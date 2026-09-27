@@ -11603,8 +11603,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::FieldAccess { object, .. } = &value.kind else {
             return;
         };
-        if !matches!(object.kind, ExprKind::Identifier(_)) {
-            return;
+        // B-2026-09-27-70 — or deeper (`keep(x.w.r)`), a chain of field hops
+        // down from a local.
+        match &object.kind {
+            ExprKind::Identifier(_) => {}
+            ExprKind::FieldAccess { .. } if Self::place_root_ident(value).is_some() => {}
+            _ => return,
         }
         let Some(tn) = self.type_name_of_expr(value) else {
             return;
@@ -11642,6 +11646,7 @@ impl<'ctx> super::Codegen<'ctx> {
             struct_leaf && !self.aggregate_param_copy_supported_struct(&tn, &mut Vec::new())
         });
         if memory_leaves {
+            // A deeper leaf reaches `zero_nested_struct_field_move_cap`.
             self.suppress_source_vec_cleanup_for_arg(value);
         }
         self.disarm_struct_field_move_bodies(value);

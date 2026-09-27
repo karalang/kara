@@ -5772,10 +5772,8 @@ impl<'a> super::Interpreter<'a> {
         i: usize,
         value: &Expr,
     ) {
-        let ExprKind::FieldAccess { object, .. } = &value.kind else {
-            return;
-        };
-        if !matches!(object.kind, ExprKind::Identifier(_))
+        // One hop or deeper (`keep(x.w.r)`, B-2026-09-27-70).
+        if Self::field_chain_name_path(value).is_none()
             || self.callee_param_is_borrow(callee_name, method_owner, i)
         {
             return;

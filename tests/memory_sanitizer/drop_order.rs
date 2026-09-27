@@ -4573,6 +4573,82 @@ fn main() {
     );
 }
 
+/// B-2026-09-27-70 — a `Drop` field TWO or more hops down a NAMED local
+/// (`x.w.r`, `y.v.f`, `z.x.w.r`) moved to a keeper, a `push`, a struct / tuple
+/// / `Some` literal, and a callee that keeps it on some paths: each body runs
+/// once and each buffer is freed once. On the unfixed compiler the local's
+/// walk ran every moved leaf's body a second time and the run aborted with
+/// `malloc(): unaligned tcache chunk detected`.
+#[test]
+fn asan_named_local_field_two_hops_down_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn keep(d: D) -> D { d }
+shared struct Sh { v: i64 }
+struct F { id: i64, h: Sh }
+impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
+struct V { f: F, d: D }
+struct Y { v: V, n: i64 }
+fn keepf(x: F) -> F { x }
+fn maybe(x: D, c: bool) -> Option[D] { if c { return Some(x); } None }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { X { w: mkw(n), t: mkd(n + 300) } }
+struct B2 { r: D }
+struct Z { x: X, n: i64 }
+fn main() {
+    let x1 = mkx(1);
+    let k = keep(x1.w.r);
+    let x2 = mkx(2);
+    let mut xs: Vec[D] = Vec.new();
+    xs.push(x2.w.r);
+    let x3 = mkx(3);
+    let b = B2 { r: x3.w.s };
+    let x4 = mkx(4);
+    let t = (x4.w.r, Some(x4.t));
+    let x5 = mkx(5);
+    let o1 = maybe(x5.w.r, false);
+    let o2 = maybe(x5.w.s, true);
+    let y = Y { v: V { f: F { id: 6, h: Sh { v: 6 } }, d: mkd(6) }, n: 0 };
+    let kf = keepf(y.v.f);
+    let z = Z { x: mkx(7), n: 0 };
+    let kz = keep(z.x.w.r);
+    println(f"r {k.id} {xs.len()} {b.r.id} {t.0.id} {o1.is_some()} {o2.is_some()} {kf.id} {kz.id}");
+    println("end")
+}
+"#,
+        &[
+            "dD301 name-string-longer-than-sso-301",
+            "dD101 name-string-longer-than-sso-101",
+            "dD302 name-string-longer-than-sso-302",
+            "dD102 name-string-longer-than-sso-102",
+            "dD303 name-string-longer-than-sso-303",
+            "dD3 name-string-longer-than-sso-3",
+            "dD104 name-string-longer-than-sso-104",
+            "dD5 name-string-longer-than-sso-5",
+            "dD305 name-string-longer-than-sso-305",
+            "dD6 name-string-longer-than-sso-6",
+            "dD307 name-string-longer-than-sso-307",
+            "dD107 name-string-longer-than-sso-107",
+            "r 1 1 103 4 false true 6 7",
+            "dD7 name-string-longer-than-sso-7",
+            "dF6",
+            "dD105 name-string-longer-than-sso-105",
+            "dD4 name-string-longer-than-sso-4",
+            "dD304 name-string-longer-than-sso-304",
+            "dD103 name-string-longer-than-sso-103",
+            "dD2 name-string-longer-than-sso-2",
+            "dD1 name-string-longer-than-sso-1",
+            "end",
+        ],
+        "asan_named_local_field_two_hops_down_is_freed_once",
+        20,
+    );
+}
+
 /// B-2026-09-17-2 and B-2026-09-27-56 — a discarded TUPLE or fixed-ARRAY
 /// METHOD result runs its element `Drop` bodies once, and an owned-`self`
 /// method that hands a field back inside a tuple no longer runs that field's

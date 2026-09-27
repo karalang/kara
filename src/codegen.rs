@@ -6569,6 +6569,7 @@ impl<'ctx> Codegen<'ctx> {
                 clone_fn_cache: HashMap::new(),
                 try_clone_fn_cache: HashMap::new(),
                 drop_fn_cache: HashMap::new(),
+                discard_frame: None,
             },
             vec_elem_field_clone_slots: std::collections::HashMap::new(),
             vec_elem_field_clone_elem_ty: std::collections::HashMap::new(),

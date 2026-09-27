@@ -53,6 +53,12 @@ pub(crate) struct DropRc<'ctx> {
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
+    /// B-2026-09-27-70 — the index of the expression statement's DISCARD
+    /// frame while its expression compiles (`xs.push(x.w.r);`). That frame
+    /// scopes the statement's temporaries and runs on every path the
+    /// statement does, so a move inside it is exactly as unconditional as the
+    /// statement; `disarm_nested_projection_move_bodies` looks through it.
+    pub(crate) discard_frame: Option<usize>,
     /// B-2026-09-21-2 — for a fresh-temp struct scrutinee whose
     /// `StructFieldBodies` husk walker is masked by MATCH ARMS: the alloca
     /// holding the walker to actually call, keyed by the scrutinee slot.

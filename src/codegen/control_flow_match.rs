@@ -12199,6 +12199,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let obj = match &object.kind {
             ExprKind::Identifier(o) => o.clone(),
             ExprKind::SelfValue => "self".to_string(),
+            // B-2026-09-27-70 — two or more hops (`keep(x.w.r)`,
+            // `xs.push(x.w.r)`): the nested-path mask the `let` and `return`
+            // sites already write for the same chain.
+            ExprKind::FieldAccess { .. } => {
+                self.disarm_nested_projection_move_bodies(value);
+                return;
+            }
             _ => return,
         };
         if self.borrow_vars.owned_struct_params.contains(obj.as_str()) {
@@ -12242,6 +12249,83 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         self.disarm_struct_field_bodies_at(&obj, fidx);
+    }
+
+    /// B-2026-09-27-70 — the multi-hop leg of
+    /// [`Self::disarm_struct_field_move_bodies`]: a `Drop` leaf moved out of a
+    /// LOCAL through two or more field hops masks that leaf in the walker of
+    /// the struct that owns it, as `return w.p.r` does in
+    /// [`Self::disarm_returned_projection_field_bodies`]. The same gates: a
+    /// parameter, `self` or borrowed root keeps its own machinery, an
+    /// entry-copied or RC-boxed root keeps its body, and only a leaf that runs
+    /// a user `Drop` has a body to retract.
+    fn disarm_nested_projection_move_bodies(&mut self, value: &Expr) {
+        if self
+            .span_tables
+            .uam_copied_sites
+            .contains(&(value.span.offset, value.span.length))
+            || self.projection_root_is_rc_boxed(value)
+        {
+            return;
+        }
+        let Some(root) = Self::place_root_ident(value) else {
+            return;
+        };
+        if root == "self"
+            || self.fn_ctx.current_fn_param_names.contains(root)
+            || self.borrow_vars.ref_params.contains_key(root)
+            || self.borrow_vars.owned_struct_params.contains(root)
+        {
+            return;
+        }
+        let mut segs: Vec<&str> = Vec::new();
+        let mut cur = value;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    segs.push(field.as_str());
+                    cur = object;
+                }
+                ExprKind::Identifier(_) => break,
+                _ => return,
+            }
+        }
+        segs.reverse();
+        let Some(root_ty) = self.var_types.var_type_names.get(root).cloned() else {
+            return;
+        };
+        if self.place_chain_leaf_runs_user_drop(&root_ty, &segs) != Some(true) {
+            return;
+        }
+        let Some((root, path)) = self.projection_field_index_path(value) else {
+            return;
+        };
+        // The static mask is exact only when the move runs whenever the
+        // root's walk does, i.e. the walk lives in THIS frame. One frame
+        // deeper (`if c { keep(x.w.r) }`) the path that skips the branch
+        // would lose the leaf's body; the one-hop route has a per-field
+        // runtime flag for that and a path has none yet, so decline.
+        // The owning frame, looking through the statement's own discard frame.
+        let frames = &self.drop_rc.scope_cleanup_actions;
+        let mut here = frames.len();
+        if here > 0 && self.drop_rc.discard_frame == Some(here - 1) {
+            here -= 1;
+        }
+        let owns_here = here > 0
+            && frames[here - 1].iter().any(|a| {
+                matches!(a,
+                    super::state::CleanupAction::UserDrop { binding_name, kind, .. }
+                        if *binding_name == root
+                            && *kind == super::state::UserDropKind::StructFieldBodies)
+            });
+        if !owns_here {
+            return;
+        }
+        if let Some((leaf, prefix)) = path.split_last() {
+            let mut only: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            only.insert(*leaf as u32);
+            self.disarm_struct_field_tuple_elem_bodies_at(&root, prefix, &only);
+        }
     }
 
     /// Struct-FIELD sibling of [`Self::disarm_tuple_elem_bodies_at`]: mask field

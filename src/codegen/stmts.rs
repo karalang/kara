@@ -4590,7 +4590,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // behavior (generic chokepoint only) for that shape.
                 let insert_reclaims_displaced = self.mapset.pending_map_insert_old_dec;
                 self.drop_rc.scope_cleanup_actions.push(Vec::new());
-                let val = self.compile_expr(value)?;
+                let prev_discard = self
+                    .drop_rc
+                    .discard_frame
+                    .replace(self.drop_rc.scope_cleanup_actions.len() - 1);
+                let val = self.compile_expr(value);
+                self.drop_rc.discard_frame = prev_discard;
+                let val = val?;
                 // B-2026-08-28-53 — the argument/result boundary on this discard
                 // frame: everything already pushed died at the call, everything
                 // the battery pushes below is the discarded result.
@@ -4714,7 +4720,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_user_drop_for_var(&n);
                 }
                 self.drop_rc.scope_cleanup_actions.push(Vec::new());
-                let val = self.compile_expr(value)?;
+                let prev_discard = self
+                    .drop_rc
+                    .discard_frame
+                    .replace(self.drop_rc.scope_cleanup_actions.len() - 1);
+                let val = self.compile_expr(value);
+                self.drop_rc.discard_frame = prev_discard;
+                let val = val?;
                 // B-2026-08-28-53 — see the sibling discard site: argument
                 // temporaries below this mark, the discarded result above it.
                 let b53_arg_mark = self
@@ -13234,7 +13246,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     &mut self.discarded_stmt_value_span,
                     discarded_value.map(|e| (e.span.offset, e.span.length)),
                 );
+                let prev_discard = if tail.is_some() || literal_tail.is_some() {
+                    self.drop_rc
+                        .discard_frame
+                        .replace(self.drop_rc.scope_cleanup_actions.len() - 1)
+                } else {
+                    self.drop_rc.discard_frame
+                };
                 let val = self.compile_expr(expr);
+                self.drop_rc.discard_frame = prev_discard;
                 self.discarded_stmt_value_span = saved_discarded_value;
                 self.discarded_stmt_literal_span = saved_discarded_stmt;
                 let val = val?;

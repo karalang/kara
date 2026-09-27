@@ -8772,7 +8772,7 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_user_drop_bindings.insert(n.clone());
                 }
             } else if (matches!(arg.value.kind, ExprKind::FieldAccess { .. })
-                && Self::field_chain_name_path(&arg.value).is_some_and(|(_, path)| path.len() == 1))
+                && Self::field_chain_name_path(&arg.value).is_some())
                 || Self::is_one_hop_tuple_index_of_name(&arg.value)
             {
                 // B-2026-09-26-35 — a field PROJECTED off a named local
@@ -8780,11 +8780,11 @@ impl<'a> super::Interpreter<'a> {
                 // the container / payload, whose walk now runs its body, so
                 // the source's field walk must skip it -- the per-field mask
                 // `let x = w.r` and a tuple element already write. Without it
-                // `w`'s walk ran the moved field's body a second time. One hop
-                // only, for the tuple arm's reason: codegen's twin
-                // (`disarm_struct_field_move_bodies`, reached from
+                // `w`'s walk ran the moved field's body a second time. Deeper
+                // chains too (`xs.push(x.w.r)`, B-2026-09-27-70), as codegen's
+                // twin (`disarm_struct_field_move_bodies`, reached from
                 // `disarm_moved_value_arg_user_drops` and
-                // `try_compile_enum_variant_at`) needs an `Identifier` object.
+                // `try_compile_enum_variant_at`) now masks them.
                 self.record_returned_projection_moves(&arg.value);
             }
         }

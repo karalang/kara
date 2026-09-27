@@ -576,16 +576,13 @@ impl<'a> super::Interpreter<'a> {
                         // so the mask cannot hide the read that produced the
                         // value.
                         //
-                        // Gated to a DIRECT one-hop `FieldAccess` for the reason
-                        // the struct-literal caller gives: codegen's
-                        // `disarm_struct_field_move_bodies` needs an
-                        // `Identifier` object and early-returns on a deeper
-                        // chain, so admitting more here would mask a source
-                        // codegen leaves armed. A NESTED tuple element needs no
-                        // recursion -- it is itself evaluated through this arm.
+                        // Any chain of field hops down from a named local:
+                        // codegen's `disarm_struct_field_move_bodies` masks a
+                        // deeper leaf too since B-2026-09-27-70. A NESTED tuple
+                        // element needs no recursion -- it is itself evaluated
+                        // through this arm.
                         if matches!(e.kind, ExprKind::FieldAccess { .. })
-                            && Self::field_chain_name_path(e)
-                                .is_some_and(|(_, path)| path.len() == 1)
+                            && Self::field_chain_name_path(e).is_some()
                         {
                             self.record_returned_projection_moves(e);
                         }
@@ -616,8 +613,7 @@ impl<'a> super::Interpreter<'a> {
                         // B-2026-09-26-35 — the named-root projection mask
                         // the tuple arm above writes, for the same element.
                         if matches!(e.kind, ExprKind::FieldAccess { .. })
-                            && Self::field_chain_name_path(e)
-                                .is_some_and(|(_, path)| path.len() == 1)
+                            && Self::field_chain_name_path(e).is_some()
                         {
                             self.record_returned_projection_moves(e);
                         }
@@ -637,8 +633,7 @@ impl<'a> super::Interpreter<'a> {
                         // B-2026-09-26-35 — the named-root projection mask
                         // the tuple arm above writes, for the same element.
                         if matches!(e.kind, ExprKind::FieldAccess { .. })
-                            && Self::field_chain_name_path(e)
-                                .is_some_and(|(_, path)| path.len() == 1)
+                            && Self::field_chain_name_path(e).is_some()
                         {
                             self.record_returned_projection_moves(e);
                         }

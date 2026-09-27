@@ -3395,3 +3395,107 @@ impl H { fn mmaybe(ref self, x: D, c: bool) -> Option[D] { if c { return Some(x)
         assert_eq!(run(&prog), want, "[{label}] interpreter");
     }
 }
+
+/// B-2026-09-27-70 — interpreter half of the codegen fixture of the same
+/// name: a `Drop`-bearing field projected TWO or more hops off a
+/// named local (`x.w.r`, `z.x.w.r`) and moved out runs its body exactly once.
+/// The one-hop mask (B-2026-09-26-47/-63) never reached a nested chain, so the
+/// local's walk ran the moved leaf's body a second time after whoever received
+/// it had already run it: a keeper, a `push`, a struct / tuple / `Some` /
+/// `vec!` literal, a callee that keeps it on some paths, and a leaf holding a
+/// `shared` field.
+#[test]
+fn test_named_local_field_two_hops_down_runs_its_body_once() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+fn keep(d: D) -> D { d }
+struct E { id: i64 }
+impl Drop for E { fn drop(mut ref self) { println(f"dE{self.id}") } }
+shared struct Sh { v: i64 }
+struct F { id: i64, h: Sh }
+impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
+enum G { A(D), B }
+struct V { e: E, f: F, g: G, d: D }
+fn mkv(n: i64) -> V { V { e: E { id: n }, f: F { id: n + 10, h: Sh { v: 1 } }, g: G.A(mkd(n + 20)), d: mkd(n + 30) } }
+fn keepf(x: F) -> F { x }
+fn maybe(x: D, c: bool) -> Option[D] { if c { return Some(x); } None }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { X { w: mkw(n), t: mkd(n + 300) } }
+struct B2 { r: D }
+struct Y { v: V, n: i64 }
+struct Z { x: X, n: i64 }
+"#;
+    for (label, body, want) in [
+        (
+            "handed to a keeper (B-2026-09-27-70)",
+            "let x = mkx(1); let k = keep(x.w.r); println(f\"k{k.id}\");",
+            "dD301n301\ndD101n101\nk1\ndD1n1\nend\n",
+        ),
+        (
+            "pushed (B-2026-09-27-70)",
+            "let x = mkx(1); let mut xs: Vec[D] = Vec.new(); xs.push(x.w.r); println(f\"l{xs.len()}\");",
+            "dD301n301\ndD101n101\nl1\ndD1n1\nend\n",
+        ),
+        (
+            "into a struct literal (B-2026-09-27-70)",
+            "let x = mkx(1); let b = B2 { r: x.w.r }; println(f\"b{b.r.id}\");",
+            "dD301n301\ndD101n101\nb1\ndD1n1\nend\n",
+        ),
+        (
+            "into Some (B-2026-09-27-70)",
+            "let x = mkx(1); let o = Some(x.w.r); println(f\"s{o.is_some()}\");",
+            "dD301n301\ndD101n101\nstrue\ndD1n1\nend\n",
+        ),
+        (
+            "into a tuple (B-2026-09-27-70)",
+            "let x = mkx(1); let t = (x.w.r, 5); println(f\"t{t.1}\");",
+            "dD301n301\ndD101n101\nt5\ndD1n1\nend\n",
+        ),
+        (
+            "into vec! (B-2026-09-27-70)",
+            "let x = mkx(1); let a = vec![x.w.r]; println(f\"a{a.len()}\");",
+            "dD301n301\ndD101n101\na1\ndD1n1\nend\n",
+        ),
+        (
+            "a callee that drops it inside (B-2026-09-27-70)",
+            "let x = mkx(1); let o = maybe(x.w.r, false); println(f\"s{o.is_some()}\");",
+            "dD1n1\ndD301n301\ndD101n101\nsfalse\nend\n",
+        ),
+        (
+            "a callee that hands it back (B-2026-09-27-70)",
+            "let x = mkx(1); let o = maybe(x.w.r, true); println(f\"s{o.is_some()}\");",
+            "dD301n301\ndD101n101\nstrue\ndD1n1\nend\n",
+        ),
+        (
+            "a leaf with a shared field, kept (B-2026-09-27-70)",
+            "let y = Y { v: mkv(1), n: 0 }; let k = keepf(y.v.f); println(f\"k{k.id}\");",
+            "dD31n31\ndD21n21\ndE1\nk11\ndF11\nend\n",
+        ),
+        (
+            "a leaf with a shared field, pushed (B-2026-09-27-70)",
+            "let y = Y { v: mkv(1), n: 0 }; let mut xs: Vec[F] = Vec.new(); xs.push(y.v.f); println(f\"l{xs.len()}\");",
+            "dD31n31\ndD21n21\ndE1\nl1\ndF11\nend\n",
+        ),
+        (
+            "three hops (B-2026-09-27-70)",
+            "let z = Z { x: mkx(1), n: 0 }; let k = keep(z.x.w.r); println(f\"k{k.id}\");",
+            "dD301n301\ndD101n101\nk1\ndD1n1\nend\n",
+        ),
+        (
+            "in a loop (B-2026-09-27-70)",
+            "let mut n = 0; while n < 2 { let x = mkx(n); let k = keep(x.w.r); println(f\"k{k.id}\"); n += 1; }",
+            "dD300n300\ndD100n100\nk0\ndD0n0\ndD301n301\ndD101n101\nk1\ndD1n1\nend\n",
+        ),
+        (
+            "control: a two-hop read moves nothing (B-2026-09-27-70)",
+            "let x = mkx(1); println(f\"r{x.w.r.id}\");",
+            "r1\ndD301n301\ndD101n101\ndD1n1\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        assert_eq!(run(&prog), want, "[{label}] interpreter");
+    }
+}
