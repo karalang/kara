@@ -4204,7 +4204,7 @@ impl<'a> super::Interpreter<'a> {
             .collect()
     }
 
-    fn mask_struct_fields(
+    pub(super) fn mask_struct_fields(
         value: &super::value::Value,
         escaping: &[Vec<String>],
     ) -> super::value::Value {
@@ -5403,7 +5403,17 @@ impl<'a> super::Interpreter<'a> {
                     let parted_param = f.params.get(i).is_some_and(|p| {
                         matches!(p.ty.kind, crate::ast::TypeKind::Tuple(_))
                             || Self::optres_param_is_part_classified(&p.ty)
-                    });
+                    })
+                        // B-2026-09-27-106 — a param the callee hands out only
+                        // a PART of (`fn g(ref self, w: W) -> D { w.r }`) is
+                        // answered by the part mask, as it is on the
+                        // free-function path. Standing the whole argument down
+                        // by return type left the parts that die in the call
+                        // with no owner: `h.g(mkw(20))` never ran `w.s`'s body,
+                        // where every compiled surface runs it at the call.
+                        || (!crate::ast::fn_escaping_param_part_paths(self.program, f, i)
+                            .is_empty()
+                            && !crate::ast::fn_returns_param_with(Some(self.program), f, i));
                     (!parted_param
                         && !crate::ast::owned_self_return_is_opaque_to_receiver(f, probe))
                         // The one shape the compiled backends keep INSIDE the

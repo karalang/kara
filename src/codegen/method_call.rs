@@ -7795,7 +7795,51 @@ impl<'ctx> super::Codegen<'ctx> {
                         } else {
                             Vec::new()
                         };
-                    if !parts.is_empty() {
+                    if !parts.is_empty() && recv_name.starts_with("__urecv_tmp_") {
+                        // B-2026-09-27-106 — a FRESH-TEMP receiver reaches here
+                        // as its synth local (`__urecv_tmp_N`). The
+                        // receiver-temp registrar declined every body for it
+                        // (the callee's return may carry a part), so the
+                        // disarm below has no walk to replace: at one hop it
+                        // registered the masked walk fresh under the synth's
+                        // name, which no drain recognises, so the fields the
+                        // callee left behind ran at the enclosing FUNCTION's
+                        // exit (`mkw(40).getr()` printed `g40 dD40n40 end
+                        // dD140n140`); at two hops it registered nothing and
+                        // they were lost (`mkt(8).deep()` over `self.w.r`).
+                        // Register the masked walk here instead, on the
+                        // receiver-temp drain: the receiver is argument zero
+                        // and dies at the call return, where the named
+                        // receiver's walk runs the same bodies.
+                        // Only where the registrar DID decline: a callee whose
+                        // return cannot carry a `Drop` part (`mkw(3).getb()`
+                        // over `self.b: i64`) already has the whole walk on
+                        // this slot, and a second, masked one doubled every
+                        // body it shares with it.
+                        let slot = self
+                            .variables
+                            .get(recv_name.as_str())
+                            .copied()
+                            .filter(|slot| {
+                                !self.drop_rc.scope_cleanup_actions.iter().flatten().any(|a| {
+                                    matches!(a, super::state::CleanupAction::UserDrop { binding_name, binding_ptr, .. }
+                                        if binding_name == "__urecv_drop_tmp" && *binding_ptr == slot.ptr)
+                                })
+                            });
+                        let skip = self.escaping_field_skip_tree(&receiver_type, &parts);
+                        if let (Some(slot), Some(bodies)) = (
+                            slot,
+                            self.field_bodies_fn_for_owned_temp_skipping(&receiver_type, &skip),
+                        ) {
+                            self.track_user_drop_var_with_fn(
+                                &receiver_type,
+                                "__urecv_drop_tmp",
+                                slot.ptr,
+                                bodies,
+                                UserDropKind::StructFieldBodies,
+                            );
+                        }
+                    } else if !parts.is_empty() {
                         let recv_name = recv_name.clone();
                         self.disarm_struct_var_escaping_parts(&recv_name, &parts);
                     }

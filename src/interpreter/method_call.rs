@@ -1359,6 +1359,67 @@ impl<'a> super::Interpreter<'a> {
                         &self.program.items,
                     ) && !crate::ast::fn_binds_self_part_out(f)
                 });
+        // B-2026-09-27-106 — an owned-`self` method that hands a PART of a
+        // fresh STRUCT receiver out (`fn getr(self) -> D { self.r }`) left the
+        // parts it did not hand out with no owner: `mkw(40).getr()` never ran
+        // `s`'s body here. A named receiver's walk masks the handed-out part and
+        // runs the rest (B-2026-09-25-28, the same filter and the same part
+        // query); the temp gets the same masked walk, at the call return, where
+        // codegen's receiver-temp drain runs it. A whole rebind of `self` stands
+        // every body down there too, and a type with its own `Drop` cannot be
+        // partially moved, so both are left out.
+        if fresh
+            && matches!(self_param, Some(crate::ast::SelfParam::Owned))
+            && matches!(obj, Value::Struct { .. })
+            && !self.program.drop_method_keys.contains_key(type_name)
+        {
+            let escaping: Vec<Vec<String>> = self
+                .find_impl_method_ast(type_name, method)
+                .filter(|f| {
+                    !crate::ast::fn_rebinds_self_whole(f)
+                        && !crate::ast::fn_conditionally_rebinds_self(f)
+                })
+                .map(|f| crate::ast::fn_escaping_self_part_paths(self.program, f))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|path| matches!(path.first(), Some(crate::ast::ParamPart::Field(_))))
+                .map(|path| {
+                    path.into_iter()
+                        .map(|p| match p {
+                            crate::ast::ParamPart::Field(n) => n,
+                            crate::ast::ParamPart::TupleIndex(i) => format!("#{i}"),
+                        })
+                        .collect()
+                })
+                .collect();
+            // Only a path that ends at a value with a `Drop` body hands an
+            // owner out. `fn m(self) -> i64 { let a = self.a; .. a.id }`
+            // reports `a.id`, an `i64` read through the alias: its `a` is the
+            // callee's own local, so the receiver's walk below stays the
+            // owner and this masked one must not run beside it.
+            let escaping: Vec<Vec<String>> = escaping
+                .into_iter()
+                .filter(|path| {
+                    let mut cur = Some(obj);
+                    for seg in path {
+                        cur = match cur {
+                            Some(Value::Struct { fields, .. }) => fields.get(seg),
+                            Some(Value::Tuple(items)) => seg
+                                .strip_prefix('#')
+                                .and_then(|d| d.parse::<usize>().ok())
+                                .and_then(|i| items.get(i)),
+                            _ => None,
+                        };
+                    }
+                    cur.is_some_and(|v| self.value_runs_user_drop(v))
+                })
+                .collect();
+            if !escaping.is_empty() && self.value_runs_user_drop(obj) {
+                let masked = Self::mask_struct_fields(obj, &escaping);
+                self.drop_user_drop_fields_of_value(&masked);
+                return;
+            }
+        }
         if !ref_self && !owned_self_consumes && !owned_self_enum_shell && !chain_views {
             return;
         }
