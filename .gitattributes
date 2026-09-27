@@ -4,3 +4,11 @@
 # checkout with core.autocrlf=true would rewrite them to CRLF and
 # break the comparison against LF-emitting code.
 * text=auto eol=lf
+
+# Per-family fixture lists (see CLAUDE.md, "Where a new fixture goes"). Each is
+# a pure list of `mod <family>;` lines that several threads append to at once;
+# `union` keeps both sides' lines instead of conflicting. Never widen this to
+# a file holding code: union keeps both sides of ANY conflict, silently.
+tests/codegen/families/mod.rs merge=union
+tests/memory_sanitizer/families/mod.rs merge=union
+tests/interpreter/families/mod.rs merge=union

@@ -70,6 +70,11 @@ mod structs;
 #[path = "interpreter/vecs.rs"]
 mod vecs;
 
+// Per-family fixture files: new fixtures go here, not at the end of an area
+// file. See `interpreter/families/mod.rs`.
+#[path = "interpreter/families/mod.rs"]
+mod families;
+
 // ── Test Helpers ────────────────────────────────────────────────
 
 fn run(source: &str) -> String {

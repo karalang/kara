@@ -214,7 +214,7 @@ bash scripts/asan-instrumented-leg.sh
 **CHECK THE LEG'S ARITHMETIC, BECAUSE "matches the quarantine list exactly" ALSO PRINTS WHEN NOTHING RAN.** Both quarantine lists are drained, so an empty `got` matches an empty `expected` and the ratchet's other arm reports success over a run of zero fixtures — the same decay described above, seen from the leg's output rather than from the list. The identity that distinguishes a real pass accounts for every fixture in the file:
 
     passed + failed + ignored
-      == `cat tests/memory_sanitizer.rs tests/memory_sanitizer/*.rs \
+      == `find tests/memory_sanitizer.rs tests/memory_sanitizer -name '*.rs' | xargs cat \
             | grep -c '^[[:space:]]*#\[test\]'`, ON THE TREE THE LEG RAN AGAINST
 
 **That spelling changed when the file was split (2026-09-21) and the OLD one now
@@ -225,8 +225,8 @@ the path holds almost no fixtures and the four-space indent is gone. A zero on
 the right-hand side does not look like a broken command: it makes the identity
 fail against a perfectly green leg, which reads as *fixtures were silently
 absent from the run* — the exact conclusion this check exists to produce, now
-produced by the instrument rather than the tree. Count the shim and the area
-files together, and anchor on `^[[:space:]]*` so a fixture inside one of the
+produced by the instrument rather than the tree. Count the shim, the area
+files and `families/` together (a `*.rs` glob misses `families/`), and anchor on `^[[:space:]]*` so a fixture inside one of the
 nested `mod` blocks is still counted.
 
 **THREE TERMS, NOT FOUR — the opt-in-archive skips are a SUBSET of `failed`, not a fourth addend.** This display line read `passed + failed + skipped-for-a-missing-opt-in-archive + ignored` until 2026-09-20, and the display line is what a script-writer copies, while both worked examples below it are three-term (`1696 + 5 + 9 == 1710`) and the prose two paragraphs down says "the leg's THREE numbers". The leg discovers a skip by reading an archive filename out of a link FAILURE, so libtest has already counted it; adding it again over-counts by exactly the number of skips, and a check written from the four-term line REFUSES A GREEN RUN. Measured 2026-09-20 while gating B-2026-09-13-7: `1700 passed; 5 failed; 9 ignored` against 1714 `#[test]`, with those 5 failures being the 5 names printed under the SKIPPED heading — three terms close it, four give 1719.
@@ -381,6 +381,18 @@ The kara-katas repo is a different story — it's a content repo, not the compil
 `git merge --ff-only <branch>` from the primary worktree avoids both: it refreshes index+worktree atomically and rejects non-fast-forward updates loudly. If the ff is rejected, the source branch needs `git rebase main` before retrying — never reach for `--no-ff` or `update-ref` as a workaround.
 
 **Prefer rebase + ff over cherry-pick when integrating a side branch.** `git rebase main` from inside the side branch's worktree, then `git merge --ff-only <branch>` from the primary, preserves the side branch's identity — its tip ends up on main's history with the same SHA, so a subsequent `git branch -d <branch>` (the *safe* form that refuses to delete unmerged work) succeeds cleanly. Cherry-pick produces a content-equivalent commit with a fresh SHA; main then has the patch but the side branch's tip is orphaned, forcing `git branch -D` (force-delete) and leaving the original SHA reachable only via the reflog. Reserve cherry-pick for cases where no live branch ref exists — recovering a single commit from a deleted branch or from an orphan SHA in the reflog. The 2026-05-20 recovery used cherry-pick for one such reconstruction; for any future rewind recovery, prefer `git rebase <restored-main> <orphan-branch>` followed by ff if the source branch is still around.
+
+## Where a new fixture goes
+
+**New fixtures for a bug family go in their OWN FILE under `tests/<suite>/families/`, never at the end of an area file** (2026-09-27). Several threads push straight to `main`, and two tests appended to the end of the same area file (`tests/codegen/drop_order.rs` and friends) always conflict on rebase; two new files never do. This applies to all three split suites, `codegen`, `memory_sanitizer` and `interpreter`:
+
+1. Create `tests/<suite>/families/<row>.rs`, named after the ledger row that opens the family, lower-cased with `_` for `-`: `b_2026_09_27_58.rs`. Open it with a `//!` line naming the row(s), then `use super::*;` (the suite's helpers resolve through it, as they do in an area file).
+2. Add ONE line, `mod b_2026_09_27_58;`, under the marker in `tests/<suite>/families/mod.rs`. Those three list files are `merge=union` in `.gitattributes`, so two threads adding lines at once rebase with both lines kept and no conflict. Keep them to `mod` lines only: union keeps both sides of ANY conflict, which is safe only for a pure list.
+3. Later fixtures for the same family (neighbour rows, follow-ups, a remainder) go in that same file, whoever writes them.
+
+The area files keep every fixture they already hold, and an edit to an EXISTING fixture still happens where that fixture lives. The test targets are unchanged, so `cargo test --features llvm --test codegen` still runs everything; one family alone is `--test codegen families::b_2026_09_27_58::`. Test paths gain a `families::<row>::` segment, and test NAMES stay unique across `tests/`, so `grep -rn '<name>' tests/` still finds any fixture.
+
+**Any count or glob over a suite's files must include `families/`.** `tests/memory_sanitizer/*.rs` does not match `tests/memory_sanitizer/families/*.rs`, so a glob-based `#[test]` count silently drops family fixtures and makes the ASAN identity below fail against a green leg. Count with `find tests/memory_sanitizer.rs tests/memory_sanitizer -name '*.rs'`, or use libtest's `--list`.
 
 ## Claiming a bug (multi-session coordination)
 

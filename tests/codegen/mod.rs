@@ -37,6 +37,10 @@ mod strings;
 mod structs;
 mod vecs;
 
+// Per-family fixture files: new fixtures go here, not at the end of an area
+// file. See `families/mod.rs`.
+mod families;
+
 /// Codegen result (Ok IR / Err diagnostic) without the `ir_for` panic.
 fn ir_result(src: &str) -> Result<String, String> {
     let mut parsed = karac::parse(src);

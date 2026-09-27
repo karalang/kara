@@ -41,6 +41,10 @@ mod strings;
 mod structs;
 mod vecs;
 
+// Per-family fixture files: new fixtures go here, not at the end of an area
+// file. See `families/mod.rs`.
+mod families;
+
 /// Returns true if the host toolchain can produce an ASAN-linked executable.
 /// Probed once per test binary run. Skipping is preferred over failing so
 /// developers on hosts without a sanitizer-capable `cc` still get a green
