@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 518 |
-| miscompile | 502 |
-| leak | 449 |
+| miscompile | 503 |
+| leak | 450 |
 | double-free | 334 |
 | missing-feature | 209 |
 | codegen-gap | 197 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2217 |
-| interp | 617 |
+| codegen | 2219 |
+| interp | 618 |
 | typecheck | 311 |
 | other | 111 |
 | ownership | 79 |
@@ -347,7 +347,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-46 | 2026-09-27 | interp+codegen | medium | A FIELD MOVED OUT INSIDE AN `if` THAT FALLS THROUGH, THEN BOUND BY A DESTRUCTURE, RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `if c { let x = o.k; .. } let Outer { h, k } = o;` with `c` true prints `x=3 dR3 dR3`; the move promotes `o` to RC fallback, which B-2026-09-16-26's hand-off does not cover, and with `c` false the compiled surfaces also run the unread leaves' bodies after `end` where `--interp` runs them at the destructure | — |
 | B-2026-09-27-47 | 2026-09-27 | codegen | medium | A LEAF BOUND BY A NESTED STRUCT SUB-PATTERN RUNS ITS `Drop` BODY AT THE DESTRUCTURE ON EVERY COMPILED SURFACE, BEFORE THE STATEMENTS THAT STILL READ IT -- `let Outer { h: Inner { r, q }, k } = o; println(f"r={r.id}")` prints `dR1` before `r=1` compiled and after it under `--interp`; no move-out is needed | — |
 | B-2026-09-27-48 | 2026-09-27 | interp+codegen | medium | A FRESH TEMP'S `Drop` FIELD HANDED TO A GENERIC CALLEE THAT KEEPS IT ON ONLY SOME PATHS STILL LOSES THE SIBLINGS' BODIES ON ALL FOUR SURFACES WHEN THE LEAF CARRIES A `shared` FIELD, IS AN ENUM, OR IS LENT ON TO A CALLEE THAT STORES IT CONDITIONALLY -- `gmaybe(mkv(1).f, c)` prints `dF11 o end` owing `dD31n31 dD21n21 dE1`, `gmaybe(mkv(1).g, true)` prints `dD21n21 o end` owing `dD31n31 dF11 dE1`, and `gl(mut v, mkw(7).r)` prints `g1 l1 dD7n7 end` owing `dD107n107` | — |
-| B-2026-09-27-50 | 2026-09-27 | codegen | high | A `let mut` REBIND OF A BY-VALUE PARAM THAT IS THEN REASSIGNED IS WRONG ON EVERY COMPILED SURFACE, AND IN THREE DIFFERENT WAYS -- `fn rb(a: Option[S]) -> i64 { let mut c = a; c = Some(mk(9)); println("in"); 5 }` double-frees for a NAMED boxed `Option[S]` argument (`free(): double free` at -O2, SIGSEGV on jit and -O0), loses both bodies for a temporary (`in k5 end` where `d2 d9 in k5 end` is due), and a plain struct param (`fn rb(a: R) { let mut c = a; c = R { id: 9 }; .. }`) runs the displaced body after the call instead of at the reassignment | — |
 | B-2026-09-27-61 | 2026-09-27 | codegen | medium | AN ENUM RECEIVER'S ARM PASSING ITS PAYLOAD AND A BY-VALUE PARAM TO THE SAME CALL DEFERS THE PARAM'S `Drop` BODY TO THE CALLER'S STATEMENT END ON COMPILED BACKENDS -- `fn both(self, o: R) -> i64 { match self { E.A(r) => { return two(r, o); } .. } }` prints `dR6 dR60 x66 dE` under `--interp` and `dR6 x66 dR60 dE` on `karac build`; `one(o)` alone, `two(mk(7), o)`, and a struct receiver's `two(mk(6), o)` all agree, so it is the pairing of the moved-out PAYLOAD with the param in one arg list that moves `o`'s body | — |
 | B-2026-09-27-62 | 2026-09-27 | codegen | low | A USER FUNCTION NAMED LIKE A C SYMBOL THE RUNTIME DECLARES (`free`, `malloc`, `exit`, `strlen`) FAILS `karac build` WHILE `--interp` RUNS IT -- `fn free(x: i64) -> i64 { return x + 1; }` reports `Binary op Add: left operand has non-comparable type PointerType` or `Global is external, but doesn't have external or weak linkage! ptr @free.1`; `memcpy` and `puts` happen to build. User fn symbols share the LLVM module's namespace with the runtime's C externs and are not mangled | — |
 | B-2026-09-27-63 | 2026-09-27 | ownership | low | REUSING A `shared enum` AFTER PASSING IT BY VALUE WARNS `value 's' moved here, used again here`, WHERE THE SAME REUSE OF A `shared struct` IS SILENT -- `rd(e); rd(e)` over `fn rd(s: Sh) -> i64`, `e.read(); e.read()` over an owned-`self` method, and `match s {..}` twice all warn for `shared enum Sh`, while `let b = a; a.id`, `c.get(); c.get()` and `sg(d); sg(d)` on a `shared struct` do not; both kinds are reference-counted handles (design.md § Guaranteed, `shared struct` / `shared enum`: reference semantics), and every backend runs these programs correctly | — |
@@ -385,6 +384,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-109 | 2026-09-27 | codegen | medium | A BY-VALUE PARAM WRAPPED INTO A LOCAL OF A HEAP-BOXED GENERIC ENUM RUNS ITS `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `fn show(x: R) -> i64 { let g: G[R] = G.X(x); println("in"); return 1 }` prints `dR4 in dR4` where `--interp` prints `in dR4`; the concrete twin `enum E { X(R), Y }` is right everywhere | — |
 | B-2026-09-27-110 | 2026-09-27 | codegen | high | A `while let` OVER A HEAP-BOXED GENERIC ENUM LOCAL THAT REASSIGNS THE SCRUTINEE IN ITS BODY FREES THE PAYLOAD TWICE ON EVERY COMPILED SURFACE -- `while let G.X(t) = g { println(t.id); i = i + 1; if i > 1 { g = G.Y; } }` aborts with `free(): double free detected in tcache 2` where `--interp` prints the loop and one body; the concrete-enum twin is clean | — |
 | B-2026-09-27-111 | 2026-09-27 | codegen | high | REASSIGNING A CONCRETE ENUM LOCAL INSIDE A READ-ONLY `match` ARM OVER IT FREES THE PAYLOAD THE ARM BINDING STILL READS -- `match g { E.X(t) => { g = E.X(mk(3)); println(t.tag) } }` prints garbage (`x` then a blank field) with 2 invalid reads on every compiled surface; the generic-enum twin leaks the payload's `String` instead (2 B) | — |
+| B-2026-09-27-112 | 2026-09-27 | interp+codegen | medium | A BY-VALUE PLAIN STRUCT PARAM PUSHED INTO A CALLEE-LOCAL `Vec` ONLY ON SOME PATHS LOSES ITS `Drop` BODY WHERE IT IS NOT PUSHED ON EVERY SURFACE, AND RUNS IT TWICE COMPILED FOR A NAMED ARGUMENT THAT IS PUSHED -- the plain-struct twin of B-2026-09-27-79: `fn rb(a: S, f: bool) -> i64 { let mut v: Vec[S] = Vec.new(); if f { v.push(a) } println("in"); 5 }` called as `rb(mk(1), true)`, `rb(mk(2), false)`, `let x = mk(3); rb(x, true)` prints `d1 in k5 in k5 d3 in k5 end` interpreted and `d1 in k5 in k5 d3 in d3 k5 end` compiled, where `d2` is due and `d3` once | — |
+| B-2026-09-27-113 | 2026-09-27 | codegen | medium | A FRESH-TEMP CALL-RESULT STRUCT ARGUMENT THAT THE CALLEE PUSHES INTO A CALLER-HELD `Vec` LEAKS THE TEMP'S `String` (29 B PER CALL) ON EVERY COMPILED SURFACE, WHILE THE STRUCT-LITERAL AND NAMED SPELLINGS ARE CLEAN -- `fn rb(b: mut ref B, a: S) -> i64 { b.v.push(a); 5 }` with `rb(mut b, mk(1))` | — |
 
 ### Relocated
 
@@ -3139,6 +3140,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-18 | interp+codegen | medium | A FRESH TEMP'S `Drop` FIELD HANDED TO A GENERIC CALLEE THAT KEEPS IT ON ONLY SOME PATHS, OR AN ENUM LEAF HANDED TO ANY KEEPING CALLEE, IS STILL WRONG… | 062289af5 |
 | B-2026-09-27-37 | codegen | high | A BY-VALUE BOXED `Option[S]` PARAM REBOUND INTO A `let mut` LOCAL IS FREED BY BOTH FRAMES FOR A NAMED ARGUMENT -- `fn rb(a: Option[S]) -> i64 { let m… | e65e0f2 |
 | B-2026-09-27-49 | interp+codegen | medium | A USER-ENUM BY-VALUE PARAM A CALLEE WRAPS IN `Some` ON ONE PATH NEVER RUNS ITS PAYLOAD'S `Drop` BODY ON THE PATH WHERE IT DIES INSIDE, ON ALL FOUR SU… | 507ba3fb1 |
+| B-2026-09-27-50 | codegen | high | A `let mut` REBIND OF A BY-VALUE PARAM THAT IS THEN REASSIGNED IS WRONG ON EVERY COMPILED SURFACE, AND IN THREE DIFFERENT WAYS -- `fn rb(a: Option[S]… | a3ff84776 |
 | B-2026-09-27-51 | interp | medium | THE INTERPRETER RUNS A BY-VALUE PARAM'S `Drop` BODY IN BOTH FRAMES WHEN THE CALLEE REBINDS IT INTO A `let mut` LOCAL THAT IS RETURNED, PUSHED OR REAS… | 2c2d8e99d |
 | B-2026-09-27-52 | codegen | high | TWO IMMUTABLE-REBIND SPELLINGS OF A BY-VALUE BOXED STRUCT PARAM THAT B-2026-09-24-20 DID NOT REACH DOUBLE-FREE ON EVERY COMPILED SURFACE -- a CHAINED… | 5accd514c |
 | B-2026-09-27-53 | codegen | high | PUSHING A BY-VALUE BOXED `Option[S]` PARAM INTO A LOCAL `Vec` CRASHES WITH NO OUTPUT AT ALL ON EVERY COMPILED SURFACE -- `fn rb(a: Option[S]) -> i64… | 4d3a1a869 |
