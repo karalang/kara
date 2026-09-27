@@ -7937,6 +7937,84 @@ fn main() {
     assert_eq!(out, "x1\ndR1\nx2\ndR2\nx3\ndR3\nx4\ndR4\nx5\ndR5\ndR60\nx6\ndR6\nx7\ndS7abcd\nx8\ndR8\nx9\ndR9\ndR100\nx10\ndR10\nend\n");
 }
 
+/// B-2026-09-27-58 — an owned struct PARAM handed to an owned-`self` method
+/// that hands a field back (`fn via(w: Ws) -> R { let x = w.getr(); x }`) runs
+/// that field's body once. The part scanner composed a param handed to a FREE
+/// function (`getf(w)`) with the callee's own answer but not a method receiver,
+/// so the caller's walk over the argument kept the field and ran it beside the
+/// result's owner, on all four surfaces. Covers the let, return and tail
+/// spellings, a temp argument, a heap field, a two-field struct (the sibling
+/// still runs once, `dR60`), a result that dies inside the callee, a discarded
+/// method result, a nested receiver `o.inner.getr()`, `self` forwarding
+/// through `self.w.getr()` and `self.getr()`, and a second free-function hop.
+#[test]
+fn interp_param_receiver_part_handed_back_runs_its_body_once() {
+    let out = run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}{self.s}") } }
+struct Ws { r: R, n: i64 }
+impl Ws {
+    fn getr(self) -> R { return self.r }
+    fn tl(self) -> R { self.r }
+    fn fw2(self) -> R { let x = self.getr(); println("in"); x }
+}
+struct W2 { a: R, b: R }
+impl W2 { fn ta(self) -> R { return self.a } }
+struct Hs { s: S, n: i64 }
+impl Hs { fn gs(self) -> S { return self.s } }
+struct O { inner: Ws, t: R }
+struct V { w: Ws, k: i64 }
+impl V { fn fwd(self) -> R { return self.w.getr() } }
+fn via(w: Ws) -> R { let x = w.getr(); println("in"); x }
+fn viar(w: Ws) -> R { return w.getr() }
+fn viat(w: Ws) -> R { w.tl() }
+fn viah(w: Hs) -> S { let x = w.gs(); println("in"); x }
+fn via2(w: W2) -> R { let x = w.ta(); println("in"); x }
+fn vian(w: Ws) { let x = w.getr(); println(f"in{x.id}") }
+fn viad(w: Ws) -> i64 { w.getr(); 5 }
+fn viao(o: O) -> R { let x = o.inner.getr(); println("in"); x }
+fn fwdv(w: Ws) -> R { return viar(w) }
+fn main() {
+    let a = Ws { r: R { id: 1 }, n: 0 };
+    let x1 = via(a);
+    println(f"x{x1.id}");
+    let x2 = via(Ws { r: R { id: 2 }, n: 0 });
+    println(f"x{x2.id}");
+    let c = Ws { r: R { id: 3 }, n: 0 };
+    let x3 = viar(c);
+    println(f"x{x3.id}");
+    let d = Ws { r: R { id: 4 }, n: 0 };
+    let x4 = viat(d);
+    println(f"x{x4.id}");
+    let e = Hs { s: S { id: 5, s: "ab".to_string() + "cd" }, n: 0 };
+    let x5 = viah(e);
+    println(f"x{x5.id}");
+    let f = W2 { a: R { id: 6 }, b: R { id: 60 } };
+    let x6 = via2(f);
+    println(f"x{x6.id}");
+    let g = Ws { r: R { id: 7 }, n: 0 };
+    vian(g);
+    let h = Ws { r: R { id: 8 }, n: 0 };
+    println(f"k{viad(h)}");
+    let o = O { inner: Ws { r: R { id: 9 }, n: 0 }, t: R { id: 90 } };
+    let x9 = viao(o);
+    println(f"x{x9.id}");
+    let v = V { w: Ws { r: R { id: 10 }, n: 0 }, k: 1 };
+    let x10 = v.fwd();
+    println(f"x{x10.id}");
+    let m = Ws { r: R { id: 11 }, n: 0 };
+    let x11 = m.fw2();
+    println(f"x{x11.id}");
+    let p = Ws { r: R { id: 12 }, n: 0 };
+    let x12 = fwdv(p);
+    println(f"x{x12.id}");
+    println("end")
+}
+"#);
+    assert_eq!(out, "in\nx1\ndR1\nin\nx2\ndR2\nx3\ndR3\nx4\ndR4\nin\nx5\ndS5abcd\nin\ndR60\nx6\ndR6\nin7\ndR7\ndR8\nk5\nin\ndR90\nx9\ndR9\nx10\ndR10\nin\nx11\ndR11\nx12\ndR12\nend\n");
+}
+
 /// B-2026-09-20-15 — a GENERIC enum's payload runs its user `Drop` body as a
 /// `Vec` ELEMENT and as a STRUCT FIELD, as its non-generic twin does. Both
 /// positions asked only the name-keyed payload walker, which skips a payload

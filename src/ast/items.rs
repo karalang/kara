@@ -5144,10 +5144,16 @@ fn part_paths_from_root(
             }
         }
     }
+    // B-2026-09-27-58 — the concrete struct the root names, for the METHOD
+    // forwarding route in `taken_over`. `None` (a generic or non-struct root,
+    // or no program) leaves that route silent, the under-approximating
+    // direction.
+    let root_struct = program.and_then(|p| part_scan_root_struct(p, f, param_name));
     let cx = PartScanCx {
         program,
         roots: &roots,
         top_level: true,
+        root_struct: root_struct.as_deref(),
     };
     // B-2026-09-05-17 — cycle guard for the forwarding route, which asks
     // this same question of the callee: a recursive forward answers empty,
@@ -5427,13 +5433,45 @@ fn part_paths_from_root(
                     }
                 }
             }
-            ExprKind::MethodCall { object, args, .. }
-                if cx.program.is_some()
-                    && outliving_store::place_root_outlives(object, cx.roots) =>
-            {
-                for a in args {
-                    if matches!(&a.value.kind, ExprKind::Identifier(_)) {
-                        note(&a.value, out);
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                let Some(program) = cx.program else { return };
+                if outliving_store::place_root_outlives(object, cx.roots) {
+                    for a in args {
+                        if matches!(&a.value.kind, ExprKind::Identifier(_)) {
+                            note(&a.value, out);
+                        }
+                    }
+                }
+                // B-2026-09-27-58 — the METHOD twin of the forwarding route
+                // above: the root, or a part of it, is the receiver of an
+                // OWNED-`self` method that hands a part of `self` back
+                // (`fn via(w: Ws) -> R { let x = w.getr(); x }` over `fn
+                // getr(self) -> R { return self.r }`), so `via` hands back that
+                // part under the receiver's prefix. Only the free-function
+                // spelling `getf(w)` was composed, so the caller's walk over the
+                // argument kept `r` and ran its body a second time beside the
+                // result's owner, on all four surfaces. Gated to the body's
+                // top level exactly as the free-function route is.
+                if cx.top_level {
+                    if let (Some(prefix), Some(root_struct)) =
+                        (denote(object, aliases), cx.root_struct)
+                    {
+                        if let Some(mf) = part_scan_struct_at_path(program, root_struct, &prefix)
+                            .and_then(|ty| owned_self_method_of(program, &ty, method))
+                        {
+                            if !fn_rebinds_self_whole(mf) && !fn_conditionally_rebinds_self(mf) {
+                                for q in fn_escaping_self_part_paths(program, mf) {
+                                    let mut path = prefix.clone();
+                                    path.extend(q);
+                                    push_part(out, path);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -5583,6 +5621,104 @@ struct PartScanCx<'a> {
     /// cEsc(g); } mk(99) }` reports nothing and the not-forwarded path keeps
     /// its body) rather than trading this row's double for a lost body.
     top_level: bool,
+    /// B-2026-09-27-58 — the concrete struct the scanned root names, which
+    /// the METHOD forwarding route needs to resolve a receiver's impl.
+    root_struct: Option<&'a str>,
+}
+
+/// B-2026-09-27-58 — the name of a bare, non-generic type path, the only
+/// shape the method forwarding route resolves.
+fn part_scan_bare_type_name(ty: &crate::ast::TypeExpr) -> Option<&str> {
+    let crate::ast::TypeKind::Path(p) = &ty.kind else {
+        return None;
+    };
+    if p.generic_args.is_some() || p.segments.len() != 1 {
+        return None;
+    }
+    Some(p.segments[0].as_str())
+}
+
+/// B-2026-09-27-58 — is `name` a non-generic struct of `program`?
+fn part_scan_is_concrete_struct(program: &crate::Program, name: &str) -> bool {
+    program.items.iter().any(
+        |item| matches!(item, Item::StructDef(s) if s.name == name && s.generic_params.is_none()),
+    )
+}
+
+/// B-2026-09-27-58 — the concrete, non-generic struct `root` names in `f`: a
+/// by-value param's declared type, or for `"self"` the target of the
+/// non-generic impl block `f` belongs to.
+fn part_scan_root_struct(program: &crate::Program, f: &Function, root: &str) -> Option<String> {
+    let name = if root == "self" {
+        program.items.iter().find_map(|item| match item {
+            Item::ImplBlock(imp)
+                if imp.generic_params.is_none()
+                    && imp
+                        .items
+                        .iter()
+                        .any(|ii| matches!(ii, ImplItem::Method(m) if std::ptr::eq(&**m, f) || (m.name == f.name && m.span == f.span))) =>
+            {
+                part_scan_bare_type_name(&imp.target_type)
+            }
+            _ => None,
+        })?
+    } else {
+        f.params.iter().find_map(|p| match &p.pattern.kind {
+            PatternKind::Binding(n) if n == root => part_scan_bare_type_name(&p.ty),
+            _ => None,
+        })?
+    };
+    part_scan_is_concrete_struct(program, name).then(|| name.to_string())
+}
+
+/// B-2026-09-27-58 — the concrete struct reached from struct `root` by the
+/// field-only `path` (empty = `root` itself); `None` past a tuple element, a
+/// generic struct or a non-struct field.
+fn part_scan_struct_at_path(
+    program: &crate::Program,
+    root: &str,
+    path: &ParamPath,
+) -> Option<String> {
+    let mut cur = root.to_string();
+    for part in path {
+        let ParamPart::Field(fname) = part else {
+            return None;
+        };
+        let sd = program.items.iter().find_map(|item| match item {
+            Item::StructDef(s) if s.name == cur && s.generic_params.is_none() => Some(s),
+            _ => None,
+        })?;
+        let fd = sd.fields.iter().find(|fd| &fd.name == fname)?;
+        cur = part_scan_bare_type_name(&fd.ty)?.to_string();
+    }
+    part_scan_is_concrete_struct(program, &cur).then_some(cur)
+}
+
+/// B-2026-09-27-58 — the OWNED-`self` method `method` of a non-generic impl of
+/// struct `ty`.
+fn owned_self_method_of<'p>(
+    program: &'p crate::Program,
+    ty: &str,
+    method: &str,
+) -> Option<&'p Function> {
+    program.items.iter().find_map(|item| match item {
+        Item::ImplBlock(imp)
+            if imp.generic_params.is_none()
+                && part_scan_bare_type_name(&imp.target_type) == Some(ty) =>
+        {
+            imp.items.iter().find_map(|ii| match ii {
+                ImplItem::Method(m)
+                    if m.name == method
+                        && m.generic_params.is_none()
+                        && matches!(m.self_param, Some(SelfParam::Owned)) =>
+                {
+                    Some(&**m)
+                }
+                _ => None,
+            })
+        }
+        _ => None,
+    })
 }
 
 /// B-2026-08-09-15 — the PAYLOAD sibling of [`fn_returns_param`]: does `f`
