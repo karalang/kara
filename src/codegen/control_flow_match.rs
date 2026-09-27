@@ -306,7 +306,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // does in the bound spelling (`let b = id(a); match b { .. }`).
         // `match` only: `if let` / `let ... else` bind the payload as an owner
         // and run the body through that binding.
-        if let Some(slot) = freshtemp_boxed_slot {
+        // B-2026-09-24-20 — BOXED payloads only, or arms that bind nothing of
+        // the payload. `track_freshtemp_boxed_enum_scrutinee` stages an INLINE
+        // passthrough result too (its alias arm runs before the width gate),
+        // and there the borrow classification this note relies on does not
+        // hold: an arm binding over an inline `Result[S, i64]` payload OWNS it
+        // -- `__karac_dropbodies_S(x)` and `__karac_drop_struct_S(x)` at the
+        // arm -- so the walker registered here ran `S`'s field body a second
+        // time at scope exit (`d1 k30 end d1` for `match id(a) { Ok(x) => x.r.id
+        // + x.s.len(), .. }`, where `--interp` prints `d1 k30 end`). A
+        // wildcard arm (`Ok(_) => 1`) binds nothing and still owes the body, so
+        // the walker stays for it.
+        let freshtemp_walker_owes_body = freshtemp_boxed_slot.is_some() && {
+            let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+            self.optres_scrutinee_payload_is_boxed(scrutinee, &pats)
+                || !pats.iter().any(|p| pattern_consumes_field(p))
+        };
+        if let Some(slot) = freshtemp_boxed_slot.filter(|_| freshtemp_walker_owes_body) {
             if self.scrutinee_aliases_caller_box(scrutinee) {
                 if let Some(walker) = self
                     .optres_scrutinee_type_expr(scrutinee)
@@ -15394,6 +15410,24 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(layout) = self.type_decls.enum_layouts.get("Result") else {
             return;
         };
+        // B-2026-09-24-20 — a payload that is a STRUCT rather than a direct
+        // `String`/`Vec` is freed by the action's struct-drop arm
+        // (`karac_drop_<S>`), which reads each field's own words: the cap this
+        // helper zeroes is word 3 of the payload area, and for `struct S { r:
+        // R, s: String }` that word is the String's LEN, not its cap. The arm
+        // then freed the buffer the container had just taken -- `v.push(a)`
+        // over a let-bound `Result[S, i64]` aborted `free(): double free
+        // detected in tcache 2` on every compiled surface, while the same
+        // push over `Result[T, i64]` with `T { s: String, n: i64 }` was clean
+        // only because its cap happens to sit at word 3. The payload words
+        // were copied out before this runs, so zero the WHOLE slot: tag `0`
+        // matches neither arm's guard, whatever the layout.
+        if self.inline_result_payload_has_struct_half(name) {
+            let _ = self
+                .builder
+                .build_store(slot.ptr, layout.llvm_type.const_zero());
+            return;
+        }
         let i64_t = self.context.i64_type();
         if let Ok(cap_ptr) =
             self.builder
@@ -15401,6 +15435,37 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
         }
+    }
+
+    /// B-2026-09-24-20 — does the inline `Result` binding `name` carry a
+    /// payload half that is a user STRUCT the `{ptr,len,cap}` overlay cannot
+    /// free (so its action runs the struct-drop arm)? Asked by the move
+    /// disarm above, and by `suppress_user_drop_body_keeping_memory` for the
+    /// struct whose bodies that arm would run.
+    pub(super) fn inline_result_payload_struct_halves(&self, name: &str) -> Vec<String> {
+        let Some(te) = self.payload_vars.inline_optres_var_tes.get(name) else {
+            return Vec::new();
+        };
+        let Some((ok_te, err_te)) = Self::result_payload_tes(te) else {
+            return Vec::new();
+        };
+        [ok_te, err_te]
+            .iter()
+            .filter_map(|half| {
+                let TypeKind::Path(hp) = &half.kind else {
+                    return None;
+                };
+                let head = hp.segments.last()?;
+                (self.type_decls.struct_types.contains_key(head.as_str())
+                    && !self.type_decls.shared_types.contains_key(head.as_str())
+                    && self.inline_heap_payload_elem(half).is_none())
+                .then(|| head.clone())
+            })
+            .collect()
+    }
+
+    pub(super) fn inline_result_payload_has_struct_half(&self, name: &str) -> bool {
+        !self.inline_result_payload_struct_halves(name).is_empty()
     }
 
     /// B-2026-08-05-3 — does this arm take OWNERSHIP of a named boxed TUPLE

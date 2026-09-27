@@ -15169,6 +15169,69 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        self.downgrade_inline_result_struct_arms_to_memory(name);
+    }
+
+    /// B-2026-09-24-20 — the inline `Result` half of
+    /// [`Self::suppress_user_drop_body_keeping_memory`]. A `Result[S, i64]`
+    /// binding whose `Ok` payload is a struct with a `Drop`-bearing field is
+    /// registered as a `FreeInlineResultPayload` whose struct-drop arm is the
+    /// FULL `karac_drop_S`: memory and bodies in one call, keyed by slot rather
+    /// than by name, so the `UserDrop` scan above never saw it. Handing such a
+    /// binding to a callee that takes its bodies over (`match id(a) { Ok(x) =>
+    /// .. }`) therefore ran `S`'s field body at the arm AND at the source's
+    /// scope exit -- `d1 k30 end d1` where `--interp` prints `d1 k30 end` --
+    /// while the memory stayed balanced, which kept it out of every sanitizer.
+    /// The arm is re-pointed at the struct's MEMORY walk
+    /// (`emit_struct_drop_synthesis`), the same downgrade the `OwnWrapper`
+    /// path takes one screen up.
+    fn downgrade_inline_result_struct_arms_to_memory(&mut self, name: &str) {
+        let halves = self.inline_result_payload_struct_halves(name);
+        if halves.is_empty() {
+            return;
+        }
+        let Some(slot) = self.variables.get(name).map(|s| s.ptr) else {
+            return;
+        };
+        let Some(te) = self.payload_vars.inline_optres_var_tes.get(name).cloned() else {
+            return;
+        };
+        let Some((ok_te, err_te)) = Self::result_payload_tes(&te) else {
+            return;
+        };
+        let head_of = |t: &TypeExpr| -> Option<String> {
+            match &t.kind {
+                TypeKind::Path(p) => p.segments.last().cloned(),
+                _ => None,
+            }
+        };
+        let ok_mem = head_of(&ok_te)
+            .filter(|h| halves.contains(h))
+            .and_then(|h| self.emit_struct_drop_synthesis(&h));
+        let err_mem = head_of(&err_te)
+            .filter(|h| halves.contains(h))
+            .and_then(|h| self.emit_struct_drop_synthesis(&h));
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let CleanupAction::FreeInlineResultPayload {
+                    result_slot,
+                    ok_payload_struct_drop,
+                    err_payload_struct_drop,
+                    ..
+                } = action
+                {
+                    if *result_slot != slot {
+                        continue;
+                    }
+                    if ok_payload_struct_drop.is_some() && ok_mem.is_some() {
+                        *ok_payload_struct_drop = ok_mem;
+                    }
+                    if err_payload_struct_drop.is_some() && err_mem.is_some() {
+                        *err_payload_struct_drop = err_mem;
+                    }
+                }
+            }
+        }
     }
 
     /// B-2026-07-30-11 (enum leg) — the PREFIX-KEYED sibling of

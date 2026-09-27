@@ -3558,6 +3558,32 @@ impl<'ctx> super::Codegen<'ctx> {
     /// frees the box; scope exit is the other and needs no `mut`, so
     /// `let y = value;` double-frees exactly as `let mut vv = value;` did.
     pub(super) fn callee_rebinds_param_whole(&self, callee_name: &str, arg_index: usize) -> bool {
+        self.callee_param_rebind_pred(callee_name, arg_index, crate::ast::param_rebound_into_local)
+    }
+
+    /// B-2026-09-24-20 — the `let MUT` half of [`Self::callee_rebinds_param_whole`]:
+    /// does the callee rebind parameter `arg_index` into a MUTABLE local? Read by
+    /// the boxed STRUCT payload arms below, which keep the caller's box across an
+    /// immutable rebind (the callee's let-site registers no owner for that shape)
+    /// and hand it over only for a mutable one.
+    pub(super) fn callee_rebinds_param_whole_mutably(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        self.callee_param_rebind_pred(
+            callee_name,
+            arg_index,
+            crate::ast::param_rebound_into_mut_local,
+        )
+    }
+
+    fn callee_param_rebind_pred(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+        pred: fn(&Function, &str) -> bool,
+    ) -> bool {
         let Some(program) = self.program_snapshot.as_deref() else {
             return false;
         };
@@ -3569,7 +3595,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let PatternKind::Binding(pname) = &p.pattern.kind else {
                 return false;
             };
-            crate::ast::param_rebound_into_local(f, pname)
+            pred(f, pname)
         };
         program.items.iter().any(|item| match item {
             Item::Function(f) if f.name == callee_name => check(f, arg_index),
@@ -4107,8 +4133,28 @@ impl<'ctx> super::Codegen<'ctx> {
         // after measuring the struct spelling double-free the same way, and
         // B-2026-09-06-56's leak stayed closed — the `-O0` ratchet leg carries
         // its fixtures.
+        //
+        // B-2026-09-24-20 — EXCEPT a boxed user STRUCT payload rebound
+        // IMMUTABLY: for that class the callee's `let c = a` registers no
+        // owner any more (`stmts.rs`, the let-site), because a NAMED argument
+        // keeps its let-site drop in the caller (B-2026-08-06-31) and the
+        // callee cannot tell a named argument from a temp. So the caller owns
+        // the temp's box here exactly as it does when the callee never
+        // rebinds. A MUTABLE rebind still hands the box over: the callee frees
+        // the displaced box on reassignment.
         if self.callee_rebinds_param_whole(name, i) {
-            return None;
+            let caller_keeps_struct_box = self
+                .type_decls
+                .struct_types
+                .contains_key(struct_name.as_str())
+                && !self
+                    .type_decls
+                    .shared_types
+                    .contains_key(struct_name.as_str())
+                && !self.callee_rebinds_param_whole_mutably(name, i);
+            if !caller_keeps_struct_box {
+                return None;
+            }
         }
         self.option_payload_is_boxed(payload_te)
             .then(|| struct_name.clone())

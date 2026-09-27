@@ -5093,6 +5093,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.payload_vars
                         .caller_retained_optres_params
                         .insert(n.clone());
+                    // B-2026-09-24-20 — and under each name a whole rebind
+                    // (`let c = a;`) gives the value: `match c { Ok(x) => .. }`
+                    // is a match of the param, and the set is keyed by the
+                    // scrutinee's own name.
+                    for alias in crate::ast::param_whole_rebind_aliases(func, n) {
+                        self.payload_vars
+                            .caller_retained_optres_params
+                            .insert(alias.to_string());
+                    }
                 }
             }
         }

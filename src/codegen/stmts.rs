@@ -8589,7 +8589,44 @@ impl<'ctx> super::Codegen<'ctx> {
                                                     .insert(var_name.to_string(), d);
                                             }
                                         }
-                                        if deeper.is_empty() {
+                                        // B-2026-09-24-20 — a whole rebind of a
+                                        // by-value PARAM whose boxed payload is a
+                                        // user STRUCT owns nothing: for that class
+                                        // the CALLER keeps its box (B-2026-08-06-31;
+                                        // the callee's prologue registers no owner
+                                        // for the param and `match a { .. }` treats
+                                        // it as the caller's), so `let c = a` gave
+                                        // the same box a second `BoxedEnumDrop`
+                                        // and `fn rb(a: Option[S]) -> i64 { let c =
+                                        // a; match c { Some(x) => x.r.id, .. } }`
+                                        // freed it in both frames -- a SIGSEGV
+                                        // under `karac run` and at -O0, `free():
+                                        // double free` at -O2. `c` is already a
+                                        // param view for the bodies
+                                        // (`param_view_locals`, cc75422b2); this
+                                        // is the memory half.
+                                        //
+                                        // `Option` and an IMMUTABLE rebind only:
+                                        // the caller-side arm that keeps the
+                                        // temp's box for this shape
+                                        // (`owned_boxed_option_param_struct`)
+                                        // is `Option`-only, and a `let mut`
+                                        // frees the displaced box on
+                                        // reassignment, so there the callee
+                                        // stays the owner (B-2026-09-09-17).
+                                        let caller_retained_boxed_param_rebind = !*is_mut
+                                            && *enum_name == "Option"
+                                            && matches!(&value.kind, ExprKind::Identifier(src)
+                                                if self.fn_ctx.current_fn_param_names.contains(src.as_str())
+                                                    && !self.borrow_vars.ref_params.contains_key(src.as_str())
+                                                    && !self.drop_rc.param_view_callee_owned.contains(src.as_str()))
+                                            && inner.as_deref().is_some_and(|n| {
+                                                self.type_decls.struct_types.contains_key(n)
+                                                    && !self.type_decls.shared_types.contains_key(n)
+                                            });
+                                        if caller_retained_boxed_param_rebind {
+                                            // nothing to register: see above.
+                                        } else if deeper.is_empty() {
                                             match (inner.as_deref(), leaf_drop) {
                                                 // A user struct/enum NAME still
                                                 // takes the name-based path: it

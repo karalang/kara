@@ -2548,6 +2548,21 @@ pub fn param_rebound_into_local(f: &Function, param_name: &str) -> bool {
         .any(|(_, y)| aliases.iter().any(|a| a == y))
 }
 
+/// B-2026-09-24-20 — does `f` rebind `param_name` (or an immutable alias of
+/// it) into a `let MUT` local? The `mut_rebinds` half of
+/// [`param_rebound_into_local`] alone. A caller that keeps the box of a boxed
+/// STRUCT payload across an IMMUTABLE whole rebind (the callee's rebind then
+/// registers no owner, see the `stmts.rs` let-site) still hands the box over
+/// when the rebind is mutable, because the callee frees the displaced box on
+/// reassignment and nothing on the caller's side can see that write.
+pub fn param_rebound_into_mut_local(f: &Function, param_name: &str) -> bool {
+    let w = rebind_walk(f);
+    let aliases = close_rebind_aliases(&w, param_name);
+    w.mut_rebinds
+        .iter()
+        .any(|(_, y)| aliases.iter().any(|a| a == y))
+}
+
 /// The transitive whole-rebind closure of `seed` over `w.rebinds`, admitting
 /// only targets bound exactly once (see [`param_rebind_aliases`]).
 fn close_rebind_aliases(w: &RebindWalk, seed: &str) -> Vec<String> {
@@ -8429,7 +8444,54 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
         return false;
     }
 
+    // B-2026-09-24-20 — and under each name a whole rebind gave the value.
     outliving_store::walk_block(&f.body, param_name, &roots)
+        || param_whole_rebind_aliases(f, param_name)
+            .iter()
+            .any(|alias| outliving_store::walk_block(&f.body, alias, &roots))
+}
+
+/// B-2026-09-24-20 — the names a TOP-LEVEL immutable whole rebind of the
+/// by-value parameter `param_name` binds (`let c = a;`, then `let d = c;`),
+/// in order.
+///
+/// `let c = a` MOVES the parameter: `a` is dead afterwards and `c` holds the
+/// value, so a store or a match of `c` is a store or a match of the value the
+/// caller handed in. The predicates below match the parameter by NAME, and
+/// every one of them answered `false` for the rebound spelling while the
+/// caller kept its walk -- `fn f(a: Option[R]) -> Vec[Option[R]] { let c = a;
+/// let mut v = Vec.new(); v.push(c); v }` ran the body twice on every surface,
+/// `--interp` included, where the same body without the `let` had been right
+/// since B-2026-09-24-16. `result_escape::seeded_acc` reads the same rebind as
+/// an alias for the escape sets; this is the AST predicates' reading of it.
+///
+/// Top-level statements only, and only an immutable binding of the BARE name:
+/// a nested or `mut` rebind can hold something the parameter never did, and a
+/// wrapped one (`let c = Some(a)`) is a constructor, not an alias. A later
+/// `let` that shadows the parameter's own name ends the chain.
+pub fn param_whole_rebind_aliases<'a>(f: &'a Function, param_name: &str) -> Vec<&'a str> {
+    let mut out: Vec<&'a str> = Vec::new();
+    for st in &f.body.stmts {
+        if let StmtKind::Let {
+            is_mut: false,
+            pattern,
+            value,
+            ..
+        } = &st.kind
+        {
+            if let (PatternKind::Binding(n), ExprKind::Identifier(src)) =
+                (&pattern.kind, &value.kind)
+            {
+                if n == param_name {
+                    break;
+                }
+                if src == param_name || out.contains(&src.as_str()) {
+                    out.push(n.as_str());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// B-2026-09-24-16 — does `f` move by-value parameter `arg_index` into a
@@ -8499,6 +8561,10 @@ pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bo
         }
     }
     let mut locals: Vec<&str> = Vec::new();
+    // B-2026-09-24-20 — the names the value goes by after a whole rebind
+    // (`let c = a;`): a push of `c` is a push of the parameter. Kept apart from
+    // `locals`, so the rebound name is never mistaken for a container.
+    let mut names: Vec<&str> = vec![name.as_str()];
     for st in &f.body.stmts {
         match &st.kind {
             StmtKind::Expr(e) => {
@@ -8515,7 +8581,7 @@ pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bo
                     ) && matches!(&object.kind, ExprKind::Identifier(v) if locals.contains(&v.as_str()))
                         && args
                             .iter()
-                            .any(|a| outliving_store::is_bare(&a.value, name))
+                            .any(|a| names.iter().any(|n| outliving_store::is_bare(&a.value, n)))
                     {
                         return args.iter().all(|a| straight(&a.value));
                     }
@@ -8524,7 +8590,12 @@ pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bo
                     return false;
                 }
             }
-            StmtKind::Let { pattern, value, .. } => {
+            StmtKind::Let {
+                is_mut,
+                pattern,
+                value,
+                ..
+            } => {
                 if !straight(value) {
                     return false;
                 }
@@ -8532,7 +8603,13 @@ pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bo
                     if n == name {
                         return false;
                     }
-                    locals.push(n.as_str());
+                    if !*is_mut
+                        && matches!(&value.kind, ExprKind::Identifier(src) if names.contains(&src.as_str()))
+                    {
+                        names.push(n.as_str());
+                    } else {
+                        locals.push(n.as_str());
+                    }
                 }
             }
             _ => return false,

@@ -1767,9 +1767,21 @@ impl<'ctx> super::Codegen<'ctx> {
             // `c = false` freed the second argument twice and stranded the
             // first, and a temporary had no owner on the path that dropped it.
             && crate::ast::fn_always_returns_param(Some(program), f, ast_i);
-        self.optres_param_entry_copied_te(&p.ty)
-            && crate::ast::concrete_plain_type(Some(program), &p.ty, &mut Vec::new())
-            && !keeps_hand_back_route
+        // B-2026-09-24-20 — a payload that is NOT `concrete_plain_type` is
+        // copied too. The exclusion reasoned that "a user `Drop` body anywhere
+        // inside is run by the CALLER's retained channel, so an escaping copy
+        // would run it a second time wherever the copy ends up" -- but the
+        // caller's channel is not unconditional: it stands down for the
+        // routes an escaping copy can take (`callee_takes_over_arg_drop_body`
+        // for a store into a container, `callee_enum_arg_payload_escape` for a
+        // payload handed out through a call). What the exclusion did leave was
+        // the MEMORY: with no copy the callee used the caller's buffer in
+        // place, so `v.push(a)` over `Result[S, i64]` (S holding a `String`)
+        // put the caller's buffer into a `Vec` the caller then freed a second
+        // time, and `match id(a) { Ok(x) => .. }` freed it through `x` and
+        // through the caller's binding -- `free(): double free detected in
+        // tcache 2` under `karac run` and at -O0 for both.
+        self.optres_param_entry_copied_te(&p.ty) && !keeps_hand_back_route
     }
 
     /// B-2026-09-24-19 — `te` with every bare `str` spelled `String`.

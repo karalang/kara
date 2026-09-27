@@ -9924,3 +9924,63 @@ fn main() {
     };
     assert_eq!(out, "n2\nn1\nn1\nn2\nn1\nabcd\ne\nk\nk\nijkl\nc22\nqr\nn1\nn2\nn2\nn2\ngghh\ne\nn2\nw2\nw1\ns4\nmmnn\ne\nw1\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-24-20 — an escaping by-value `Result`/`Option` param whose inline
+/// payload runs a user `Drop` has ONE owner on every surface: the callee
+/// entry-copies it, a whole rebind (`let c = a;`) is the param's alias for the
+/// escape predicates and the caller-retained set, a `Result[S, _]` binding
+/// pushed into a container is disarmed whole (its struct-drop arm reads the
+/// String's own cap, not payload word 3), a passthrough result's staged bodies
+/// walker stands down when an arm binds the inline payload, and a boxed
+/// `Option[S]` param's rebind registers no second box owner. Before: double
+/// frees (push, `match id(a)`, boxed rebind) and double bodies (rebind then
+/// arm, rebind then push -- on `--interp` too).
+#[test]
+fn test_e2e_escaping_optres_param_with_drop_payload_has_one_owner() {
+    let out = run_program(
+        r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct S { r: R, s: String }
+fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
+struct W { p: Result[S, i64], k: i64 }
+fn id(a: Result[S, i64]) -> Result[S, i64] { a }
+fn peek(a: Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => e } }
+fn keep(a: Result[S, i64]) -> Vec[Result[S, i64]] { let mut v: Vec[Result[S, i64]] = Vec.new(); v.push(a); v }
+fn keep_rb(a: Result[S, i64]) -> Vec[Result[S, i64]] { let c = a; let mut v: Vec[Result[S, i64]] = Vec.new(); v.push(c); v }
+fn local_rb(a: Result[S, i64]) -> i64 { let c = a; let mut v: Vec[Result[S, i64]] = Vec.new(); v.push(c); v.len() + 2 }
+fn arm_rb(a: Result[S, i64]) -> i64 { let c = a; match c { Ok(x) => x.r.id, Err(e) => e } }
+fn len_rb(a: Result[S, i64]) -> i64 { let c = a; match c { Ok(x) => x.s.len(), Err(e) => e } }
+fn sink(v: mut ref Vec[Result[S, i64]], a: Result[S, i64]) { v.push(a); }
+fn tup(a: Result[S, i64]) -> (Result[S, i64], i64) { (a, 2) }
+fn wrap(a: Result[S, i64]) -> W { W { p: a, k: 2 } }
+fn eat(x: Result[S, i64]) -> i64 { match x { Ok(y) => y.r.id, Err(e) => e } }
+fn via(a: Result[S, i64]) -> i64 { eat(a) }
+fn opt_rb(a: Option[R]) -> Vec[Option[R]] { let c = a; let mut v: Vec[Option[R]] = Vec.new(); v.push(c); v }
+fn opt_sink(v: mut ref Vec[Option[R]], a: Option[R]) { let c = a; v.push(c); }
+fn boxed_rb(a: Option[S]) -> i64 { let c = a; match c { Some(x) => x.r.id, None => 0 } }
+fn main() {
+  let a1: Result[S, i64] = Ok(mk(1)); let k1 = peek(a1); println(f"a{k1}");
+  let k1t = peek(Ok(mk(2))); println(f"at{k1t}");
+  let a3: Result[S, i64] = Ok(mk(3)); let v3 = keep(a3); println(f"c{v3.len()}");
+  let a4: Result[S, i64] = Ok(mk(4)); let v4 = keep_rb(a4); println(f"r{v4.len()}");
+  let a5: Result[S, i64] = Ok(mk(5)); let k5 = local_rb(a5); println(f"l{k5}");
+  let a6: Result[S, i64] = Ok(mk(6)); let k6 = arm_rb(a6); println(f"d{k6}x");
+  let a7: Result[S, i64] = Ok(mk(7)); let k7 = len_rb(a7); println(f"n{k7}");
+  let mut s8: Vec[Result[S, i64]] = Vec.new(); let a8: Result[S, i64] = Ok(mk(8)); sink(mut s8, a8); println(f"m{s8.len()}");
+  let a9: Result[S, i64] = Ok(mk(9)); let t9 = tup(a9); println(f"t{t9.1}");
+  let a10: Result[S, i64] = Ok(mk(10)); let w10 = wrap(a10); println(f"w{w10.k}");
+  let a11: Result[S, i64] = Ok(mk(11)); let k11 = via(a11); println(f"e{k11}");
+  let a12: Result[S, i64] = Ok(mk(12)); let mut v12: Vec[Result[S, i64]] = Vec.new(); v12.push(a12); println(f"p{v12.len()}");
+  let o13: Option[R] = Some(R { id: 13 }); let v13 = opt_rb(o13); println(f"o{v13.len()}");
+  let mut s14: Vec[Option[R]] = Vec.new(); let o14: Option[R] = Some(R { id: 14 }); opt_sink(mut s14, o14); println(f"q{s14.len()}");
+  let b15: Option[S] = Some(mk(15)); let k15 = boxed_rb(b15); println(f"g{k15}");
+  println("end")
+}
+"#,
+    );
+    assert_eq!(
+        out.as_deref(),
+        Some("d1\na30\nd2\nat31\nc1\nd3\nr1\nd4\nd5\nl3\nd6\nd6x\nd7\nn29\nm1\nd8\nt2\nd9\nw2\nd10\nd11\ne11\np1\nd12\no1\nd13\nq1\nd14\nd15\ng15\nend\n"),
+        "must match --interp"
+    );
+}
