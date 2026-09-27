@@ -1883,13 +1883,13 @@ fn asan_boxed_array_payload_interior_has_exactly_one_owner() {
 /// green `--features llvm` run is no evidence either way. The crash,
 /// however, aborted at BOTH opt levels before the fix.
 ///
-/// ONE CELL IS PINNED AS IT STANDS RATHER THAN AS IT SHOULD BE. Every
-/// envelope cell here runs its element bodies at the CONSTRUCTOR statement
-/// rather than at the holder's death — `local/seeded` prints both `dS` lines
-/// before `held`, though `x` owns the array until the block ends. That is
-/// pre-existing and agreed on all four surfaces (`userenum` printed exactly
-/// this before the fix, when it was the clean control), so it is pinned as
-/// measured and filed as its own row rather than quietly blessed here.
+/// THE EARLY BODIES ARE AS SPECIFIED, NOT A PINNED DEFECT. Every envelope
+/// cell here runs its element bodies at the CONSTRUCTOR statement rather than
+/// at the end of the block — `local/seeded` prints both `dS` lines before
+/// `held`. That is design.md's NLL rule: a destructor fires where the
+/// binding's live range ends, and `x` is never read after the constructor.
+/// All four surfaces agree. B-2026-09-17-6 filed it as an order defect and was
+/// closed `invalid` on exactly this reading.
 ///
 /// Measured on this tree: 0 bytes in 0 blocks at `-O0` under
 /// `valgrind --leak-check=full`, and the stdout below is byte-identical
