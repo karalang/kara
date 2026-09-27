@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 512 |
-| miscompile | 492 |
+| miscompile | 493 |
 | leak | 443 |
 | double-free | 329 |
 | missing-feature | 209 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2189 |
-| interp | 601 |
+| codegen | 2190 |
+| interp | 602 |
 | typecheck | 309 |
 | other | 111 |
 | ownership | 78 |
@@ -356,7 +356,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-46 | 2026-09-27 | interp+codegen | medium | A FIELD MOVED OUT INSIDE AN `if` THAT FALLS THROUGH, THEN BOUND BY A DESTRUCTURE, RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `if c { let x = o.k; .. } let Outer { h, k } = o;` with `c` true prints `x=3 dR3 dR3`; the move promotes `o` to RC fallback, which B-2026-09-16-26's hand-off does not cover, and with `c` false the compiled surfaces also run the unread leaves' bodies after `end` where `--interp` runs them at the destructure | — |
 | B-2026-09-27-47 | 2026-09-27 | codegen | medium | A LEAF BOUND BY A NESTED STRUCT SUB-PATTERN RUNS ITS `Drop` BODY AT THE DESTRUCTURE ON EVERY COMPILED SURFACE, BEFORE THE STATEMENTS THAT STILL READ IT -- `let Outer { h: Inner { r, q }, k } = o; println(f"r={r.id}")` prints `dR1` before `r=1` compiled and after it under `--interp`; no move-out is needed | — |
 | B-2026-09-27-48 | 2026-09-27 | interp+codegen | medium | A FRESH TEMP'S `Drop` FIELD HANDED TO A GENERIC CALLEE THAT KEEPS IT ON ONLY SOME PATHS STILL LOSES THE SIBLINGS' BODIES ON ALL FOUR SURFACES WHEN THE LEAF CARRIES A `shared` FIELD, IS AN ENUM, OR IS LENT ON TO A CALLEE THAT STORES IT CONDITIONALLY -- `gmaybe(mkv(1).f, c)` prints `dF11 o end` owing `dD31n31 dD21n21 dE1`, `gmaybe(mkv(1).g, true)` prints `dD21n21 o end` owing `dD31n31 dF11 dE1`, and `gl(mut v, mkw(7).r)` prints `g1 l1 dD7n7 end` owing `dD107n107` | — |
-| B-2026-09-27-49 | 2026-09-27 | interp+codegen | medium | A USER-ENUM BY-VALUE PARAM A CALLEE WRAPS IN `Some` ON ONE PATH NEVER RUNS ITS PAYLOAD'S `Drop` BODY ON THE PATH WHERE IT DIES INSIDE, ON ALL FOUR SURFACES -- `let g = G.A(mkd(21)); let o = gmaybeg(g, false)` over `fn gmaybeg(x: G, c: bool) -> Option[G] { if c { return Some(x); } None }` prints `o end` owing `dD21n21 o end`; the struct twin `maybe(d, false)` and an enum callee that never wraps it both run the body | — |
 | B-2026-09-27-50 | 2026-09-27 | codegen | high | A `let mut` REBIND OF A BY-VALUE PARAM THAT IS THEN REASSIGNED IS WRONG ON EVERY COMPILED SURFACE, AND IN THREE DIFFERENT WAYS -- `fn rb(a: Option[S]) -> i64 { let mut c = a; c = Some(mk(9)); println("in"); 5 }` double-frees for a NAMED boxed `Option[S]` argument (`free(): double free` at -O2, SIGSEGV on jit and -O0), loses both bodies for a temporary (`in k5 end` where `d2 d9 in k5 end` is due), and a plain struct param (`fn rb(a: R) { let mut c = a; c = R { id: 9 }; .. }`) runs the displaced body after the call instead of at the reassignment | — |
 | B-2026-09-27-51 | 2026-09-27 | interp | medium | THE INTERPRETER RUNS A BY-VALUE PARAM'S `Drop` BODY IN BOTH FRAMES WHEN THE CALLEE REBINDS IT INTO A `let mut` LOCAL THAT IS RETURNED, PUSHED OR REASSIGNED -- `fn rb(a: Option[S]) -> Option[S] { let mut c = a; c }` prints `d1 d1 k d2 d2 end` under `--interp` where every compiled surface (and the `let c = a` spelling on every surface) prints `d1 k d2 end` | — |
 | B-2026-09-27-53 | 2026-09-27 | codegen | high | PUSHING A BY-VALUE BOXED `Option[S]` PARAM INTO A LOCAL `Vec` CRASHES WITH NO OUTPUT AT ALL ON EVERY COMPILED SURFACE -- `fn rb(a: Option[S]) -> i64 { let mut v: Vec[Option[S]] = Vec.new(); v.push(a); println("in"); 5 }` prints `d1 in k5 d2 in end` under `--interp` and dies before its first `println` on jit, -O0 and -O2 (valgrind -O0: 17 allocs, 21 frees, 8 errors) | — |
@@ -374,6 +373,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-66 | 2026-09-27 | codegen | high | A `for` LOOP VIEW OF A BOXED GENERIC ENUM THAT ESCAPES A BY-VALUE CALLEE, OR IS CONSUMED TWICE, CRASHES ON EVERY COMPILED SURFACE -- `for h in v { w.push(keep(h)) }` over `fn keep(h: Ho[S]) -> Ho[S] { h }` segfaults with 5 valgrind errors, and `for h in v { shows(h); shows(h) }` aborts, where `--interp` prints `n11 dS7 dS7 end` and `s7 s7 n1 dS7 end` | — |
 | B-2026-09-27-74 | 2026-09-27 | codegen | high | A BY-VALUE `Option` / `Result` PARAM WITH A BOXED USER-ENUM PAYLOAD, MATCHED BY A NESTED ARM WHOSE VALUE READS THE PAYLOAD, SKIPS THE PAYLOAD'S DROP BODIES AND RUNS ONE ON A ZEROED VALUE -- `fn rb(a: Option[K]) -> i64 { match a { Some(K.A(w)) => w.r.id, Some(K.B) => 30, None => 40 } }` over `enum K { A(W), B }` prints `k1 d0 k2 end` at -O0 and -O2 where `--interp` prints `k1 d1 d2 k2 end`, and valgrind finds the two heap `String`s of each `W` definitely lost; no rebind is involved | — |
 | B-2026-09-27-75 | 2026-09-27 | codegen | high | A WHOLE-PAYLOAD ARM `Some(k) => match k { .. }` ON A BY-VALUE `Option[K]` PARAM WITH A BOXED USER-ENUM PAYLOAD RUNS AN EXTRA `Drop` BODY ON A ZEROED VALUE, AND DOUBLE-FREES WHEN THE PARAM IS FIRST REBOUND -- `fn rb(a: Option[K]) -> i64 { match a { Some(k) => match k { K.A(w) => println(f"m{w.r.id}"), K.B => println("b") }, None => println("n") } 5 }` prints `m1 d1 d0 k5 m2 d2 d0 end` at -O0 and -O2 where `--interp` prints `m1 d1 k5 m2 d2 end`; with `let c = a; match c { .. }` it aborts `free(): double free` on both | — |
+| B-2026-09-27-69 | 2026-09-27 | interp+codegen | medium | A `for` LOOP ELEMENT HANDED BY VALUE TO A CALLEE THAT KEEPS IT RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `for g in v { let o = f(g); }` over `fn f(x: D) -> D { x }` prints `dD1n1 o dD2n2 o dD1n1 dD2n2 end`, the result's body at each iteration AND the element's again when `v`'s buffer dies, where a consuming callee that keeps nothing prints each body once | — |
 
 ### Relocated
 
@@ -3119,6 +3119,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-14 | interp+codegen | medium | TWO SPELLINGS OF B-2026-09-27-3 ITS FIX LEAVES AS THEY WERE: a STRUCT field at the tail of an `if` passed as a CALL ARGUMENT (`show(if k { p.a } else… | e06d859 |
 | B-2026-09-27-18 | interp+codegen | medium | A FRESH TEMP'S `Drop` FIELD HANDED TO A GENERIC CALLEE THAT KEEPS IT ON ONLY SOME PATHS, OR AN ENUM LEAF HANDED TO ANY KEEPING CALLEE, IS STILL WRONG… | 062289af5 |
 | B-2026-09-27-37 | codegen | high | A BY-VALUE BOXED `Option[S]` PARAM REBOUND INTO A `let mut` LOCAL IS FREED BY BOTH FRAMES FOR A NAMED ARGUMENT -- `fn rb(a: Option[S]) -> i64 { let m… | e65e0f2 |
+| B-2026-09-27-49 | interp+codegen | medium | A USER-ENUM BY-VALUE PARAM A CALLEE WRAPS IN `Some` ON ONE PATH NEVER RUNS ITS PAYLOAD'S `Drop` BODY ON THE PATH WHERE IT DIES INSIDE, ON ALL FOUR SU… | 507ba3fb1 |
 | B-2026-09-27-52 | codegen | high | TWO IMMUTABLE-REBIND SPELLINGS OF A BY-VALUE BOXED STRUCT PARAM THAT B-2026-09-24-20 DID NOT REACH DOUBLE-FREE ON EVERY COMPILED SURFACE -- a CHAINED… | 5accd514c |
 | B-2026-09-27-60 | codegen | medium | A `for` LOOP BINDING OVER A `Vec` OF A BOXED GENERIC ENUM, PASSED BY VALUE TO A CALLEE THAT MATCHES IT, RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY… | b3ab2eb44 |
 
