@@ -2143,6 +2143,36 @@ pub fn fn_destructures_bare_self(f: &Function) -> bool {
     walk_block(&f.body)
 }
 
+/// B-2026-09-16-29 — can the free function `callee` KEEP what it is handed at
+/// argument `idx`, by its declaration alone?
+///
+/// A by-value argument to a user function is entry-copied, not transferred
+/// (`consume_class`), so the only ways the value can outlive the call are the
+/// return value and the other parameters. This answers "cannot" only when both
+/// are closed: the return type is unit or a type that carries no `Drop` body
+/// (a scalar or `String`), and every OTHER parameter is one too, so there is
+/// no container, `mut ref` or channel to stash it in. An unknown callee, a
+/// closure, a constructor and a method all answer `false`, which is the
+/// conservative direction here: `false` keeps the arm a take.
+pub fn free_fn_arg_cannot_keep(items: &[Item], callee: &str, idx: usize) -> bool {
+    let Some(f) = items.iter().find_map(|it| match it {
+        Item::Function(f) if f.name == callee => Some(f),
+        _ => None,
+    }) else {
+        return false;
+    };
+    if f.self_param.is_some() || idx >= f.params.len() {
+        return false;
+    }
+    f.return_type
+        .as_ref()
+        .is_none_or(type_expr_cannot_carry_drop_body)
+        && f.params
+            .iter()
+            .enumerate()
+            .all(|(i, p)| i == idx || type_expr_cannot_carry_drop_body(&p.ty))
+}
+
 /// B-2026-09-06-39 — do this function's bare-`self` match / `if let` /
 /// `while let` arms only READ THROUGH their payload bindings, so that the arms
 /// can bind VIEWS and the CALLER keep ownership of the payload's `Drop` bodies?
@@ -2176,11 +2206,16 @@ pub fn fn_destructures_bare_self(f: &Function) -> bool {
 /// bare mention in ANY other position counts as a take, including a call
 /// argument and a method receiver. So `eat(r)` and `Some(r)` both decline, and
 /// only the second of those has to — `Some(r)` really is a move (`opt/temp`
-/// doubled without it), while `eat(r)` is caller-retains and would be safe. The
-/// walk cannot tell them apart syntactically, and an over-approximation costs
-/// the pre-existing mis-ORDER while an under-approximation costs a doubled
-/// body, so it over-approximates. That residual is B-2026-09-16-26.
-pub fn fn_bare_self_arms_bind_views(f: &Function) -> bool {
+/// doubled without it), while `eat(r)` is caller-retains and would be safe.
+///
+/// B-2026-09-16-29 — the free-function argument is now told apart by its
+/// DECLARATION, which is what `items` is for: a bare binding handed to
+/// [`free_fn_arg_cannot_keep`]'s callees is a read. Everything else keeps the
+/// over-approximation, whose cost is a mis-ORDER where the opposite error
+/// costs a doubled body.
+pub fn fn_bare_self_arms_bind_views(f: &Function, items: &[Item]) -> bool {
+    let read_arg = |callee: &str, i: usize| free_fn_arg_cannot_keep(items, callee, i);
+    let read_arg: &dyn Fn(&str, usize) -> bool = &read_arg;
     fn names_of(p: &Pattern, out: &mut Vec<String>) {
         match &p.kind {
             PatternKind::Binding(n) => out.push(n.clone()),
@@ -2206,17 +2241,19 @@ pub fn fn_bare_self_arms_bind_views(f: &Function) -> bool {
             _ => {}
         }
     }
-    fn block_takes(b: &Block, name: &str) -> bool {
+    fn block_takes(b: &Block, name: &str, read_arg: &dyn Fn(&str, usize) -> bool) -> bool {
         b.stmts.iter().any(|st| {
             let mut found = false;
             crate::rc_elide::walk_stmt_children_pub(st, &mut |e| {
-                if crate::deque_head::expr_mentions_name_outside_field_projection(e, name) {
+                if crate::deque_head::expr_mentions_name_outside_field_projection_except(
+                    e, name, read_arg,
+                ) {
                     found = true;
                 }
             });
             found
         }) || b.final_expr.as_deref().is_some_and(|e| {
-            crate::deque_head::expr_mentions_name_outside_field_projection(e, name)
+            crate::deque_head::expr_mentions_name_outside_field_projection_except(e, name, read_arg)
         })
     }
     fn arm_reads_only(
@@ -2224,29 +2261,34 @@ pub fn fn_bare_self_arms_bind_views(f: &Function) -> bool {
         guard: Option<&Expr>,
         body: Option<&Expr>,
         blk: Option<&Block>,
+        read_arg: &dyn Fn(&str, usize) -> bool,
     ) -> bool {
         let mut names = Vec::new();
         names_of(p, &mut names);
         names.iter().all(|n| {
             !guard.is_some_and(|g| {
-                crate::deque_head::expr_mentions_name_outside_field_projection(g, n)
+                crate::deque_head::expr_mentions_name_outside_field_projection_except(
+                    g, n, read_arg,
+                )
             }) && !body.is_some_and(|b| {
-                crate::deque_head::expr_mentions_name_outside_field_projection(b, n)
-            }) && !blk.is_some_and(|b| block_takes(b, n))
+                crate::deque_head::expr_mentions_name_outside_field_projection_except(
+                    b, n, read_arg,
+                )
+            }) && !blk.is_some_and(|b| block_takes(b, n, read_arg))
         })
     }
     fn is_bare_self(e: &Expr) -> bool {
         matches!(&e.kind, ExprKind::SelfValue)
     }
-    fn walk_expr(e: &Expr) -> bool {
+    fn walk_expr(e: &Expr, read_arg: &dyn Fn(&str, usize) -> bool) -> bool {
         match &e.kind {
             ExprKind::Match { scrutinee, arms } => {
                 (!is_bare_self(scrutinee)
-                    || arms
-                        .iter()
-                        .all(|a| arm_reads_only(&a.pattern, a.guard.as_ref(), Some(&a.body), None)))
-                    && walk_expr(scrutinee)
-                    && arms.iter().all(|a| walk_expr(&a.body))
+                    || arms.iter().all(|a| {
+                        arm_reads_only(&a.pattern, a.guard.as_ref(), Some(&a.body), None, read_arg)
+                    }))
+                    && walk_expr(scrutinee, read_arg)
+                    && arms.iter().all(|a| walk_expr(&a.body, read_arg))
             }
             ExprKind::IfLet {
                 pattern,
@@ -2254,10 +2296,13 @@ pub fn fn_bare_self_arms_bind_views(f: &Function) -> bool {
                 then_block,
                 else_branch,
             } => {
-                (!is_bare_self(value) || arm_reads_only(pattern, None, None, Some(then_block)))
-                    && walk_expr(value)
-                    && walk_block(then_block)
-                    && else_branch.as_deref().is_none_or(walk_expr)
+                (!is_bare_self(value)
+                    || arm_reads_only(pattern, None, None, Some(then_block), read_arg))
+                    && walk_expr(value, read_arg)
+                    && walk_block(then_block, read_arg)
+                    && else_branch
+                        .as_deref()
+                        .is_none_or(|x| walk_expr(x, read_arg))
             }
             ExprKind::WhileLet {
                 pattern,
@@ -2265,39 +2310,46 @@ pub fn fn_bare_self_arms_bind_views(f: &Function) -> bool {
                 body,
                 ..
             } => {
-                (!is_bare_self(value) || arm_reads_only(pattern, None, None, Some(body)))
-                    && walk_expr(value)
-                    && walk_block(body)
+                (!is_bare_self(value) || arm_reads_only(pattern, None, None, Some(body), read_arg))
+                    && walk_expr(value, read_arg)
+                    && walk_block(body, read_arg)
             }
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
-            | ExprKind::Par(b) => walk_block(b),
+            | ExprKind::Par(b) => walk_block(b, read_arg),
             ExprKind::If {
                 condition,
                 then_block,
                 else_branch,
             } => {
-                walk_expr(condition)
-                    && walk_block(then_block)
-                    && else_branch.as_deref().is_none_or(walk_expr)
+                walk_expr(condition, read_arg)
+                    && walk_block(then_block, read_arg)
+                    && else_branch
+                        .as_deref()
+                        .is_none_or(|x| walk_expr(x, read_arg))
             }
             ExprKind::While { body, .. }
             | ExprKind::For { body, .. }
             | ExprKind::Loop { body, .. }
-            | ExprKind::LabeledBlock { body, .. } => walk_block(body),
+            | ExprKind::LabeledBlock { body, .. } => walk_block(body, read_arg),
             _ => true,
         }
     }
-    fn walk_block(b: &Block) -> bool {
+    fn walk_block(b: &Block, read_arg: &dyn Fn(&str, usize) -> bool) -> bool {
         b.stmts.iter().all(|st| match &st.kind {
-            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => walk_expr(value),
-            StmtKind::Expr(e) => walk_expr(e),
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                walk_expr(value, read_arg)
+            }
+            StmtKind::Expr(e) => walk_expr(e, read_arg),
             _ => true,
-        }) && b.final_expr.as_deref().is_none_or(walk_expr)
+        }) && b
+            .final_expr
+            .as_deref()
+            .is_none_or(|x| walk_expr(x, read_arg))
     }
-    fn_matches_on_bare_self(f) && !fn_binds_self_part_out(f) && walk_block(&f.body)
+    fn_matches_on_bare_self(f) && !fn_binds_self_part_out(f) && walk_block(&f.body, read_arg)
 }
 
 /// `(target, callee key, [(arg index, bare-identifier arg)])` of one

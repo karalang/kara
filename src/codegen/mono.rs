@@ -5085,7 +5085,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // every compiled surface, against a concrete-`impl G[R]` twin that is
         // correct. Restored by `ensure_mono_generated` / `compile_generic_call`
         // alongside `current_fn_param_names`.
-        self.fn_ctx.self_arms_bind_views = crate::ast::fn_bare_self_arms_bind_views(func);
+        self.fn_ctx.self_arms_bind_views =
+            crate::ast::fn_bare_self_arms_bind_views(func, self.program_items());
         self.fn_ctx.current_fn_param_names.clear();
         for p in &func.params {
             if let crate::ast::PatternKind::Binding(n) = &p.pattern.kind {

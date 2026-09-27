@@ -626,6 +626,7 @@ impl<'a> super::Interpreter<'a> {
                                                         )
                                                         && crate::ast::fn_bare_self_arms_bind_views(
                                                             f,
+                                                            &self.program.items,
                                                         )))
                                                 || !crate::ast::owned_self_return_cannot_carry_receiver(
                                                     f,
@@ -685,7 +686,9 @@ impl<'a> super::Interpreter<'a> {
                         // payload's `Drop` body.
                         self.self_arms_bind_views_stack.push(
                             self.find_impl_method_ast(&type_name, method)
-                                .is_some_and(crate::ast::fn_bare_self_arms_bind_views),
+                                .is_some_and(|f| {
+                                    crate::ast::fn_bare_self_arms_bind_views(f, &self.program.items)
+                                }),
                         );
                         self.self_param_stack.push(sp);
                         true
@@ -1248,7 +1251,7 @@ impl<'a> super::Interpreter<'a> {
             && self.owned_enum_receiver_arms_bind_views(type_name)
             && self
                 .find_impl_method_ast(type_name, method)
-                .is_some_and(crate::ast::fn_bare_self_arms_bind_views);
+                .is_some_and(|f| crate::ast::fn_bare_self_arms_bind_views(f, &self.program.items));
         if !fresh && !chain_views {
             return;
         }
@@ -1351,7 +1354,9 @@ impl<'a> super::Interpreter<'a> {
                     && ((self.owned_enum_receiver_arms_bind_views(&tn)
                         && self
                             .find_impl_method_ast(type_name, method)
-                            .is_some_and(crate::ast::fn_bare_self_arms_bind_views))
+                            .is_some_and(|f| {
+                                crate::ast::fn_bare_self_arms_bind_views(f, &self.program.items)
+                            }))
                         || !self
                             .find_impl_method_ast(type_name, method)
                             .is_some_and(crate::ast::fn_matches_on_bare_self));

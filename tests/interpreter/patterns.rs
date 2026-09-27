@@ -7861,14 +7861,14 @@ fn main() {
 /// MethodCall receiver for that walk. Its missing `dE` is pre-existing and
 /// untouched.
 ///
-/// TWO RESIDUALS ARE PINNED AS THEY STAND rather than blessed. `named/call`
-/// (`eat(r)`) still prints payload-then-shell: the read-only walk counts a bare
-/// mention in ANY non-projection position as a take, which `Some(r)` really is
-/// (it doubled the body without the clause) and `eat(r)` is not — the walk cannot
-/// tell them apart syntactically and over-approximates, because an
-/// over-approximation costs this mis-order while an under-approximation costs a
-/// doubled body. That is B-2026-09-16-29. `ret_self` / `wrap` kept the doubled
-/// `dE` of B-2026-09-16-22 until that row's fix, and now print it once.
+/// `named/call` (`eat(r)`) printed payload-then-shell until B-2026-09-16-29:
+/// the read-only walk counted a bare mention in ANY non-projection position as
+/// a take, which `Some(r)` really is (it doubled the body without the clause)
+/// and `eat(r)` is not. It now reads the callee's declaration, and a free
+/// function that can keep nothing it is handed (`free_fn_arg_cannot_keep`) is a
+/// read, so the cell prints the shell first like `named/read`. `ret_self` /
+/// `wrap` kept the doubled `dE` of B-2026-09-16-22 until that row's fix, and now
+/// print it once.
 ///
 /// Controls that must not move: `named/none` (no arm at all, B-2026-09-16-21),
 /// `named/letself` (a whole rebind — the callee owns it, so the arms must NOT
@@ -7945,9 +7945,9 @@ chain/read
   dR5
   x5
 named/call
-  dR6
   x6
   dE
+  dR6
 named/none
   x5
   dE
@@ -8295,4 +8295,53 @@ fn main() {
 }
 "#);
     assert_eq!(out, "3 23\n41 2 Some(1)\n4413\n");
+}
+
+/// B-2026-09-16-29 — a bare-`self` arm that hands its payload BY VALUE to a
+/// free function that can keep nothing (`eat(r)` over `fn eat(r: R) -> i64`)
+/// ran the payload's `Drop` body before the shell's, where the projection-only
+/// spelling and the by-value param twin both run it after. The read-only walk
+/// counted every bare mention outside a projection as a take; it now reads the
+/// callee's declaration, and `free_fn_arg_cannot_keep` (unit or scalar/`String`
+/// return, every other parameter scalar/`String`) makes the argument a read.
+/// `call`, `tail`, `gen`, `stmt`, `iflet` and `temp` are the fixed cells; `opt`
+/// (`Some(r)`), `id` (a callee that returns its argument) and `keep` (a callee
+/// with a `mut ref Vec[R]` to stash it in) must stay takes, and do.
+#[test]
+fn test_bare_self_arm_passing_payload_to_scalar_fn_orders_payload_after_shell() {
+    let out = run(r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" } }
+fn eat(r: R) -> i64 { return r.id; }
+fn eatg[T](x: T, k: i64) -> i64 { return k; }
+fn say(r: R) { println(f"  say{r.id}"); }
+fn id(r: R) -> R { return r; }
+fn keep(v: mut ref Vec[R], r: R) { v.push(r); }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+impl E {
+    fn call(self) -> i64 { match self { E.A(r) => { return eat(r); } E.B => { return 0; } } }
+    fn tailc(self) -> i64 { match self { E.A(r) => eat(r), E.B => 0 } }
+    fn gcall(self) -> i64 { match self { E.A(r) => { return eatg(r, 7); } E.B => { return 0; } } }
+    fn stmt(self) -> i64 { match self { E.A(r) => { say(r); return 1; } E.B => { return 0; } } }
+    fn iflet(self) -> i64 { if let E.A(r) = self { return eat(r); } return 0; }
+    fn opt(self) -> Option[R] { match self { E.A(r) => { return Some(r); } E.B => { return None; } } }
+    fn cid(self) -> i64 { match self { E.A(r) => { let q = id(r); return q.id; } E.B => { return 0; } } }
+    fn ckeep(self, v: mut ref Vec[R]) -> i64 { match self { E.A(r) => { keep(v, r); return 1; } E.B => { return 0; } } }
+}
+fn main() {
+    println("call");  { let a: E = E.A(mk(1)); println(f"  x{a.call()}") }
+    println("tail");  { let a: E = E.A(mk(2)); println(f"  x{a.tailc()}") }
+    println("gen");   { let a: E = E.A(mk(3)); println(f"  x{a.gcall()}") }
+    println("stmt");  { let a: E = E.A(mk(4)); println(f"  x{a.stmt()}") }
+    println("iflet"); { let a: E = E.A(mk(5)); println(f"  x{a.iflet()}") }
+    println("temp");  { println(f"  x{E.A(mk(7)).call()}") }
+    println("none");  { let a: E = E.B; println(f"  x{a.call()}") }
+    println("opt");   { let a: E = E.A(mk(8)); let o = a.opt(); println("  held") }
+    println("id");    { let a: E = E.A(mk(9)); println(f"  x{a.cid()}") }
+    println("keep");  { let mut v: Vec[R] = Vec.new(); { let a: E = E.A(mk(10)); println(f"  x{a.ckeep(mut v)}") } println(f"  n{v.len()}") }
+    println("end");
+}
+"#);
+    assert_eq!(out, "call\n  x1\n  dE\n  dR1\ntail\n  x2\n  dE\n  dR2\ngen\n  x7\n  dE\n  dR3\nstmt\n  say4\n  x1\n  dE\n  dR4\niflet\n  x5\n  dE\n  dR5\ntemp\n  dE\n  dR7\n  x7\nnone\n  x0\n  dE\nopt\n  dR8\n  dE\n  held\nid\n  dR9\n  x9\n  dE\nkeep\n  x1\n  dE\n  n1\n  dR10\nend\n");
 }

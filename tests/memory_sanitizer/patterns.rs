@@ -479,9 +479,9 @@ fn main() {
             "  dR5",
             "  x5",
             "named/call",
-            "  dR6",
             "  x6",
             "  dE",
+            "  dR6",
             "named/none",
             "  x5",
             "  dE",
@@ -10731,5 +10731,64 @@ fn main() {
 "#,
         &expected,
         "asan_enum_self_assign_identity_arm_frees_only_the_distinct_value",
+    );
+}
+
+/// B-2026-09-16-29 — a bare-`self` arm that hands its payload BY VALUE to a
+/// free function that can keep nothing (`eat(r)` over `fn eat(r: R) -> i64`)
+/// ran the payload's `Drop` body before the shell's, where the projection-only
+/// spelling and the by-value param twin both run it after. The read-only walk
+/// counted every bare mention outside a projection as a take; it now reads the
+/// callee's declaration, and `free_fn_arg_cannot_keep` (unit or scalar/`String`
+/// return, every other parameter scalar/`String`) makes the argument a read.
+/// `call`, `tail`, `gen`, `stmt`, `iflet` and `temp` are the fixed cells; `opt`
+/// (`Some(r)`), `id` (a callee that returns its argument) and `keep` (a callee
+/// with a `mut ref Vec[R]` to stash it in) must stay takes, and do.
+#[test]
+fn asan_bare_self_arm_passing_payload_to_scalar_fn_frees_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" } }
+fn eat(r: R) -> i64 { return r.id; }
+fn eatg[T](x: T, k: i64) -> i64 { return k; }
+fn say(r: R) { println(f"  say{r.id}"); }
+fn id(r: R) -> R { return r; }
+fn keep(v: mut ref Vec[R], r: R) { v.push(r); }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+impl E {
+    fn call(self) -> i64 { match self { E.A(r) => { return eat(r); } E.B => { return 0; } } }
+    fn tailc(self) -> i64 { match self { E.A(r) => eat(r), E.B => 0 } }
+    fn gcall(self) -> i64 { match self { E.A(r) => { return eatg(r, 7); } E.B => { return 0; } } }
+    fn stmt(self) -> i64 { match self { E.A(r) => { say(r); return 1; } E.B => { return 0; } } }
+    fn iflet(self) -> i64 { if let E.A(r) = self { return eat(r); } return 0; }
+    fn opt(self) -> Option[R] { match self { E.A(r) => { return Some(r); } E.B => { return None; } } }
+    fn cid(self) -> i64 { match self { E.A(r) => { let q = id(r); return q.id; } E.B => { return 0; } } }
+    fn ckeep(self, v: mut ref Vec[R]) -> i64 { match self { E.A(r) => { keep(v, r); return 1; } E.B => { return 0; } } }
+}
+fn main() {
+    println("call");  { let a: E = E.A(mk(1)); println(f"  x{a.call()}") }
+    println("tail");  { let a: E = E.A(mk(2)); println(f"  x{a.tailc()}") }
+    println("gen");   { let a: E = E.A(mk(3)); println(f"  x{a.gcall()}") }
+    println("stmt");  { let a: E = E.A(mk(4)); println(f"  x{a.stmt()}") }
+    println("iflet"); { let a: E = E.A(mk(5)); println(f"  x{a.iflet()}") }
+    println("temp");  { println(f"  x{E.A(mk(7)).call()}") }
+    println("none");  { let a: E = E.B; println(f"  x{a.call()}") }
+    println("opt");   { let a: E = E.A(mk(8)); let o = a.opt(); println("  held") }
+    println("id");    { let a: E = E.A(mk(9)); println(f"  x{a.cid()}") }
+    println("keep");  { let mut v: Vec[R] = Vec.new(); { let a: E = E.A(mk(10)); println(f"  x{a.ckeep(mut v)}") } println(f"  n{v.len()}") }
+    println("end");
+}
+"#,
+        &[
+            "call", "  x1", "  dE", "  dR1", "tail", "  x2", "  dE", "  dR2", "gen", "  x7",
+            "  dE", "  dR3", "stmt", "  say4", "  x1", "  dE", "  dR4", "iflet", "  x5", "  dE",
+            "  dR5", "temp", "  dE", "  dR7", "  x7", "none", "  x0", "  dE", "opt", "  dR8",
+            "  dE", "  held", "id", "  dR9", "  x9", "  dE", "keep", "  x1", "  dE", "  n1",
+            "  dR10", "end",
+        ],
+        "asan_bare_self_arm_passing_payload_to_scalar_fn_frees_once",
+        20,
     );
 }

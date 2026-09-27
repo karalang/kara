@@ -176,8 +176,21 @@ pub fn expr_mentions_name_deep(expr: &Expr, name: &str) -> bool {
 /// deliberately "other" — an owned-`self` method consumes the value, and
 /// this walk cannot see receiver modes).
 pub fn expr_mentions_name_outside_field_projection(expr: &Expr, name: &str) -> bool {
+    expr_mentions_name_outside_field_projection_except(expr, name, &|_, _| false)
+}
+
+/// [`expr_mentions_name_outside_field_projection`] with one more non-taking
+/// position: `name` passed BARE as argument `i` of a call to the free function
+/// `f`, where `read_arg(f, i)` says that callee cannot keep it. B-2026-09-16-29
+/// — the caller supplies the answer because it needs the callee's declaration,
+/// which this syntactic walk does not have.
+pub fn expr_mentions_name_outside_field_projection_except(
+    expr: &Expr,
+    name: &str,
+    read_arg: &dyn Fn(&str, usize) -> bool,
+) -> bool {
     let mut bad = false;
-    walk_outside_projection(expr, name, &mut bad);
+    walk_outside_projection(expr, name, read_arg, &mut bad);
     bad
 }
 
@@ -190,16 +203,21 @@ pub fn block_mentions_name_outside_field_projection(b: &Block, name: &str) -> bo
     let mut bad = false;
     for s in &b.stmts {
         crate::rc_elide::walk_stmt_children_pub(s, &mut |e| {
-            walk_outside_projection(e, name, &mut bad)
+            walk_outside_projection(e, name, &|_, _| false, &mut bad)
         });
     }
     if let Some(e) = &b.final_expr {
-        walk_outside_projection(e, name, &mut bad);
+        walk_outside_projection(e, name, &|_, _| false, &mut bad);
     }
     bad
 }
 
-fn walk_outside_projection(expr: &Expr, name: &str, bad: &mut bool) {
+fn walk_outside_projection(
+    expr: &Expr,
+    name: &str,
+    read_arg: &dyn Fn(&str, usize) -> bool,
+    bad: &mut bool,
+) {
     if *bad {
         return;
     }
@@ -214,24 +232,37 @@ fn walk_outside_projection(expr: &Expr, name: &str, bad: &mut bool) {
             // A direct `name.field` / `name.0` base is a projection read;
             // any deeper base expression is walked normally.
             if !matches!(&object.kind, ExprKind::Identifier(n) if n == name) {
-                walk_outside_projection(object, name, bad);
+                walk_outside_projection(object, name, read_arg, bad);
             }
             return;
+        }
+        ExprKind::Call { callee, args } => {
+            if let ExprKind::Identifier(f) = &callee.kind {
+                for (i, a) in args.iter().enumerate() {
+                    let bare = !a.mut_marker
+                        && matches!(&a.value.kind, ExprKind::Identifier(n) if n == name);
+                    if !(bare && read_arg(f, i)) {
+                        walk_outside_projection(&a.value, name, read_arg, bad);
+                    }
+                }
+                walk_outside_projection(callee, name, read_arg, bad);
+                return;
+            }
         }
         _ => {}
     }
     for_each_block(&expr.kind, &mut |b| {
         for s in &b.stmts {
             crate::rc_elide::walk_stmt_children_pub(s, &mut |e| {
-                walk_outside_projection(e, name, bad)
+                walk_outside_projection(e, name, read_arg, bad)
             });
         }
         if let Some(e) = &b.final_expr {
-            walk_outside_projection(e, name, bad);
+            walk_outside_projection(e, name, read_arg, bad);
         }
     });
     crate::rc_elide::walk_children_pub(&expr.kind, &mut |sub| {
-        walk_outside_projection(sub, name, bad)
+        walk_outside_projection(sub, name, read_arg, bad)
     });
 }
 

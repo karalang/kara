@@ -7683,7 +7683,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // and a by-value param have always printed.
                                 || (crate::ast::fn_matches_on_bare_self(f)
                                     && !(self.owned_enum_receiver_arms_bind_views(&receiver_type)
-                                        && crate::ast::fn_bare_self_arms_bind_views(f)))
+                                        && crate::ast::fn_bare_self_arms_bind_views(f, items)))
                                 || !crate::ast::owned_self_return_cannot_carry_receiver(
                                     f,
                                     &receiver_type,
@@ -9941,7 +9941,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     || (crate::ast::fn_matches_on_bare_self(f)
                                         && !(self
                                             .owned_enum_receiver_arms_bind_views(&receiver_type)
-                                            && crate::ast::fn_bare_self_arms_bind_views(f)))
+                                            && crate::ast::fn_bare_self_arms_bind_views(f, items)))
                                     || !crate::ast::owned_self_return_cannot_carry_receiver(
                                         f,
                                         &receiver_type,
@@ -10898,6 +10898,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|p| p.drop_method_keys.contains_key(type_name))
     }
 
+    /// The program's top-level items, or none before the snapshot exists.
+    pub(super) fn program_items(&self) -> &[crate::ast::Item] {
+        self.program_snapshot
+            .as_deref()
+            .map(|p| p.items.as_slice())
+            .unwrap_or(&[])
+    }
+
     pub(super) fn find_impl_method_ast<'a>(
         &'a self,
         type_name: &str,
@@ -11355,7 +11363,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     && self.owned_enum_receiver_arms_bind_views(&type_name)
                     && self
                         .find_impl_method_ast(&type_name, method)
-                        .is_some_and(crate::ast::fn_bare_self_arms_bind_views);
+                        .is_some_and(|f| {
+                            crate::ast::fn_bare_self_arms_bind_views(f, self.program_items())
+                        });
                 // B-2026-09-04-30 — an OWNED-`self` receiver joins the
                 // borrowing ones here, behind the return-opacity gate.
                 //
@@ -11548,7 +11558,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         && ((self.owned_enum_receiver_arms_bind_views(&type_name)
                             && self
                                 .find_impl_method_ast(&type_name, method)
-                                .is_some_and(crate::ast::fn_bare_self_arms_bind_views))
+                                .is_some_and(|f| {
+                                    crate::ast::fn_bare_self_arms_bind_views(
+                                        f,
+                                        self.program_items(),
+                                    )
+                                }))
                             || !self
                                 .find_impl_method_ast(&type_name, method)
                                 .is_some_and(crate::ast::fn_matches_on_bare_self));

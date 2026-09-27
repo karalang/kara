@@ -1417,7 +1417,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // has the AST of the function it is compiling. Read by
         // `bare_self_is_owned_drop_enum_receiver`; the call site asks the same
         // predicate of this same AST, so caller and callee cannot disagree.
-        self.fn_ctx.self_arms_bind_views = crate::ast::fn_bare_self_arms_bind_views(func);
+        self.fn_ctx.self_arms_bind_views =
+            crate::ast::fn_bare_self_arms_bind_views(func, self.program_items());
         self.fn_ctx.current_fn_heap_closure_spans.clear();
         // B-2026-08-23-19: never inherit a parked cleanup-body error from a
         // function that bailed out before reaching the report site.
