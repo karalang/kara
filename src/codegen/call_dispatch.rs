@@ -4212,7 +4212,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Measured `fn show(x: Result[K, i64]) { let y = x; .. }` over three
         // calls: 3 excess frees, unchanged by widening the predicate, because
         // control never reached a gate.
-        if self.callee_rebinds_param_whole(name, i) {
+        let rebinds = self.callee_rebinds_param_whole(name, i);
+        if rebinds && self.callee_rebinds_param_whole_mutably(name, i) {
             return Vec::new();
         }
         self.boxed_enum_payload_variants(&param_te)
@@ -4220,6 +4221,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .filter(|(enum_lit, _, _)| *enum_lit == "Result")
             .filter_map(|(_, variant, inner)| {
                 let inner = inner?;
+                // B-2026-09-27-52 — an IMMUTABLE rebind keeps the caller's
+                // box for a user STRUCT payload, as the `Option` arm does
+                // (B-2026-09-24-20); the callee's let-site registers nothing
+                // for it. Any other payload is still the callee's.
+                if rebinds
+                    && (!self.type_decls.struct_types.contains_key(inner.as_str())
+                        || self.type_decls.shared_types.contains_key(inner.as_str()))
+                {
+                    return None;
+                }
                 self.boxed_param_payload_owns_its_box(inner.as_str())
                     .then_some((variant, inner))
             })

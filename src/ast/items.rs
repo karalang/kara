@@ -8615,7 +8615,9 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
 /// B-2026-09-27-37 — the indices of the TOP-LEVEL statements of `f` that
 /// rebind a by-value `Option` / `Result` parameter into a `let mut` local the
 /// body never mutates (`fn rb(a: Option[S]) { let mut c = a; .. }` with no
-/// assignment to `c`, no method call on it, no `mut c` argument).
+/// assignment to `c`, no method call on it, no `mut c` argument) -- directly,
+/// or through a chain of top-level whole rebinds (`let b = a; let mut c = b;`,
+/// B-2026-09-27-52).
 ///
 /// Such a `mut` is a permission nobody uses, so the binding is an immutable
 /// rebind in every respect that matters to ownership -- and the by-value
@@ -8651,12 +8653,17 @@ pub fn unmutated_optres_param_mut_rebinds(f: &Function) -> Vec<usize> {
     if optres_params.is_empty() {
         return Vec::new();
     }
-    let mut out = Vec::new();
-    let mut bound: Option<std::collections::HashMap<String, usize>> = None;
+    let bound = rebind_walk(f).bound;
+    let once = |n: &str| bound.get(n) == Some(&1);
+    // The names the param's value goes by: the param, then every top-level
+    // whole rebind of one of them -- an immutable one, or a `let mut` this
+    // demotes (`let c = a; let mut d = c;` is `let d = c` too).
+    let mut aliases: Vec<&str> = optres_params.into_iter().filter(|p| once(p)).collect();
     let mut assigned: Option<std::collections::HashSet<String>> = None;
+    let mut out = Vec::new();
     for (i, st) in f.body.stmts.iter().enumerate() {
         let StmtKind::Let {
-            is_mut: true,
+            is_mut,
             pattern,
             value,
             ..
@@ -8668,22 +8675,21 @@ pub fn unmutated_optres_param_mut_rebinds(f: &Function) -> Vec<usize> {
         else {
             continue;
         };
-        if !optres_params.contains(&src.as_str()) {
+        if !aliases.contains(&src.as_str()) || !once(c) {
             continue;
         }
-        let bound = bound.get_or_insert_with(|| rebind_walk(f).bound);
-        if bound.get(c.as_str()) != Some(&1) {
-            continue;
+        if *is_mut {
+            let assigned = assigned.get_or_insert_with(|| {
+                let mut a = std::collections::HashSet::new();
+                crate::ast::collect_assigned_roots_block(&f.body, &mut a);
+                a
+            });
+            if assigned.contains(c.as_str()) || block_uses_local_mutably(&f.body, c) {
+                continue;
+            }
+            out.push(i);
         }
-        let assigned = assigned.get_or_insert_with(|| {
-            let mut a = std::collections::HashSet::new();
-            crate::ast::collect_assigned_roots_block(&f.body, &mut a);
-            a
-        });
-        if assigned.contains(c.as_str()) || block_uses_local_mutably(&f.body, c) {
-            continue;
-        }
-        out.push(i);
+        aliases.push(c.as_str());
     }
     out
 }
@@ -9519,6 +9525,19 @@ mod unmutated_rebind_tests {
         }
         // Neither a non-`Option`/`Result` param nor a non-param source.
         assert!(idxs("fn f(a: S) -> i64 { let mut c = a; 5 }").is_empty());
-        assert!(idxs("fn f(a: Option[S]) -> i64 { let b = a; let mut c = b; 5 }").is_empty());
+        assert!(idxs("fn f(a: Option[S]) -> i64 { let b = g(); let mut c = b; 5 }").is_empty());
+        // A chain through an immutable or a demoted rebind is still the param.
+        assert_eq!(
+            idxs("fn f(a: Option[S]) -> i64 { let b = a; let mut c = b; 5 }"),
+            vec![1]
+        );
+        assert_eq!(
+            idxs("fn f(a: Option[S]) -> i64 { let mut b = a; let mut c = b; 5 }"),
+            vec![0, 1]
+        );
+        assert!(
+            idxs("fn f(a: Option[S]) -> i64 { let mut b = a; b = None; let mut c = b; 5 }")
+                .is_empty()
+        );
     }
 }

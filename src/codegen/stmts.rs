@@ -8634,12 +8634,25 @@ impl<'ctx> super::Codegen<'ctx> {
                                         // frees the displaced box on
                                         // reassignment, so there the callee
                                         // stays the owner (B-2026-09-09-17).
+                                        //
+                                        // B-2026-09-27-52 — a `Result` too, whose
+                                        // caller-side arm (`owned_boxed_result_param_structs`)
+                                        // now keeps the box across an immutable rebind
+                                        // as the `Option` one does; and a CHAIN (`let c =
+                                        // a; let d = c;`): `c` is a param view that
+                                        // registered no box, so the caller still owns the
+                                        // one `d` receives, exactly as the caller-side
+                                        // alias closure (`param_rebound_into_local`)
+                                        // already assumes.
                                         let caller_retained_boxed_param_rebind = !*is_mut
-                                            && *enum_name == "Option"
+                                            && matches!(*enum_name, "Option" | "Result")
                                             && matches!(&value.kind, ExprKind::Identifier(src)
-                                                if self.fn_ctx.current_fn_param_names.contains(src.as_str())
+                                                if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
                                                     && !self.borrow_vars.ref_params.contains_key(src.as_str())
                                                     && !self.drop_rc.param_view_callee_owned.contains(src.as_str()))
+                                                    || (self.payload_vars.param_view_locals.contains(src.as_str())
+                                                        && !self.payload_vars.boxed_enum_payload_vars.contains(src.as_str())
+                                                        && !self.fn_ctx.current_fn_param_names.contains(src.as_str())))
                                             && inner.as_deref().is_some_and(|n| {
                                                 self.type_decls.struct_types.contains_key(n)
                                                     && !self.type_decls.shared_types.contains_key(n)
