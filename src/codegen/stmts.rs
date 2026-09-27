@@ -14772,13 +14772,19 @@ impl<'ctx> super::Codegen<'ctx> {
                             // replaying the walk would run the body a second
                             // time over bits the arm took.
                             if self.has_armed_container_elem_bodies(name.as_str()) {
-                                if let Some(bodies) =
-                                    self.emit_optres_payload_user_drop_bodies_fn(&te)
+                                if let Some(bodies) = self
+                                    .armed_reversed_container_elem_bodies(name.as_str())
+                                    .or_else(|| self.emit_optres_payload_user_drop_bodies_fn(&te))
                                 {
                                     self.builder
                                         .build_call(bodies, &[slot.ptr.into()], "")
                                         .unwrap();
                                 }
+                                // B-2026-09-17-14 — the reversal belonged to
+                                // the destructured value just displaced; the
+                                // stored one is whole, so its scope-exit walk
+                                // goes back to the forward order.
+                                self.restore_forward_container_elem_bodies(name.as_str());
                             }
                         }
                         // B-2026-08-29-1 — the MEMORY sibling of the bodies

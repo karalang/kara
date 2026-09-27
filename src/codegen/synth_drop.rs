@@ -78,6 +78,41 @@ pub(crate) enum PayloadBodiesMask<'m> {
     /// `..._nested` with an empty `nested` map — so the two arms agree on
     /// every shape the old one could express, symbol name included.
     TupleTree(&'m str, &'m FieldSkipTree),
+    /// B-2026-09-17-14 — a TUPLE payload whose read-only arm DESTRUCTURED it:
+    /// same identity, walked LAST ELEMENT FIRST, recursing in reverse into
+    /// each element the pattern destructured again (the tree's `nested`).
+    ///
+    /// The leaves of `Some((a, b))` are arm locals, and locals drop in reverse
+    /// declaration order (design.md § Drop ordering within a branch, rule 1).
+    /// An inline payload already does that, because each leaf takes its own
+    /// owner; a heap-BOXED one keeps the leaves as views and runs the
+    /// payload's element walk instead, which goes first to last. So
+    /// `Option[(R, R)]` printed `dR3 dR4` compiled against `dR4 dR3` under
+    /// `--interp`, while `Option[(W, W)]` with a heap-free `W` printed
+    /// `dW2 dW1` on every surface. This mask gives the boxed walk the order
+    /// the inline leaves have.
+    TupleReverse(&'m str, &'m TupleRevTree),
+}
+
+/// B-2026-09-17-14 — the destructuring SHAPE a reversed tuple walk follows:
+/// `nested` holds the elements the pattern destructured again as tuples,
+/// each reversed in its turn. Every other element is walked whole, in its
+/// own order (a struct's fields last to first, a whole-bound tuple first to
+/// last), exactly as the leaf bound to it would drop.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct TupleRevTree {
+    pub(crate) nested: std::collections::BTreeMap<usize, TupleRevTree>,
+}
+
+impl TupleRevTree {
+    /// Stable symbol rendering, over the ORDERED map so equal trees agree.
+    pub(crate) fn mangle(&self) -> String {
+        let mut s = String::from("r");
+        for (i, sub) in &self.nested {
+            s.push_str(&format!("{i}o{}c", sub.mangle()));
+        }
+        s
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -11224,6 +11259,82 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(walker)
     }
 
+    /// B-2026-09-17-14 — the tuple bodies walk LAST ELEMENT FIRST, recursing
+    /// in reverse into each element `tree` names. Bodies only, like every
+    /// sibling here; the tuple's memory stays on its own free channel.
+    pub(super) fn emit_tuple_elem_user_drop_bodies_fn_reversed(
+        &mut self,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        elem_tes: &[TypeExpr],
+        tree: &TupleRevTree,
+    ) -> Option<FunctionValue<'ctx>> {
+        let targets: Vec<u32> = elem_tes
+            .iter()
+            .enumerate()
+            .filter(|(_, te)| self.elem_te_runs_user_drop(te))
+            .map(|(i, _)| i as u32)
+            .collect();
+        if targets.is_empty() {
+            return None;
+        }
+        // Keyed exactly as the forward walker is (targets plus the aggregate
+        // shape), with the tree folded in, so the two never alias.
+        let key: Vec<String> = targets
+            .iter()
+            .map(|i| format!("{i}_{}", Self::display_mangle_te(&elem_tes[*i as usize])))
+            .collect();
+        let shape: String = Self::llvm_agg_shape_sig(agg_ty);
+        let fn_name = format!(
+            "__karac_dropelems_tuple_{}$rev{}$in{shape}",
+            key.join("_"),
+            tree.mangle()
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved = self.builder.get_insert_block();
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(walker, "entry");
+        self.builder.position_at_end(entry);
+        let base = walker.get_nth_param(0).unwrap().into_pointer_value();
+        for idx in targets.into_iter().rev() {
+            let Some(ep) = self
+                .builder
+                .build_struct_gep(agg_ty, base, idx, &format!("dt.e{idx}"))
+                .ok()
+            else {
+                continue;
+            };
+            let te = elem_tes[idx as usize].clone();
+            let sub = tree.nested.get(&(idx as usize)).cloned();
+            match (&te.kind, sub) {
+                (TypeKind::Tuple(inner), Some(sub)) => {
+                    let inner = inner.clone();
+                    if let inkwell::types::BasicTypeEnum::StructType(agg) =
+                        self.llvm_type_for_type_expr(&te)
+                    {
+                        if let Some(w) =
+                            self.emit_tuple_elem_user_drop_bodies_fn_reversed(agg, &inner, &sub)
+                        {
+                            self.builder.build_call(w, &[ep.into()], "").unwrap();
+                        }
+                    }
+                }
+                _ => self.emit_slot_drop_bodies_at_opt(ep, &te, false),
+            }
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
     /// B-2026-09-06-5 — [`Self::emit_slot_drop_bodies_at_opt`] under a
     /// [`FieldSkipTree`] for the slot's OWN interior: a nested tuple takes the
     /// tree-driven tuple walker, a user struct its own body plus the masked
@@ -12483,6 +12594,18 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_optres_payload_user_drop_bodies_fn_ex_masked(te, true, Some(mask))
     }
 
+    /// B-2026-09-17-14 — [`Self::emit_optres_payload_user_drop_bodies_fn_ex`]
+    /// under any mask, for a caller that must keep the `Vec` flag of the
+    /// walker it is replacing.
+    pub(super) fn emit_optres_payload_user_drop_bodies_fn_ex_with_mask(
+        &mut self,
+        te: &TypeExpr,
+        include_vec: bool,
+        mask: PayloadBodiesMask<'_>,
+    ) -> Option<FunctionValue<'ctx>> {
+        self.emit_optres_payload_user_drop_bodies_fn_ex_masked(te, include_vec, Some(mask))
+    }
+
     pub(super) fn emit_optres_payload_user_drop_bodies_fn_ex(
         &mut self,
         te: &TypeExpr,
@@ -12537,6 +12660,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // the other's call.
             Some(PayloadBodiesMask::TupleTree(key, tree)) if !tree.is_empty() => {
                 format!("$skiptuptree{key}_{}", tree.mangle())
+            }
+            Some(PayloadBodiesMask::TupleReverse(key, tree)) => {
+                format!("$revtup{key}_{}", tree.mangle())
             }
             Some(_) => String::new(),
         };
@@ -13656,6 +13782,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if !tree.is_empty() && key == Self::display_mangle_te(&pte) =>
                             {
                                 self.emit_tuple_elem_user_drop_bodies_fn_tree(
+                                    agg_ty, elem_tes, tree,
+                                )
+                            }
+                            // B-2026-09-17-14 — the destructured read-only arm's
+                            // order; same identity check as the two above.
+                            Some(PayloadBodiesMask::TupleReverse(key, tree))
+                                if key == Self::display_mangle_te(&pte) =>
+                            {
+                                self.emit_tuple_elem_user_drop_bodies_fn_reversed(
                                     agg_ty, elem_tes, tree,
                                 )
                             }

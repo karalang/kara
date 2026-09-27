@@ -15544,6 +15544,66 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-17-14 — the REVERSED payload walk armed on `name`, if a
+    /// destructuring arm swapped one in
+    /// (`reverse_destructured_optres_tuple_walk`). A reassignment that drops
+    /// the displaced payload must run that walk rather than synthesising the
+    /// forward one from the type, or `o = None` inside the destructuring
+    /// body fires the leaves in the order the swap exists to correct.
+    pub(super) fn armed_reversed_container_elem_bodies(
+        &self,
+        name: &str,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flat_map(|frame| frame.iter())
+            .find_map(|action| match action {
+                CleanupAction::UserDrop {
+                    binding_name,
+                    kind: UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } if binding_name == name
+                    && drop_fn.get_name().to_string_lossy().contains("$revtup") =>
+                {
+                    Some(*drop_fn)
+                }
+                _ => None,
+            })
+    }
+
+    /// B-2026-09-17-14 — undo [`Self::armed_reversed_container_elem_bodies`]'s
+    /// swap on `name`: the reversed walk is named `<plain>$revtup..`, so the
+    /// plain walk it replaced is the prefix before the `$`.
+    pub(super) fn restore_forward_container_elem_bodies(&mut self, name: &str) {
+        let Some(rev) = self.armed_reversed_container_elem_bodies(name) else {
+            return;
+        };
+        let rev_name = rev.get_name().to_string_lossy().into_owned();
+        let Some(plain) = rev_name
+            .split_once('$')
+            .and_then(|(p, _)| self.module.get_function(p))
+        else {
+            return;
+        };
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let CleanupAction::UserDrop {
+                    binding_name,
+                    kind: UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == name && *drop_fn == rev {
+                        *drop_fn = plain;
+                    }
+                }
+            }
+        }
+    }
+
     /// Own-wrapper-specific sibling of [`Self::has_armed_user_drop`]: a
     /// `UserDrop` action for `name` that is NOT a `__karac_dropelems_*`
     /// walker — i.e. the binding's own `karac_drop_<T>` body is still armed.

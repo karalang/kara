@@ -1429,6 +1429,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
 
+            // B-2026-09-17-14 — a read-only destructure of a boxed tuple
+            // payload takes its leaves' order, last element first.
+            {
+                let variant = match &arm.pattern.kind {
+                    PatternKind::TupleVariant { path, .. } => {
+                        path.last().cloned().unwrap_or_default()
+                    }
+                    _ => String::new(),
+                };
+                let arms_ok = Self::optres_variant_arms_all_destructure(arms, &variant);
+                let body = &arm.body;
+                let guard = arm.guard.as_ref();
+                self.reverse_destructured_optres_tuple_walk(
+                    scrutinee,
+                    &arm.pattern,
+                    arms_ok,
+                    &|n: &str| {
+                        crate::binding_use::binding_only_read_through(n, body)
+                            && guard
+                                .is_none_or(|g| crate::binding_use::binding_only_read_through(n, g))
+                    },
+                );
+            }
             // B-2026-08-30-2 — hand the arm context down only when the body is
             // DIRECTLY a block, which is the only shape that reaches
             // `compile_block_with_frame` as this arm rather than as something
@@ -18904,6 +18927,177 @@ impl<'ctx> super::Codegen<'ctx> {
         let (arity, moved) =
             crate::binding_use::optres_block_moved_destructured_elems(pattern, block);
         self.narrow_callee_owned_tuple_payload_bodies_core(scrutinee, pattern, arity, moved)
+    }
+
+    /// B-2026-09-17-14 — a READ-ONLY arm that destructures a heap-BOXED tuple
+    /// payload out of a named local runs the payload's bodies in the order
+    /// its leaves would drop: last element first.
+    ///
+    /// The leaves of `Some((a, b))` are arm locals, and locals drop in reverse
+    /// declaration order (design.md § Drop ordering within a branch, rule 1).
+    /// An INLINE payload already does that on every surface, since each leaf
+    /// takes an owner of its own (`Option[(W, W)]` with a heap-free `W`:
+    /// `dW2 dW1`). A BOXED one keeps the leaves as views and leaves the bodies
+    /// to the scrutinee's element walk, which goes first to last, so
+    /// `Option[(R, R)]` with a `String` in `R` printed `dR3 dR4` compiled
+    /// against `dR4 dR3` under `--interp`. This swaps that walk for the
+    /// reversed one.
+    ///
+    /// Declines, leaving the walk as it is, unless every leaf is only read
+    /// (`only_read`): an arm that moves a leaf takes the masked routes instead,
+    /// and must not be reordered from here. Also declines unless the walk
+    /// still in place is the plain one, and when another arm of the same
+    /// variant binds the payload some other way (`arms_ok`), since the walk
+    /// runs whichever arm was taken.
+    pub(super) fn reverse_destructured_optres_tuple_walk(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        arms_ok: bool,
+        only_read: &dyn Fn(&str) -> bool,
+    ) {
+        if !arms_ok {
+            return;
+        }
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return;
+        };
+        // A by-value PARAM scrutinee: the interpreter keeps the whole-value
+        // walk with the caller, which runs the elements forward, so the
+        // forward walk here is already the agreed answer.
+        if self.fn_ctx.current_fn_param_names.contains(name) {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        let variant = path.last().map(|s| s.as_str());
+        if !matches!(variant, Some("Some") | Some("Ok") | Some("Err")) {
+            return;
+        }
+        let [sub] = patterns.as_slice() else {
+            return;
+        };
+        let Some(tree) = Self::destructure_rev_tree(sub, only_read) else {
+            return;
+        };
+        let Some(env_te) = self
+            .type_decls
+            .enum_inst_var_types
+            .get(name.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        let TypeKind::Path(ep) = &env_te.kind else {
+            return;
+        };
+        let arg_idx = if variant == Some("Err") { 1 } else { 0 };
+        let Some(crate::ast::GenericArg::Type(payload_te)) = ep
+            .generic_args
+            .as_ref()
+            .and_then(|a| a.get(arg_idx))
+            .cloned()
+        else {
+            return;
+        };
+        if !matches!(payload_te.kind, TypeKind::Tuple(_)) {
+            return;
+        }
+        let key = Self::display_mangle_te(&payload_te);
+        // The walk still armed on the scrutinee, if it is the PLAIN one. A
+        // masked walk (`$skip..`) means some arm already narrowed it, and
+        // reordering that is not this arm's decision.
+        let mut include_vec = None;
+        for frame in self.drop_rc.scope_cleanup_actions.iter() {
+            for action in frame.iter() {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_name,
+                    kind: super::state::UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == name {
+                        let fname = drop_fn.get_name().to_string_lossy().into_owned();
+                        if (fname.starts_with("__karac_dropelems_opt_")
+                            || fname.starts_with("__karac_dropelems_res_"))
+                            && !fname.contains('$')
+                        {
+                            include_vec = Some(fname.ends_with("_v"));
+                        }
+                    }
+                }
+            }
+        }
+        let Some(include_vec) = include_vec else {
+            return;
+        };
+        let Some(rev) = self.emit_optres_payload_user_drop_bodies_fn_ex_with_mask(
+            &env_te,
+            include_vec,
+            super::synth_drop::PayloadBodiesMask::TupleReverse(&key, &tree),
+        ) else {
+            return;
+        };
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_name,
+                    kind: super::state::UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == name {
+                        *drop_fn = rev;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The reversal shape for [`Self::reverse_destructured_optres_tuple_walk`]:
+    /// `Some` only for a tuple destructure every one of whose bindings is only
+    /// read. A nested tuple destructure recurses; any other sub-pattern is
+    /// walked whole, so only its bindings are checked.
+    fn destructure_rev_tree(
+        sub: &Pattern,
+        only_read: &dyn Fn(&str) -> bool,
+    ) -> Option<super::synth_drop::TupleRevTree> {
+        let PatternKind::Tuple(parts) = &sub.kind else {
+            return None;
+        };
+        let mut tree = super::synth_drop::TupleRevTree::default();
+        for (i, p) in parts.iter().enumerate() {
+            match &p.kind {
+                PatternKind::Wildcard => {}
+                PatternKind::Tuple(_) => {
+                    tree.nested
+                        .insert(i, Self::destructure_rev_tree(p, only_read)?);
+                }
+                _ => {
+                    if !crate::cfg::pattern_bindings(p).iter().all(|n| only_read(n)) {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(tree)
+    }
+
+    /// Whether every arm of `arms` that matches `variant` destructures its
+    /// payload as a tuple, so a reversal chosen by one of them is right for
+    /// whichever runs. See [`Self::reverse_destructured_optres_tuple_walk`].
+    pub(super) fn optres_variant_arms_all_destructure(arms: &[MatchArm], variant: &str) -> bool {
+        arms.iter().all(|a| match &a.pattern.kind {
+            PatternKind::TupleVariant { path, patterns }
+                if path.last().map(|s| s.as_str()) == Some(variant) =>
+            {
+                matches!(patterns.as_slice(), [p] if matches!(p.kind, PatternKind::Tuple(_)))
+            }
+            _ => true,
+        })
     }
 
     /// The shared body of the two narrowings above, taking the moved-element

@@ -547,6 +547,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // — zero the source field in the then-arm (the binding owns the
         // payload); the miss edge leaves it for the struct drop.
         self.suppress_consumed_place_optres_field_source(value, pattern, optres_bindings_owned);
+        // B-2026-09-17-14 — a read-only destructure of a boxed tuple payload
+        // takes its leaves' order, last element first.
+        self.reverse_destructured_optres_tuple_walk(value, pattern, true, &|n: &str| {
+            crate::binding_use::binding_only_read_through_block(n, then_block)
+        });
         // B-2026-07-22-2: fresh-temp sibling (`if let Some(s) = mk().opt`).
         self.consume_freshtemp_field_scrutinee(value, pattern, optres_bindings_owned);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
@@ -1423,6 +1428,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
             self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
         }
+        // B-2026-09-17-14 — the `while let` leg of the reversal above.
+        self.reverse_destructured_optres_tuple_walk(value, pattern, true, &|n: &str| {
+            crate::binding_use::binding_only_read_through_block(n, body)
+        });
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
         // B-2026-07-03-31: skip disarming the source payload drop when the
         // loop body ONLY BORROWS the bound payload (not moved out) — the source
