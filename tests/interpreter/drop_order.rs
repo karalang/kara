@@ -7564,3 +7564,45 @@ fn main() {
     );
     assert_eq!(out, "dE\ndR1\nk1\ndE\ndR2\nk2\ndE\ndR3\nk3\ndE\nk4\nsw\ndE\ndR5\ndE\nk5\nmb\ndE\ndR6\ndE\nk6\ndE\ndR7\nk7\nsw\ndE\ndR8\ndE\nk8\nmb\ndE\ndR9\ndE\nk9\nsw\ndR10\nk10\nmb\ndR11\nk11\ndR12\nk12\ndone\n");
 }
+
+/// B-2026-09-16-23 — a binding shadowed by a `let` that moved it out on the
+/// path actually taken runs its `Drop` body once: in a NESTED block
+/// (`{ let q = idr(q); }`), under an `if` / `match` RHS whose taken arm hands
+/// it back, two blocks deep, in a `while` body, and for a plain rebind of an
+/// enclosing binding (`{ let q = q; }`, `{ let p = q; }`, a struct-literal
+/// field, an enum, a match-arm binding). The move-out record
+/// is keyed by name, so the shadowing `let` re-armed the enclosing binding
+/// along with its own and each of those cells printed the body twice under
+/// `--interp`. The untaken-arm cells (`k3`, `k5`) are the controls: there the
+/// shadowed value dies and its body must still run.
+#[test]
+fn interp_shadowed_binding_moved_out_on_the_taken_path_runs_each_body_once() {
+    let out = run_no_errors(
+        r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { R { id: n, tag: f"tag-aaaaaaaaaaaaaaaaaaaaaaaaaaaa{n}" } }
+fn idr(r: R) -> R { r }
+fn eat(r: R) -> i64 { r.id }
+fn k1() { let q = mk(1); { let q = idr(q); println(f"q={q.id}"); } println("k1") }
+fn k2(c: bool) { let q = mk(2); let q = if c { idr(q) } else { mk(20) }; println(f"q={q.id}"); println("k2") }
+fn k3(c: bool) { let q = mk(3); let q = if c { idr(q) } else { mk(30) }; println(f"q={q.id}"); println("k3") }
+fn k4(c: bool) { let q = mk(4); let q = match c { true => idr(q), false => mk(40) }; println(f"q={q.id}"); println("k4") }
+fn k5(c: bool) { let q = mk(5); let q = match c { true => idr(q), false => mk(50) }; println(f"q={q.id}"); println("k5") }
+fn k6(c: bool) { let q = mk(6); let q = if c { idr(q) } else { idr(q) }; println(f"q={q.id}"); println("k6") }
+fn k7() { let q = mk(7); { let q = idr(q); { let q = idr(q); println(f"q={q.id}"); } println("mid"); } println("k7") }
+fn k8() { let q = mk(8); { let q = q; println(f"q={q.id}"); } println("k8") }
+fn k9() { let q = mk(9); { let p = q; println(f"p={p.id}"); } println("k9") }
+fn k10() { let q = mk(10); let mut i = 0; while i < 1 { let q = idr(q); println(f"q={q.id}"); i = i + 1; } println("k10") }
+fn k11() { let q = mk(11); { let n = eat(q); println(f"n={n}"); } println("k11") }
+fn k12() { let q = mk(12); let q = idr(q); println(f"q={q.id}"); println("k12") }
+struct H { r: R }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+fn k13() { let q = mk(13); { let h = H { r: q }; println(f"h={h.r.id}"); } println("k13") }
+fn k14() { let q = E.A(mk(14)); { let p = q; println("in"); } println("k14") }
+fn k15() { let o = Some(mk(15)); match o { Some(r) => { { let p = r; println(f"p={p.id}"); } println("arm") } None => {} } println("k15") }
+fn main() { k1(); k2(true); k3(false); k4(true); k5(false); k6(false); k7(); k8(); k9(); k10(); k11(); k12(); k13(); k14(); k15(); println("done") }
+"#,
+    );
+    assert_eq!(out, "q=1\ndR1\nk1\nq=2\ndR2\nk2\nq=30\ndR30\ndR3\nk3\nq=4\ndR4\nk4\nq=50\ndR50\ndR5\nk5\nq=6\ndR6\nk6\nq=7\ndR7\nmid\nk7\nq=8\ndR8\nk8\np=9\ndR9\nk9\nq=10\ndR10\nk10\nn=11\ndR11\nk11\nq=12\ndR12\nk12\nh=13\ndR13\nk13\ndE\ndR14\nin\nk14\np=15\ndR15\narm\nk15\ndone\n");
+}

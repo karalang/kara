@@ -842,6 +842,18 @@ pub struct Interpreter<'a> {
     /// at `try_compile_enum_variant`'s arg loop. Re-armed on a fresh
     /// `let`/assign of the name like the other moved-out sets.
     pub(crate) moved_out_user_drop_bindings: HashSet<String>,
+    /// B-2026-09-16-23 — the names a `let` just rebound whose PREVIOUS
+    /// binding had moved out (`moved_out_user_drop_bindings` held the name when
+    /// the new binding re-armed it). Filled by the `let` bind, drained by the
+    /// block loop right after the statement: the re-arm is correct for the new
+    /// binding and erases the one fact the displaced binding's slot needs.
+    pub(crate) let_displaced_moved: Vec<String>,
+    /// B-2026-09-16-23 — per block, the names whose ENCLOSING binding was moved
+    /// out and then shadowed inside this block. The move-out set is keyed by
+    /// name, so the inner `let` re-arms the outer binding along with its own;
+    /// re-inserting at block exit restores "moved" to the binding that is live
+    /// again once the block ends, before its slot in the enclosing block fires.
+    pub(crate) outer_shadow_moved_restore: Vec<Vec<String>>,
     /// B-2026-08-28-51 — spans (`(offset, length)`, the shape every other span
     /// table here uses) of expressions known to sit in an ESCAPING position:
     /// one whose value is handed to an owner rather than discarded. Seeded at
@@ -1350,6 +1362,8 @@ impl<'a> Interpreter<'a> {
             method_frame_caller_retains_args: Vec::new(),
             method_frame_sole_owned: Vec::new(),
             moved_out_user_drop_bindings: HashSet::new(),
+            let_displaced_moved: Vec::new(),
+            outer_shadow_moved_restore: Vec::new(),
             cond_move_escaping_sites: HashSet::new(),
             taken_branch_tail: None,
             pending_arm_drop_bindings: Vec::new(),

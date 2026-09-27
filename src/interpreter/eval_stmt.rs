@@ -94,6 +94,21 @@ impl<'a> super::Interpreter<'a> {
 
     #[allow(clippy::result_large_err)]
     pub(crate) fn eval_block_inner(&mut self, block: &Block) -> EvalResult {
+        // B-2026-09-16-23 — every exit of the block body restores the move-out
+        // record of an ENCLOSING binding this block shadowed after moving it.
+        // Done here, around the body, rather than at each of its exits: the
+        // record has to be back before the enclosing block's slot for that
+        // binding fires, and that slot fires only after this call returns.
+        self.outer_shadow_moved_restore.push(Vec::new());
+        let result = self.eval_block_scope(block);
+        for name in self.outer_shadow_moved_restore.pop().unwrap_or_default() {
+            self.moved_out_user_drop_bindings.insert(name);
+        }
+        result
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn eval_block_scope(&mut self, block: &Block) -> EvalResult {
         // TAKEN, not read: `eval_body_growing` sets this immediately before a
         // function/closure/method body, and consuming it here means every
         // block nested inside that body sees `false`. See the field's doc.
@@ -236,6 +251,10 @@ impl<'a> super::Interpreter<'a> {
             // is about to shadow. It has to happen here: evaluating the `let`
             // overwrites the slot, and the old value is then unreachable.
             let shadowed_before = self.snapshot_shadowed_bindings(stmt);
+            // B-2026-09-16-23 — and the names it shadows from an ENCLOSING
+            // block, whose slots this block's cleanup does not hold.
+            let outer_shadowed = self.snapshot_outer_shadowed_names(stmt);
+            self.let_displaced_moved.clear();
             // B-2026-08-31-7 — the interpreter twin of codegen's
             // `clear_stale_param_view_marks`, and it has to land with it.
             // `owned_param_names_stack`'s top frame is this frame's view set,
@@ -290,7 +309,20 @@ impl<'a> super::Interpreter<'a> {
             // drop_trace records — gated on `drop_method_keys` so the
             // NLL placement / scope-exit ordering tests for plain
             // bindings stay unchanged.
+            let displaced_moved = std::mem::take(&mut self.let_displaced_moved);
             self.suppress_let_rebind_user_drop(stmt, &mut cleanup);
+            // B-2026-09-16-23 — the rebind's source may be an ENCLOSING
+            // block's binding, whose slot the line above cannot reach.
+            self.record_enclosing_let_rebind_moves(stmt, &cleanup, &outer_shadowed);
+            // An enclosing binding this `let` shadows after moving it out on
+            // this path: its record comes back when this block ends.
+            for name in &outer_shadowed {
+                if displaced_moved.contains(name) {
+                    if let Some(top) = self.outer_shadow_moved_restore.last_mut() {
+                        top.push(name.clone());
+                    }
+                }
+            }
             // B-2026-09-01-18 — the same rule for a struct literal DISCARDED as
             // a bare statement (`W { r: t, b: 1 };`, `{ W { r: t, b: 1 } };`),
             // which is not a `Let` and so never reached the hook above.
@@ -360,7 +392,7 @@ impl<'a> super::Interpreter<'a> {
             // to freeze and the one object keeps its single owner. BEFORE
             // `push_drops_for_stmt`: once that runs, a slot with this name is
             // ambiguous between the old binding and the new one.
-            self.freeze_shadowed_drop_slots(stmt, &mut cleanup, &shadowed_before);
+            self.freeze_shadowed_drop_slots(stmt, &mut cleanup, &shadowed_before, &displaced_moved);
             // B-2026-09-02-17 — and a binding taken out of a container ELEMENT
             // the container still owns registers no slot either, for the same
             // caller-retains reason: `v[i]` is a `ref T`, so the container's
@@ -1105,6 +1137,96 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-16-23 — the names a `let` is about to bind that are live in an
+    /// ENCLOSING scope and not in this one: the bindings it shadows from
+    /// outside the block. Captured before the statement, while the lookup
+    /// still sees the old binding.
+    fn snapshot_outer_shadowed_names(&self, stmt: &Stmt) -> Vec<String> {
+        let pattern = match &stmt.kind {
+            StmtKind::Let { pattern, .. } => pattern,
+            _ => return Vec::new(),
+        };
+        pattern
+            .binding_names()
+            .into_iter()
+            .filter(|n| self.env.get_in_current_scope(n).is_none() && self.env.get(n).is_some())
+            .collect()
+    }
+
+    /// B-2026-09-16-23 — `let p = q;` (or `let q = q;`, or
+    /// `let h = H { r: q };`) inside a NESTED block, where `q` belongs to an
+    /// enclosing block.
+    ///
+    /// `suppress_let_rebind_user_drop` retracts the source's slot from THIS
+    /// block's cleanup, and an enclosing binding's slot is not there, so it
+    /// stayed armed and ran the body a second time after the block —
+    /// `{ let p = q; }` printed `dR15 dR15` against one body compiled. The
+    /// runtime record is the channel a `return` nested in a branch already
+    /// uses for the same reach problem (`record_conditional_move_tail`).
+    ///
+    /// A shadowing rebind cannot record directly, because the name is about to
+    /// be re-armed for the new binding's own slot; it goes on this block's
+    /// restore list instead and comes back when the block ends. A param VIEW
+    /// is left alone: its body belongs to the caller, and no slot of this
+    /// frame owns it.
+    fn record_enclosing_let_rebind_moves(
+        &mut self,
+        stmt: &Stmt,
+        cleanup: &[CleanupAction],
+        outer_shadowed: &[String],
+    ) {
+        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            return;
+        };
+        let bound = pattern.binding_names();
+        for src in Self::let_rebind_source_names(value) {
+            if cleanup
+                .iter()
+                .any(|a| matches!(a, CleanupAction::Drop { name } if *name == src))
+            {
+                continue;
+            }
+            if self
+                .owned_param_names_stack
+                .last()
+                .is_some_and(|top| top.contains(&src))
+            {
+                continue;
+            }
+            let rebinds_same_name = bound.contains(&src);
+            if rebinds_same_name {
+                if !outer_shadowed.contains(&src) {
+                    continue;
+                }
+            } else if self.env.get_in_current_scope(&src).is_some() || self.env.get(&src).is_none()
+            {
+                continue;
+            }
+            // The SOURCE's type. For a shadowing rebind the lookup now sees
+            // the new binding, which for `let q = q` is the same value and for
+            // `let q = H { r: q }` is not, so a shadowing literal is asked
+            // nothing and left alone.
+            if rebinds_same_name && !matches!(value.kind, ExprKind::Identifier(_)) {
+                continue;
+            }
+            let type_name = match self.env.get(&src) {
+                Some(Value::Struct { name, .. }) => name,
+                Some(Value::EnumVariant { enum_name, .. }) => enum_name,
+                _ => continue,
+            };
+            if !self.program.drop_method_keys.contains_key(&type_name) {
+                continue;
+            }
+            if rebinds_same_name {
+                if let Some(top) = self.outer_shadow_moved_restore.last_mut() {
+                    top.push(src);
+                }
+            } else {
+                self.moved_out_user_drop_bindings.insert(src);
+            }
+        }
+    }
+
     /// B-2026-08-30-51 — the values of the same-scope bindings a `let` is about
     /// to shadow, captured before it runs.
     ///
@@ -1147,6 +1269,7 @@ impl<'a> super::Interpreter<'a> {
         stmt: &Stmt,
         cleanup: &mut Vec<CleanupAction>,
         shadowed: &[(String, Value)],
+        displaced_moved: &[String],
     ) {
         if shadowed.is_empty() {
             return;
@@ -1178,7 +1301,14 @@ impl<'a> super::Interpreter<'a> {
             // params it owns at exit. When it answers yes the callee owns
             // nothing at its exit, the returned value IS the argument, and the
             // new binding is its single owner.
-            let hands_back = self.let_rhs_hands_shadowed_binding_back(stmt, name);
+            // B-2026-09-16-23 — or the RHS moved the old binding out ON THIS
+            // PATH, which is the per-path answer the syntactic predicate
+            // cannot give: `let q = if c { idr(q) } else { mk(7) }` hands `q`
+            // back when `c` holds and leaves it to die when it does not. The
+            // call recorded the move and the new binding's re-arm noted it, so
+            // the taken path decides; the frozen copy stays for the other.
+            let hands_back = self.let_rhs_hands_shadowed_binding_back(stmt, name)
+                || displaced_moved.contains(name);
             let Some(idx) = cleanup
                 .iter()
                 .rposition(|a| matches!(a, CleanupAction::Drop { name: n } if n == name))
@@ -6677,11 +6807,21 @@ impl<'a> super::Interpreter<'a> {
         // `discarded_struct_literal_tail`, so the wrapped spelling answers
         // exactly as the direct one does; the `Identifier` arm is deliberately
         // NOT peeled, since a wrapped bare name reaches its own hooks.
+        let source_names = Self::let_rebind_source_names(value);
+        self.retract_user_drop_actions_for(&source_names, cleanup);
+    }
+
+    /// The locals a `let` initializer MOVES whole into the new binding: the
+    /// bare rebind (`let g = f;`) and each identifier field of a struct literal
+    /// (`let h = Holder { r: r };`), the literal seen through block wrappers.
+    /// Shared by the same-block retraction above and its enclosing-block
+    /// sibling (B-2026-09-16-23), so the two cannot disagree on what moved.
+    fn let_rebind_source_names(value: &Expr) -> Vec<String> {
         let literal = match &value.kind {
             ExprKind::StructLiteral { .. } => Some(value),
             _ => Self::discarded_struct_literal_tail(value),
         };
-        let source_names: Vec<String> = match (&value.kind, literal) {
+        match (&value.kind, literal) {
             (ExprKind::Identifier(n), _) => vec![n.clone()],
             (_, Some(lit)) => match &lit.kind {
                 ExprKind::StructLiteral { fields, .. } => fields
@@ -6691,11 +6831,10 @@ impl<'a> super::Interpreter<'a> {
                         _ => None,
                     })
                     .collect(),
-                _ => return,
+                _ => Vec::new(),
             },
-            _ => return,
-        };
-        self.retract_user_drop_actions_for(&source_names, cleanup);
+            _ => Vec::new(),
+        }
     }
 
     /// Retract the `Drop` cleanup action of every named source whose value
@@ -10206,6 +10345,13 @@ impl<'a> super::Interpreter<'a> {
                 self.run_wildcard_destructure_leaf_user_drops(pattern, value, &val);
                 self.bind_pattern(pattern, val);
                 for bound in pattern.binding_names() {
+                    // B-2026-09-16-23 — the binding this one displaces had
+                    // moved out on THIS path (the RHS handed it through a call
+                    // and back, say). Noted before the re-arm erases it; the
+                    // block loop gives it to the displaced binding's slot.
+                    if self.moved_out_user_drop_bindings.contains(&bound) {
+                        self.let_displaced_moved.push(bound.clone());
+                    }
                     self.rearm_container_bodies_for_name(&bound);
                 }
                 // B-2026-09-07-1 — HAND THE LEAF THE SOURCE'S MOVE-OUT MASKS.
