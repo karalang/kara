@@ -93,13 +93,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 513 |
-| miscompile | 494 |
+| miscompile | 495 |
 | leak | 443 |
 | double-free | 329 |
 | missing-feature | 209 |
 | codegen-gap | 197 |
 | other | 153 |
-| diagnostics | 135 |
+| diagnostics | 137 |
 | perf | 117 |
 | false-positive | 110 |
 | crash | 98 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2192 |
-| interp | 603 |
-| typecheck | 309 |
+| codegen | 2193 |
+| interp | 604 |
+| typecheck | 311 |
 | other | 111 |
-| ownership | 78 |
+| ownership | 79 |
 | cli | 73 |
 | autopar | 56 |
 | parser | 49 |
@@ -333,7 +333,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-52 | 2026-09-26 | interp | medium | THE INTERPRETER LOSES BOTH FIELD BODIES OF A NAMED `Drop`-LESS STRUCT HANDED TO A CALLEE THAT KEEPS IT ON ONLY SOME PATHS, ON THE PATH WHERE IT DIES INSIDE -- `let o = maybew(w, false)` prints `ofalse end` under `--interp` where JIT, `-O2` seq and `-O2` par all print the due `dD107n107 dD7n7 ofalse end`; `gcsw(mut v, w, false)` loses them the same way | — |
 | B-2026-09-26-60 | 2026-09-26 | codegen | high | A NAMED `Drop` LOCAL MOVED INSIDE AN `if` ARM THAT IS NOT TAKEN LOSES ITS BODY ON EVERY COMPILED SURFACE, AND THE BUILTIN-PUSH SPELLING ALSO LEAKS ITS STRING -- `let d = mkd(2); if d.id > 3 { v.push(d); }` prints `l0 end` on JIT / `-O2` seq / `-O2` par against `--interp`'s correct `dD2n2 l0 end`, and loses 2 B in 1 block at `-O0`; the same move into a user callee (`std(mut v, d)`, `keepd(d)`) loses the body with memory balanced, and a `Drop`-less `W` pushed the same way loses both field bodies | — |
 | B-2026-09-26-61 | 2026-09-26 | other | medium | AN E2E FIXTURE THAT PANICS IN `link_or_skip` LEAVES ITS LINKED BINARY AND OBJECT IN `/tmp`, SO ONE STALE ARTIFACT UNDER `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` FILLS THE DISK -- a stale `target/release/karac_jit_runner` made all ~1835 fixtures of an ASAN ratchet leg panic after a SUCCESSFUL link, each stranding a ~13 MB `/tmp/karac_asan_<pid>_<n>` executable; the leg spent ~20 GiB and ended on ENOSPC, which hid the one-line staleness message behind a full disk | — |
-| B-2026-09-26-63 | 2026-09-26 | interp+codegen | medium | FOUR SPELLINGS OF A NAMED LOCAL'S `Drop` FIELD HANDED TO A KEEPING CALLEE STILL RUN THE FIELD'S BODY TWICE ON ALL FOUR SURFACES AFTER B-2026-09-26-47 -- a callee that keeps it on only SOME paths (`maybe(w.r, true)` prints `dD107n107 dD7n7 otrue dD7n7 end`, and the `false` leg runs `dD7n7` inside the callee AND from `w`), a TWO-hop projection (`keep(x.w.r)`), an ENUM leaf (`keepg(v.g)` over `enum G { A(D), B }`), and a projection off an owned PARAMETER rather than a `let` (`fn ownw(w: W) -> i64 { let k = keep(w.r); k.id }`) | — |
 | B-2026-09-27-1 | 2026-09-27 | codegen | high | A GENERIC METHOD THAT HANDS A `shared`-FIELD STRUCT BACK ON ONLY SOME PATHS IS STILL USED AFTER FREE ON EVERY COMPILED SURFACE, with or without a `Drop` -- `k.gpk(s, true, w)` over `impl K { fn gpk[T](ref self, v: T, c: bool, w: T) -> T { if c { return v } return w } }` aborts under `karac run` with 2 valgrind errors at -O0 at both exits for `T = S3` and `T = S2`, the S2 cell also running a body twice (`dS6 dS6 dS5 t5 dS5` against `dS6 t5 dS5`); the remainder of B-2026-09-25-40, whose fix reached the generic FREE fn and the generic method STORE (`k.gst(s, true)`) but not this, because `compute_handback_safe_params` declines every generic impl method | — |
 | B-2026-09-27-10 | 2026-09-27 | codegen+interp | low | A CHAINED OWNED-`self` CALL WHOSE RECEIVER IS ANOTHER METHOD'S RESULT RUNS NO `Drop` BODY FOR THAT RESULT, on every surface -- `E.A(mk(14)).ret_self().none()` prints `n5` where `dE dR14 n5` is due, and a struct chain `S { r: mk(2) }.ret_self().none()` prints nothing where `dS2 dR2` is due; memory balanced | — |
 | B-2026-09-27-11 | 2026-09-27 | codegen+interp | medium | A NAMED STRUCT RECEIVER HANDED BACK WHOLE BY AN OWNED-`self` METHOD RUNS EVERY `Drop` BODY TWICE, on all four surfaces, own `Drop` or not -- `let b = a.ret_self()` over `struct S { r: R }` with `impl Drop for S` prints `dS1 dR1 dS1 dR1`, and over a plain `struct P { r: R }` prints `dR6 dR6`; a temp receiver whose method returns a fresh value loses its bodies; memory balanced | — |
@@ -371,9 +370,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-66 | 2026-09-27 | codegen | high | A `for` LOOP VIEW OF A BOXED GENERIC ENUM THAT ESCAPES A BY-VALUE CALLEE, OR IS CONSUMED TWICE, CRASHES ON EVERY COMPILED SURFACE -- `for h in v { w.push(keep(h)) }` over `fn keep(h: Ho[S]) -> Ho[S] { h }` segfaults with 5 valgrind errors, and `for h in v { shows(h); shows(h) }` aborts, where `--interp` prints `n11 dS7 dS7 end` and `s7 s7 n1 dS7 end` | — |
 | B-2026-09-27-74 | 2026-09-27 | codegen | high | A BY-VALUE `Option` / `Result` PARAM WITH A BOXED USER-ENUM PAYLOAD, MATCHED BY A NESTED ARM WHOSE VALUE READS THE PAYLOAD, SKIPS THE PAYLOAD'S DROP BODIES AND RUNS ONE ON A ZEROED VALUE -- `fn rb(a: Option[K]) -> i64 { match a { Some(K.A(w)) => w.r.id, Some(K.B) => 30, None => 40 } }` over `enum K { A(W), B }` prints `k1 d0 k2 end` at -O0 and -O2 where `--interp` prints `k1 d1 d2 k2 end`, and valgrind finds the two heap `String`s of each `W` definitely lost; no rebind is involved | — |
 | B-2026-09-27-75 | 2026-09-27 | codegen | high | A WHOLE-PAYLOAD ARM `Some(k) => match k { .. }` ON A BY-VALUE `Option[K]` PARAM WITH A BOXED USER-ENUM PAYLOAD RUNS AN EXTRA `Drop` BODY ON A ZEROED VALUE, AND DOUBLE-FREES WHEN THE PARAM IS FIRST REBOUND -- `fn rb(a: Option[K]) -> i64 { match a { Some(k) => match k { K.A(w) => println(f"m{w.r.id}"), K.B => println("b") }, None => println("n") } 5 }` prints `m1 d1 d0 k5 m2 d2 d0 end` at -O0 and -O2 where `--interp` prints `m1 d1 k5 m2 d2 end`; with `let c = a; match c { .. }` it aborts `free(): double free` on both | — |
-| B-2026-09-27-69 | 2026-09-27 | interp+codegen | medium | A `for` LOOP ELEMENT HANDED BY VALUE TO A CALLEE THAT KEEPS IT RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `for g in v { let o = f(g); }` over `fn f(x: D) -> D { x }` prints `dD1n1 o dD2n2 o dD1n1 dD2n2 end`, the result's body at each iteration AND the element's again when `v`'s buffer dies, where a consuming callee that keeps nothing prints each body once | — |
 | B-2026-09-27-67 | 2026-09-27 | interp+codegen | medium | A PART OF A NAMED RECEIVER OR ARGUMENT HANDED BACK ON ONLY SOME PATHS LOSES ITS `Drop` BODY ON THE PATH THAT DOES NOT HAND IT BACK, ON ALL FOUR SURFACES -- `impl Ws { fn pick(self, c: bool) -> Option[R] { if c { return Option.Some(self.r) } return None } }` with `w.pick(false)` prints `got` where `dR17 got` is due; `return self.r` and a free fn `pkf(w, false)` lose it the same way | — |
 | B-2026-09-27-68 | 2026-09-27 | codegen | medium | A NAMED STRUCT ARGUMENT WITH NO `Drop` OF ITS OWN, WRAPPED WHOLE IN AN `Option` AND HANDED BACK, RUNS ITS FIELDS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE -- `fn wrap(w: Ws) -> Option[Ws] { Some(w) }` with `let o = wrap(w)` prints `dR1 x1 dR1 end` on jit, -O0 and -O2 where `--interp` prints `x1 dR1 end` | — |
+| B-2026-09-27-70 | 2026-09-27 | interp+codegen | medium | FOUR SPELLINGS OF A NAMED LOCAL'S `Drop` FIELD HANDED TO A KEEPING CALLEE STILL RUN THE BODY TWICE ON ALL FOUR SURFACES AFTER B-2026-09-26-63 -- a TWO-hop projection (`keep(x.w.r)`), a projection off an owned PARAMETER (`fn ownw(w: W) -> i64 { let k = keep(w.r); k.id }`), a struct leaf with NO `Drop` of its own kept on only some paths (`maybew(x.w, true)`), and a user-enum leaf STORED on only some paths (`csg(mut xs, v.g, true)`) | — |
+| B-2026-09-27-76 | 2026-09-27 | ownership+interp+codegen | medium | `for g in v.into_iter()` DOES NOT CONSUME `v` OR MOVE ITS ELEMENTS, ON ALL FOUR SURFACES -- the element's `Drop` body runs after the loop instead of at the end of each iteration, TWICE when the loop moves `g` on (`let h = g`, `w.push(g)`), BEFORE the loop body reads the element when the iterator is bound first (`let it = v.into_iter(); for g in it`), and `v.len()` after the loop still compiles and prints 2, where design.md says `into_iter()` consumes the collection | — |
+| B-2026-09-27-80 | 2026-09-27 | typecheck | low | THE `borrow_projection_copy` LINT (W0299) IS STILL SILENT WHEN A BORROWED VALUE IS HANDED TO A KEEPING FREE-FUNCTION CALLEE -- `for g in v { let o = f(g); }` and `fn k(s: ref S) { let o = f(s.r); }` over `fn f(x: D) -> D { x }` copy the value and run its `Drop` body twice with no warning, where `let h = g` and `let o = s.r` now warn | — |
 
 ### Relocated
 
@@ -3114,6 +3115,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-48 | codegen | medium | A NAMED `Drop` LOCAL MOVED WHOLE INTO A GENERIC CALLEE THAT STORES IT RUNS ITS BODY AT THE CALL ON EVERY COMPILED SURFACE, AND AGAIN AT THE CONTAINER… | c47f9ae28 |
 | B-2026-09-26-62 | interp+codegen | medium | FIXED FOR THE TAIL SPELLING (7ce7f24); THE TUPLE-PAYLOAD AND TWO-HOP SPELLINGS MOVED TO B-2026-09-27-19 -- THE SPELLINGS OF B-2026-09-26-37 ITS FIX D… | 7ce7f24 |
 | B-2026-09-26-50 | codegen | medium | A NAMED STRUCT WITH NO `Drop` OF ITS OWN WHOSE FIELDS CARRY ONE, MOVED WHOLE INTO A CALLEE THAT KEEPS IT, RUNS EACH FIELD'S BODY AT THE CALL AND AGAI… | 049da6f4e |
+| B-2026-09-26-63 | interp+codegen | medium | FOUR SPELLINGS OF A NAMED LOCAL'S `Drop` FIELD HANDED TO A KEEPING CALLEE STILL RUN THE FIELD'S BODY TWICE ON ALL FOUR SURFACES AFTER B-2026-09-26-47… | 2ab2f27ba |
 | B-2026-09-27-2 | interp+codegen | high | MOVING AN ELEMENT OUT OF A LOCAL TUPLE BY `return t.0` OR A TAIL `t.0` RUNS ITS Drop BODY TWICE IN THE INTERPRETER, AND A CONDITIONAL MOVE (`if k { r… | e39f58c |
 | B-2026-09-27-3 | interp+codegen | high | A PROJECTION MOVED OUT IN A VALUE POSITION OTHER THAN `let x = p.f` / `return` / a function tail RUNS ITS Drop BODY TWICE ON EVERY BACKEND -- `let x… | bd5b43d |
 | B-2026-09-27-14 | interp+codegen | medium | TWO SPELLINGS OF B-2026-09-27-3 ITS FIX LEAVES AS THEY WERE: a STRUCT field at the tail of an `if` passed as a CALL ARGUMENT (`show(if k { p.a } else… | e06d859 |
@@ -3124,6 +3126,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-55 | codegen | high | AN IMMUTABLE REBIND OF A BY-VALUE `Option` / `Result` PARAM WHOSE BOXED PAYLOAD IS A USER ENUM DOUBLE-FREES ON EVERY COMPILED SURFACE -- `fn rb(a: Op… | d10c6ce7b |
 | B-2026-09-27-57 | interp+codegen | medium | A PART OF A NAMED RECEIVER OR ARGUMENT WRAPPED IN A BARE `Some(..)` AND HANDED BACK RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES, while the qualif… | b88a2ccce |
 | B-2026-09-27-60 | codegen | medium | A `for` LOOP BINDING OVER A `Vec` OF A BOXED GENERIC ENUM, PASSED BY VALUE TO A CALLEE THAT MATCHES IT, RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY… | b3ab2eb44 |
+| B-2026-09-27-69 | typecheck | low | THE `borrow_projection_copy` LINT (W0299) IS SILENT WHEN A BARE `for` LOOP'S ELEMENT IS MATERIALIZED -- `for g in v { let o = f(g); }` over a keeping… | 1d152cc9e |
 
 </details>
 
