@@ -5055,13 +5055,63 @@ pub fn fn_escaping_self_part_paths(program: &crate::Program, f: &Function) -> Ve
     part_paths_from_root(f, "self", usize::MAX, Some(program))
 }
 
-/// B-2026-09-25-28 — does `f` declare a TUPLE return? The receiver mask built
-/// on [`fn_escaping_self_part_paths`] stands down for one, because a discarded
-/// tuple method result runs no element body yet (B-2026-09-17-2).
-pub fn fn_returns_tuple(f: &Function) -> bool {
-    f.return_type
-        .as_ref()
-        .is_some_and(|te| matches!(te.kind, crate::ast::TypeKind::Tuple(_)))
+/// B-2026-09-17-2 — which aggregate a discarded METHOD result is, for the
+/// bodies walk both backends run at the `;`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DiscardedAggregate {
+    Tuple,
+    FixedArray,
+}
+
+/// B-2026-09-17-2 — may a discarded `recv.method(..)` result of shape `want`
+/// run its element `Drop` bodies at the `;`? Yes when at least one impl
+/// method named `method` declares that aggregate as its return, and EVERY
+/// such method is concrete: neither it nor its impl block has generic
+/// params.
+///
+/// Keyed on the method NAME rather than the receiver's type because the
+/// interpreter's discard dispatch has only the name; both backends ask this
+/// one question so that neither can fire where the other declines. The
+/// concreteness half is parity rather than caution: codegen resolves the
+/// element types from the DECLARED return, so an erased `T` yields no walker,
+/// while the interpreter reads the runtime value and would fire anyway.
+pub fn method_discard_runs_aggregate_bodies(
+    program: &crate::ast::Program,
+    method: &str,
+    want: DiscardedAggregate,
+) -> bool {
+    let mut found = false;
+    for item in &program.items {
+        let Item::ImplBlock(imp) = item else {
+            continue;
+        };
+        for ii in &imp.items {
+            let ImplItem::Method(f) = ii else {
+                continue;
+            };
+            if f.name != method {
+                continue;
+            }
+            let shape = f.return_type.as_ref().and_then(|te| match &te.kind {
+                crate::ast::TypeKind::Tuple(_) => Some(DiscardedAggregate::Tuple),
+                crate::ast::TypeKind::Array { .. } => Some(DiscardedAggregate::FixedArray),
+                crate::ast::TypeKind::Path(p)
+                    if p.segments.len() == 1 && p.segments[0] == "Array" =>
+                {
+                    Some(DiscardedAggregate::FixedArray)
+                }
+                _ => None,
+            });
+            if shape != Some(want) {
+                continue;
+            }
+            if imp.generic_params.is_some() || f.generic_params.is_some() {
+                return false;
+            }
+            found = true;
+        }
+    }
+    found
 }
 
 /// The shared body of the two part-path queries above: `root` is the param's

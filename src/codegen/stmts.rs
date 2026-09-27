@@ -25792,6 +25792,23 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// `array_elem_and_len` accepts both array spellings, for the reason
     /// [`Self::owned_array_param_te`] documents.
+    /// B-2026-09-17-2 — is `tail` a METHOD call whose discarded result of
+    /// shape `want` runs its element bodies? The interpreter's `MethodCall`
+    /// discard arm asks the same `method_discard_runs_aggregate_bodies`, so
+    /// the two backends admit exactly the same method names.
+    fn discarded_method_tail_runs_bodies(
+        &self,
+        tail: &Expr,
+        want: crate::ast::DiscardedAggregate,
+    ) -> bool {
+        let ExprKind::MethodCall { method, .. } = &tail.kind else {
+            return false;
+        };
+        self.program_snapshot
+            .as_deref()
+            .is_some_and(|p| crate::ast::method_discard_runs_aggregate_bodies(p, method, want))
+    }
+
     fn discarded_call_array_parts(&self, tail: &Expr) -> Option<(TypeExpr, u32)> {
         let declared = match &tail.kind {
             ExprKind::Call { callee, .. } => match &callee.kind {
@@ -26252,7 +26269,10 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         in_branch: bool,
     ) {
-        if !in_branch {
+        if !in_branch
+            && !self
+                .discarded_method_tail_runs_bodies(tail, crate::ast::DiscardedAggregate::FixedArray)
+        {
             let ExprKind::Call { callee, .. } = &tail.kind else {
                 return;
             };
@@ -26431,21 +26451,22 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         in_branch: bool,
     ) {
-        // A FREE-FUNCTION call tail only, and the restriction is load-bearing
-        // rather than tidy. The interpreter twin routes this shape from the
-        // `Call` arm of its discard dispatch, which reaches an `Identifier`
-        // callee; a METHOD tail (`h.wrap(mk(43));`) lands in a different arm
-        // there and is NOT routed, so registering bodies here for one would
-        // fire on all three compiled surfaces against an interpreter that
-        // stays silent — a run-vs-build divergence, which is exactly the
-        // outcome B-2026-09-09-21 was written to avoid. Measured: an earlier
-        // draft of this function omitted the gate and produced
+        // A FREE-FUNCTION call tail, or a METHOD tail that the shared
+        // predicate admits, and the restriction is load-bearing rather than
+        // tidy. The interpreter twin routes the free-function shape from the
+        // `Call` arm of its discard dispatch and the method shape from its
+        // `MethodCall` arm, asking the same predicate; registering bodies here
+        // for anything else would fire on all three compiled surfaces against
+        // an interpreter that stays silent — a run-vs-build divergence, which
+        // is exactly the outcome B-2026-09-09-21 was written to avoid.
+        // Measured: an earlier draft of that fix omitted the gate and produced
         // `h.wrap(mk(43));` => `dR43` compiled / nothing interpreted.
         //
-        // The method spelling is a real gap and is filed separately. It needs
-        // the same both-halves-in-one-commit treatment this shape got, not a
-        // widened gate here.
-        if !in_branch {
+        // B-2026-09-17-2 — the method spelling, landed with its interpreter
+        // twin in one commit.
+        if !in_branch
+            && !self.discarded_method_tail_runs_bodies(tail, crate::ast::DiscardedAggregate::Tuple)
+        {
             let ExprKind::Call { callee, .. } = &tail.kind else {
                 return;
             };

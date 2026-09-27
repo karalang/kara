@@ -8005,3 +8005,51 @@ fn main() {
         "got:\n{out}"
     );
 }
+
+/// B-2026-09-17-2 and B-2026-09-27-56 — a discarded TUPLE or fixed-ARRAY
+/// METHOD result runs its element `Drop` bodies once, and an owned-`self`
+/// method that hands a field back inside a tuple no longer runs that field's
+/// body twice.
+///
+/// Before: `h.wrap(mk(1));` over `fn wrap(ref self, r: R) -> (R, i64)` and
+/// `h.pass([..]);` over `-> Array[R, 2]` ran no body on any backend, in the
+/// statement and the `let _ =` spellings, the method twins of
+/// B-2026-09-09-21 and B-2026-09-16-33. And because that left the receiver's
+/// walk as the only thing running a handed-back part (`own`), B-2026-09-25-28's
+/// receiver mask excluded tuple returns, so a BOUND tuple ran the part in that
+/// walk and again at its own death (`bound` printed `dR9 x9 dR9`, `both`
+/// printed each body twice). Both backends now ask one predicate,
+/// `method_discard_runs_aggregate_bodies`, and the exclusion is gone.
+///
+/// The CODEGEN twin is `tests/codegen/drop_order.rs`'s `e2e_discarded_method_aggregate_runs_its_element_bodies`, byte-identical
+/// source and expectation.
+#[test]
+fn test_discarded_method_aggregate_runs_its_element_bodies() {
+    let out = run(r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+struct H { n: i64 }
+impl H {
+    fn wrap(ref self, r: R) -> (R, i64) { return (r, 9); }
+    fn pass(ref self, x: Array[R, 2]) -> Array[R, 2] { return x; }
+}
+struct Ws { r: R, n: i64 }
+impl Ws { fn pair(self) -> (R, i64) { return (self.r, 5); } }
+struct W2 { q: R, r: R }
+impl W2 { fn both(self) -> (R, R) { return (self.q, self.r); } }
+fn main() {
+    let h = H { n: 1 };
+    println("stmt"); h.wrap(mk(1));
+    println("let"); let _ = h.wrap(mk(2));
+    println("arr"); h.pass([mk(3), mk(4)]);
+    println("larr"); let _ = h.pass([mk(5), mk(6)]);
+    println("temp"); H { n: 2 }.wrap(mk(7));
+    println("own"); { let w = Ws { r: mk(8), n: 0 }; w.pair(); println("end-own") }
+    println("bound"); { let w = Ws { r: mk(9), n: 0 }; let p = w.pair(); println(f"x{p.0.id}") }
+    println("both"); { let w = W2 { q: mk(10), r: mk(11) }; let p = w.both(); println("got") }
+    println("dboth"); { let w = W2 { q: mk(12), r: mk(13) }; w.both(); println("end-dboth") }
+    println("ok");
+}
+"#);
+    assert_eq!(out, "stmt\ndR1\nlet\ndR2\narr\ndR3\ndR4\nlarr\ndR5\ndR6\ntemp\ndR7\nown\ndR8\nend-own\nbound\nx9\ndR9\nboth\ndR10\ndR11\ngot\ndboth\ndR12\ndR13\nend-dboth\nok\n", "got:\n{out}");
+}

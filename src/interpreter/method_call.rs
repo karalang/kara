@@ -549,9 +549,10 @@ impl<'a> super::Interpreter<'a> {
                                 // Without it `let x = w.getr()` ran `dR1` in
                                 // the walk and again at `x`'s death, on all
                                 // four surfaces. A whole rebind of `self`
-                                // stands the walk down below instead, and a
-                                // TUPLE-returning method is left alone for
-                                // codegen's B-2026-09-17-2 reason. Codegen
+                                // stands the walk down below instead. A
+                                // TUPLE-returning method is masked too since
+                                // B-2026-09-17-2 gave its discarded result an
+                                // element walk (B-2026-09-27-56). Codegen
                                 // twin: `disarm_struct_var_escaping_parts` at
                                 // the owned-`self` call site in method_call.rs.
                                 if matches!(obj, Value::Struct { .. }) {
@@ -560,7 +561,6 @@ impl<'a> super::Interpreter<'a> {
                                         .filter(|f| {
                                             !crate::ast::fn_rebinds_self_whole(f)
                                                 && !crate::ast::fn_conditionally_rebinds_self(f)
-                                                && !crate::ast::fn_returns_tuple(f)
                                         })
                                         .map(|f| {
                                             crate::ast::fn_escaping_self_part_paths(self.program, f)

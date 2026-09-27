@@ -7890,6 +7890,19 @@ impl<'a> super::Interpreter<'a> {
                         Value::EnumVariant { enum_name, .. } => {
                             self.user_method_returns_owned_type(method, enum_name)
                         }
+                        // B-2026-09-17-2 — the `let _ =` spelling of the
+                        // statement dispatch's tuple / fixed-array arm, on the
+                        // same shared predicate.
+                        Value::Tuple(_) => crate::ast::method_discard_runs_aggregate_bodies(
+                            self.program,
+                            method,
+                            crate::ast::DiscardedAggregate::Tuple,
+                        ),
+                        Value::Array(_) => crate::ast::method_discard_runs_aggregate_bodies(
+                            self.program,
+                            method,
+                            crate::ast::DiscardedAggregate::FixedArray,
+                        ),
                         _ => false,
                     })
             }
@@ -11791,6 +11804,31 @@ impl<'a> super::Interpreter<'a> {
                                     } else {
                                         self.run_enum_payload_user_drops_value(&discarded);
                                     }
+                                }
+                            }
+                            // B-2026-09-17-2 — a discarded TUPLE or fixed-ARRAY
+                            // method result (`h.wrap(mk(43));` over `fn
+                            // wrap(ref self, r: R) -> (R, i64)`), the method
+                            // spelling of the free-fn arms above
+                            // (B-2026-09-09-21, B-2026-09-16-33). It ran no
+                            // element body on any backend. Keyed on the
+                            // DECLARED return through the predicate codegen's
+                            // `discarded_method_tail_runs_bodies` asks too,
+                            // because `Value::Array` also carries every `Vec`
+                            // and a generic method's erased `T` yields no
+                            // walker on the compiled side.
+                            Value::Tuple(_) | Value::Array(_) => {
+                                let want = if matches!(&discarded, Value::Tuple(_)) {
+                                    crate::ast::DiscardedAggregate::Tuple
+                                } else {
+                                    crate::ast::DiscardedAggregate::FixedArray
+                                };
+                                if crate::ast::method_discard_runs_aggregate_bodies(
+                                    self.program,
+                                    method,
+                                    want,
+                                ) {
+                                    self.run_discarded_value_user_drops(discarded);
                                 }
                             }
                             _ => {}

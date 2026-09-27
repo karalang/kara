@@ -7755,14 +7755,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // above, and re-registering a masked walk over that would ADD
                 // one, so it is excluded; so is an owned struct PARAM
                 // receiver, for the param sibling's reason (its bodies are the
-                // enclosing frame's to run). So is a method returning a TUPLE:
-                // a DISCARDED tuple method result runs no element body on any
-                // backend (B-2026-09-17-2), so the receiver's walk is the only
-                // thing running the part there (`s.m();` over `fn m(self) ->
-                // (R, i64) { return (self.r, 3) }`, pinned as cell 3c of
-                // `e2e_discarded_tuple_return_runs_its_element_drop_body`), and
-                // masking it lost the body. A BOUND tuple result keeps its
-                // doubled body until that row lands.
+                // enclosing frame's to run). A method returning a TUPLE is
+                // masked like any other since B-2026-09-17-2 gave a DISCARDED
+                // tuple method result its own element walk; before it, the
+                // receiver's walk was the only thing running the part there, so
+                // tuple returns were excluded and a BOUND tuple result ran the
+                // part twice (B-2026-09-27-56).
                 if let ExprKind::Identifier(recv_name) = &object.kind {
                     let parts: Vec<crate::ast::ParamPath> =
                         if matches!(
@@ -7780,8 +7778,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             ) {
                                 (Some(f), Some(p))
                                     if !crate::ast::fn_rebinds_self_whole(f)
-                                        && !crate::ast::fn_conditionally_rebinds_self(f)
-                                        && !crate::ast::fn_returns_tuple(f) =>
+                                        && !crate::ast::fn_conditionally_rebinds_self(f) =>
                                 {
                                     crate::ast::fn_escaping_self_part_paths(p, f)
                                 }
