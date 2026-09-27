@@ -1827,6 +1827,23 @@ pub fn tail_ends_freshtemp_reads(e: &Expr) -> bool {
     )
 }
 
+/// B-2026-09-27-104 — whether a call argument is a BRANCH WRAPPER, the shape
+/// whose arm tails the conditional-move seeding (`note_escaping_site`'s call
+/// arm) has to reach. The cheap pre-test both backends run as a call starts,
+/// before asking the full minting question.
+pub fn is_branch_wrapper_expr(e: &Expr) -> bool {
+    matches!(
+        &e.kind,
+        ExprKind::If { .. }
+            | ExprKind::IfLet { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::Block(_)
+            | ExprKind::Seq(_)
+            | ExprKind::Unsafe(_)
+            | ExprKind::LabeledBlock { .. }
+    )
+}
+
 /// B-2026-09-17-36 — whether `object`, the receiver of a field projection,
 /// produces a value nothing else owns, so its `Drop` bodies are owed when the
 /// enclosing statement ends. A free-function or method CALL, minus the accessor

@@ -6468,6 +6468,33 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-27-104 — seed a call's wrapper arguments WHEREVER the call
+    /// sits, not only where a statement hook reaches it.
+    ///
+    /// [`Self::note_escaping_stmt_sites`] seeds the calls at a statement's top
+    /// (`let`, `return`, an assignment, a bare call) and descends through the
+    /// wrappers and calls below them, but through nothing else. A call inside
+    /// an f-string part (`println(f"s{show(if c { p.a } else { mk(9) })}")`),
+    /// under an operator, or in a condition was never seeded, so the arm that
+    /// hands `p.a` over did not disarm it and the argument temp had no owner:
+    /// the minting arm's body was lost here and the compiled backends ran the
+    /// part's body twice. A call's arguments escape into it by construction,
+    /// which is the reason the statement hook seeds a bare call at all.
+    ///
+    /// Run as the call starts evaluating, before its arguments, so the arm
+    /// tails are known by the time one runs. Idempotent, like the hook: the
+    /// site set bounds it. Gated on a wrapper argument so an ordinary call
+    /// costs a scan of its argument kinds and nothing else. Codegen twin: the
+    /// method of the same name, at the head of its `Call`/`MethodCall` arms.
+    pub(crate) fn note_nested_call_arg_sites(&mut self, call: &Expr, args: &[crate::ast::CallArg]) {
+        if args
+            .iter()
+            .any(|a| crate::ast::is_branch_wrapper_expr(&a.value))
+        {
+            self.note_escaping_site(call);
+        }
+    }
+
     /// B-2026-08-28-51 — seed [`Self::note_escaping_site`] for the two
     /// ESCAPING STATEMENT positions, `let x = <expr>;` and `return <expr>;`.
     /// Runs as a pre-statement hook, before the statement evaluates, so the

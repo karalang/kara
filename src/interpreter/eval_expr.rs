@@ -1178,7 +1178,10 @@ impl<'a> super::Interpreter<'a> {
             }
 
             // Function calls
-            ExprKind::Call { callee, args } => self.eval_call(callee, args, &expr.span),
+            ExprKind::Call { callee, args } => {
+                self.note_nested_call_arg_sites(expr, args);
+                self.eval_call(callee, args, &expr.span)
+            }
 
             // Method calls
             ExprKind::MethodCall {
@@ -1187,7 +1190,10 @@ impl<'a> super::Interpreter<'a> {
                 args,
                 args_close_span,
                 ..
-            } => self.eval_method_call(object, method, args, &expr.span, args_close_span),
+            } => {
+                self.note_nested_call_arg_sites(expr, args);
+                self.eval_method_call(object, method, args, &expr.span, args_close_span)
+            }
 
             // If/else
             ExprKind::If {

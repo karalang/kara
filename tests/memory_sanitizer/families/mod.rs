@@ -27,6 +27,7 @@ use super::*;
 // ── Family modules (one `mod` line each, any order) ──
 mod b_2026_09_17_11;
 mod b_2026_09_17_12;
+mod b_2026_09_27_104;
 mod b_2026_09_27_50;
 mod b_2026_09_27_51;
 mod b_2026_09_27_54;

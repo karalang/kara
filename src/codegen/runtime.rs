@@ -13695,6 +13695,22 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-27-104 — seed a call's wrapper arguments wherever the call
+    /// sits. [`Self::note_escaping_stmt_sites`] only reaches calls at a
+    /// statement's top and below wrappers and calls, so one inside an f-string
+    /// part, under an operator or in a condition was never seeded: the arm that
+    /// handed `p.a` over did not disarm it, and the argument temp and `p` both
+    /// ran its body (a husk on the second). Run before the arguments lower.
+    /// Interp twin: `Interpreter::note_nested_call_arg_sites`.
+    pub(super) fn note_nested_call_arg_sites(&mut self, call: &Expr, args: &[crate::ast::CallArg]) {
+        if args
+            .iter()
+            .any(|a| crate::ast::is_branch_wrapper_expr(&a.value))
+        {
+            self.note_escaping_site(call);
+        }
+    }
+
     /// B-2026-08-28-51 — seed [`Self::note_escaping_site`] for the two escaping
     /// STATEMENT positions, `let x = <expr>;` and `return <expr>;`. The
     /// interpreter's `note_escaping_stmt_sites` is the same rule.

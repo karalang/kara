@@ -1074,6 +1074,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // call has been emitted, so the window holds exactly this
                 // call's own argument temps; a nested call in argument
                 // position opens its own window here and drains first.
+                self.note_nested_call_arg_sites(expr, args);
                 let arg_temp_mark = self.call_arg_temp_mark();
                 let v = self.compile_call(callee, args, &expr.span)?;
                 self.drain_call_arg_temp_user_drops(arg_temp_mark);
@@ -2053,6 +2054,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Method sibling of the `Call` arm's per-call drain
                 // (B-2026-08-29-55) — the position table's argument row does
                 // not distinguish the two spellings.
+                self.note_nested_call_arg_sites(expr, args);
                 let arg_temp_mark = self.call_arg_temp_mark();
                 let v =
                     self.compile_method_call(object, method, args, &expr.span, args_close_span)?;
