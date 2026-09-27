@@ -6915,6 +6915,7 @@ impl<'ctx> Codegen<'ctx> {
                 for_loop_borrow_vars: HashSet::new(),
                 borrow_accessor_let_payload: std::collections::HashMap::new(),
                 for_loop_owned_agg_vars: HashSet::new(),
+                pending_for_loop_box_owners: Vec::new(),
                 for_loop_elem_struct_views: HashSet::new(),
                 borrowed_agg_payload_struct_vars: HashSet::new(),
                 owned_struct_params: HashSet::new(),

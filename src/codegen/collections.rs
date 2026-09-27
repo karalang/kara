@@ -4135,6 +4135,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(f) => f,
                 None => return Ok(val),
             }
+        } else if let Some(f) = self.emit_vec_elem_boxed_enum_clone_fn(&elem_te) {
+            // B-2026-09-26-12 — the container's element drop frees the
+            // payload box, so the moved-out copy needs its own.
+            f
         } else {
             self.emit_clone_fn_for_type_expr(&elem_te)
         };

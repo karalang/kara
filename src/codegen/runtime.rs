@@ -5847,6 +5847,151 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(drop_fn)
     }
 
+    /// [`Self::emit_vec_elem_boxed_enum_drop_fn`] for any element type,
+    /// `None` unless it is a user enum whose instantiation boxes a payload.
+    pub(super) fn vec_elem_boxed_enum_drop_for_te(
+        &mut self,
+        elem_te: &TypeExpr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let TypeKind::Path(p) = &elem_te.kind else {
+            return None;
+        };
+        let name = p.segments.first()?.clone();
+        if !self.type_decls.enum_layouts.contains_key(&name) {
+            return None;
+        }
+        self.emit_vec_elem_boxed_enum_drop_fn(elem_te, &name)
+    }
+
+    /// B-2026-09-26-12 — the per-element drop for a `Vec` of a user enum
+    /// whose payload is BOXED, keyed on the element's INSTANTIATION.
+    ///
+    /// It is the name-keyed `emit_enum_drop_switch` followed by one
+    /// `BoxedEnumDrop` per boxed field, emitted as a function rather than a
+    /// scope action because a `Vec` element has no binding to hang an action
+    /// on. The two halves are disjoint by construction:
+    /// `user_enum_boxed_payload_variants` returns only fields whose
+    /// `EnumDropKind` is `None`, i.e. exactly the fields the switch does not
+    /// touch — the same partition the let site relies on when it registers
+    /// both for one binding.
+    ///
+    /// The interior walk is the let site's own resolver with
+    /// `array_interior_ok = true`: a value in a `Vec` slot was moved there, so
+    /// no named source still owns its elements.
+    ///
+    /// The box word is zeroed after the free, so a second drain of the same
+    /// slot takes the null guard instead of freeing twice.
+    pub(super) fn emit_vec_elem_boxed_enum_drop_fn(
+        &mut self,
+        elem_te: &TypeExpr,
+        enum_name: &str,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let boxed = self.user_enum_boxed_payload_variants(elem_te);
+        if boxed.is_empty() {
+            return None;
+        }
+        let fn_name = format!(
+            "__karac_vec_elem_boxed_enum_drop_{}",
+            Self::display_mangle_te(elem_te)
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let layout = self.type_decls.enum_layouts.get(enum_name)?.clone();
+        // Resolve every callee before positioning inside the new function:
+        // each may synthesize a function of its own.
+        let base = self.emit_enum_drop_switch(enum_name);
+        let arms: Vec<(u64, u32, Option<inkwell::values::FunctionValue<'ctx>>)> = boxed
+            .iter()
+            .map(|(_, vname, payload_te, box_field, _)| {
+                (
+                    layout.tags.get(vname).copied().unwrap_or(1),
+                    *box_field,
+                    self.enum_boxed_payload_interior_drop(payload_te, true),
+                )
+            })
+            .collect();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let void_ty = self.context.void_type();
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn =
+            self.module
+                .add_function(&fn_name, fn_ty, Some(inkwell::module::Linkage::Internal));
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let slot = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        if let Some(b) = base {
+            self.builder.build_call(b, &[slot.into()], "").unwrap();
+        }
+        for (tag, field, inner) in arms {
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(layout.llvm_type, slot, 0, "vecelem.bx.tagp")
+                .unwrap();
+            let got = self
+                .builder
+                .build_load(i64_t, tag_ptr, "vecelem.bx.tag")
+                .unwrap()
+                .into_int_value();
+            let is_tag = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    got,
+                    i64_t.const_int(tag, false),
+                    "vecelem.bx.is",
+                )
+                .unwrap();
+            let do_bb = self.context.append_basic_block(drop_fn, "vecelem.bx.do");
+            let free_bb = self.context.append_basic_block(drop_fn, "vecelem.bx.free");
+            let next_bb = self.context.append_basic_block(drop_fn, "vecelem.bx.next");
+            self.builder
+                .build_conditional_branch(is_tag, do_bb, next_bb)
+                .unwrap();
+            self.builder.position_at_end(do_bb);
+            let w_ptr = self
+                .builder
+                .build_struct_gep(layout.llvm_type, slot, field, "vecelem.bx.wp")
+                .unwrap();
+            let w = self
+                .builder
+                .build_load(i64_t, w_ptr, "vecelem.bx.w")
+                .unwrap()
+                .into_int_value();
+            let box_ptr = self
+                .builder
+                .build_int_to_ptr(w, ptr_ty, "vecelem.bx.ptr")
+                .unwrap();
+            let is_null = self
+                .builder
+                .build_is_null(box_ptr, "vecelem.bx.isnull")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(is_null, next_bb, free_bb)
+                .unwrap();
+            self.builder.position_at_end(free_bb);
+            if let Some(f) = inner {
+                self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
+            }
+            self.builder
+                .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
+                .unwrap();
+            self.builder.build_store(w_ptr, i64_t.const_zero()).unwrap();
+            self.builder.build_unconditional_branch(next_bb).unwrap();
+            self.builder.position_at_end(next_bb);
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.current_fn = saved_fn;
+        Some(drop_fn)
+    }
+
     /// B-2026-06-14-28 — synthesize (or fetch) `__karac_vec_elem_rc_dec_<T>`,
     /// a per-element drop fn for a `Vec` whose element type is `shared T` (an
     /// inline RC pointer). The `FreeVecBuffer` drain calls it with a pointer

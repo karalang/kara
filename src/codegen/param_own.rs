@@ -4653,6 +4653,166 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(exit_bb);
     }
 
+    /// B-2026-09-26-12 — duplicate every heap-BOXED payload of a user-enum
+    /// value in place, keyed on the value's INSTANTIATION (`Ho[String]`).
+    ///
+    /// The name-keyed [`Self::deep_copy_enum_heap_payload_in_place`] walks
+    /// `field_drop_kinds`, which is one table per enum shared by every
+    /// instantiation; an erased `T` payload classifies `None` there, so a
+    /// boxed `Ho[String]` payload was bit-copied and the copy SHARED the box.
+    /// That was harmless only while nothing owned the box of a `Vec` element.
+    /// Now that the element drop frees it, every copy of such an element must
+    /// get a box of its own, or both free one.
+    ///
+    /// The fields visited are exactly `user_enum_boxed_payload_variants`'s,
+    /// the same set the element drop and the let-site `BoxedEnumDrop` free,
+    /// so copy-depth equals drop-depth by construction. Each new box is filled
+    /// by the owning clone of the payload type, so a `String` or struct
+    /// payload's own heap is duplicated too. Tag- and null-guarded.
+    ///
+    /// Returns whether the instantiation boxes anything, i.e. whether a copy
+    /// was emitted.
+    /// B-2026-09-26-12 — make a `for`-loop binding over a boxed-payload enum
+    /// element (`for h in v` over `Vec[Ho[String]]`) the OWNER of a box of its
+    /// own for the iteration: duplicate the box in place, then register the
+    /// same per-variant box drop a `let h: Ho[String] = ..` registers, in the
+    /// loop body's frame so it runs at the end of every iteration.
+    ///
+    /// Copying at the binding rather than at each place the binding escapes
+    /// is what makes this one change: a named local's box is already handed
+    /// over correctly to a call, a struct literal, a variant constructor, a
+    /// closure and a container, so the binding only has to BE one. The
+    /// container keeps its element's box, which its own element drop frees.
+    pub(super) fn own_for_loop_boxed_enum_binding(&mut self, name: &str, te: &TypeExpr) {
+        let boxed = self.user_enum_boxed_payload_variants(te);
+        if boxed.is_empty() {
+            return;
+        }
+        let Some(slot) = self.variables.get(name).copied() else {
+            return;
+        };
+        self.deep_copy_boxed_enum_payloads_in_place(te, slot.ptr);
+        for (enum_name, variant, payload_te, box_field, _multi_field) in boxed {
+            let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
+            self.track_boxed_enum_var_with_inner_drop_for_payload(
+                name,
+                slot.ptr,
+                &enum_name,
+                &variant,
+                inner,
+                &payload_te,
+                box_field,
+            );
+        }
+    }
+
+    pub(super) fn deep_copy_boxed_enum_payloads_in_place(
+        &mut self,
+        te: &TypeExpr,
+        slot: PointerValue<'ctx>,
+    ) -> bool {
+        let boxed = self.user_enum_boxed_payload_variants(te);
+        if boxed.is_empty() {
+            return false;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return false;
+        };
+        let enum_name = boxed[0].0.clone();
+        let Some(layout) = self.type_decls.enum_layouts.get(&enum_name).cloned() else {
+            return false;
+        };
+        // Resolve every clone fn before emitting into this block: each one
+        // repositions the builder while it is synthesized.
+        let arms: Vec<(
+            u64,
+            u32,
+            BasicTypeEnum<'ctx>,
+            inkwell::values::FunctionValue<'ctx>,
+        )> = boxed
+            .iter()
+            .map(|(_, vname, payload_te, field, _)| {
+                (
+                    layout.tags.get(vname).copied().unwrap_or(1),
+                    *field,
+                    self.llvm_type_for_type_expr(payload_te),
+                    self.emit_owning_clone_fn_for_type_expr(payload_te),
+                )
+            })
+            .collect();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        for (tag, field, payload_ll, clone_fn) in arms {
+            let Some(raw_size) = payload_ll.size_of() else {
+                continue;
+            };
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(layout.llvm_type, slot, 0, "bxcp.tagp")
+                .unwrap();
+            let got = self
+                .builder
+                .build_load(i64_t, tag_ptr, "bxcp.tag")
+                .unwrap()
+                .into_int_value();
+            let is_tag = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    got,
+                    i64_t.const_int(tag, false),
+                    "bxcp.is",
+                )
+                .unwrap();
+            let load_bb = self.context.append_basic_block(fn_val, "bxcp.load");
+            let copy_bb = self.context.append_basic_block(fn_val, "bxcp.copy");
+            let join_bb = self.context.append_basic_block(fn_val, "bxcp.join");
+            self.builder
+                .build_conditional_branch(is_tag, load_bb, join_bb)
+                .unwrap();
+            self.builder.position_at_end(load_bb);
+            let word_ptr = self
+                .builder
+                .build_struct_gep(layout.llvm_type, slot, field, "bxcp.wp")
+                .unwrap();
+            let old_p = self
+                .builder
+                .build_load(ptr_ty, word_ptr, "bxcp.old")
+                .unwrap()
+                .into_pointer_value();
+            let is_null = self.builder.build_is_null(old_p, "bxcp.isnull").unwrap();
+            self.builder
+                .build_conditional_branch(is_null, join_bb, copy_bb)
+                .unwrap();
+            self.builder.position_at_end(copy_bb);
+            let size = if raw_size.get_type().get_bit_width() == 64 {
+                raw_size
+            } else {
+                self.builder
+                    .build_int_z_extend(raw_size, i64_t, "bxcp.sz64")
+                    .unwrap()
+            };
+            let new_p = self
+                .builder
+                .build_call(self.runtime_fns.malloc_fn, &[size.into()], "bxcp.new")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            self.builder
+                .build_call(clone_fn, &[old_p.into(), new_p.into()], "")
+                .unwrap();
+            let new_w = self
+                .builder
+                .build_ptr_to_int(new_p, i64_t, "bxcp.w")
+                .unwrap();
+            self.builder.build_store(word_ptr, new_w).unwrap();
+            self.builder.build_unconditional_branch(join_bb).unwrap();
+            self.builder.position_at_end(join_bb);
+        }
+        true
+    }
+
     /// Deep-copy the live variant's Vec/String payload of
     /// the enum value at `base_ptr`. Emits a tag switch mirroring
     /// `emit_enum_drop_switch`; only variants with a VecOrString payload get a

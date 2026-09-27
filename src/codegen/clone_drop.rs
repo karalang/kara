@@ -610,7 +610,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_ty = self.vec_struct_type();
         let elem_ty = self.llvm_type_for_type_expr(elem_te);
         // Recurse first — emit may switch the builder's insert block.
-        let elem_clone = self.emit_owning_clone_fn_for_type_expr(elem_te);
+        // B-2026-09-26-12 — a boxed-payload enum element gets a box of its
+        // own, matching the local `Vec`'s element drop that frees it.
+        let elem_clone = match self.emit_vec_elem_boxed_enum_clone_fn(elem_te) {
+            Some(f) => f,
+            None => self.emit_owning_clone_fn_for_type_expr(elem_te),
+        };
 
         let saved_bb = self.builder.get_insert_block();
         let clone_fn_ty = self
@@ -1109,6 +1114,82 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
+        Some(clone_fn)
+    }
+
+    /// B-2026-09-26-12 — the element clone for a `Vec` whose element drop
+    /// frees a boxed enum payload (`emit_vec_elem_boxed_enum_drop_fn`), `None`
+    /// for every other element type.
+    ///
+    /// SCOPED TO `Vec` ELEMENTS, not added to the general dispatcher, because
+    /// copy-depth has to equal drop-depth position by position. Only a `Vec`
+    /// element's drop owns the box; an `Option[G1[String]]` payload or a
+    /// struct field still has none, and the match that moves such a payload
+    /// out frees its contents itself, so a box-owning drop there double frees
+    /// (`e2e_option_wrapped_handback_leaves_one_owner_on_the_payload_box`).
+    pub(super) fn emit_vec_elem_boxed_enum_clone_fn(
+        &mut self,
+        elem_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let TypeKind::Path(p) = &elem_te.kind else {
+            return None;
+        };
+        let name = p.segments.first()?.clone();
+        if !self.type_decls.enum_layouts.contains_key(&name) {
+            return None;
+        }
+        self.emit_boxed_enum_value_clone_fn(elem_te, &name)
+    }
+
+    /// B-2026-09-26-12 — `karac_clone_<Ho_String>`: the name-keyed enum clone
+    /// (or a plain copy when that declines) followed by
+    /// [`Self::deep_copy_boxed_enum_payloads_in_place`] on the destination, so
+    /// a heap-BOXED payload gets a box of its own. `None` when the
+    /// instantiation boxes nothing, leaving every such enum on the path it
+    /// had.
+    fn emit_boxed_enum_value_clone_fn(
+        &mut self,
+        te: &TypeExpr,
+        enum_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        if self.user_enum_boxed_payload_variants(te).is_empty() {
+            return None;
+        }
+        let fn_name = format!("karac_clone_boxed_{}", Self::display_mangle_te(te));
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let base = self.emit_enum_clone_fn(enum_name);
+        let enum_ty = self.type_decls.enum_layouts.get(enum_name)?.llvm_type;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn = self
+            .module
+            .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+        self.current_fn = Some(clone_fn);
+        let entry = self.context.append_basic_block(clone_fn, "entry");
+        self.builder.position_at_end(entry);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+        if let Some(b) = base {
+            self.builder
+                .build_call(b, &[src.into(), dst.into()], "")
+                .unwrap();
+        } else {
+            let v = self.builder.build_load(enum_ty, src, "bxcl.v").unwrap();
+            self.builder.build_store(dst, v).unwrap();
+        }
+        self.deep_copy_boxed_enum_payloads_in_place(te, dst);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.current_fn = saved_fn;
         Some(clone_fn)
     }
 

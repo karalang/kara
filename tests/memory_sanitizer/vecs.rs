@@ -8179,3 +8179,70 @@ fn main() {
         8,
     );
 }
+
+/// B-2026-09-26-12 — a `Vec` of a GENERIC user enum whose payload is heap-BOXED
+/// (`Ho[String]`, `Ho[P1]`, `Ho[S3]`, `Ho[S2]`, `Ho[Vec[String]]`) frees each
+/// element's box and interior. The element drop was the name-keyed
+/// `__karac_drop_Ho`, one function for every instantiation, which cannot know
+/// the payload is boxed. Also every copy that has to hold its own box once the
+/// container frees one: a `for` binding (moved to a local, matched, handed to a
+/// function, pushed, index-assigned), `match v[0]`, `v.clone()`, and a named
+/// local index-assigned over an element.
+/// The use-after-free cell (a `Vec` read again after a loop handed every
+/// element away) lives in the codegen twin only: without the fix it spins
+/// forever, and this harness has no hang watchdog.
+#[test]
+fn asan_generic_enum_vec_element_owns_its_payload_box() {
+    assert_clean_asan_run(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+struct S3 { h: Sh, id: i64 }
+enum Ho[T] { Full(T), Empty }
+struct P1 { t: String, id: i64 }
+fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
+fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn keep(h: Ho[String]) -> i64 { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }
+fn show(h: Ho[String]) { match h { Ho.Full(s) => println(s), Ho.Empty => println("e") } }
+fn c00() { let mut v: Vec[Ho[String]] = Vec.new(); v.push(Ho.Full("ab".to_string() + "cd")); v.push(Ho.Empty); println(f"n{v.len()}"); }
+fn c01() { let mut v: Vec[Ho[P1]] = Vec.new(); v.push(Ho.Full(P1 { t: "x".to_string() + "y", id: 1 })); println(f"n{v.len()}"); }
+fn c02() { let mut v: Vec[Ho[S3]] = Vec.new(); v.push(Ho.Full(mk(10))); println(f"n{v.len()}"); }
+fn c03() { let mut v: Vec[Ho[S2]] = Vec.new(); v.push(Ho.Full(mk2(9))); v.push(Ho.Empty); println(f"n{v.len()}"); }
+fn c04() { let mut v: Vec[Ho[Vec[String]]] = Vec.new(); v.push(Ho.Full(vec!["a".to_string() + "b"])); println(f"n{v.len()}"); }
+fn c05() { let v: Vec[Ho[String]] = vec![Ho.Full("ab".to_string() + "cd"), Ho.Empty]; for h in v { match h { Ho.Full(s) => println(s), Ho.Empty => println("e"), } } }
+fn c06() { let v: Vec[Ho[String]] = vec![Ho.Full("ef".to_string() + "gh"), Ho.Empty]; for h in v { let k = h; println("k") } }
+fn c07() { let v: Vec[Ho[String]] = vec![Ho.Full("ij".to_string() + "kl")]; match v[0] { Ho.Full(s) => println(s), Ho.Empty => println("e"), } }
+fn c08() { let v: Vec[Ho[String]] = vec![Ho.Full("mn".to_string() + "op"), Ho.Empty]; let w = v.clone(); println(f"c{w.len()}{v.len()}"); }
+fn c09() { let mut v: Vec[Ho[P1]] = Vec.new(); v.push(Ho.Full(P1 { t: "q".to_string() + "r", id: 2 })); for h in v { match h { Ho.Full(p) => println(p.t), Ho.Empty => println("e"), } } }
+fn c10() { let mut v: Vec[Ho[String]] = Vec.new(); v.push(Ho.Full("st".to_string() + "uv")); v[0] = Ho.Full("wx".to_string() + "yz"); println(f"n{v.len()}"); }
+fn c11() { let mut i = 0; while i < 3 { let mut v: Vec[Ho[S2]] = Vec.new(); v.push(Ho.Full(mk2(20 + i))); v.push(Ho.Empty); println(f"n{v.len()}"); i = i + 1; } }
+fn c12() { let v: Vec[Ho[String]] = vec![Ho.Full("gg".to_string() + "hh"), Ho.Empty]; for h in v { show(h) } println(f"n{v.len()}"); }
+fn c13() { let v: Vec[Ho[String]] = vec![Ho.Full("ii".to_string() + "jj"), Ho.Empty]; let mut w: Vec[Ho[String]] = Vec.new(); for h in v { w.push(h) } println(f"w{w.len()}"); }
+fn c14() { let v: Vec[Ho[String]] = vec![Ho.Full("kk".to_string() + "ll")]; let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); for h in v { w[0] = h; } println(f"w{w.len()}"); }
+fn c16() { let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); let h: Ho[String] = Ho.Full("oo".to_string() + "pp"); w[0] = h; println(f"w{w.len()}"); }
+fn main() {
+    c00()
+    c01()
+    c02()
+    c03()
+    c04()
+    c05()
+    c06()
+    c07()
+    c08()
+    c09()
+    c10()
+    c11()
+    c12()
+    c13()
+    c14()
+    c16()
+    println("end")
+}
+"#,
+        &[
+            "n2", "n1", "n1", "n2", "n1", "abcd", "e", "k", "k", "ijkl", "c22", "qr", "n1", "n2",
+            "n2", "n2", "gghh", "e", "n2", "w2", "w1", "w1", "end",
+        ],
+        "asan_generic_enum_vec_element_owns_its_payload_box",
+    );
+}

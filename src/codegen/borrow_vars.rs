@@ -112,6 +112,12 @@ pub(crate) struct BorrowVars<'ctx> {
     /// copy-support); removed on shadow-rebind; cleared per-function alongside
     /// `for_loop_borrow_vars`.
     pub(crate) for_loop_owned_agg_vars: HashSet<String>,
+    /// B-2026-09-26-12 — `for`-loop bindings whose element is a user enum
+    /// with a heap-BOXED payload (`Ho[String]`), with that element type.
+    /// Filled by `register_for_loop_bindings` and drained by
+    /// `compile_loop_body_with_cleanup` once the body's scope frame exists,
+    /// which gives each such binding a box of its own for the iteration.
+    pub(crate) pending_for_loop_box_owners: Vec<(String, crate::ast::TypeExpr)>,
     /// Every non-shared STRUCT `for`-loop element binding, copy-supported or
     /// not (B-2026-09-24-26). A superset of the struct half of
     /// `for_loop_owned_agg_vars`, which is gated on recursive copy-support

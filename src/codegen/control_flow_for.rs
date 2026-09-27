@@ -1655,6 +1655,9 @@ impl<'ctx> super::Codegen<'ctx> {
         continue_bb: inkwell::basic_block::BasicBlock<'ctx>,
     ) -> Result<(), String> {
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
+        for (name, te) in std::mem::take(&mut self.borrow_vars.pending_for_loop_box_owners) {
+            self.own_for_loop_boxed_enum_binding(&name, &te);
+        }
         self.compile_block(body)?;
         if self
             .builder

@@ -2835,6 +2835,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(elem_te) = self.var_types.var_elem_type_exprs.get(source_var).cloned() {
                     self.register_var_from_type_expr(name, &elem_te);
                     self.mark_for_loop_borrow_if_heap(name, &elem_te);
+                    self.note_for_loop_box_owner(name, &elem_te);
                 }
             }
             // `for (k, v) in m` — only legal tuple iteration shape today
@@ -2852,6 +2853,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         self.register_var_from_type_expr(v_name, &v_te);
                         self.mark_for_loop_borrow_if_heap(v_name, &v_te);
+                        self.note_for_loop_box_owner(v_name, &v_te);
                     }
                 }
             }
@@ -2872,6 +2874,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Scalars carry no buffer to alias, so consuming them is a plain bit-copy
     /// and stays unmarked (an unarmed container keeps the old consume+free
     /// balance).
+    /// B-2026-09-26-12 — queue a loop binding whose element's enum payload is
+    /// heap-BOXED for [`Self::own_for_loop_boxed_enum_binding`]. The binding
+    /// is otherwise a bit-copy of the container's slot, so it would share the
+    /// box with the element the container frees.
+    fn note_for_loop_box_owner(&mut self, name: &str, elem_te: &TypeExpr) {
+        let TypeKind::Path(p) = &elem_te.kind else {
+            return;
+        };
+        let Some(head) = p.segments.first() else {
+            return;
+        };
+        if self
+            .type_decls
+            .enum_layouts
+            .get(head.as_str())
+            .is_none_or(|l| l.is_shared)
+            || self.user_enum_boxed_payload_variants(elem_te).is_empty()
+        {
+            return;
+        }
+        self.borrow_vars
+            .pending_for_loop_box_owners
+            .push((name.to_string(), elem_te.clone()));
+    }
+
     pub(super) fn mark_for_loop_borrow_if_heap(&mut self, name: &str, elem_te: &TypeExpr) {
         // B-2026-09-23-31 — a TUPLE element is a bit-copy of the container's
         // slot, so a heap member moved out of it (`let s = p.0`) aliases the

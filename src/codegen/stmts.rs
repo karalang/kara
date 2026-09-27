@@ -2039,9 +2039,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let map_elem_drop = elem_te
                                     .as_ref()
                                     .and_then(|te| self.vec_elem_map_drop_for_type_expr(te));
+                                // B-2026-09-26-12 — a boxed-payload enum
+                                // element, asked at the local `Vec`'s own
+                                // registration rather than in the shared
+                                // resolver, whose Option-payload and
+                                // struct-field callers have no box owner.
                                 let agg_elem_drop = elem_te
                                     .as_ref()
-                                    .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te))
+                                    .and_then(|te| {
+                                        self.vec_elem_boxed_enum_drop_for_te(te)
+                                            .or_else(|| self.vec_elem_agg_drop_for_type_expr(te))
+                                    })
                                     // B-2026-09-10-36 — the `Array` element the
                                     // shared resolver above deliberately does
                                     // not answer for (see
@@ -9150,9 +9158,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let map_elem_drop = elem_te
                                     .as_ref()
                                     .and_then(|te| self.vec_elem_map_drop_for_type_expr(te));
+                                // B-2026-09-26-12 — a boxed-payload enum
+                                // element, asked at the local `Vec`'s own
+                                // registration rather than in the shared
+                                // resolver, whose Option-payload and
+                                // struct-field callers have no box owner.
                                 let agg_elem_drop = elem_te
                                     .as_ref()
-                                    .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te))
+                                    .and_then(|te| {
+                                        self.vec_elem_boxed_enum_drop_for_te(te)
+                                            .or_else(|| self.vec_elem_agg_drop_for_type_expr(te))
+                                    })
                                     // B-2026-09-10-36 — the `Array` element,
                                     // asked at the registration that actually
                                     // fires for a `let`-bound `Vec[Array[..]]`.
@@ -15295,6 +15311,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         Self::store_destroys_displaced(value),
                     );
                     self.compile_index_store(object, index, val, rhs_is_fresh, Some(value))?;
+                    // B-2026-09-26-12 — a named boxed-payload enum moved into a
+                    // local `Vec`'s element: that `Vec`'s element drop frees the
+                    // box now, so the source's `BoxedEnumDrop` stands down —
+                    // the same box-word zero `push` applies to its argument.
+                    if let ExprKind::Identifier(container) = &object.kind {
+                        let boxed_elem = self
+                            .var_types
+                            .var_elem_type_exprs
+                            .get(container.as_str())
+                            .cloned()
+                            .is_some_and(|te| {
+                                !self.user_enum_boxed_payload_variants(&te).is_empty()
+                            });
+                        if boxed_elem {
+                            self.suppress_boxed_enum_payload_cleanup_for_moved_arg(value);
+                        }
+                    }
                     // B-2026-07-11-32: an f-string RHS stored into a Vec element
                     // slot (`v[i] = f"…"`). `compile_vec_index_store` already
                     // dropped the old element and MOVED the acc's {ptr,len,cap}
@@ -24303,7 +24336,13 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
             }
-        } else if let Some(f) = self.emit_enum_drop_switch(&etn) {
+        } else if let Some(f) = self
+            .emit_vec_elem_boxed_enum_drop_fn(&elem_te, &etn)
+            .or_else(|| self.emit_enum_drop_switch(&etn))
+        {
+            // B-2026-09-26-12 — the instantiation-keyed drop when the
+            // displaced value's payload is BOXED, which the name-keyed switch
+            // cannot free.
             self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
         }
     }
