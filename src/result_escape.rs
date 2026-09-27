@@ -41,6 +41,9 @@ type LentPolicy<'a> = dyn Fn(&str, usize) -> bool + 'a;
 
 #[derive(Default)]
 struct Acc<'a> {
+    /// B-2026-09-27-51 — the unmutated `let mut` rebinds of parameters, read
+    /// as immutable aliases (`crate::ast::demoted_param_rebind_names`).
+    demoted: HashSet<&'a str>,
     /// B-2026-09-14-5 — the PROJECTION POLICY the `payload_escapers_proj` map is
     /// built under, supplied by the caller. `None` is
     /// [`projection_is_read`], i.e. "every projection is a read", which is what
@@ -156,7 +159,12 @@ fn root<'a>(acc: &Acc<'a>, name: &'a str) -> &'a str {
 /// that read the other entry points treat a rebind as a real transfer
 /// (`callee_rebinds_param_whole`), so they keep the unseeded walk.
 fn seeded_acc<'a>(func: &'a Function) -> Acc<'a> {
-    let mut acc = Acc::default();
+    let mut acc = Acc {
+        demoted: crate::ast::demoted_param_rebind_names(func)
+            .into_iter()
+            .collect(),
+        ..Acc::default()
+    };
     for p in &func.params {
         let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
             continue;
@@ -950,7 +958,12 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                 // `c` cannot be reassigned to something `a` never held.
                 if let ExprKind::Identifier(src) = &value.kind {
                     let r = root(acc, src.as_str());
-                    if !*is_mut && !acc.in_closure && acc.alias_roots.contains(r) {
+                    // B-2026-09-27-51 — or a `let mut` never mutated, which
+                    // codegen compiles as the `let` it is.
+                    if (!*is_mut || acc.demoted.contains(name.as_str()))
+                        && !acc.in_closure
+                        && acc.alias_roots.contains(r)
+                    {
                         acc.aliases.insert(name.as_str(), r);
                         return;
                     }

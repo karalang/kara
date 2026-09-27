@@ -2606,6 +2606,32 @@ impl RebindWalk {
 
 /// The rebind walk over `f`'s body, seeded with its parameter names.
 fn rebind_walk(f: &Function) -> RebindWalk {
+    let mut w = rebind_walk_raw(f);
+    // B-2026-09-27-51 — an unmutated `let mut` rebind of a parameter is an
+    // immutable rebind for every alias question, on BOTH backends: codegen
+    // compiles it as a `let` (`demote_unmutated_param_rebinds`) and the
+    // interpreter reads these closures directly, so reclassifying it here is
+    // what makes the two agree. `fn rb(a: R) -> R { let mut c = a; c }` ran
+    // `a`'s body twice on all four surfaces because the hand-back predicates
+    // could not see `c` as `a`.
+    let demoted: Vec<(String, String)> = unmutated_param_mut_rebinds(f)
+        .into_iter()
+        .filter_map(|i| match &f.body.stmts[i].kind {
+            StmtKind::Let { pattern, value, .. } => match (&pattern.kind, &value.kind) {
+                (PatternKind::Binding(x), ExprKind::Identifier(y)) => Some((x.clone(), y.clone())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    if !demoted.is_empty() {
+        w.mut_rebinds.retain(|r| !demoted.contains(r));
+        w.rebinds.extend(demoted);
+    }
+    w
+}
+
+fn rebind_walk_raw(f: &Function) -> RebindWalk {
     let mut w = RebindWalk {
         rebinds: Vec::new(),
         mut_rebinds: Vec::new(),
@@ -8823,7 +8849,7 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
 /// reassignment to carry it, a named argument was freed in both frames
 /// (`free(): double free detected in tcache 2`) and a temporary's `Drop` body
 /// ran nowhere. Codegen demotes these to `let` before it compiles anything
-/// ([`demote_unmutated_optres_param_rebinds`]), so every predicate keyed on
+/// ([`demote_unmutated_param_rebinds`]), so every predicate keyed on
 /// `is_mut` answers the immutable question once, at one definition.
 ///
 /// Deliberately narrow and conservative. Top-level statements only; the local
@@ -8831,28 +8857,36 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
 /// call on it (a `take()` or `replace()` rewrites the payload), `mut`-marked
 /// argument, optional-chain call or `for` over it counts as a mutation, so a
 /// false "unmutated" cannot arise from a use this walk does not understand.
-pub fn unmutated_optres_param_mut_rebinds(f: &Function) -> Vec<usize> {
-    let optres_params: Vec<&str> = f
+pub fn unmutated_param_mut_rebinds(f: &Function) -> Vec<usize> {
+    // B-2026-09-27-51 — every OWNED parameter, not `Option` / `Result` alone.
+    // A plain struct returned through the same spelling (`fn rb(a: R) -> R {
+    // let mut c = a; c }`) ran its `Drop` body twice on all four surfaces:
+    // the hand-back predicates read the `let mut` as no alias of `a`, so the
+    // caller fired `a` and the result binding fired it again.
+    let owned_params: Vec<&str> = f
         .params
         .iter()
-        .filter(|p| {
-            matches!(&p.ty.kind, crate::ast::TypeKind::Path(path)
-                if matches!(path.segments.first().map(String::as_str), Some("Option") | Some("Result")))
+        .filter(|p| match &p.ty.kind {
+            crate::ast::TypeKind::Path(path) => {
+                path.segments.first().map(String::as_str) != Some("Slice")
+            }
+            crate::ast::TypeKind::Tuple(_) => true,
+            _ => false,
         })
         .filter_map(|p| match &p.pattern.kind {
             PatternKind::Binding(n) => Some(n.as_str()),
             _ => None,
         })
         .collect();
-    if optres_params.is_empty() {
+    if owned_params.is_empty() {
         return Vec::new();
     }
-    let bound = rebind_walk(f).bound;
+    let bound = rebind_walk_raw(f).bound;
     let once = |n: &str| bound.get(n) == Some(&1);
     // The names the param's value goes by: the param, then every top-level
     // whole rebind of one of them -- an immutable one, or a `let mut` this
     // demotes (`let c = a; let mut d = c;` is `let d = c` too).
-    let mut aliases: Vec<&str> = optres_params.into_iter().filter(|p| once(p)).collect();
+    let mut aliases: Vec<&str> = owned_params.into_iter().filter(|p| once(p)).collect();
     let mut assigned: Option<std::collections::HashSet<String>> = None;
     let mut out = Vec::new();
     for (i, st) in f.body.stmts.iter().enumerate() {
@@ -8888,9 +8922,27 @@ pub fn unmutated_optres_param_mut_rebinds(f: &Function) -> Vec<usize> {
     out
 }
 
+/// B-2026-09-27-51 — the names [`unmutated_param_mut_rebinds`] binds: the
+/// `let mut` locals every alias walk reads as immutable rebinds. The walks
+/// that test `is_mut` directly ask this beside it, so a demoted rebind is an
+/// alias on both backends and not only on the one that compiles the demoted
+/// program.
+pub fn demoted_param_rebind_names(f: &Function) -> Vec<&str> {
+    unmutated_param_mut_rebinds(f)
+        .into_iter()
+        .filter_map(|i| match &f.body.stmts[i].kind {
+            StmtKind::Let { pattern, .. } => match &pattern.kind {
+                PatternKind::Binding(x) => Some(x.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 /// Could `b` mutate the local `name` through anything other than an assignment
 /// (which [`crate::ast::collect_assigned_roots_block`] answers)? See
-/// [`unmutated_optres_param_mut_rebinds`] for why every method call counts.
+/// [`unmutated_param_mut_rebinds`] for why every method call counts.
 fn block_uses_local_mutably(b: &Block, name: &str) -> bool {
     fn visit(e: &Expr, name: &str, hit: &mut bool) {
         if *hit {
@@ -8920,14 +8972,14 @@ fn block_uses_local_mutably(b: &Block, name: &str) -> bool {
 }
 
 /// B-2026-09-27-37 — `program` with every rebind
-/// [`unmutated_optres_param_mut_rebinds`] finds demoted to an immutable `let`,
+/// [`unmutated_param_mut_rebinds`] finds demoted to an immutable `let`,
 /// or `None` when there is none (the common case, which then costs no clone).
 /// Read by codegen alone: the interpreter already answers both spellings alike.
-pub fn demote_unmutated_optres_param_rebinds(program: &crate::Program) -> Option<crate::Program> {
+pub fn demote_unmutated_param_rebinds(program: &crate::Program) -> Option<crate::Program> {
     let any = program.items.iter().any(|item| match item {
-        Item::Function(f) => !unmutated_optres_param_mut_rebinds(f).is_empty(),
+        Item::Function(f) => !unmutated_param_mut_rebinds(f).is_empty(),
         Item::ImplBlock(b) => b.items.iter().any(|ii| match ii {
-            ImplItem::Method(f) => !unmutated_optres_param_mut_rebinds(f).is_empty(),
+            ImplItem::Method(f) => !unmutated_param_mut_rebinds(f).is_empty(),
             _ => false,
         }),
         _ => false,
@@ -8936,7 +8988,7 @@ pub fn demote_unmutated_optres_param_rebinds(program: &crate::Program) -> Option
         return None;
     }
     fn demote(f: &mut Function) {
-        for i in unmutated_optres_param_mut_rebinds(f) {
+        for i in unmutated_param_mut_rebinds(f) {
             if let StmtKind::Let { is_mut, .. } = &mut f.body.stmts[i].kind {
                 *is_mut = false;
             }
@@ -8979,14 +9031,21 @@ pub fn demote_unmutated_optres_param_rebinds(program: &crate::Program) -> Option
 /// `let` that shadows the parameter's own name ends the chain.
 pub fn param_whole_rebind_aliases<'a>(f: &'a Function, param_name: &str) -> Vec<&'a str> {
     let mut out: Vec<&'a str> = Vec::new();
+    let demoted = demoted_param_rebind_names(f);
     for st in &f.body.stmts {
         if let StmtKind::Let {
-            is_mut: false,
+            is_mut,
             pattern,
             value,
             ..
         } = &st.kind
         {
+            // B-2026-09-27-51 — or a `let mut` that is never mutated.
+            if *is_mut
+                && !matches!(&pattern.kind, PatternKind::Binding(n) if demoted.contains(&n.as_str()))
+            {
+                continue;
+            }
             if let (PatternKind::Binding(n), ExprKind::Identifier(src)) =
                 (&pattern.kind, &value.kind)
             {
@@ -9097,6 +9156,7 @@ fn param_whole_container_store(f: &Function, arg_index: usize, outliving: bool) 
     // (`let c = a;`): a push of `c` is a push of the parameter. Kept apart from
     // `locals`, so the rebound name is never mistaken for a container.
     let mut names: Vec<&str> = vec![name.as_str()];
+    let demoted = demoted_param_rebind_names(f);
     // B-2026-09-27-53 — the roots whose storage outlives the call, as
     // `fn_moves_param_into_outliving_place` collects them.
     let mut roots: Vec<&str> = Vec::new();
@@ -9160,7 +9220,7 @@ fn param_whole_container_store(f: &Function, arg_index: usize, outliving: bool) 
                     if n == name {
                         return false;
                     }
-                    if !*is_mut
+                    if (!*is_mut || demoted.contains(&n.as_str()))
                         && matches!(&value.kind, ExprKind::Identifier(src) if names.contains(&src.as_str()))
                     {
                         names.push(n.as_str());
@@ -9723,7 +9783,7 @@ fn collect_payload_moved_fields_in_block(b: &Block, param_name: &str, out: &mut 
 mod unmutated_rebind_tests {
     use super::*;
 
-    /// The statement indices [`unmutated_optres_param_mut_rebinds`] reports
+    /// The statement indices [`unmutated_param_mut_rebinds`] reports
     /// for the first function of `src`.
     fn idxs(src: &str) -> Vec<usize> {
         let parsed = crate::parse(src);
@@ -9741,13 +9801,13 @@ mod unmutated_rebind_tests {
                 _ => None,
             })
             .expect("no function");
-        unmutated_optres_param_mut_rebinds(f)
+        unmutated_param_mut_rebinds(f)
     }
 
     /// B-2026-09-27-37 — only a rebind the body never mutates is demoted, and
     /// every way of mutating it keeps the `mut`.
     #[test]
-    fn only_an_unmutated_optres_param_rebind_is_demoted() {
+    fn only_an_unmutated_owned_param_rebind_is_demoted() {
         assert_eq!(
             idxs("fn f(a: Option[S]) -> i64 { let mut c = a; 5 }"),
             vec![0]
@@ -9771,8 +9831,17 @@ mod unmutated_rebind_tests {
                 "demoted a mutated rebind: {mutated}"
             );
         }
-        // Neither a non-`Option`/`Result` param nor a non-param source.
-        assert!(idxs("fn f(a: S) -> i64 { let mut c = a; 5 }").is_empty());
+        // An owned struct, tuple or container param is demoted too
+        // (B-2026-09-27-51); a borrowed or `Slice` param and a non-param
+        // source are not.
+        assert_eq!(idxs("fn f(a: S) -> i64 { let mut c = a; 5 }"), vec![0]);
+        assert_eq!(
+            idxs("fn f(a: (S, i64)) -> i64 { let mut c = a; 5 }"),
+            vec![0]
+        );
+        assert_eq!(idxs("fn f(a: Vec[S]) -> i64 { let mut c = a; 5 }"), vec![0]);
+        assert!(idxs("fn f(a: ref S) -> i64 { let mut c = a; 5 }").is_empty());
+        assert!(idxs("fn f(a: S) -> i64 { let mut c = a; c.id = 1; 5 }").is_empty());
         assert!(idxs("fn f(a: Option[S]) -> i64 { let b = g(); let mut c = b; 5 }").is_empty());
         // A chain through an immutable or a demoted rebind is still the param.
         assert_eq!(
