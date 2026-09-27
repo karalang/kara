@@ -896,7 +896,14 @@ impl<'a> super::Interpreter<'a> {
                                         f,
                                         i,
                                     );
-                                Some((n, adopt.then(|| p.ty.clone())))
+                                // B-2026-09-27-128 — a generic method's `Option[T]`
+                                // resolved to the bound value's type, as the
+                                // free-fn frame does.
+                                let seed = adopt.then(|| match self.env.get(&n) {
+                                    Some(v) => Self::optres_te_at_value_type(f, &p.ty, &v),
+                                    None => p.ty.clone(),
+                                });
+                                Some((n, seed))
                             })
                             .collect()
                     })

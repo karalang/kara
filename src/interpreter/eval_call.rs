@@ -2825,8 +2825,13 @@ impl<'a> super::Interpreter<'a> {
                 let optres = matches!(&p.ty.kind, crate::ast::TypeKind::Path(tp)
                     if tp.segments.len() == 1
                         && matches!(tp.segments[0].as_str(), "Option" | "Result"));
-                (optres && pending.iter().any(|n| n == name))
-                    .then(|| (name.to_string(), p.ty.clone()))
+                (optres && pending.iter().any(|n| n == name)).then(|| {
+                    let te = match self.env.get(name) {
+                        Some(v) => Self::optres_te_at_value_type(f, &p.ty, &v),
+                        None => p.ty.clone(),
+                    };
+                    (name.to_string(), te)
+                })
             })
             .collect();
         tes.into_iter()
@@ -2835,6 +2840,62 @@ impl<'a> super::Interpreter<'a> {
                 (name, prev)
             })
             .collect()
+    }
+
+    /// B-2026-09-27-128 — `te` with the live variant's payload argument
+    /// resolved to the VALUE's type when it names one of `f`'s own type
+    /// parameters. A generic `fn mg[T](a: Option[T], c: bool)` declares its
+    /// param `Option[T]`, and the payload walker gates each body on the
+    /// declared head matching the runtime name, so a literal `T` matched
+    /// nothing and `mg(Some(mk(2)), false)` ran no body. Codegen walks the
+    /// monomorph's SUBSTITUTED type (`Option[S]`) for the same param; this is
+    /// the interpreter's reading of that substitution, off the one value the
+    /// call bound. Any other shape is returned unchanged.
+    pub(crate) fn optres_te_at_value_type(
+        f: &crate::ast::Function,
+        te: &crate::ast::TypeExpr,
+        v: &Value,
+    ) -> crate::ast::TypeExpr {
+        let mut out = te.clone();
+        let Some(g) = f.generic_params.as_ref() else {
+            return out;
+        };
+        let Value::EnumVariant { variant, data, .. } = v else {
+            return out;
+        };
+        let pos = match variant.as_str() {
+            "Some" | "Ok" => 0usize,
+            "Err" => 1usize,
+            _ => return out,
+        };
+        let EnumData::Tuple(items) = data else {
+            return out;
+        };
+        let concrete = match items.first() {
+            Some(Value::Struct { name, .. }) => name.clone(),
+            Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
+            _ => return out,
+        };
+        let crate::ast::TypeKind::Path(p) = &mut out.kind else {
+            return out;
+        };
+        let Some(crate::ast::GenericArg::Type(arg)) =
+            p.generic_args.as_mut().and_then(|a| a.get_mut(pos))
+        else {
+            return out;
+        };
+        let crate::ast::TypeKind::Path(ap) = &mut arg.kind else {
+            return out;
+        };
+        if ap.generic_args.is_none()
+            && ap.segments.len() == 1
+            && g.params
+                .iter()
+                .any(|gp| !gp.is_const && gp.name == ap.segments[0])
+        {
+            ap.segments[0] = concrete;
+        }
+        out
     }
 
     fn cond_returned_param_drop_names(

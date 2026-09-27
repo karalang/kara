@@ -2296,6 +2296,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // back. Resolved in the loop below and consumed after the call, where
         // the returned value exists to compare against.
         let mut maybe_handed_back_args: Vec<String> = Vec::new();
+        // B-2026-09-27-128 — fresh-temp box slots this call may hand back.
+        let mut maybe_handed_back_slots: Vec<(
+            inkwell::values::PointerValue<'ctx>,
+            inkwell::types::BasicTypeEnum<'ctx>,
+        )> = Vec::new();
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
             // B-2026-07-14-12: a fresh-heap `String` TEMP arg to a generic fn
@@ -2764,6 +2769,66 @@ impl<'ctx> super::Codegen<'ctx> {
                         })
                         .contains(n)
                 });
+            // B-2026-09-27-128 — a fresh-temp `Option[T]` / `Result[T, E]`
+            // whose instantiated payload is a heap-boxed user STRUCT, handed to
+            // a param the callee returns on SOME paths only (`fn mg[T](a:
+            // Option[T], c: bool) -> Option[T] { if c { a } else { None } }`).
+            // The arm below is for non-escaping params, so this one had no
+            // owner: the callee runs the payload's bodies on the leg that keeps
+            // it and frees nothing, and the box and its interior leaked. The
+            // caller owns them on both legs, as B-2026-09-27-94 made
+            // `compile_call` do, and the post-call compare takes the box back
+            // off it on the leg whose result IS it. Only where the return is the
+            // param's one way out.
+            if !param_nonescaping
+                && val.is_struct_value()
+                && self.expr_yields_fresh_owned_temp(&a.value)
+                && !self.call_result_aliases_armed_binding(&a.value)
+                && generic_fn.params.get(i).is_some_and(|p| {
+                    !matches!(p.ty.kind, TypeKind::Ref { .. } | TypeKind::MutRef { .. })
+                        && matches!(p.pattern.kind, PatternKind::Binding(_))
+                })
+                && crate::ast::fn_returns_param(&generic_fn, i)
+                && !crate::ast::fn_moves_param_into_outliving_place(&generic_fn, i)
+                && !crate::ast::fn_moves_param_into_local_container_any(&generic_fn, i)
+            {
+                if let Some(p) = generic_fn.params.get(i) {
+                    let inst = self.callee_param_te_for_call(&p.ty, call_span);
+                    let boxed: Vec<(&'static str, &'static str, String)> = self
+                        .boxed_enum_payload_variants(&inst)
+                        .into_iter()
+                        .filter_map(|(e, v, inner)| {
+                            inner
+                                .filter(|n| self.type_decls.struct_types.contains_key(n.as_str()))
+                                .map(|n| (e, v, n))
+                        })
+                        .collect();
+                    if !boxed.is_empty() {
+                        let cur_fn = self
+                            .builder
+                            .get_insert_block()
+                            .and_then(|bb| bb.get_parent())
+                            .expect("compile_generic_call inside a function context");
+                        let slot = self.create_entry_alloca(
+                            cur_fn,
+                            &format!("optbox_garg_tmp{i}"),
+                            val.get_type(),
+                        );
+                        self.builder.build_store(slot, val).unwrap();
+                        for (enum_lit, variant, inner) in &boxed {
+                            self.track_boxed_enum_var_masked(
+                                &format!("__optbox_garg_tmp{i}"),
+                                slot,
+                                enum_lit,
+                                variant,
+                                Some(inner.as_str()),
+                                &Default::default(),
+                            );
+                        }
+                        maybe_handed_back_slots.push((slot, val.get_type()));
+                    }
+                }
+            }
             if param_nonescaping && self.optres_arg_is_unowned_temp(&a.value) {
                 if let Some(p) = generic_fn.params.get(i) {
                     let inst = self.callee_param_te_for_call(&p.ty, call_span);
@@ -4570,6 +4635,9 @@ impl<'ctx> super::Codegen<'ctx> {
             for src in &maybe_handed_back_args {
                 self.zero_boxed_binding_if_call_returned_its_box(src, v);
             }
+            for (ptr, ty) in &maybe_handed_back_slots {
+                self.zero_boxed_slot_if_call_returned_its_box(*ptr, *ty, v);
+            }
             // LazyFrame codegen twin — rule 3, the generic-call twin of the
             // `compile_call` hook: a generic fn DECLARED to return LazyExpr/
             // LazyFrame (`std.lazy`'s `lit[T]`) hands back an escaping +1;
@@ -5999,6 +6067,37 @@ impl<'ctx> super::Codegen<'ctx> {
                         if user_enum {
                             if let Some(bodies) =
                                 self.emit_enum_payload_user_drop_bodies_fn(struct_name)
+                            {
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    &param_name,
+                                    alloca,
+                                    bodies,
+                                    crate::codegen::state::UserDropKind::ContainerElemBodies,
+                                );
+                                self.payload_vars
+                                    .cond_handback_optres_params
+                                    .insert(param_name.clone());
+                            }
+                        }
+                        // B-2026-09-27-128 — the `Option` / `Result` arm, mono
+                        // leg of `compile_function`'s B-2026-09-23-26 arm. An
+                        // `a: Option[T]` returned on some exits only: the caller
+                        // stands the payload's bodies down on every path and
+                        // keeps the memory, and this prologue registered
+                        // nothing, so `mg(Some(mk(2)), false)` ran no body on
+                        // any surface. The SUBSTITUTED type (`Option[S]`) is what
+                        // names the payload walker; `conditional_optres_handback_
+                        // bodies_to_callee` declines every generic callee, so the
+                        // predicate pair is asked here directly, as the struct
+                        // arm above asks it.
+                        let optres = !owns_memory
+                            && path.segments.len() == 1
+                            && matches!(struct_name.as_str(), "Option" | "Result")
+                            && self.optres_payload_runs_user_drop(&param_ty_resolved);
+                        if optres {
+                            if let Some(bodies) =
+                                self.emit_optres_payload_user_drop_bodies_fn(&param_ty_resolved)
                             {
                                 self.track_user_drop_var_with_fn(
                                     "",
