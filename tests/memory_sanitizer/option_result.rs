@@ -9159,3 +9159,61 @@ fn main() {
         30,
     );
 }
+
+/// B-2026-09-27-55 — the ASAN twin of
+/// `e2e_rebind_of_boxed_enum_payload_param_runs_each_body_once`: every payload
+/// is a boxed user enum whose variant carries heap `String`s, so a box the
+/// callee's rebind frees after the caller does aborts under the sanitizer.
+#[test]
+fn asan_rebind_of_boxed_enum_payload_param_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct W { r: R, s: String, t: String }
+fn mw(i: i64) -> W { W { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}", t: f"another-long-heap-string-{i}" } }
+enum K { A(W), B }
+fn opt(a: Option[K]) -> i64 { let c = a; println("in"); 1 }
+fn res_ok(a: Result[K, i64]) -> i64 { let c = a; println("in"); 2 }
+fn opt_match(a: Option[K]) -> i64 { let c = a; match c { Some(K.A(w)) => println(f"m{w.r.id}"), Some(K.B) => println("b"), None => println("n") } 3 }
+fn chain(a: Option[K]) -> i64 { let b = a; let c = b; println("in"); 4 }
+fn res_err_match(a: Result[i64, K]) -> i64 { let c = a; match c { Ok(v) => println(f"o{v}"), Err(K.A(w)) => println(f"m{w.r.id}"), Err(K.B) => println("b") } 5 }
+fn unmutated(a: Option[K]) -> i64 { let mut c = a; println("in"); 6 }
+fn main() {
+    let a: Option[K] = Some(K.A(mw(1)));
+    println(f"k{opt(a)}");
+    println(f"k{opt(Some(K.A(mw(2))))}");
+    println(f"k{opt(Some(K.B))}");
+    let b: Result[K, i64] = Ok(K.A(mw(3)));
+    println(f"k{res_ok(b)}");
+    println(f"k{res_ok(Ok(K.A(mw(4))))}");
+    println(f"k{res_ok(Err(7))}");
+    let c: Option[K] = Some(K.A(mw(5)));
+    println(f"k{opt_match(c)}");
+    println(f"k{opt_match(Some(K.A(mw(6))))}");
+    println(f"k{opt_match(Some(K.B))}");
+    println(f"k{opt_match(None)}");
+    let d: Option[K] = Some(K.A(mw(7)));
+    println(f"k{chain(d)}");
+    println(f"k{chain(Some(K.A(mw(8))))}");
+    let e: Result[i64, K] = Err(K.A(mw(9)));
+    println(f"k{res_err_match(e)}");
+    println(f"k{res_err_match(Err(K.A(mw(10))))}");
+    println(f"k{res_err_match(Ok(60))}");
+    println(f"k{res_err_match(Err(K.B))}");
+    let f: Option[K] = Some(K.A(mw(11)));
+    println(f"k{unmutated(f)}");
+    println(f"k{unmutated(Some(K.A(mw(12))))}");
+    println("end")
+}
+"#,
+        &[
+            "in", "k1", "d1", "in", "d2", "k1", "in", "k1", "in", "k2", "d3", "in", "d4", "k2",
+            "in", "k2", "m5", "k3", "d5", "m6", "d6", "k3", "b", "k3", "n", "k3", "in", "k4", "d7",
+            "in", "d8", "k4", "m9", "k5", "d9", "m10", "d10", "k5", "o60", "k5", "b", "k5", "in",
+            "k6", "d11", "in", "d12", "k6", "end",
+        ],
+        "asan_rebind_of_boxed_enum_payload_param_is_freed_once",
+        30,
+    );
+}

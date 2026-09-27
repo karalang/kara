@@ -4278,19 +4278,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // the temp's box here exactly as it does when the callee never
         // rebinds. A MUTABLE rebind still hands the box over: the callee frees
         // the displaced box on reassignment.
-        if self.callee_rebinds_param_whole(name, i) {
-            let caller_keeps_struct_box = self
-                .type_decls
-                .struct_types
-                .contains_key(struct_name.as_str())
-                && !self
-                    .type_decls
-                    .shared_types
-                    .contains_key(struct_name.as_str())
-                && !self.callee_rebinds_param_whole_mutably(name, i);
-            if !caller_keeps_struct_box {
-                return None;
-            }
+        //
+        // B-2026-09-27-55 — a boxed user ENUM payload too, which the let-site
+        // now also leaves unregistered: the whole class the filter above
+        // admits keeps its box in the caller across an immutable rebind.
+        if self.callee_rebinds_param_whole(name, i)
+            && self.callee_rebinds_param_whole_mutably(name, i)
+        {
+            return None;
         }
         self.option_payload_is_boxed(payload_te)
             .then(|| struct_name.clone())
@@ -4358,15 +4353,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .filter_map(|(_, variant, inner)| {
                 let inner = inner?;
                 // B-2026-09-27-52 — an IMMUTABLE rebind keeps the caller's
-                // box for a user STRUCT payload, as the `Option` arm does
-                // (B-2026-09-24-20); the callee's let-site registers nothing
-                // for it. Any other payload is still the callee's.
-                if rebinds
-                    && (!self.type_decls.struct_types.contains_key(inner.as_str())
-                        || self.type_decls.shared_types.contains_key(inner.as_str()))
-                {
-                    return None;
-                }
+                // box, as the `Option` arm does (B-2026-09-24-20); the
+                // callee's let-site registers nothing for it. B-2026-09-27-55
+                // — for a user ENUM payload as well as a STRUCT: both are the
+                // class the filter below admits.
                 self.boxed_param_payload_owns_its_box(inner.as_str())
                     .then_some((variant, inner))
             })

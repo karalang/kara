@@ -8644,6 +8644,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                         // one `d` receives, exactly as the caller-side
                                         // alias closure (`param_rebound_into_local`)
                                         // already assumes.
+                                        //
+                                        // B-2026-09-27-55 — and a user ENUM
+                                        // payload, the rest of the class the
+                                        // caller-side arms keep the box for
+                                        // (`boxed_param_payload_owns_its_box`).
                                         let caller_retained_boxed_param_rebind = !*is_mut
                                             && matches!(*enum_name, "Option" | "Result")
                                             && matches!(&value.kind, ExprKind::Identifier(src)
@@ -8654,8 +8659,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                                         && !self.payload_vars.boxed_enum_payload_vars.contains(src.as_str())
                                                         && !self.fn_ctx.current_fn_param_names.contains(src.as_str())))
                                             && inner.as_deref().is_some_and(|n| {
-                                                self.type_decls.struct_types.contains_key(n)
-                                                    && !self.type_decls.shared_types.contains_key(n)
+                                                self.boxed_param_payload_owns_its_box(n)
                                             });
                                         if caller_retained_boxed_param_rebind {
                                             // nothing to register: see above.

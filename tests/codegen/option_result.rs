@@ -12046,3 +12046,59 @@ fn main() {
         assert_eq!(aot, want, "AOT");
     }
 }
+
+/// B-2026-09-27-55 — an immutable rebind of a by-value `Option` / `Result`
+/// param whose boxed payload is a user ENUM runs each body once and frees each
+/// box once, as B-2026-09-24-20 and B-2026-09-27-52 made it do for a STRUCT
+/// payload: `let c = a`, a chain, a `match` on the rebound local, both
+/// `Result` sides, and a never-mutated `let mut`. Every one double-freed on
+/// every compiled surface; `--interp` was right. Named and temporary
+/// arguments, and the payload-free variant.
+#[test]
+fn e2e_rebind_of_boxed_enum_payload_param_runs_each_body_once() {
+    let src = r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct W { r: R, s: String, t: String }
+fn mw(i: i64) -> W { W { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}", t: f"another-long-heap-string-{i}" } }
+enum K { A(W), B }
+fn opt(a: Option[K]) -> i64 { let c = a; println("in"); 1 }
+fn res_ok(a: Result[K, i64]) -> i64 { let c = a; println("in"); 2 }
+fn opt_match(a: Option[K]) -> i64 { let c = a; match c { Some(K.A(w)) => println(f"m{w.r.id}"), Some(K.B) => println("b"), None => println("n") } 3 }
+fn chain(a: Option[K]) -> i64 { let b = a; let c = b; println("in"); 4 }
+fn res_err_match(a: Result[i64, K]) -> i64 { let c = a; match c { Ok(v) => println(f"o{v}"), Err(K.A(w)) => println(f"m{w.r.id}"), Err(K.B) => println("b") } 5 }
+fn unmutated(a: Option[K]) -> i64 { let mut c = a; println("in"); 6 }
+fn main() {
+    let a: Option[K] = Some(K.A(mw(1)));
+    println(f"k{opt(a)}");
+    println(f"k{opt(Some(K.A(mw(2))))}");
+    println(f"k{opt(Some(K.B))}");
+    let b: Result[K, i64] = Ok(K.A(mw(3)));
+    println(f"k{res_ok(b)}");
+    println(f"k{res_ok(Ok(K.A(mw(4))))}");
+    println(f"k{res_ok(Err(7))}");
+    let c: Option[K] = Some(K.A(mw(5)));
+    println(f"k{opt_match(c)}");
+    println(f"k{opt_match(Some(K.A(mw(6))))}");
+    println(f"k{opt_match(Some(K.B))}");
+    println(f"k{opt_match(None)}");
+    let d: Option[K] = Some(K.A(mw(7)));
+    println(f"k{chain(d)}");
+    println(f"k{chain(Some(K.A(mw(8))))}");
+    let e: Result[i64, K] = Err(K.A(mw(9)));
+    println(f"k{res_err_match(e)}");
+    println(f"k{res_err_match(Err(K.A(mw(10))))}");
+    println(f"k{res_err_match(Ok(60))}");
+    println(f"k{res_err_match(Err(K.B))}");
+    let f: Option[K] = Some(K.A(mw(11)));
+    println(f"k{unmutated(f)}");
+    println(f"k{unmutated(Some(K.A(mw(12))))}");
+    println("end")
+}"#;
+    let want = "in\nk1\nd1\nin\nd2\nk1\nin\nk1\nin\nk2\nd3\nin\nd4\nk2\nin\nk2\nm5\nk3\nd5\nm6\nd6\nk3\nb\nk3\nn\nk3\nin\nk4\nd7\nin\nd8\nk4\nm9\nk5\nd9\nm10\nd10\nk5\no60\nk5\nb\nk5\nin\nk6\nd11\nin\nd12\nk6\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    if let Some(aot) = run_program(src) {
+        assert_eq!(aot, want, "AOT");
+    }
+}
