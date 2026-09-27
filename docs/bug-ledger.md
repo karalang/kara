@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 503 |
 | miscompile | 482 |
 | leak | 438 |
-| double-free | 320 |
+| double-free | 322 |
 | missing-feature | 209 |
 | codegen-gap | 196 |
 | other | 151 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2153 |
-| interp | 586 |
+| codegen | 2155 |
+| interp | 587 |
 | typecheck | 309 |
 | other | 111 |
 | ownership | 77 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-16-23 | 2026-09-16 | interp | low | TWO SHADOW-REBIND SPELLINGS STILL DOUBLE THE `Drop` BODY IN THE INTERPRETER -- a NESTED BLOCK (`{ let q = idr(q); .. }`) and an `if`-WRAPPED RHS both print `dR15 dR15` against one body on `karac build`; the first is out of the retraction's SCOPE and the second is a genuine per-path question the all-paths predicate correctly declines, so they need different repairs | — |
 | B-2026-09-16-25 | 2026-09-16 | interp+codegen | low | THE OWNED-`self` ENUM RECEIVER PAYLOAD-BODY SUPPRESSION IS ALL-PATHS, NOT PATH-SENSITIVE -- a callee that takes the payload on SOME path still suppresses the caller's walk on the paths it does NOT take, so `if c { match self { E.A(r) => .. } } return 0;` called with `c == false` prints a bare `dE` and loses `dR`; same for a zero-trip `while` and an unselected match arm; B-2026-09-16-21's fix answered the ALL-PATHS-NO case only | — |
 | B-2026-09-16-26 | 2026-09-16 | interp+codegen | low | A DEPTH-1 FIELD MOVE-OUT WHOSE FIELD IS THEN BOUND BY A DESTRUCTURE RUNS THAT FIELD'S `Drop` BODY TWICE -- `let x = o.k; let Outer { h, k } = o;` prints `dR18 dR18 dR17 dR16` on all four surfaces with memory balanced; the NESTED sibling is fixed (B-2026-09-07-1) and this is not, because at depth 1 the leaf IS the moved field and owes no body at all rather than a masked one | — |
 | B-2026-09-16-28 | 2026-09-16 | codegen | low | A BARE GENERIC-PARAM FIELD MOVED INTO AN OWNING SINK STILL LEAKS 24 B AFTER B-2026-09-15-16 -- that fix closes the BLANK READ half for `Box2[T] { f: T }` at `T = String` (`b ` -> `b b1516-baret-...`) and leaves the leak unchanged, because the `bare_t_heap` arm zeroes words 1 and 2 ahead of every dispatched arm and does not consult `uam_copied_sites` | — |
@@ -354,6 +353,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-3 | 2026-09-27 | interp+codegen | high | A PROJECTION MOVED OUT IN A VALUE POSITION OTHER THAN `let x = p.f` / `return` / a function tail RUNS ITS Drop BODY TWICE ON EVERY BACKEND -- `let x = if k { p.a } else { .. }`, `let x = { t.0 }`, `v.push(t.0)`, and `if k { v.push(t.0); }` | — |
 | B-2026-09-27-4 | 2026-09-27 | interp+codegen | medium | A BY-VALUE TUPLE PARAMETER WHOSE ELEMENT IS RETURNED ON ONLY SOME PATHS (`fn eat(o: (R, R), k: bool) -> R { if k { return o.0; } .. }`) LOSES THAT ELEMENT'S Drop BODY ON THE PATH THAT DOES NOT RETURN IT, ON EVERY BACKEND | — |
 | B-2026-09-27-14 | 2026-09-27 | interp+codegen | medium | TWO SPELLINGS OF B-2026-09-27-3 ITS FIX LEAVES AS THEY WERE: a STRUCT field at the tail of an `if` passed as a CALL ARGUMENT (`show(if k { p.a } else { mk(..) })`) runs its Drop body over the moved-out husk compiled, and a DISCARDED `if k { p.a } else { .. };` statement runs it twice in the interpreter | — |
+| B-2026-09-27-15 | 2026-09-27 | codegen | high | A BINDING MOVED INSIDE A LOOP BODY (RC FALLBACK) IS FREED TWICE ON EVERY COMPILED SURFACE -- `let q = mk(5); while i < 1 { let p = q; .. }` aborts with `free(): double free detected in tcache 2` on the JIT, -O0, -O2 and nopar, and the spellings that hand it through a call run its `Drop` body a second time after the loop (`p=15 dR15 end dR15`) | — |
+| B-2026-09-27-16 | 2026-09-27 | codegen+interp | high | A CLOSURE THAT CAPTURES A `Drop` VALUE RUNS ITS BODY BEFORE THE CLOSURE IS CALLED, AND ONE THAT MOVES THE CAPTURE DOUBLE-FREES IT ON EVERY COMPILED SURFACE -- `let g = || { let p = q; .. }; g()` aborts with `double free` compiled and prints `dR9 p=9 dR9` under `--interp`; `|| { eat(q) }` reads freed memory (5 invalid reads at -O0) | — |
 
 ### Relocated
 
@@ -2853,6 +2854,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-16-20 | codegen | low | `karac_string_try_inline_into` IS DEAD ABI SURFACE -- no caller anywhere in the compiler since `9d3ceb9` removed its declaration from `runtime_fns.rs… | 34211d4 |
 | B-2026-09-16-21 | codegen+interp | medium | AN OWNED ENUM RECEIVER'S PAYLOAD `Drop` BODY IS LOST WHENEVER THE CALLEE NEVER DESTRUCTURES `self` -- `let a = E.A(mk(1)); a.none()` over `fn none(se… | 0b97e71 |
 | B-2026-09-16-22 | codegen+interp | low | AN OWNED ENUM RECEIVER THAT ESCAPES THROUGH THE RETURN RUNS ITS SHELL `Drop` BODY TWICE, AND A CHAINED CALL OVER THE SAME SHAPE RUNS NO BODY AT ALL -… | ee28cd284 |
+| B-2026-09-16-23 | interp | low | TWO SHADOW-REBIND SPELLINGS STILL DOUBLE THE `Drop` BODY IN THE INTERPRETER -- a NESTED BLOCK (`{ let q = idr(q); . | b0d2f297c |
 | B-2026-09-16-24 | typecheck | medium | `partial_move_of_drop_enum` REJECTS A BORROW-PROJECTION SCRUTINEE, and it is a false positive by the rule's OWN stated terms -- the rule documents it… | 84030e8 |
 | B-2026-09-16-27 | codegen | medium | A NESTED STRUCT MOVED INTO A VARIANT CONSTRUCTOR ABORTS WITH A DOUBLE FREE -- `Wn.Full(o)` over `struct Out { i: In }` / `struct In { s: String }` di… | 602a4bd |
 | B-2026-09-16-31 | codegen | high | A GENERIC ENUM WITH A GENERIC `impl[T] Drop` SEGFAULTS AT RUNTIME ON EVERY COMPILED BACKEND WHEN AN OWNED-`self` METHOD MATCHES ON IT -- `enum G[T] {… | 3fb151a |
