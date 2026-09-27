@@ -2967,6 +2967,33 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.track_optres_arg_temp(val, &param_te, own_payload, own_envelope);
                     }
                 }
+                // B-2026-09-17-11 — a fresh `Option` temp whose STRUCT payload
+                // sits inline, handed to a callee that does NOT entry-copy it.
+                // Nothing above owned it: the entry-copy arm is the only one
+                // that registers a temp, and its type gate declines this
+                // payload, while the callee's own param registrars cover the
+                // `{ptr,len,cap}` overlay and `Result` but not an inline struct.
+                // The same value bound first (`let o = Some(..); f(o)`) keeps
+                // its let-site `track_inline_option_agg_payload_var` across the
+                // call — an argument is a consuming position that does not
+                // transfer this payload class (see
+                // `suppress_inline_option_agg_binding_transfer`) — so the temp
+                // gets that registrar, under the escape gate the entry-copy arm
+                // uses. `f(Some(ShP { i: ShIn { .. }, n: 3 }))` stranded the
+                // `shared` field's block and its `String` on every call.
+                if self.callee_optres_param_entry_copied(&name, i).is_none()
+                    && self.optres_arg_is_unowned_temp(&a.value)
+                {
+                    if let Some(param_te) = self
+                        .callee_nonescaping_inline_struct_option_param_te(&name, i)
+                        .filter(|_| {
+                            self.callee_by_value_optres_param_bodies_te(&name, i, &a.value)
+                                .is_some_and(|(_, skip)| skip.is_empty())
+                        })
+                    {
+                        self.track_optres_arg_temp(val, &param_te, true, false);
+                    }
+                }
                 // B-2026-09-09-18 — the BODY channel for the same temp, which
                 // the memory registration above cannot carry and which no
                 // frame owned at all.
@@ -6363,6 +6390,49 @@ impl<'ctx> super::Codegen<'ctx> {
         );
     }
 
+    /// B-2026-09-17-11 — the declared type of free function `callee_name`'s
+    /// by-value parameter `arg_index` when it is an `Option` whose STRUCT
+    /// payload is laid inline (neither boxed nor the `{ptr,len,cap}` overlay)
+    /// and the parameter provably does not escape the callee — the one shape
+    /// whose fresh-temp argument has no owner in either frame unless the
+    /// caller takes it. `None` for a method, whose receiver shifts the index
+    /// and whose payload shapes this row did not measure.
+    pub(super) fn callee_nonescaping_inline_struct_option_param_te(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> Option<TypeExpr> {
+        let program = self.program_snapshot.as_deref()?;
+        let f = super::declarations::find_function_ast(program, callee_name)?;
+        if f.self_param.is_some() || f.generic_params.is_some() {
+            return None;
+        }
+        let p = f.params.get(arg_index)?;
+        let crate::ast::PatternKind::Binding(pname) = &p.pattern.kind else {
+            return None;
+        };
+        let payload = Self::option_payload_te(&p.ty)?;
+        if self.option_payload_is_boxed(&payload)
+            || self.option_inline_payload_elem(&p.ty).is_some()
+            || !self.option_payload_struct_or_enum_drop_ok(&payload)
+        {
+            return None;
+        }
+        // Only a payload with MEMORY to release. A heapless one (`Array[W1, 1]`
+        // over `W1 { v: i64 }` with a `Drop`) has nothing for this owner to
+        // free, and registering it anyway moved the temp's body walk from the
+        // caller's scope exit to the end of the call statement -- the timing
+        // B-2026-09-20-23 is about, changed here as a side effect rather than
+        // decided.
+        if !self.type_expr_has_drop_heap(&payload) && !self.struct_elem_owns_shared_field(&payload)
+        {
+            return None;
+        }
+        crate::result_escape::by_value_nonescaping_param_names(f)
+            .contains(pname.as_str())
+            .then(|| p.ty.clone())
+    }
+
     pub(super) fn track_optres_arg_temp(
         &mut self,
         val: BasicValueEnum<'ctx>,
@@ -6383,6 +6453,21 @@ impl<'ctx> super::Codegen<'ctx> {
         if own_payload {
             self.track_inline_option_payload_var("__optres_arg_tmp", slot, param_te);
             self.track_inline_result_payload_var("__optres_arg_tmp", slot, param_te);
+            // B-2026-09-17-11 — the STRUCT payload laid inline, which neither
+            // registrar above covers: the first frees a `{ptr,len,cap}` overlay
+            // and the second only a `Result`. `Some(ShP { i: ShIn { .. }, n })`
+            // handed to `f(w: Option[ShP])` stranded the `shared` field's block
+            // and its `String` on every call, while the same value bound first
+            // (`let o = ..; f(o)`) was clean through this registrar. Gated as
+            // the let site gates it: a boxed payload belongs to the box's own
+            // drop, and an overlay payload to the first registrar above.
+            if let Some(payload) = Self::option_payload_te(param_te) {
+                if !self.option_payload_is_boxed(&payload)
+                    && self.option_inline_payload_elem(param_te).is_none()
+                {
+                    self.track_inline_option_agg_payload_var("__optres_arg_tmp", slot, param_te);
+                }
+            }
         }
         if !own_envelope {
             return;

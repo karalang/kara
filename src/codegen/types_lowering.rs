@@ -1776,30 +1776,55 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         let name = p.segments.last()?.as_str();
+        // B-2026-09-17-11 — a `shared` struct is never transparent: its value
+        // is the one-word pointer to its refcount block, not its field, so the
+        // `{ptr,len,cap}` overlay read the pointer as a buffer, found no
+        // capacity past it, freed nothing, and the block was never released.
+        // `Option[ShOut]` over `struct ShOut { i: ShIn }` with
+        // `shared struct ShIn { s: String }` stranded 32 B (the block) and 20 B
+        // (its `String`) at every spelling that registers this overlay.
+        if self.type_decls.shared_type_decl_names.contains(name) {
+            return None;
+        }
         let field_tes = self.type_decls.struct_field_type_exprs.get(name)?;
         if field_tes.len() != 1 {
             return None;
         }
         let field_te = &field_tes[0];
-        // Non-generic single-field struct: the field type is already concrete.
-        let Some(args) = p.generic_args.as_ref() else {
-            return Some(field_te.clone());
+        let inner = match p.generic_args.as_ref() {
+            // Non-generic single-field struct: the field type is already concrete.
+            None => field_te.clone(),
+            Some(args) => {
+                // Generic: substitute the declared params with the concrete args.
+                let params = self.type_decls.struct_generic_params.get(name)?;
+                if params.is_empty() || params.len() != args.len() {
+                    field_te.clone()
+                } else {
+                    let mut subst: std::collections::HashMap<String, TypeExpr> =
+                        std::collections::HashMap::new();
+                    for (param, a) in params.iter().zip(args.iter()) {
+                        if let GenericArg::Type(t) = a {
+                            subst.insert(param.clone(), t.clone());
+                        }
+                    }
+                    super::helpers::subst_type_params_in_type_expr(field_te, &subst)
+                }
+            }
         };
-        // Generic: substitute the declared params with the concrete args.
-        let params = self.type_decls.struct_generic_params.get(name)?;
-        if params.is_empty() || params.len() != args.len() {
-            return Some(field_te.clone());
-        }
-        let mut subst: std::collections::HashMap<String, TypeExpr> =
-            std::collections::HashMap::new();
-        for (param, a) in params.iter().zip(args.iter()) {
-            if let GenericArg::Type(t) = a {
-                subst.insert(param.clone(), t.clone());
+        // B-2026-09-17-11 — nor is a wrapper whose sole field is a `shared`
+        // handle: peeling `ShOut` to `ShIn` would hand the struct-drop arm of
+        // `inline_struct_payload_drop` the handle's type rather than the
+        // wrapper's, so the wrapper stays whole and its own drop decides.
+        if let TypeKind::Path(ip) = &inner.kind {
+            if ip
+                .segments
+                .last()
+                .is_some_and(|n| self.type_decls.shared_type_decl_names.contains(n.as_str()))
+            {
+                return None;
             }
         }
-        Some(super::helpers::subst_type_params_in_type_expr(
-            field_te, &subst,
-        ))
+        Some(inner)
     }
 
     /// For a `Result[T, E]` type expr, return `(ok_elem, err_elem)` payload
@@ -1938,7 +1963,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let drop_te = self
             .transparent_single_heap_field_te(arg)
             .unwrap_or_else(|| arg.clone());
-        if !self.type_expr_has_drop_heap(&drop_te) {
+        // B-2026-09-17-11 — a struct whose only owned content is a `shared`
+        // handle (`ShP { i: ShIn, n: i64 }`) owns no buffer, so
+        // `type_expr_has_drop_heap` answers `false` for it, but it still owns
+        // one refcount that nothing else releases. `Result[ShP, i64]` stranded
+        // the block and its `String` at every spelling, bound or temp.
+        if !self.type_expr_has_drop_heap(&drop_te) && !self.struct_elem_owns_shared_field(&drop_te)
+        {
             return None;
         }
         Some(self.emit_drop_fn_for_type_expr(&drop_te))
