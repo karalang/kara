@@ -4416,7 +4416,14 @@ impl<'a> super::Interpreter<'a> {
                 let Some(leaf) = Self::value_at_name_path(&rv, &path) else {
                     return;
                 };
-                if !self.value_runs_user_drop(leaf) {
+                // B-2026-09-26-63 — a USER enum leaf whose live variant
+                // carries a `Drop` payload too (`keepg(v.g)`, `xs.push(v.g)`):
+                // codegen masks the field out of the walk by index whatever
+                // its type, and this ran its payload body a second time.
+                let enum_leaf = matches!(leaf, Value::EnumVariant { enum_name, .. }
+                    if enum_name != "Option" && enum_name != "Result")
+                    && self.field_value_carries_user_drop(leaf);
+                if !self.value_runs_user_drop(leaf) && !enum_leaf {
                     return;
                 }
                 match path.as_slice() {

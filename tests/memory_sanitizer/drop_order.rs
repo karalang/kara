@@ -4377,3 +4377,79 @@ fn main() {
         20,
     );
 }
+
+/// B-2026-09-26-63 — a `Drop` field of a NAMED local handed to a callee that
+/// keeps it on only SOME paths (returned or stored, free and generic, a leaf
+/// with a `shared` field), and a USER enum leaf kept on some or every path:
+/// each body runs once and each buffer is freed once. On the unfixed compiler
+/// the local's walk ran the kept field's body again, and valgrind reported 2
+/// errors at `-O0`.
+#[test]
+fn asan_named_local_field_kept_on_some_paths_or_as_an_enum_is_freed_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+shared struct Sh { v: i64 }
+struct F { id: i64, h: Sh }
+impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
+enum G { A(D), B }
+struct V { f: F, g: G, b: i64 }
+fn mkv(n: i64) -> V { V { f: F { id: n + 10, h: Sh { v: n } }, g: G.A(mkd(n + 20)), b: n } }
+fn maybe(x: D, c: bool) -> Option[D] { if c { return Some(x); } None }
+fn cs(v: mut ref Vec[D], x: D, c: bool) { if c { v.push(x); } }
+fn gmaybe[T](x: T, c: bool) -> Option[T] { if c { return Some(x); } None }
+fn maybef(x: F, c: bool) -> Option[F] { if c { return Some(x); } None }
+fn csf(v: mut ref Vec[F], x: F, c: bool) { if c { v.push(x); } }
+fn maybeg(x: G, c: bool) -> Option[G] { if c { return Some(x); } None }
+fn keepg(x: G) -> G { x }
+fn main() {
+    let w = mkw(1);
+    let o1 = maybe(w.r, false);
+    let o2 = maybe(w.s, true);
+    println(f"o {o1.is_some()} {o2.is_some()} {w.b}");
+    let mut xs: Vec[D] = Vec.new();
+    let u = mkw(2);
+    cs(mut xs, u.r, false);
+    cs(mut xs, u.s, true);
+    let q = gmaybe(mkw(3).r, true);
+    let x = mkw(4);
+    let q2 = gmaybe(x.r, false);
+    println(f"l {xs.len()} {q.is_some()} {q2.is_some()} {u.b} {x.b}");
+    let v = mkv(5);
+    let p1 = maybef(v.f, true);
+    let p2 = maybeg(v.g, false);
+    let mut fs: Vec[F] = Vec.new();
+    let v2 = mkv(6);
+    csf(mut fs, v2.f, false);
+    let k = keepg(v2.g);
+    println(f"p {p1.is_some()} {p2.is_some()} {fs.len()} {v.b} {v2.b}");
+    match k { G.A(d) => println(f"k{d.id}"), G.B => println("kb") }
+    println("end")
+}
+"#,
+        &[
+            "dD1 name-string-longer-than-sso-1",
+            "o false true 1",
+            "dD101 name-string-longer-than-sso-101",
+            "dD2 name-string-longer-than-sso-2",
+            "dD103 name-string-longer-than-sso-103",
+            "dD4 name-string-longer-than-sso-4",
+            "l 1 true false 2 4",
+            "dD104 name-string-longer-than-sso-104",
+            "dD3 name-string-longer-than-sso-3",
+            "dD102 name-string-longer-than-sso-102",
+            "dD25 name-string-longer-than-sso-25",
+            "dF16",
+            "p true false 0 5 6",
+            "dF15",
+            "k26",
+            "dD26 name-string-longer-than-sso-26",
+            "end",
+        ],
+        "asan_named_local_field_kept_on_some_paths_or_as_an_enum_is_freed_once",
+        40,
+    );
+}

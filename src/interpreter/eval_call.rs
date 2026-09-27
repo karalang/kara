@@ -5703,9 +5703,21 @@ impl<'a> super::Interpreter<'a> {
         let Some(tn) = self.freshtemp_drop_projection_arg_type_name(value) else {
             return false;
         };
+        self.generic_callee_owns_body_per_path_for(&tn, callee_name, method_owner, i)
+    }
+
+    /// [`Self::generic_callee_owns_projection_body_per_path`] for a leaf type
+    /// already named, whatever the projection's root.
+    fn generic_callee_owns_body_per_path_for(
+        &self,
+        tn: &str,
+        callee_name: &str,
+        method_owner: Option<CalleeOwner<'_>>,
+        i: usize,
+    ) -> bool {
         let program = self.program;
-        if !program.drop_method_keys.contains_key(tn.as_str())
-            || self.struct_carries_shared_field(&tn, &mut Vec::new())
+        if !program.drop_method_keys.contains_key(tn)
+            || self.struct_carries_shared_field(tn, &mut Vec::new())
         {
             return false;
         }
@@ -5777,9 +5789,76 @@ impl<'a> super::Interpreter<'a> {
                     || crate::ast::fn_always_moves_param_into_outliving_place(f, i)
                     || crate::ast::fn_moves_param_into_local_container(f, i)
             });
-        if keeps {
+        if keeps || self.callee_adopts_projection_body_per_path(callee_name, method_owner, i, value)
+        {
             self.record_returned_projection_moves(value);
         }
+    }
+
+    /// B-2026-09-26-63 — codegen's `callee_adopts_projection_body_per_path`: a
+    /// callee that keeps the argument on only SOME paths and whose prologue
+    /// runs its `Drop` body on the others, so the body leaves the caller's
+    /// local on every path. A non-`shared` struct with its own `Drop`, handed
+    /// back or stored on some paths (for a generic callee, the B-2026-09-27-18
+    /// predicate); or a non-`shared` user enum with no `Drop` of its own,
+    /// handed back on some paths by a callee that does not rebind it
+    /// (B-2026-09-27-49's arm).
+    fn callee_adopts_projection_body_per_path(
+        &self,
+        callee_name: &str,
+        method_owner: Option<CalleeOwner<'_>>,
+        i: usize,
+        value: &Expr,
+    ) -> bool {
+        let Some(crate::typechecker::Type::Named { name: tn, .. }) =
+            self.span_expr_type(&value.span)
+        else {
+            return false;
+        };
+        let program = self.program;
+        let Some(f) = self.callee_fn_for_ownership_guard_of(callee_name, method_owner) else {
+            return false;
+        };
+        let Some(param) = f.params.get(i) else {
+            return false;
+        };
+        if matches!(param.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
+            return false;
+        }
+        let own_drop = program.drop_method_keys.contains_key(tn.as_str());
+        let cond_return = crate::ast::fn_conditionally_returns_param_bare(Some(program), f, i)
+            && !crate::ast::fn_moves_param_into_outliving_place(f, i);
+        if let Some(si) = self.typecheck_result.struct_info.get(tn.as_str()) {
+            if si.is_shared {
+                return false;
+            }
+            if f.generic_params.is_some() {
+                return self.generic_callee_owns_body_per_path_for(
+                    &tn,
+                    callee_name,
+                    method_owner,
+                    i,
+                );
+            }
+            return own_drop
+                && (cond_return
+                    || crate::ast::fn_conditionally_stores_param(f, i)
+                    || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, i));
+        }
+        let rebound = match &param.pattern.kind {
+            crate::ast::PatternKind::Binding(n) => crate::ast::param_rebind_aliases(f, n).len() > 1,
+            _ => true,
+        };
+        cond_return
+            && !own_drop
+            && !rebound
+            && tn != "Option"
+            && tn != "Result"
+            && self
+                .typecheck_result
+                .enum_info
+                .get(tn.as_str())
+                .is_some_and(|e| !e.is_shared)
     }
 
     /// B-2026-09-26-23 — the type of an argument [`Self::drop_projection_arg_consume`]

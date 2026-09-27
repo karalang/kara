@@ -3274,3 +3274,124 @@ fn main() {
 "#);
     assert_eq!(out, "dD1n1\no\ndD2n2\np\ndD3n3\nq\nend\n", "got:\n{out}");
 }
+
+/// B-2026-09-26-63 — interpreter half of the codegen fixture of the same
+/// name: a `Drop`-bearing field projected one hop off a NAMED
+/// local and handed to a callee that keeps it on only SOME paths (returns it,
+/// or stores it) runs its body exactly once: from the kept value on the path
+/// that keeps, from the callee on the path where it dies inside. The local's
+/// walk ran it a THIRD time on every path, since only an every-path keeper
+/// masked it (B-2026-09-26-47). And a USER enum leaf, which neither the
+/// every-path mask nor the interpreter's builtin-sink mask admitted.
+#[test]
+fn test_named_local_field_kept_on_some_paths_or_as_an_enum_runs_its_body_once() {
+    const H: &str = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
+struct E { id: i64 }
+impl Drop for E { fn drop(mut ref self) { println(f"dE{self.id}") } }
+shared struct Sh { v: i64 }
+struct F { id: i64, h: Sh }
+impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
+enum G { A(D), B }
+struct V { e: E, f: F, g: G, b: i64 }
+fn mkv(n: i64) -> V { V { e: E { id: n }, f: F { id: n + 10, h: Sh { v: 1 } }, g: G.A(mkd(n + 20)), b: n } }
+enum Go { A(D), B }
+impl Drop for Go { fn drop(mut ref self) { println("dGo") } }
+struct Vo { g: Go, b: i64 }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { X { w: mkw(n), t: mkd(n + 300) } }
+fn maybe(x: D, c: bool) -> Option[D] { if c { return Some(x); } None }
+fn cs(v: mut ref Vec[D], x: D, c: bool) { if c { v.push(x); } }
+fn gmaybe[T](x: T, c: bool) -> Option[T] { if c { return Some(x); } None }
+fn gcs[T](v: mut ref Vec[T], x: T, c: bool) { if c { v.push(x); } }
+fn maybee(x: E, c: bool) -> Option[E] { if c { return Some(x); } None }
+fn maybef(x: F, c: bool) -> Option[F] { if c { return Some(x); } None }
+fn csf(v: mut ref Vec[F], x: F, c: bool) { if c { v.push(x); } }
+fn maybeg(x: G, c: bool) -> Option[G] { if c { return Some(x); } None }
+fn maybew(x: W, c: bool) -> Option[W] { if c { return Some(x); } None }
+fn keepg(x: G) -> G { x }
+fn stg(v: mut ref Vec[G], x: G) { v.push(x); }
+fn gid[T](x: T) -> T { x }
+fn keepgo(x: Go) -> Go { x }
+struct H { k: i64 }
+impl H { fn mmaybe(ref self, x: D, c: bool) -> Option[D] { if c { return Some(x); } None } fn amaybe(x: D, c: bool) -> Option[D] { if c { return Some(x); } None } }
+"#;
+    for (label, body, want) in [
+        (
+            "a free fn, dies inside (B-2026-09-26-63)",
+            "let w = mkw(7); let o = maybe(w.r, false); println(\"o\"); println(f\"b{w.b}\");",
+            "dD7n7\no\nb7\ndD107n107\nend\n",
+        ),
+        (
+            "a free fn, handed back (B-2026-09-26-63)",
+            "let w = mkw(7); let o = maybe(w.r, true); println(f\"o{o.is_some()}\"); println(f\"b{w.b}\");",
+            "otrue\ndD7n7\nb7\ndD107n107\nend\n",
+        ),
+        (
+            "a method and an associated fn (B-2026-09-26-63)",
+            "let h = H { k: 1 }; let w = mkw(7); let o = h.mmaybe(w.r, false); println(\"o\"); let p = H.amaybe(w.s, true); println(f\"p{p.is_some()}\"); println(f\"b{w.b}\");",
+            "dD7n7\no\nptrue\ndD107n107\nb7\nend\n",
+        ),
+        (
+            "a generic callee, both paths (B-2026-09-26-63)",
+            "let w = mkw(7); let o = gmaybe(w.r, false); println(\"o\"); let p = gmaybe(w.s, true); println(f\"p{p.is_some()}\"); println(f\"b{w.b}\");",
+            "dD7n7\no\nptrue\ndD107n107\nb7\nend\n",
+        ),
+        (
+            "a conditional store, both paths (B-2026-09-26-63)",
+            "let mut xs: Vec[D] = Vec.new(); let w = mkw(7); cs(mut xs, w.r, false); cs(mut xs, w.s, true); println(f\"l{xs.len()}\"); println(f\"b{w.b}\");",
+            "dD7n7\nl1\ndD107n107\nb7\nend\n",
+        ),
+        (
+            "a generic conditional store (B-2026-09-26-63)",
+            "let mut xs: Vec[D] = Vec.new(); let w = mkw(7); gcs(mut xs, w.r, false); gcs(mut xs, w.s, true); println(f\"l{xs.len()}\"); println(f\"b{w.b}\");",
+            "dD7n7\nl1\ndD107n107\nb7\nend\n",
+        ),
+        (
+            "a heapless Drop leaf (B-2026-09-26-63)",
+            "let v = mkv(1); let o = maybee(v.e, false); println(\"o\"); println(f\"b{v.b}\");",
+            "dE1\no\nb1\ndD21n21\ndF11\nend\n",
+        ),
+        (
+            "a leaf with a shared field, returned (B-2026-09-26-63)",
+            "let v = mkv(1); let o = maybef(v.f, false); println(\"o\"); println(f\"b{v.b}\");",
+            "dF11\no\nb1\ndD21n21\ndE1\nend\n",
+        ),
+        (
+            "a leaf with a shared field, stored (B-2026-09-26-63)",
+            "let mut xs: Vec[F] = Vec.new(); let v = mkv(1); csf(mut xs, v.f, true); println(f\"l{xs.len()}\"); println(f\"b{v.b}\");",
+            "l1\ndF11\nb1\ndD21n21\ndE1\nend\n",
+        ),
+        (
+            "an enum leaf on some paths (B-2026-09-26-63)",
+            "let v = mkv(1); let o = maybeg(v.g, false); println(\"o\"); let u = mkv(2); let p = gmaybe(u.g, true); println(f\"p{p.is_some()}\"); println(f\"b{v.b}{u.b}\");",
+            "dD21n21\no\nptrue\ndD22n22\nb12\ndF12\ndE2\ndF11\ndE1\nend\n",
+        ),
+        (
+            "an enum leaf on every path (B-2026-09-26-63)",
+            "let v = mkv(1); let k = keepg(v.g); println(\"k\"); let u = mkv(2); let j = gid(u.g); println(\"j\"); println(f\"b{v.b}{u.b}\");",
+            "dD21n21\nk\ndD22n22\nj\nb12\ndF12\ndE2\ndF11\ndE1\nend\n",
+        ),
+        (
+            "an enum leaf stored, by a user fn and by push (B-2026-09-26-63)",
+            "let mut xs: Vec[G] = Vec.new(); let v = mkv(1); stg(mut xs, v.g); let u = mkv(2); xs.push(u.g); println(f\"l{xs.len()}\"); println(f\"b{v.b}{u.b}\");",
+            "l2\ndD21n21\ndD22n22\nb12\ndF12\ndE2\ndF11\ndE1\nend\n",
+        ),
+        (
+            "an enum leaf with its own Drop (B-2026-09-26-63)",
+            "let v = Vo { g: Go.A(mkd(4)), b: 2 }; let k = keepgo(v.g); println(\"k\"); println(f\"b{v.b}\");",
+            "dGo\ndD4n4\nk\nb2\nend\n",
+        ),
+        (
+            "control: a Drop-less leaf dropped inside runs its fields once (B-2026-09-26-63)",
+            "let x = mkx(7); let o = maybew(x.w, false); println(f\"o{o.is_some()}\"); println(f\"t{x.t.id}\");",
+            "ofalse\nt307\ndD307n307\ndD107n107\ndD7n7\nend\n",
+        ),
+    ] {
+        let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");
+        assert_eq!(run(&prog), want, "[{label}] interpreter");
+    }
+}

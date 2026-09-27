@@ -11448,6 +11448,105 @@ impl<'ctx> super::Codegen<'ctx> {
             || crate::ast::fn_conditionally_stores_param(f, arg_index)
     }
 
+    /// B-2026-09-26-63 — does the callee's PROLOGUE run a projected
+    /// argument's `Drop` body itself on the path where it keeps nothing, for a
+    /// callee that keeps the argument (hands it back or stores it) on only
+    /// SOME paths? Then the body leaves the caller on EVERY path: the kept
+    /// value runs it on the paths that keep, the callee's per-path
+    /// registration on the others. Asked with the prologues' own predicates
+    /// (`compile_function`'s conditional-return and conditional-store arms,
+    /// the mono leg's, and B-2026-09-27-49's user-enum arm), so the caller
+    /// masks exactly where a callee registered. A leaf the prologue does not
+    /// adopt (a struct with no `Drop` of its own, whose kept value alone runs
+    /// the fields' bodies) answers `false`: its body stays with the caller on
+    /// the path that keeps nothing, and moves only on the path that keeps.
+    ///
+    /// `Some(true)` when the registration takes the leaf's MEMORY as well (a
+    /// forwarded struct the non-generic prologue owns whole on the dies-inside
+    /// path), so the caller must stand its memory down too; `Some(false)` for
+    /// a bodies-only registration, whose memory stays with the caller.
+    pub(super) fn callee_adopts_projection_body_per_path(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+        value: &Expr,
+    ) -> Option<bool> {
+        let tn = self.type_name_of_expr(value)?;
+        let program = self.program_snapshot.as_deref()?;
+        let f = super::declarations::find_function_ast(program, callee_name)?;
+        if self.is_coroutine_compiled(callee_name)
+            || f.params
+                .get(arg_index)
+                .is_none_or(|p| matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
+        {
+            return None;
+        }
+        let own_drop = program.drop_method_keys.contains_key(tn.as_str());
+        let cond_return =
+            crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+                && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index);
+        if self.type_decls.struct_types.contains_key(tn.as_str()) {
+            if self.type_decls.shared_types.contains_key(tn.as_str()) {
+                return None;
+            }
+            if f.generic_params.is_some() {
+                return self
+                    .mono_callee_owns_projection_body_per_path(callee_name, arg_index, value)
+                    .then_some(false);
+            }
+            if !own_drop {
+                return None;
+            }
+            // The memory half of each prologue arm: the conditional-return
+            // arm's `conditional_handback_memory_moves_to_callee`, and the
+            // conditional-store arm's `owns_memory`.
+            let cond_store = crate::ast::fn_conditionally_stores_param(f, arg_index)
+                || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, arg_index);
+            let store_takes_memory = cond_store
+                && self.struct_param_memory_stays_with_caller(&tn)
+                && self
+                    .type_decls
+                    .struct_generic_params
+                    .get(tn.as_str())
+                    .is_none_or(|g| g.is_empty());
+            return if cond_return {
+                Some(self.conditional_handback_memory_moves_to_callee(callee_name, arg_index))
+            } else if cond_store {
+                Some(store_takes_memory)
+            } else {
+                None
+            };
+        }
+        // The user-enum arm is conditional-RETURN only, and declines an enum
+        // with its own `Drop` and a param the body rebinds, as both prologues
+        // do; the mono leg also declines a leaf whose memory it takes.
+        let rebound = f
+            .params
+            .get(arg_index)
+            .and_then(|p| match &p.pattern.kind {
+                crate::ast::PatternKind::Binding(n) => Some(n.as_str()),
+                _ => None,
+            })
+            .is_none_or(|n| crate::ast::param_rebind_aliases(f, n).len() > 1);
+        (cond_return
+            && !own_drop
+            && !rebound
+            && tn != "Option"
+            && tn != "Result"
+            && self
+                .type_decls
+                .enum_layouts
+                .get(tn.as_str())
+                .is_some_and(|l| !l.is_shared)
+            && (f.generic_params.is_none()
+                || !self.conditional_handback_memory_moves_to_mono_callee(
+                    callee_name,
+                    arg_index,
+                    &tn,
+                )))
+        .then_some(false)
+    }
+
     pub(super) fn disarm_named_projection_arg_kept_by_callee(
         &mut self,
         callee_name: &str,
@@ -11460,22 +11559,42 @@ impl<'ctx> super::Codegen<'ctx> {
         if !matches!(object.kind, ExprKind::Identifier(_)) {
             return;
         }
-        let Some(tn) = self.type_name_of_expr(value).filter(|tn| {
-            self.type_decls.struct_types.contains_key(tn.as_str())
-                && !self.type_decls.shared_types.contains_key(tn.as_str())
-        }) else {
+        let Some(tn) = self.type_name_of_expr(value) else {
             return;
         };
-        if !(self.arg_leaves_caller_on_every_path(callee_name, arg_index)
-            || self.callee_always_hands_arg_back_via_call(callee_name, arg_index))
-        {
-            return;
-        }
+        let struct_leaf = self.type_decls.struct_types.contains_key(tn.as_str())
+            && !self.type_decls.shared_types.contains_key(tn.as_str());
+        // A USER enum leaf too (`keepg(v.g)`): the mask is by field index
+        // whatever the field's type, and bodies only, so its memory stays put.
+        let enum_leaf = tn != "Option"
+            && tn != "Result"
+            && self
+                .type_decls
+                .enum_layouts
+                .get(tn.as_str())
+                .is_some_and(|l| !l.is_shared);
+        let every = (struct_leaf || enum_leaf)
+            && (self.arg_leaves_caller_on_every_path(callee_name, arg_index)
+                || self.callee_always_hands_arg_back_via_call(callee_name, arg_index));
+        // B-2026-09-26-63 — or keeps it on only SOME paths and runs its body
+        // itself on the others: the body leaves the local on every path then
+        // too. Its memory leaves only where that registration took it.
+        let per_path = if every {
+            None
+        } else {
+            match self.callee_adopts_projection_body_per_path(callee_name, arg_index, value) {
+                Some(takes_memory) => Some(takes_memory),
+                None => return,
+            }
+        };
         // A leaf the prologue FORWARDS rather than copies (a `shared` field
         // declines copy support) is the same object in the callee, so its
         // memory leaves the local too, as a builtin sink's does; keeping it
         // gave the handle two owners.
-        if !self.aggregate_param_copy_supported_struct(&tn, &mut Vec::new()) {
+        let memory_leaves = per_path.unwrap_or_else(|| {
+            struct_leaf && !self.aggregate_param_copy_supported_struct(&tn, &mut Vec::new())
+        });
+        if memory_leaves {
             self.suppress_source_vec_cleanup_for_arg(value);
         }
         self.disarm_struct_field_move_bodies(value);
