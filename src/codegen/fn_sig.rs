@@ -31,9 +31,11 @@ pub(crate) struct FnSig<'ctx> {
     /// original callee runs that body on the param (the boxed payload is the
     /// callee's, B-2026-09-25-19), but a loop view's body belongs to the `Vec`
     /// it came out of, so the view variant is the same function without that
-    /// one registration. Entries are `(callee name, variant symbol, view param
-    /// names)`, queued at the call and compiled after the user functions.
-    pub(crate) pending_view_variants: Vec<(String, String, Vec<String>)>,
+    /// one registration. Entries are `(callee AST, variant symbol, view param
+    /// names)`, queued at the call and compiled after the user functions. The
+    /// AST travels with the entry because a METHOD callee (B-2026-09-27-65) is
+    /// a synthesized `Type.method` function that no name-keyed table holds.
+    pub(crate) pending_view_variants: Vec<(Function, String, Vec<String>)>,
     /// Function parameter ref-ness (function name → vec of is_ref per param).
     pub(crate) fn_param_ref: HashMap<String, Vec<bool>>,
     /// The `mut ref` / `mut Slice` subset of [`Self::fn_param_ref`] — a

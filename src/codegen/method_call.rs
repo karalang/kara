@@ -8800,6 +8800,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // otherwise emit a width-mismatched call). See
                 // `coerce_scalar_to_type`.
                 self.coerce_args_to_fn_params(fn_val, &mut compiled_args);
+                // B-2026-09-27-65 — a `for` loop view passed by value to a
+                // method picks the method's view variant, as a free call does.
+                let fn_val = self
+                    .view_variant_for_method_call(&qualified, fn_val, args, 1)
+                    .unwrap_or(fn_val);
                 let call_site = self
                     .builder
                     .build_call(fn_val, &compiled_args, "usermethod")

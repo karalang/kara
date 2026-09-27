@@ -2266,6 +2266,14 @@ pub(super) struct Codegen<'ctx> {
         inkwell::types::BasicTypeEnum<'ctx>,
         inkwell::values::FunctionValue<'ctx>,
     )>,
+    /// B-2026-09-27-65 — the `(offset, length)` of an argument whose
+    /// use-after-move copy the static-call path (`Type.f(h)`) has ALREADY made.
+    /// That path compiles the argument before it reaches the shared choke
+    /// point (`move_declined_copy_struct_arg_for`), so a copy made there would
+    /// land after the load and hand the callee the caller's original box. The
+    /// path copies first and records the argument here, and
+    /// `uam_copy_boxed_enum_arg` stands down once for it.
+    pub(crate) uam_enum_arg_precopied: Option<(usize, usize)>,
 
     /// B-2026-08-30-2 — did the most recent
     /// `suppress_source_vec_cleanup_for_arg_ex` zero a Vec/String BINDING's
@@ -6888,6 +6896,7 @@ impl<'ctx> Codegen<'ctx> {
             shared_transfer_applied: false,
             pending_enum_field_zeros: Vec::new(),
             pending_uam_enum_restores: Vec::new(),
+            uam_enum_arg_precopied: None,
             vecstr_source_disarmed: None,
             block_tail_binding_unowned: None,
             arm_tail_owner_ctx: None,

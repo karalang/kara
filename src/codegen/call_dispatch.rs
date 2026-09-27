@@ -58,11 +58,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Compile every queued view variant (see [`Self::view_variant_for_call`]),
     /// to a fixpoint: a variant that forwards a view param mints its callee's.
     pub(crate) fn drain_view_variants(&mut self) -> Result<(), String> {
-        while let Some((orig, vname, params)) = self.fn_sig.pending_view_variants.pop() {
-            let (Some(f), Some(vfn)) = (
-                self.fn_sig.fn_asts.get(&orig).cloned(),
-                self.module.get_function(&vname),
-            ) else {
+        while let Some((f, vname, params)) = self.fn_sig.pending_view_variants.pop() {
+            let Some(vfn) = self.module.get_function(&vname) else {
                 continue;
             };
             self.fn_ctx.view_fn = Some(vfn);
@@ -82,14 +79,67 @@ impl<'ctx> super::Codegen<'ctx> {
         func: FunctionValue<'ctx>,
         args: &[CallArg],
     ) -> Option<FunctionValue<'ctx>> {
-        if name != lookup_name || args.iter().any(|a| a.label.is_some()) {
+        if name != lookup_name {
             return None;
         }
-        let callee = self.fn_sig.fn_asts.get(name)?;
-        if callee.generic_params.is_some() || callee.params.len() != args.len() {
+        let callee = self.fn_sig.fn_asts.get(name)?.clone();
+        self.view_variant_for(name, callee, 0, func, args)
+    }
+
+    /// B-2026-09-27-65 — [`Self::view_variant_for_call`] for a METHOD call
+    /// (`k.take(h)`, `K.st(h)`). `qualified` is the callee's `Type.method`
+    /// symbol; `offset` is 1 for an instance call (the receiver is param 0 of
+    /// the synthesized function and is not in `args`) and 0 for a static one.
+    /// Only a non-generic method of a non-generic impl qualifies, the same
+    /// fail-closed rule as a free callee.
+    pub(super) fn view_variant_for_method_call(
+        &mut self,
+        qualified: &str,
+        func: FunctionValue<'ctx>,
+        args: &[CallArg],
+        offset: usize,
+    ) -> Option<FunctionValue<'ctx>> {
+        let (type_name, method) = qualified.split_once('.')?;
+        let program = self.program_snapshot.clone()?;
+        let synth = program.items.iter().find_map(|item| {
+            let Item::ImplBlock(imp) = item else {
+                return None;
+            };
+            if imp.generic_params.is_some()
+                || super::helpers::impl_target_name(&imp.target_type).as_deref() != Some(type_name)
+            {
+                return None;
+            }
+            imp.items.iter().find_map(|ii| match ii {
+                ImplItem::Method(m) if m.name == method && m.generic_params.is_none() => Some(
+                    super::helpers::make_impl_method_function(type_name, m, &imp.target_type),
+                ),
+                _ => None,
+            })
+        })?;
+        if synth.name != qualified {
             return None;
         }
-        let callee = callee.clone();
+        self.view_variant_for(qualified, synth, offset, func, args)
+    }
+
+    /// The shared body of the free and method view-variant lookups: `callee`
+    /// is the function to specialize and `offset` the number of its leading
+    /// params that `args` does not cover (a method receiver).
+    fn view_variant_for(
+        &mut self,
+        name: &str,
+        callee: Function,
+        offset: usize,
+        func: FunctionValue<'ctx>,
+        args: &[CallArg],
+    ) -> Option<FunctionValue<'ctx>> {
+        if args.iter().any(|a| a.label.is_some())
+            || callee.generic_params.is_some()
+            || callee.params.len() != args.len() + offset
+        {
+            return None;
+        }
         let in_variant = self.current_fn.is_some() && self.fn_ctx.view_fn == self.current_fn;
         let refs = self
             .fn_sig
@@ -98,7 +148,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned()
             .unwrap_or_default();
         let mut views: Vec<(usize, String)> = Vec::new();
-        for (i, (arg, param)) in args.iter().zip(callee.params.iter()).enumerate() {
+        for (i, (arg, param)) in args
+            .iter()
+            .zip(callee.params.iter().skip(offset))
+            .enumerate()
+        {
+            let i = i + offset;
             let ExprKind::Identifier(src) = &arg.value.kind else {
                 continue;
             };
@@ -159,7 +214,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         variant.set_call_conventions(func.get_call_conventions());
         self.fn_sig.pending_view_variants.push((
-            name.to_string(),
+            callee,
             vname,
             views.into_iter().map(|(_, n)| n).collect(),
         ));
@@ -15928,6 +15983,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// owner's scope-exit drop — the window `pending_enum_field_zeros` already
     /// drains in, and for the same reason.
     pub(super) fn uam_copy_boxed_enum_arg(&mut self, arg: &Expr) {
+        if self.uam_enum_arg_precopied == Some((arg.span.offset, arg.span.length)) {
+            self.uam_enum_arg_precopied = None;
+            return;
+        }
         if !self.uam_boxed_enum_arg_will_be_copied(arg) {
             return;
         }

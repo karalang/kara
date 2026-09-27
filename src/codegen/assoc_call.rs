@@ -2966,6 +2966,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 .cloned()
                 .unwrap_or_default();
             let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+            // B-2026-09-27-65 — the static-call twin of the free path's
+            // hand-back set (see `compile_call`).
+            let mut maybe_handed_back_args: Vec<String> = Vec::new();
             for (i, a) in _args.iter().enumerate() {
                 let is_ref = ref_flags.get(i).copied().unwrap_or(false);
                 // Thread the callee's DECLARED tensor element type into
@@ -3046,6 +3049,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         None => self.compile_expr(&a.value)?.into(),
                     }
                 } else {
+                    // B-2026-09-27-65 — a boxed-enum binding used again after
+                    // this call gets its use-after-move copy BEFORE it is
+                    // loaded, so the copy is what the callee receives. This arm
+                    // reaches the shared choke point only after the load, where
+                    // the copy would hand the callee the caller's original box
+                    // and the caller's restore would then free it a second
+                    // time (`K.st(h); K.st(h)` crashed).
+                    if !is_ref && self.uam_boxed_enum_arg_will_be_copied(&a.value) {
+                        self.uam_copy_boxed_enum_arg(&a.value);
+                        self.uam_enum_arg_precopied =
+                            Some((a.value.span.offset, a.value.span.length));
+                    }
                     let val = self.compile_expr(&a.value)?;
                     // B-2026-09-14-27 — an owned `Array` argument the ownership
                     // pass flagged as read again after this move gets an
@@ -3456,6 +3471,50 @@ impl<'ctx> super::Codegen<'ctx> {
                         // B-2026-09-26-37 — see the free-fn site.
                         self.stand_down_named_optres_bodies_if_callee_owns(&argn, &qualified, i);
                     }
+                    // B-2026-09-27-65 — the by-value MOVE of a boxed-enum
+                    // binding, and the hand-back disarm, both of which the
+                    // free path (`compile_call`) has always done and this path
+                    // never did. Without the move, `K.st(h)` handed the callee
+                    // a box whose owner then freed it again at scope end: a
+                    // named local crashed, and so did a `for` loop's element
+                    // copy. The gates are the free path's, asked of the
+                    // callee's own param index.
+                    let arg_flows_into_return = self
+                        .callee_param_ast(&qualified, i)
+                        .is_some_and(|(_, ai)| self.call_arg_flows_into_return(&qualified, ai));
+                    if self.erased_boxed_user_enum_ident_arg(&a.value)
+                        && self.callee_param_ast(&qualified, i).is_some_and(|(_, ai)| {
+                            self.callee_by_value_binding_param_may_return(&qualified, ai)
+                        })
+                    {
+                        if let ExprKind::Identifier(n) = &a.value.kind {
+                            let owner = self.moved_arg_owner_name(n);
+                            if self
+                                .payload_vars
+                                .boxed_enum_payload_vars
+                                .contains(owner.as_str())
+                                && !maybe_handed_back_args.contains(&owner)
+                            {
+                                maybe_handed_back_args.push(owner);
+                            }
+                        }
+                    }
+                    if !arg_flows_into_return
+                        || self.optres_escaping_param_entry_copied(&qualified, i)
+                    {
+                        let boxed_struct_binding = matches!(
+                            &a.value.kind,
+                            ExprKind::Identifier(n) if self.payload_vars.boxed_struct_payload_vars.contains(n.as_str())
+                        ) && !self
+                            .callee_stores_param_whole(&qualified, i);
+                        if !boxed_struct_binding
+                            && self
+                                .callee_optres_param_entry_copied(&qualified, i)
+                                .is_none()
+                        {
+                            self.suppress_inline_option_result_binding_move(&a.value);
+                        }
+                    }
                     // A fresh bare-`shared` (RC-box) result passed by value:
                     // the callee inc/decs net-zero, so the caller still owns
                     // the temp's +1 and must release it. Self-excludes a
@@ -3483,6 +3542,11 @@ impl<'ctx> super::Codegen<'ctx> {
             self.pack_niche_abi_args(&qualified, &mut compiled_args);
             self.pack_wasm_bf16_args(&qualified, &mut compiled_args);
             self.pack_wasm_bf16_agg_args(&qualified, &mut compiled_args);
+            // B-2026-09-27-65 — a `for` loop view passed by value picks the
+            // callee's view variant, as a free call does.
+            let fn_val = self
+                .view_variant_for_method_call(&qualified, fn_val, args, 0)
+                .unwrap_or(fn_val);
             let call_site = self
                 .builder
                 .build_call(fn_val, &compiled_args, "usercall")
@@ -3491,10 +3555,14 @@ impl<'ctx> super::Codegen<'ctx> {
             return if basic_val.is_instruction() {
                 Ok(self.context.i64_type().const_int(0, false).into())
             } else {
-                Ok(self.unpack_wasm_bf16_ret(
+                let v = self.unpack_wasm_bf16_ret(
                     &qualified,
                     self.unpack_niche_abi_ret(&qualified, basic_val.unwrap_basic()),
-                ))
+                );
+                for src in &maybe_handed_back_args {
+                    self.zero_boxed_binding_if_call_returned_its_box(src, v);
+                }
+                Ok(v)
             };
         }
 
