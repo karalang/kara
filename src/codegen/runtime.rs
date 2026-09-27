@@ -14620,6 +14620,14 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.disarm_struct_field_move_bodies(expr)
             }
+            // B-2026-09-27-101 — two or more hops (`let y = if c { x.w.r } else {
+            // .. }`, and as a call argument): the nested route, which takes
+            // the per-path flag because the root's walk lives outside the arm.
+            ExprKind::FieldAccess { object, .. }
+                if matches!(object.kind, ExprKind::FieldAccess { .. }) =>
+            {
+                self.disarm_struct_field_move_bodies(expr)
+            }
             ExprKind::TupleIndex { object, .. }
                 if matches!(object.kind, ExprKind::Identifier(_)) =>
             {
@@ -14641,6 +14649,29 @@ impl<'ctx> super::Codegen<'ctx> {
     /// tuple flag is keyed `#<i>` in `field_view_flags`).
     fn projection_part_is_masked(&self, expr: &Expr) -> bool {
         match &expr.kind {
+            // B-2026-09-27-101 — two or more hops: the per-path flag
+            // `disarm_nested_path_move_bodies` mints, or its static mask.
+            ExprKind::FieldAccess { object, .. }
+                if matches!(object.kind, ExprKind::FieldAccess { .. }) =>
+            {
+                let Some((root, path)) = self.projection_field_index_path(expr) else {
+                    return false;
+                };
+                let Some((leaf, prefix)) = path.split_last() else {
+                    return false;
+                };
+                let key = Self::nested_field_move_flag_key(&path);
+                self.drop_rc
+                    .field_view_flags
+                    .get(root.as_str())
+                    .is_some_and(|m| m.contains_key(&key))
+                    || self
+                        .type_decls
+                        .struct_moved_nested_field_bodies
+                        .get(root.as_str())
+                        .and_then(|m| m.get(prefix))
+                        .is_some_and(|s| s.contains(leaf))
+            }
             ExprKind::FieldAccess { object, field } => {
                 let ExprKind::Identifier(obj) = &object.kind else {
                     return false;

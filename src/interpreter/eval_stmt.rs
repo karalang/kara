@@ -4460,14 +4460,18 @@ impl<'a> super::Interpreter<'a> {
     }
 
     /// B-2026-09-27-14 — would [`Self::record_returned_projection_moves`]
-    /// mask this ONE-HOP projection out of its local's walk? Its own gates,
+    /// mask this projection (one hop, or a field chain of any depth since
+    /// B-2026-09-27-101) out of its local's walk? Its own gates,
     /// asked without moving anything: a local (not a param view) whose leaf
     /// runs a user `Drop`.
     pub(crate) fn projection_move_would_mask(&self, e: &Expr) -> bool {
         let Some((root, path)) = Self::projection_chain_name_path(e) else {
             return false;
         };
-        if path.len() != 1
+        // B-2026-09-27-101 — any depth for a pure FIELD chain, which
+        // `record_conditional_move_tail` now masks at any depth too.
+        let deep_fields = path.len() >= 2 && Self::field_chain_name_path(e).is_some();
+        if (path.len() != 1 && !deep_fields)
             || self
                 .owned_param_names_stack
                 .last()
@@ -6675,9 +6679,17 @@ impl<'a> super::Interpreter<'a> {
         // and the argument temp with no owner, so the minting arm's body was
         // lost on every surface; codegen additionally ran the part's body over
         // the husk its block-tail move left behind.
+        // B-2026-09-27-101 — and a field chain of TWO OR MORE hops (`let y = if c {
+        // x.w.r } else { .. }`, or as a call argument): the let-site mask
+        // `record_returned_projection_moves` writes is path-keyed already,
+        // and codegen's twin now reaches its per-path flag through
+        // `disarm_nested_path_move_bodies`.
+        let deep_field_tail =
+            Self::field_chain_name_path(expr).is_some_and(|(_, path)| path.len() >= 2);
         if (matches!(expr.kind, ExprKind::FieldAccess { .. })
             && Self::field_chain_name_path(expr).is_some_and(|(_, path)| path.len() == 1))
             || Self::is_one_hop_tuple_index_of_name(expr)
+            || deep_field_tail
         {
             self.record_returned_projection_moves(expr);
             // B-2026-09-26-62 — and when the root is an arm view of a by-value
