@@ -2631,8 +2631,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // registrar).
                 let payload_skip = self.enum_arg_payload_skip(&name, i);
                 let field_payload_paths = self.callee_escaping_field_payload_paths(&name, i);
-                self.drop_rc.aggregate_arg_escape_stores = stored_in_outliving_place
-                    && !self.call_arg_store_is_local_container_only(&name, i, false);
+                self.drop_rc.aggregate_arg_escape_stores =
+                    stored_in_outliving_place && self.callee_param_rc_promoted(&name, i, false);
                 self.drop_rc.freshtemp_drop_projection_arg =
                     drop_projection.filter(|_| !escapes_frame);
                 self.track_inline_owned_aggregate_arg_parts(
@@ -7364,20 +7364,21 @@ impl<'ctx> super::Codegen<'ctx> {
             || crate::ast::fn_moves_param_into_local_container_any(f, declared)
     }
 
-    /// B-2026-09-27-50 — is the only store [`Self::call_arg_moves_into_outliving_place`]
-    /// found for this argument an unconditional one into a container the
-    /// CALLEE's own local holds ([`crate::ast::fn_moves_param_into_local_container`],
-    /// which also counts a `let mut` rebind the callee reassigns)?
+    /// B-2026-09-27-113 — did the callee RC-promote by-value parameter
+    /// `arg_index` (the ownership pass's `rc_fallback_fns`, keyed by the
+    /// callee's name exactly as `is_rc_fallback_binding` keys its own frame)?
     ///
-    /// The registrar's escaping-entry-copy arm declines the store route because
-    /// a CONDITIONALLY stored param is RC-promoted rather than copied, so its box
-    /// frees the caller's value. An unconditional local store is not promoted:
-    /// the callee entry-copies the param and its container frees the copy, so
-    /// the caller's fresh temp is an orphaned original that only the caller can
-    /// free. Measured on `rb(mk(2))` over `fn rb(a: S) -> i64 { let mut v:
-    /// Vec[S] = Vec.new(); v.push(a); 5 }`, which lost the temp's `String` (29 B)
-    /// on every compiled surface.
-    pub(super) fn call_arg_store_is_local_container_only(
+    /// The registrar's escaping-entry-copy arm frees a fresh temp the callee
+    /// copies at entry, because the caller's original is then orphaned. The one
+    /// callee that does NOT copy is one whose param is RC-promoted: it boxes the
+    /// value itself and the box frees it (B-2026-09-07-50's `pf` cell). That
+    /// arm used to decline the whole STORE route as a stand-in for this
+    /// question, which orphaned the original on every store that was NOT
+    /// promoted: `rb(mk(2))` over `fn rb(a: S) -> i64 { let mut v: Vec[S] =
+    /// Vec.new(); v.push(a); 5 }` (a callee-local container, B-2026-09-27-50),
+    /// and `rb(mut b, mk(1))` over `fn rb(b: mut ref B, a: S) -> i64 {
+    /// b.v.push(a); 5 }` (a caller-held one), each losing the temp's `String`.
+    pub(super) fn callee_param_rc_promoted(
         &self,
         callee_name: &str,
         arg_index: usize,
@@ -7400,11 +7401,15 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             arg_index
         };
-        crate::ast::fn_moves_param_into_local_container(f, declared)
-            && !crate::ast::fn_moves_param_into_outliving_place(f, declared)
-            && !self.program_snapshot.as_deref().is_some_and(|p| {
-                crate::ast::fn_moves_param_into_outliving_place_via_call(p, f, declared)
-            })
+        let Some(PatternKind::Binding(param_name)) =
+            f.params.get(declared).map(|p| &p.pattern.kind)
+        else {
+            return false;
+        };
+        self.drop_rc
+            .rc_fallback_fns
+            .get(callee_name)
+            .is_some_and(|set| set.contains(param_name))
     }
 
     /// B-2026-07-01-7 (discard position): register the caller-side
@@ -10090,10 +10095,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // 29 B lost per call on every compiled surface, while a
                     // struct literal and a named argument were clean. MEMORY
                     // ONLY, as on the `has_user_drop` arm's escape leg above:
-                    // any field bodies belong to the result's consumer. Not on
-                    // the STORE route (`aggregate_arg_escape_stores`): a
-                    // conditionally stored param is RC-promoted, not copied, and
-                    // its box frees the value (B-2026-09-07-50's `pf` cell).
+                    // any field bodies belong to the result's consumer. Not
+                    // when the callee RC-promotes a stored param
+                    // (`aggregate_arg_escape_stores`): that param is boxed, not
+                    // copied, and its box frees the value (B-2026-09-07-50's
+                    // `pf` cell). Every other store copies (B-2026-09-27-113).
                     let escaping_entry_copied = arg_escapes_frame
                         && !self.drop_rc.aggregate_arg_escape_stores
                         && self.arg_is_entry_copied_heap_struct(arg);

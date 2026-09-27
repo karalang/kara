@@ -319,10 +319,12 @@ pub(crate) struct DropRc<'ctx> {
     /// B-2026-09-25-14 — set by an argument site, around its call to the
     /// aggregate-arg registrar, when the argument escapes by being STORED into
     /// a place that outlives the call (not only handed back). The registrar's
-    /// memory-only drop for an escaping entry-copied call temp is for the
-    /// RETURN route: a conditionally stored param is RC-promoted rather than
-    /// copied, so a caller drop there frees the box's value a second time.
-    /// False everywhere else.
+    /// memory-only drop for an escaping entry-copied call temp is declined
+    /// when this is set: an RC-promoted param is boxed rather than copied, so a
+    /// caller drop there frees the box's value a second time. B-2026-09-27-113
+    /// narrowed it from every store to a store whose callee param is actually
+    /// RC-promoted (`callee_param_rc_promoted`); an unpromoted store copies, and
+    /// declining there orphaned the caller's original. False everywhere else.
     pub(crate) aggregate_arg_escape_stores: bool,
     /// B-2026-09-26-23 — set by a by-value argument site, around its call to
     /// the aggregate-arg registrar, when the argument is a `Drop`-bearing
