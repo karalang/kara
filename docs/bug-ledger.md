@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 518 |
-| miscompile | 503 |
+| miscompile | 509 |
 | leak | 450 |
 | double-free | 334 |
 | missing-feature | 209 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2219 |
-| interp | 618 |
+| codegen | 2225 |
+| interp | 624 |
 | typecheck | 311 |
 | other | 111 |
 | ownership | 79 |
@@ -361,7 +361,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-78 | 2026-09-27 | interp+codegen | medium | `match v.pop()` OVER A `Vec[Option[S]]` WHOSE ELEMENT IS A BOXED `Option` LEAKS THE INNER BOX AND ITS STRING WHEN AN ARM DESTRUCTURES THE ELEMENT, ON EVERY COMPILED SURFACE; TWO SPELLINGS ALSO LOSE THE `Drop` BODY -- `match v.pop() { Some(Some(s)) => s.r.id, _ => 0 }` prints the right `d1 k1 d2 k2 end` on all four surfaces but leaks 61 B per call (32 B box + 29 B String) at -O0; `Some(o) => match o { Some(s) => s.r.id, None => 0 }` prints `k1 k2 end` compiled against `d1 k1 d2 k2 end` interpreted; `Some(x) => 3` (payload bound, unused) prints `k3 k3 end` on ALL FOUR surfaces where `d1 k3 d2 k3 end` is due; `let x = v.pop(); match x { .. }` is clean | — |
 | B-2026-09-27-79 | 2026-09-27 | interp+codegen | high | A BY-VALUE BOXED `Option[S]` PARAM PUSHED INTO A LOCAL `Vec` ONLY ON SOME PATHS CRASHES WITH NO OUTPUT ON EVERY COMPILED SURFACE, AND THE INTERPRETER LOSES THE BODY ON THE PATH THAT DOES NOT PUSH -- `fn rb(a: Option[S], c: bool) -> i64 { let mut v: Vec[Option[S]] = Vec.new(); if c { v.push(a) }; println("in"); 5 }` called as `rb(a, true)`, `rb(b, false)`, `rb(Some(mk(3)), true)`, `rb(Some(mk(4)), false)` prints nothing at -O0 or -O2 (8 valgrind errors), and `d1 in k5 in k5 d3 in in end` interpreted, where `d2` and `d4` are due | — |
 | B-2026-09-27-90 | 2026-09-27 | interp+codegen | medium | THREE SPELLINGS B-2026-09-27-58'S FORWARDING ROUTE DOES NOT REACH STILL RUN A PARAM'S HANDED-BACK FIELD `Drop` BODY TWICE ON ALL FOUR SURFACES -- a `match` directly on the forwarded call (`match w.opt() { Some(x) => .. }` and the free-function `match getfo(w)` alike) prints `x7 dR7 dR7 k1`; a method that hands `self` back WHOLE (`let v = w.me(); v` over `fn me(self) -> Ws { return self }`) prints `in dR26 x26 dR26` where the free-function `me2(w)` is right; and a CONDITIONAL forward (`if c { return w.getr() }`, and `getf(w)` alike) prints `dR12 x12 dR12` | — |
-| B-2026-09-27-82 | 2026-09-27 | interp+codegen | medium | AFTER B-2026-09-27-70 A NAMED ROOT'S `Drop` FIELD HANDED ON STILL RUNS ITS BODY TWICE IN FOUR SPELLINGS, AND A TWO-HOP MOVE UNDER AN `if` SPLITS THE BACKENDS -- a projection off an owned PARAMETER (`fn ownw(w: W) -> i64 { let k = keep(w.r); k.id }`), a struct leaf with NO `Drop` kept on some paths (`maybew(x.w, true)`), a user-enum leaf STORED on some paths (`csg(mut xs, v.g, true)`), and a two-hop move inside an `if` (`if c { xs.push(x.w.r); }`), where the interpreter is now right and codegen still runs the body twice over a freed name; a two-hop `let`/`return` inside an `if` loses the body on the leg that does not move, compiled only | — |
 | B-2026-09-27-91 | 2026-09-27 | codegen | medium | TWO LEAKS OF A BOXED GENERIC ENUM'S PAYLOAD BOX, NEIGHBOURS OF B-2026-09-27-66 (AND B-2026-09-27-65'S FIELD-SOURCE HALF) -- a `Vec[Ho[P]]` held in a STRUCT FIELD never frees its elements' boxes, with no loop involved, and with a `Drop` payload a `for h in c.v` walk runs the body in the callee instead of at the field's death (`let c = C { v: v }; println(f"n{c.v.len()}")` loses 36 B), and a by-value `Ho[P]` param that its callee forwards to itself in one branch and matches in the other (`cnt`) loses the 32 B box, let-bound or from a `for` loop | — |
 | B-2026-09-27-93 | 2026-09-27 | interp | medium | THE INTERPRETER RUNS A FRESH-TEMP `Option[S]` ARGUMENT'S `Drop` BODY TWICE, THE FIRST TIME BEFORE THE METHOD BODY, WHEN A METHOD REBINDS ITS BY-VALUE PARAM IMMUTABLY -- `impl H { fn rb(ref self, a: Option[S]) -> i64 { let c = a; println("in"); 5 } }` called as `h.rb(Some(mk(1)))` prints `d1 in d1 k5` under `--interp` where every compiled surface prints the due `in d1 k5` | — |
 | B-2026-09-27-94 | 2026-09-27 | codegen | medium | A FRESH-TEMP BOXED `Option[S]` ARGUMENT TO A PARAM THE CALLEE RETURNS ONLY ON SOME PATHS LEAKS ITS BOX AND STRING ON THE PATH THAT DOES NOT RETURN IT, ON EVERY COMPILED SURFACE, FOR A FREE FUNCTION AND A METHOD ALIKE -- `fn mf(a: Option[S], c: bool) -> Option[S] { if c { a } else { None } }` called as `mf(Some(mk(2)), false)` prints the due `d2` but leaks 61 B (32 B box + 29 B String) at -O0 | — |
@@ -386,6 +385,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-111 | 2026-09-27 | codegen | high | REASSIGNING A CONCRETE ENUM LOCAL INSIDE A READ-ONLY `match` ARM OVER IT FREES THE PAYLOAD THE ARM BINDING STILL READS -- `match g { E.X(t) => { g = E.X(mk(3)); println(t.tag) } }` prints garbage (`x` then a blank field) with 2 invalid reads on every compiled surface; the generic-enum twin leaks the payload's `String` instead (2 B) | — |
 | B-2026-09-27-112 | 2026-09-27 | interp+codegen | medium | A BY-VALUE PLAIN STRUCT PARAM PUSHED INTO A CALLEE-LOCAL `Vec` ONLY ON SOME PATHS LOSES ITS `Drop` BODY WHERE IT IS NOT PUSHED ON EVERY SURFACE, AND RUNS IT TWICE COMPILED FOR A NAMED ARGUMENT THAT IS PUSHED -- the plain-struct twin of B-2026-09-27-79: `fn rb(a: S, f: bool) -> i64 { let mut v: Vec[S] = Vec.new(); if f { v.push(a) } println("in"); 5 }` called as `rb(mk(1), true)`, `rb(mk(2), false)`, `let x = mk(3); rb(x, true)` prints `d1 in k5 in k5 d3 in k5 end` interpreted and `d1 in k5 in k5 d3 in d3 k5 end` compiled, where `d2` is due and `d3` once | — |
 | B-2026-09-27-113 | 2026-09-27 | codegen | medium | A FRESH-TEMP CALL-RESULT STRUCT ARGUMENT THAT THE CALLEE PUSHES INTO A CALLER-HELD `Vec` LEAKS THE TEMP'S `String` (29 B PER CALL) ON EVERY COMPILED SURFACE, WHILE THE STRUCT-LITERAL AND NAMED SPELLINGS ARE CLEAN -- `fn rb(b: mut ref B, a: S) -> i64 { b.v.push(a); 5 }` with `rb(mut b, mk(1))` | — |
+| B-2026-09-27-100 | 2026-09-27 | interp+codegen | medium | A `Drop` FIELD MOVED OUT ON ONE ITERATION OF A LOOP THAT RUNS AGAIN RUNS ITS BODY A SECOND TIME AFTER THE LOOP ON EVERY COMPILED SURFACE, one hop and two -- `let w = W { r: mkd(1), s: mkd(2) }; while n < 2 { if c and n == 0 { let k = keep(w.r); .. } n = n + 1; }` prints `k1 dD1n1 r dD2n2 dD1n1` compiled where `--interp` prints `k1 dD1n1 dD2n2 r`; the FIELD twin of B-2026-09-27-15 | — |
+| B-2026-09-27-105 | 2026-09-27 | interp+codegen | medium | A PARAM'S OR RECEIVER'S `Drop` FIELD HANDED TO ANOTHER OWNER ON ONLY SOME PATHS, OR OFF `self`, STILL RUNS ITS BODY TWICE OR NOT AT ALL, ON ALL FOUR SURFACES ALIKE -- `if c { let k = keep(w.r); return k.id; }` doubles `w.r` on the leg that keeps; the alias spelling `let r = w.r; if c { keep(r) .. }` LOSES it on the leg that does not; `fn take(self) -> i64 { let k = keep(self.r); k.id }` doubles for a named and a temp receiver; plus B-2026-09-27-99's cells (2) and (3) | — |
+| B-2026-09-27-106 | 2026-09-27 | interp+codegen | medium | A METHOD THAT RETURNS ONE FIELD OF A FRESH-TEMP STRUCT LOSES THE OTHER FIELD'S `Drop` BODY UNDER `--interp`, AND FOR A TEMP RECEIVER COMPILED CODE RUNS IT AFTER `main` HAS PRINTED ITS LAST LINE -- `h.g(mkw(20))` over `fn g(ref self, w: W) -> D { w.r }` prints `b20 dD20n20` interpreted, no `dD120n120`; `mkw(40).getr()` over `fn getr(self) -> D { self.r }` prints `g40 dD40n40` interpreted and `g40 dD40n40 end dD140n140` compiled; the named spellings are right everywhere | — |
 
 ### Relocated
 
@@ -3155,6 +3157,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-66 | codegen | high | A `for` LOOP VIEW OF A BOXED GENERIC ENUM THAT ESCAPES A BY-VALUE CALLEE, OR IS CONSUMED TWICE, CRASHES ON EVERY COMPILED SURFACE -- `for h in v { w.… | e7b06b0a4 |
 | B-2026-09-27-69 | typecheck | low | THE `borrow_projection_copy` LINT (W0299) IS SILENT WHEN A BARE `for` LOOP'S ELEMENT IS MATERIALIZED -- `for g in v { let o = f(g); }` over a keeping… | 1d152cc9e |
 | B-2026-09-27-70 | interp+codegen | medium | FOUR SPELLINGS OF A NAMED LOCAL'S `Drop` FIELD HANDED TO A KEEPING CALLEE STILL RUN THE BODY TWICE ON ALL FOUR SURFACES AFTER B-2026-09-26-63 -- a TW… | 0a4e2754e |
+| B-2026-09-27-82 | interp+codegen | medium | AFTER B-2026-09-27-70 A NAMED ROOT'S `Drop` FIELD HANDED ON STILL RUNS ITS BODY TWICE IN FOUR SPELLINGS, AND A TWO-HOP MOVE UNDER AN `if` SPLITS THE… | 2b2b6596b |
+| B-2026-09-27-99 | interp+codegen | medium | A `Drop` FIELD HANDED ON FROM A BY-VALUE PARAM, OR AS A CONDITIONALLY-KEPT STRUCT OR ENUM LEAF, STILL RUNS ITS BODY TWICE -- `fn ownw(w: W) -> i64 {… | 0029ca75c |
+| B-2026-09-27-101 | interp+codegen | medium | A `Drop` FIELD TWO HOPS DOWN MOVED OUT AS A BRANCH ARM'S TAIL VALUE RUNS ITS BODY TWICE, DIFFERENTLY ON EACH BACKEND -- `let y = if c { x.w.r } else… | ef6b26179 |
+| B-2026-09-27-104 | interp+codegen | medium | A CALL WHOSE ARGUMENT IS AN `if`/`match` HANDING A LOCAL'S `Drop` FIELD OVER ON ONE ARM LOSES THE OTHER ARM'S BODY IN THE INTERPRETER AND RUNS THE FI… | d066dc514 |
 
 </details>
 
