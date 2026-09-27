@@ -2081,6 +2081,68 @@ pub fn fn_binds_self_part_out(f: &Function) -> bool {
     walk_block(&f.body)
 }
 
+/// B-2026-09-16-25 — does this function DESTRUCTURE bare `self` in a `let`
+/// (`let E.A(r) = self else { .. }`, `let H1 { e } = self`)?
+///
+/// [`fn_binds_self_part_out`] answers yes for a whole rebind (`let e = self`)
+/// too, because both are transfers. The question at the rebinding receiver's
+/// payload walk is narrower: is there a channel that takes the PAYLOAD out on
+/// a path other than the rebind's? A whole rebind takes it on the rebinding
+/// path only, and the frame that adopted the receiver owes it on the others,
+/// so only a destructure or a bare-`self` match ([`fn_matches_on_bare_self`])
+/// counts.
+pub fn fn_destructures_bare_self(f: &Function) -> bool {
+    fn walk_expr(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Match { scrutinee, arms } => {
+                walk_expr(scrutinee) || arms.iter().any(|a| walk_expr(&a.body))
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                walk_expr(value)
+                    || walk_block(then_block)
+                    || else_branch.as_deref().is_some_and(walk_expr)
+            }
+            ExprKind::WhileLet { value, body, .. } => walk_expr(value) || walk_block(body),
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => walk_block(b),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                walk_expr(condition)
+                    || walk_block(then_block)
+                    || else_branch.as_deref().is_some_and(walk_expr)
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => walk_block(body),
+            _ => false,
+        }
+    }
+    fn walk_block(b: &Block) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } => {
+                (matches!(value.kind, ExprKind::SelfValue)
+                    && !matches!(pattern.kind, PatternKind::Binding(_)))
+                    || walk_expr(value)
+            }
+            StmtKind::Expr(e) => walk_expr(e),
+            _ => false,
+        }) || b.final_expr.as_deref().is_some_and(walk_expr)
+    }
+    walk_block(&f.body)
+}
+
 /// B-2026-09-06-39 — do this function's bare-`self` match / `if let` /
 /// `while let` arms only READ THROUGH their payload bindings, so that the arms
 /// can bind VIEWS and the CALLER keep ownership of the payload's `Drop` bodies?

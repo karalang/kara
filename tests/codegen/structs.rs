@@ -2093,6 +2093,7 @@ bare_true
   v=7
 bare_false
   dE
+  dR4
   v=0
 mut_true
   dE
@@ -2104,6 +2105,7 @@ loop_once
   v=9
 loop_zero
   dE
+  dR7
   v=0
 arm_taken
   dE
@@ -2111,6 +2113,7 @@ arm_taken
   v=1
 arm_other
   dE
+  dR9
   v=2
 temp_true
   dE

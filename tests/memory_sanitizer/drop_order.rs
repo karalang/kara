@@ -4143,3 +4143,56 @@ fn main() {
         40,
     );
 }
+
+/// B-2026-09-16-25 — the MEMORY half of
+/// `e2e_conditionally_rebound_enum_receiver_runs_its_payload_body_on_the_other_paths`
+/// under ASAN + LSan, two rounds: the callee frame's adopted receiver now runs
+/// its payload body on the paths that do not rebind, and frees nothing a
+/// second time.
+#[test]
+fn asan_conditionally_rebound_enum_receiver_is_freed_once() {
+    let round: &[&str] = &[
+        "dE", "dR1", "k1 1", "k2 0", "dE", "dR2", "k3 0", "dE", "dR3", "dE", "dR4", "k4 5", "dE",
+        "dR5", "k5 0", "dE", "dR6", "k6 0", "dR7", "k7 7", "dR8", "k8 0", "dR9", "k9 0", "dR10",
+        "k10 9", "done",
+    ];
+    let expected: Vec<&str> = round.iter().chain(round.iter()).copied().collect();
+    assert_clean_asan_run(
+        r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"tag-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{n}", xs: [n, n] } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+enum N { A(R), B }
+impl E {
+    fn cond(self, c: bool) -> i64 { if c { match self { E.A(r) => { return r.id; } E.B => { return 0; } } } return 0; }
+    fn loopy(self, n: i64) -> i64 { let mut i = 0; while i < n { match self { E.A(r) => { return r.id; } E.B => { return 0; } } } return 0; }
+    fn cond_mut(self, c: bool) -> i64 { if c { let mut e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } } else { return 5; } }
+    fn cond_bare(self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
+}
+impl N {
+    fn cond_bare(self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
+    fn cond_loop(self, n: i64) -> i64 { let mut i = 0; while i < n { let e = self; return 9; } return 0; }
+}
+fn round() {
+    println(f"k1 {E.A(mk(1)).cond(true)}");
+    let a = E.A(mk(2)); println(f"k2 {a.cond(false)}");
+    let b = E.A(mk(3)); println(f"k3 {b.loopy(0)}");
+    let c = E.A(mk(4)); println(f"k4 {c.cond_mut(false)}");
+    let d = E.A(mk(5)); println(f"k5 {d.cond_bare(false)}");
+    println(f"k6 {E.A(mk(6)).cond_bare(false)}");
+    let e = N.A(mk(7)); println(f"k7 {e.cond_bare(true)}");
+    let f = N.A(mk(8)); println(f"k8 {f.cond_bare(false)}");
+    let g = N.A(mk(9)); println(f"k9 {g.cond_loop(0)}");
+    let h = N.A(mk(10)); println(f"k10 {h.cond_loop(1)}");
+    println("done");
+}
+fn main() {
+    round()
+    round()
+}
+"#,
+        &expected,
+        "asan_conditionally_rebound_enum_receiver_is_freed_once",
+    );
+}

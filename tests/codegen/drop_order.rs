@@ -9165,3 +9165,52 @@ fn main() { k1(); k2(true); k4(true); k6(false); k7(); k8(); k9(); k11(); k12();
         "must match --interp"
     );
 }
+
+/// B-2026-09-16-25 — an owned enum receiver whose method REBINDS `self` on
+/// some paths (`if c { let e = self; .. }`) runs its payload's `Drop` body on
+/// the paths that do not. The caller stands down for the whole call and the
+/// callee frame adopts the receiver, but the frame ran only the shell, so
+/// `d.cond_bare(false)` printed a bare `dE`, and an enum with no `Drop` of its
+/// own (`N`) was not adopted at all and ran nothing. A method that also
+/// matches on bare `self` (`cond`, `loopy`) keeps its arm as the payload's
+/// channel and is pinned unchanged.
+#[test]
+fn e2e_conditionally_rebound_enum_receiver_runs_its_payload_body_on_the_other_paths() {
+    assert_eq!(
+        run_program(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"tag-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{n}", xs: [n, n] } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+enum N { A(R), B }
+impl E {
+    fn cond(self, c: bool) -> i64 { if c { match self { E.A(r) => { return r.id; } E.B => { return 0; } } } return 0; }
+    fn loopy(self, n: i64) -> i64 { let mut i = 0; while i < n { match self { E.A(r) => { return r.id; } E.B => { return 0; } } } return 0; }
+    fn cond_mut(self, c: bool) -> i64 { if c { let mut e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } } else { return 5; } }
+    fn cond_bare(self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
+}
+impl N {
+    fn cond_bare(self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
+    fn cond_loop(self, n: i64) -> i64 { let mut i = 0; while i < n { let e = self; return 9; } return 0; }
+}
+fn main() {
+    println(f"k1 {E.A(mk(1)).cond(true)}");
+    let a = E.A(mk(2)); println(f"k2 {a.cond(false)}");
+    let b = E.A(mk(3)); println(f"k3 {b.loopy(0)}");
+    let c = E.A(mk(4)); println(f"k4 {c.cond_mut(false)}");
+    let d = E.A(mk(5)); println(f"k5 {d.cond_bare(false)}");
+    println(f"k6 {E.A(mk(6)).cond_bare(false)}");
+    let e = N.A(mk(7)); println(f"k7 {e.cond_bare(true)}");
+    let f = N.A(mk(8)); println(f"k8 {f.cond_bare(false)}");
+    let g = N.A(mk(9)); println(f"k9 {g.cond_loop(0)}");
+    let h = N.A(mk(10)); println(f"k10 {h.cond_loop(1)}");
+    println("done");
+}
+"#
+        )
+        .as_deref(),
+        Some("dE\ndR1\nk1 1\nk2 0\ndE\ndR2\nk3 0\ndE\ndR3\ndE\ndR4\nk4 5\ndE\ndR5\nk5 0\ndE\ndR6\nk6 0\ndR7\nk7 7\ndR8\nk8 0\ndR9\nk9 0\ndR10\nk10 9\ndone\n"),
+        "must match --interp"
+    );
+}

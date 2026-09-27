@@ -4198,7 +4198,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     if let TypeKind::Path(path) = &param.ty.kind {
                         if let Some(type_name) = path.segments.first().cloned() {
+                            // B-2026-09-16-25 — a rebinding enum receiver
+                            // with no arm channel over `self` owes its PAYLOAD
+                            // here too on the paths that do not rebind: the
+                            // caller stood down on bodies for the whole call,
+                            // and nothing else in the frame claims the payload.
+                            // Shell alone lost it (`if c { let e = self; .. }`
+                            // with `c` false printed a bare `dE`), and an enum
+                            // with no `Drop` of its own was not registered at
+                            // all, so its payload body ran nowhere. A frame
+                            // that also matches or part-binds bare `self` keeps
+                            // the shell-only walk: its arm owns the payload on
+                            // those paths.
+                            let enum_frame_owns_payload =
+                                self.type_decls.enum_layouts.contains_key(&type_name)
+                                    && !crate::ast::fn_destructures_bare_self(func)
+                                    && !crate::ast::fn_matches_on_bare_self(func);
                             let has_user_drop = adopts_returnable_enum_self
+                                || enum_frame_owns_payload
                                 || self
                                     .program_snapshot
                                     .as_deref()
@@ -4211,13 +4228,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .contains_key(type_name.as_str())
                             {
                                 let is_enum = self.type_decls.enum_layouts.contains_key(&type_name);
-                                let bodies = if adopts_returnable_enum_self {
-                                    self.emit_enum_bodies_only_fn(&type_name)
-                                } else if is_enum {
-                                    self.module.get_function(&format!("{type_name}.drop"))
-                                } else {
-                                    self.emit_struct_user_drop_bodies_only_fn(&type_name)
-                                };
+                                let bodies =
+                                    if adopts_returnable_enum_self || enum_frame_owns_payload {
+                                        self.emit_enum_bodies_only_fn(&type_name)
+                                    } else if is_enum {
+                                        self.module.get_function(&format!("{type_name}.drop"))
+                                    } else {
+                                        self.emit_struct_user_drop_bodies_only_fn(&type_name)
+                                    };
                                 if let Some(bodies) = bodies {
                                     self.track_user_drop_var_with_fn(
                                         "",

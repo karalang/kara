@@ -900,11 +900,23 @@ impl<'a> super::Interpreter<'a> {
                 // caller stood its payload walk down too, so this frame is the
                 // payload's only owner on the paths that do not hand `self`
                 // back. Marking it here lost the payload body (`mb-new dE dE`).
+                //
+                // B-2026-09-16-25 — and NOT for a rebinding receiver whose frame
+                // has no arm channel either (no `match self`, no part bound out
+                // of `self`): there too this frame is the payload's only owner
+                // on the paths that do not rebind, and marking it lost the body
+                // (`if c { let e = self; .. }` with `c` false printed a bare
+                // `dE`). Codegen's twin registers the shell-and-payload walk for
+                // the same shape in `compile_function`.
                 if adopts_self_body
                     && matches!(obj, Value::EnumVariant { .. })
                     && self
                         .find_impl_method_ast(&type_name, method)
-                        .is_some_and(crate::ast::fn_conditionally_rebinds_self)
+                        .is_some_and(|f| {
+                            crate::ast::fn_conditionally_rebinds_self(f)
+                                && (crate::ast::fn_destructures_bare_self(f)
+                                    || crate::ast::fn_matches_on_bare_self(f))
+                        })
                 {
                     self.moved_out_container_bodies_bindings
                         .insert("self".to_string());
