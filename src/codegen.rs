@@ -9087,7 +9087,11 @@ impl<'ctx> Codegen<'ctx> {
                                 let mut synth =
                                     make_impl_method_function(&type_name, method, &imp.target_type);
                                 synth.name.clone_from(&qualified);
-                                self.compile_function(&synth)?;
+                                self.compile_concrete_impl_method(
+                                    &synth,
+                                    &type_name,
+                                    &imp.target_type,
+                                )?;
                             }
                         }
                     }

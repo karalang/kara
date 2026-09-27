@@ -7693,6 +7693,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         let recv_name = recv_name.clone();
                         self.suppress_container_elem_bodies_for_var(&recv_name);
+                        // B-2026-09-17-13 — the MEMORY half, as the generic-impl
+                        // twin below has done since B-2026-09-16-31. A concrete
+                        // impl over a generic enum (`impl G1[String]`) now types
+                        // `self` with its args, so its arm takes the boxed
+                        // payload's interior exactly as the monomorph's does;
+                        // the box itself stays the caller's. A no-op for a
+                        // receiver with no box.
+                        self.clear_boxed_enum_inner_drop(&recv_name, false);
                     }
                 }
                 // B-2026-09-06-42 — the callee REBINDS `self` whole
@@ -10865,6 +10873,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// receiver (associated fns and generic impls resolved through other
     /// channels stay `None` — the caller treats that as not body-eligible,
     /// the conservative silent direction). B-2026-08-01-5.
+    /// Does `imp` answer to the receiver segment `type_name`?
+    ///
+    /// B-2026-09-17-13 — the segment is the call site's DISPATCH segment
+    /// (`impl_dispatch_segment_at`), which is the bare head for every program
+    /// with no colliding impl group and the qualified `G1[Vec[i64]]` for one
+    /// that has two instantiations of `G1`. Matched against the head alone, a
+    /// qualified segment answered to no impl at all, so every receiver decision
+    /// keyed on the method's AST (the owned-`self` disarms, the temp
+    /// registrar's gates) silently declined for colliding impls: once the
+    /// concrete method's arm took its boxed payload, `a.show()` over
+    /// `impl G1[Vec[i64]]` beside `impl G1[i64]` freed the Vec twice.
+    /// Matching the impl's own dispatch segment also picks the RIGHT impl of
+    /// the group, where the head would have picked the first.
+    fn impl_block_answers_to(&self, imp: &crate::ast::ImplBlock, type_name: &str) -> bool {
+        let crate::ast::TypeKind::Path(p) = &imp.target_type.kind else {
+            return false;
+        };
+        p.segments.last().is_some_and(|s| s == type_name)
+            || crate::impl_dispatch::impl_dispatch_segment(
+                &imp.target_type,
+                &self.span_tables.impl_dispatch_names,
+            )
+            .is_some_and(|seg| seg == type_name)
+    }
+
     pub(super) fn impl_method_self_and_borrow_return(
         &self,
         type_name: &str,
@@ -10875,8 +10908,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let crate::ast::Item::ImplBlock(imp) = item else {
                 continue;
             };
-            let target_ok = matches!(&imp.target_type.kind, crate::ast::TypeKind::Path(p)
-                if p.segments.last().is_some_and(|s| s == type_name));
+            let target_ok = self.impl_block_answers_to(imp, type_name);
             if !target_ok {
                 continue;
             }
@@ -10938,8 +10970,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let crate::ast::Item::ImplBlock(imp) = item else {
                 return None;
             };
-            let target_ok = matches!(&imp.target_type.kind, crate::ast::TypeKind::Path(p)
-                if p.segments.last().is_some_and(|s| s == type_name));
+            let target_ok = self.impl_block_answers_to(imp, type_name);
             if !target_ok {
                 return None;
             }
@@ -11478,6 +11509,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     // (`call_dispatch.rs`, B-2026-09-14-9), `true` included:
                     // the constructor lowering stands every array source down,
                     // so the box owns its interior on every spelling.
+                    //
+                    // B-2026-09-17-13 — BOX-ONLY when the callee's arm takes the
+                    // payload over, the question the named receiver's disarm
+                    // asks (`clear_boxed_enum_inner_drop` there). The arm copies
+                    // the payload out of the box and frees it at its own end, so
+                    // an interior step here freed it a second time:
+                    // `G1.Y(f"..").shm()` over `impl[T] G1[T] { fn shm(self) {
+                    // match self { .. } } }` aborted `double free` on every
+                    // compiled surface, and the concrete `impl G1[String]` joined
+                    // it once its `self` kept its args. A callee whose arms bind
+                    // VIEWS leaves the payload with the caller, and keeps it.
+                    let arm_takes_interior =
+                        matches!(self_mode, Some((crate::ast::SelfParam::Owned, _)))
+                            && self
+                                .find_impl_method_ast(&type_name, method)
+                                .is_some_and(|f| {
+                                    crate::ast::fn_binds_self_part_out(f)
+                                        || (crate::ast::fn_matches_on_bare_self(f)
+                                            && !(self
+                                                .owned_enum_receiver_arms_bind_views(&type_name)
+                                                && crate::ast::fn_bare_self_arms_bind_views(
+                                                    f,
+                                                    self.program_items(),
+                                                )))
+                                });
                     if let Some(inst) = recv_inst.clone() {
                         let inst = self.subst_monomorph_type_params(&inst);
                         for (enum_name, variant, payload_te, box_field, multi_field) in
@@ -11486,7 +11542,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             // B-2026-09-20-55 — see the `functions.rs` sibling: the flag
                             // marks a multi-field ARM, never an ownership answer, and the
                             // interior of a generic multi-field field is owned by nobody.
-                            let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
+                            let inner = if arm_takes_interior {
+                                None
+                            } else {
+                                self.enum_boxed_payload_interior_drop(&payload_te, true)
+                            };
                             self.track_boxed_enum_var_with_inner_drop_for_payload(
                                 "__urecv_drop_tmp",
                                 slot,

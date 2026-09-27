@@ -4753,6 +4753,80 @@ impl<'ctx> super::Codegen<'ctx> {
         self.module.get_function(&mangled)
     }
 
+    /// B-2026-09-17-13 — compile a method of a NON-generic impl block, under
+    /// the substitution its target spells out when that target is a GENERIC
+    /// user enum at concrete args (`impl G1[String]` binds `T = String`).
+    ///
+    /// Such a method is compiled once, against the erased enum, and nothing
+    /// told its body what `T` is. A payload binding in `match self { G1.Y(v)
+    /// => .. }` therefore lowered to the erased one-word area (`alloca i64`):
+    /// a heap-boxed payload read as its POINTER (`mx 94057656956400` where
+    /// `--interp` printed the String), a method returning it failed module
+    /// verification (`ret i64 0` against `{ ptr, i64, i64 }`), and a `Drop`
+    /// payload's body never ran. The `impl[T] G1[T]` spelling was right all
+    /// along because its monomorph runs under exactly this substitution, which
+    /// is what `record_mono_generic_enum_payload_types` reads to type and
+    /// debox the binding. Installing it here makes the concrete block the
+    /// monomorph it already is, rather than a second route to the same body.
+    ///
+    /// Only the substitution axes are swapped: this is an ordinary
+    /// `compile_function`, which resets its own per-function state. `Option`
+    /// and `Result` keep their seeded layouts and are left alone.
+    pub(super) fn compile_concrete_impl_method(
+        &mut self,
+        synth: &Function,
+        type_name: &str,
+        target_type: &TypeExpr,
+    ) -> Result<(), String> {
+        let subst_te: Vec<(String, TypeExpr)> = match &target_type.kind {
+            crate::ast::TypeKind::Path(p) if !matches!(type_name, "Option" | "Result") => {
+                let args: Vec<TypeExpr> = p
+                    .generic_args
+                    .iter()
+                    .flatten()
+                    .filter_map(|a| match a {
+                        crate::ast::GenericArg::Type(t) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let params = self.enum_generic_param_names(type_name);
+                if params.is_empty() || params.len() != args.len() {
+                    Vec::new()
+                } else {
+                    params.into_iter().zip(args).collect()
+                }
+            }
+            _ => Vec::new(),
+        };
+        if subst_te.is_empty() {
+            return self.compile_function(synth);
+        }
+        let mut axes = MonoTypeAxes::default();
+        for (param, te) in &subst_te {
+            axes.subst
+                .insert(param.clone(), self.llvm_type_for_type_expr(te));
+            axes.subst_names
+                .insert(param.clone(), Self::mangled_type_name(te));
+            axes.subst_type_exprs.insert(param.clone(), te.clone());
+            axes.subst_call_te.insert(param.clone(), te.clone());
+        }
+        let saved_subst = std::mem::replace(&mut self.mono_state.type_subst, axes.subst);
+        let saved_names =
+            std::mem::replace(&mut self.mono_state.type_subst_names, axes.subst_names);
+        let saved_type_exprs = std::mem::replace(
+            &mut self.mono_state.type_subst_type_exprs,
+            axes.subst_type_exprs,
+        );
+        let saved_call_te =
+            std::mem::replace(&mut self.mono_state.type_subst_call_te, axes.subst_call_te);
+        let result = self.compile_function(synth);
+        self.mono_state.type_subst = saved_subst;
+        self.mono_state.type_subst_names = saved_names;
+        self.mono_state.type_subst_type_exprs = saved_type_exprs;
+        self.mono_state.type_subst_call_te = saved_call_te;
+        result
+    }
+
     /// Generate (declare + compile) a per-layout monomorph of a *non-generic*
     /// function under `mangled`, with `layout_subst` active so its `Vec[E]`
     /// params lower SoA against the caller's argument layout (slice 2) and
