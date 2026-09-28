@@ -5869,7 +5869,8 @@ impl<'a> super::Interpreter<'a> {
     /// has no `Drop` of its own and its fields run user bodies. The callee
     /// adopts the fields' bodies per path and the caller stands its walk down
     /// on every path, a named, fresh or projected argument alike. A struct
-    /// holding a `shared` field is left out, as codegen's forwarded arm is.
+    /// holding a `shared` field qualifies too (B-2026-09-28-41): codegen's
+    /// forwarded arm now runs the bodies beside its per-path memory drop.
     fn cond_store_field_bodies_adopted(
         &self,
         f: &crate::ast::Function,
@@ -5883,7 +5884,6 @@ impl<'a> super::Interpreter<'a> {
                 .struct_info
                 .get(tn)
                 .is_some_and(|si| !si.is_shared && si.generic_params.is_empty())
-            && !self.struct_carries_shared_field(tn, &mut Vec::new())
             && self.type_name_runs_user_drop(tn, &mut Vec::new())
             && crate::ast::fn_conditionally_stores_param(f, i)
             && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)

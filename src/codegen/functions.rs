@@ -4208,8 +4208,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                         i - recv_offset,
                                     )
                                 {
-                                    if let Some(full) =
-                                        self.emit_vec_elem_struct_with_shared_drop_fn(struct_name)
+                                    if let Some(full) = self
+                                        .emit_forwarded_struct_bodies_then_full_drop_fn(struct_name)
                                     {
                                         self.track_user_drop_var_with_fn(
                                             struct_name,

@@ -12093,6 +12093,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     .then_some(false);
             }
             if !own_drop {
+                // B-2026-09-28-41 — a forwarded struct owning a `shared` field,
+                // stored on some paths: the prologue (B-2026-09-25-37's arm)
+                // takes its memory and bodies per path, so both leave the
+                // local. Keeping them double-freed the leaf on either path.
+                if self.cond_store_dropless_memory_moves_to_callee(callee_name, arg_index) {
+                    return Some(true);
+                }
                 // B-2026-09-28-20 — a field-bodies struct the prologue adopts
                 // per path when stored on some paths: bodies only.
                 return self

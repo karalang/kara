@@ -5847,6 +5847,48 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(drop_fn)
     }
 
+    /// B-2026-09-28-41 — the per-path drop a callee registers for a forwarded
+    /// struct with no `Drop` of its own that owns a `shared` field and is
+    /// stored on some paths only (B-2026-09-25-37's arm): the fields' user
+    /// bodies first, so a body still reads its own buffers, then
+    /// [`Self::emit_vec_elem_struct_with_shared_drop_fn`]'s combined value
+    /// drop. That combined drop frees memory and runs no body, so on the path
+    /// that did not store `struct Z { d: D, h: N }` nobody ran `drop D`. A
+    /// struct whose fields run no user body gets the combined drop unchanged.
+    pub(super) fn emit_forwarded_struct_bodies_then_full_drop_fn(
+        &mut self,
+        struct_name: &str,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let full = self.emit_vec_elem_struct_with_shared_drop_fn(struct_name)?;
+        if !self.type_runs_user_drop(struct_name, &mut Vec::new()) {
+            return Some(full);
+        }
+        let Some(bodies) = self.emit_struct_user_drop_bodies_only_fn(struct_name) else {
+            return Some(full);
+        };
+        let fn_name = format!("__karac_bodies_then_full_drop_{struct_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let drop_fn = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let p = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        self.builder.build_call(bodies, &[p.into()], "").unwrap();
+        self.builder.build_call(full, &[p.into()], "").unwrap();
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(drop_fn)
+    }
+
     /// [`Self::emit_vec_elem_boxed_enum_drop_fn`] for any element type,
     /// `None` unless it is a user enum whose instantiation boxes a payload.
     pub(super) fn vec_elem_boxed_enum_drop_for_te(
