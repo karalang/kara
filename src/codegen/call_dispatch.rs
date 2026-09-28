@@ -2285,8 +2285,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // bare shared param does NOT consume — it inc/decs — so queue the
             // caller-side dec here. `fresh_arg_bare_shared_heap_type` resolves the
             // box's heap layout from the producing fn's return type (or a variant
-            // ctor) and self-excludes a `g(make())` passthrough chain, so the box
-            // is dec'd exactly once. (Not routed through `materialize_owned_temp`:
+            // ctor); each link of a `g(make())` chain owns its own reference
+            // (B-2026-09-28-54), so each is dec'd once. (Not routed through `materialize_owned_temp`:
             // a bare shared call result carries no `owned_temp_drops` entry — that
             // table only records `Type::Shared`, which a user `shared enum` result
             // is not — so the hint-driven shared arm there never fires for it.)
@@ -4975,31 +4975,34 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         expr: &Expr,
     ) -> Option<inkwell::types::StructType<'ctx>> {
+        // B-2026-09-28-54 — a `shared` struct LITERAL (`nn(N { v: 1 })`) is a
+        // fresh box exactly as `nn(mkn(1))` is, and nothing else holds its
+        // count, so the caller owns one rc-dec. It was answered `None` (the
+        // match below reads calls only), which left the box unreleased: `N`'s
+        // `Drop` body ran on no surface and the box leaked.
+        if let ExprKind::StructLiteral { path, .. } = &expr.kind {
+            return path
+                .last()
+                .and_then(|n| self.type_decls.shared_types.get(n.as_str()))
+                .map(|i| i.heap_type);
+        }
         if !self.expr_yields_fresh_owned_temp(expr) {
             return None;
         }
-        let ExprKind::Call { callee, args, .. } = &expr.kind else {
+        let ExprKind::Call { callee, .. } = &expr.kind else {
             return None;
         };
-        // The self-exclusion below is a passthrough-chain guard for a
-        // FUNCTION call `g(make())`: g may forward make()'s box, so the box is
-        // dec'd once at the outer link, not here. A VARIANT CONSTRUCTOR is not
-        // a passthrough — `Node(inner)` MOVES `inner` into its own payload and
-        // its recursive `__karac_rc_drop` frees the payload, so the outer temp
-        // always needs its own caller-side dec regardless of whether `inner` is
-        // itself a fresh shared temp. Applying the guard to a constructor made
-        // the drop TOGGLE with nesting depth: `fresh_arg_..` flipped Some/None
-        // each level, so odd-depth `Node(Node(…))` args registered no drop and
-        // leaked the whole RC chain while even depths were clean
-        // (B-2026-07-12-25). Skip the guard for a variant constructor.
-        let is_variant_ctor = self.enum_name_of_expr(expr).is_some();
-        if !is_variant_ctor
-            && args
-                .iter()
-                .any(|a| self.fresh_arg_bare_shared_heap_type(&a.value).is_some())
-        {
-            return None;
-        }
+        // B-2026-09-28-54 — no passthrough-chain exclusion. This answered
+        // `None` for a call whose own argument was a fresh shared temp, on the
+        // belief that `g(make())` forwards make()'s box and one release at the
+        // outer link covers both. It does not: a callee returning its param
+        // (`fn idn(n: N) -> N { n }`) incs on the move out, so the result
+        // carries its OWN reference beside the argument's, and both temps owe
+        // a release. `nn(idn(mkn(6)))` ran `N`'s `Drop` body on no compiled
+        // surface and leaked the box; `bump(mkn(5))`, a callee that builds a
+        // new value, leaked its result the same way. B-2026-07-12-25 had
+        // already exempted variant constructors, whose payload move is the
+        // same argument in another form.
         let type_name = match &callee.kind {
             ExprKind::Identifier(n) => self
                 .fn_sig
@@ -10610,7 +10613,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         // ownership argument is unchanged: the callee entry-copies a
                         // copy-supported struct, making this caller temp an
                         // INDEPENDENT buffer that nothing else frees.
+                        // B-2026-09-28-54 — or a `shared` field, whose rc-dec
+                        // is the only thing that runs its `Drop` body: a struct
+                        // whose ONLY droppable part is a shared handle
+                        // (`yn(mky(2))`, `struct Y { h: N, k: i64 }`) has no
+                        // heap field and no bodies walker, so it registered
+                        // nothing, ran `N`'s body on no surface and leaked the
+                        // box. The struct-literal arm already releases it.
                         let needs_memory_drop = self.aggregate_has_heap_field(agg_ty)
+                            || self.struct_owns_shared_field(&ret_ty_name, &mut Vec::new())
                             || (self.aggregate_param_copy_supported_struct(
                                 &ret_ty_name,
                                 &mut Vec::new(),
@@ -17461,6 +17472,18 @@ impl<'ctx> super::Codegen<'ctx> {
             if self.optres_arg_is_unowned_temp(arg_expr) {
                 self.track_inline_option_payload_var("__refarg_optres_tmp", slot, param_te);
                 self.track_inline_result_payload_var("__refarg_optres_tmp", slot, param_te);
+                return;
+            }
+        }
+        // B-2026-09-28-54 — a fresh `shared` handle (`rq(N { v: 3 })`,
+        // `rq(mkn(4))`) lent to a `ref` param: the callee borrows it, so the
+        // caller still owns the temp's one reference, and nothing released it.
+        // `N`'s `Drop` body ran on no compiled surface and the box leaked,
+        // while `--interp` released it at the statement's end. The statement
+        // drain fires this name there.
+        if val.is_pointer_value() {
+            if let Some(heap_type) = self.fresh_arg_bare_shared_heap_type(arg_expr) {
+                self.track_rc_var("__refarg_shared_tmp", val.into_pointer_value(), heap_type);
                 return;
             }
         }

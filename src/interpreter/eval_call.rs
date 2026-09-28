@@ -4900,6 +4900,32 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
             }
+            // B-2026-09-28-54 — a fresh bare `shared` handle passed as an
+            // argument, a struct LITERAL (`nn(N { v: 1 })`) or a call's result
+            // (`nn(mkn(2))`), is released by its REFCOUNT at the end of the
+            // statement, whatever the callee did with it. A callee that
+            // returned or stored the handle leaves another holder, so the
+            // release does not fire; one that dropped it on some path
+            // (`fn idc(n: N, c: bool) -> N { if c { n } else { mkn(0) } }`)
+            // leaves this temp the last holder, and the body runs here. The
+            // `callee_owns_arg_beyond_call` stand-down below answers that from
+            // the callee's SHAPE, and skipped `idc(mkn(4), false)`'s `dN4`
+            // where every compiled surface ran it. Before this fix the literal
+            // ran no body on any surface and the call result ran it
+            // unconditionally at the call's return.
+            if let Some(v @ Value::SharedStruct(_)) = arg_vals.get(i) {
+                let fresh = match &arg.value.kind {
+                    ExprKind::StructLiteral { path, .. } => path
+                        .last()
+                        .and_then(|n| self.find_struct_def(n))
+                        .is_some_and(|d| d.is_shared),
+                    _ => self.fresh_temp_arg_type_name(&arg.value).is_some(),
+                };
+                if fresh {
+                    self.defer_fresh_shared_arg_release(v);
+                    continue;
+                }
+            }
             let variant = match arg_vals.get(i) {
                 Some(Value::EnumVariant { variant, .. }) => Some(variant.as_str()),
                 _ => None,
@@ -5100,6 +5126,17 @@ impl<'a> super::Interpreter<'a> {
                 .or_else(|| self.owned_drop_projection_arg_type_name(&arg.value));
             let Some(tn) = type_name else { continue };
             let Some(v) = arg_vals.get(i) else { continue };
+            // B-2026-09-28-54 — a bare `shared` value a CALL produced
+            // (`nq(mkn(2))`) is the literal above by another spelling: one
+            // refcount release, at the end of the statement where codegen's
+            // `__owned_arg_tmp` dies (`q2 2 y dN2`), and only when nothing else
+            // holds the handle. The unconditional body run below fired it at the
+            // call's return instead, and would fire it again for a callee that
+            // kept the handle.
+            if matches!(v, Value::SharedStruct(_)) {
+                self.defer_fresh_shared_arg_release(v);
+                continue;
+            }
             // B-2026-08-01-13 (c1/c5) — a fresh USER-enum arg's payload
             // bodies: own body first (below, when the enum declares Drop),
             // then the declared-type payload walk — the caller-side single
@@ -5225,15 +5262,13 @@ impl<'a> super::Interpreter<'a> {
             // temp dies, at the end of the statement (`h.m(mkz(1))` prints
             // `m1` before `dN1`), so it is deferred to the read level. A struct
             // whose ONLY droppable part is shared fields is released there too
-            // when it is a struct LITERAL (`yn(Y { h: N { v: 4 }, k: 4 })`),
-            // but when a CALL produced it (`yn(mky(2))`) the body runs on NO
-            // surface today (B-2026-09-28-54); `value_runs_user_drop` answers
-            // false for exactly that shape, and firing it here alone would
-            // trade an agreed loss for a divergence.
-            if matches!(v, super::value::Value::Struct { .. })
-                && (self.value_runs_user_drop(v)
-                    || matches!(arg.value.kind, ExprKind::StructLiteral { .. }))
-            {
+            // whatever produced it: a struct LITERAL (`yn(Y { h: N { v: 4 },
+            // k: 4 })`) always was, and a CALL (`yn(mky(2))`) is since
+            // B-2026-09-28-54, which gave codegen's fn-call arm the memory drop
+            // whose rc-dec runs the body. Before that the body ran on no
+            // surface, so this walk declined the call shape to keep the two
+            // backends agreeing.
+            if matches!(v, super::value::Value::Struct { .. }) {
                 if self.program.drop_method_keys.contains_key(&tn) {
                     self.run_value_held_shared_user_drops(v);
                 } else {
@@ -5243,6 +5278,18 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
             }
+        }
+    }
+
+    /// B-2026-09-28-54 — release a fresh `shared` argument handle where the
+    /// caller's temporary dies: at the end of the enclosing statement when one
+    /// is being read (the holder list [`Self::end_freshtemp_reads`] drains), at
+    /// once otherwise. The release is refcount-gated either way, so a handle
+    /// the callee stored or handed back keeps its body for its new owner.
+    fn defer_fresh_shared_arg_release(&mut self, v: &Value) {
+        match self.freshtemp_read_levels.last_mut() {
+            Some(level) => level.shared_holders.push(v.clone()),
+            None => self.run_value_held_shared_user_drops(v),
         }
     }
 

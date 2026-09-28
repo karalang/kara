@@ -2432,6 +2432,26 @@ impl<'ctx> super::Codegen<'ctx> {
             if is_fresh_string_temp || is_fresh_vec_temp_for_owned_param {
                 self.materialize_owned_temp(val, arg_key);
             }
+            // B-2026-09-28-54 — a fresh `shared` handle passed to a CONCRETE
+            // by-value `shared` param of a generic callee (`gn(0, mkn(5))` over
+            // `fn gn[T](t: T, n: N)`): the monomorph's param inc/decs like any
+            // other, so the caller still owns the temp's reference. This path
+            // never took the caller-side release `compile_call` gives the same
+            // argument, so `N`'s `Drop` body ran on no compiled surface and the
+            // box leaked. A type-param or `ref` spelling is not a bare path
+            // naming a shared type, so it stays as it was.
+            let param_is_concrete_shared = matches!(
+                generic_fn.params.get(i).map(|p| &p.ty.kind),
+                Some(TypeKind::Path(p))
+                    if p.segments.len() == 1
+                        && p.generic_args.is_none()
+                        && self.type_decls.shared_types.contains_key(p.segments[0].as_str())
+            );
+            if param_is_concrete_shared && val.is_pointer_value() {
+                if let Some(heap_type) = self.fresh_arg_bare_shared_heap_type(&a.value) {
+                    self.track_rc_var("__owned_arg_tmp", val.into_pointer_value(), heap_type);
+                }
+            }
             // B-2026-09-16-10 — the CALLER's half of the box hand-off that
             // `compile_function`'s prologue already performs the callee's half
             // of, and which this path never performed at all.

@@ -13265,7 +13265,15 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Some(&self.drop_rc.stmt_end_arg_memory_slots)
         };
-        let due: Vec<(PointerValue<'ctx>, FunctionValue<'ctx>, bool)> = {
+        // B-2026-09-28-54 — `None` in the fn slot marks an RC release of a
+        // fresh `shared` argument handle, whose heap type rides in the last.
+        #[allow(clippy::type_complexity)]
+        let due: Vec<(
+            PointerValue<'ctx>,
+            Option<FunctionValue<'ctx>>,
+            bool,
+            Option<StructType<'ctx>>,
+        )> = {
             let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() else {
                 return;
             };
@@ -13419,7 +13427,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             && (binding_name == "__freshtemp_enum_scrut"
                                 || binding_name == "__freshtemp_struct_scrut")) =>
                     {
-                        fired.push((binding_ptr, drop_fn, false));
+                        fired.push((binding_ptr, Some(drop_fn), false, None));
                     }
                     // B-2026-09-28-55 — a fresh argument temp's MEMORY, for
                     // the struct that carries no `Drop` of its own (its own
@@ -13437,7 +13445,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         struct_alloca,
                         drop_fn,
                     } if stmt_end_slots.is_some_and(|s| s.contains(&struct_alloca)) => {
-                        fired.push((struct_alloca, drop_fn, true));
+                        fired.push((struct_alloca, Some(drop_fn), true, None));
+                    }
+                    // B-2026-09-28-54 — a fresh `shared` ARGUMENT handle
+                    // (`nq(N { v: 1 })`, `rq(mkn(4))`): the caller owns one
+                    // release and the temp dies with its statement, as it does
+                    // under `--interp`. On the scope frame it ran at the
+                    // enclosing block's exit, after every later statement.
+                    CleanupAction::RcDec {
+                        ref name,
+                        ptr,
+                        heap_type,
+                    } if stmt_end_slots.is_some()
+                        && (name == "__owned_arg_tmp" || name == "__refarg_shared_tmp") =>
+                    {
+                        fired.push((ptr, None, false, Some(heap_type)));
                     }
                     other => frame.push(other),
                 }
@@ -13447,13 +13469,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // LIFO — the last-materialized temp's body runs first, matching the
         // one-shot discard frame's drain order. A temp's memory was pushed
         // before its bodies, so it drains after them here too.
-        for (ptr, drop_fn, memory) in due.iter().rev() {
-            if *memory {
-                self.emit_struct_drop_call_guarded(*drop_fn, *ptr);
-            } else {
-                self.builder
-                    .build_call(*drop_fn, &[(*ptr).into()], "")
-                    .unwrap();
+        for (ptr, drop_fn, memory, heap_type) in due.iter().rev() {
+            match (drop_fn, heap_type) {
+                (Some(drop_fn), _) if *memory => {
+                    self.emit_struct_drop_call_guarded(*drop_fn, *ptr);
+                }
+                (Some(drop_fn), _) => {
+                    self.builder
+                        .build_call(*drop_fn, &[(*ptr).into()], "")
+                        .unwrap();
+                }
+                (None, Some(heap_type)) => self.emit_refcount_dec_by_type(*heap_type, *ptr),
+                (None, None) => {}
             }
         }
     }

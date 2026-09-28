@@ -8696,8 +8696,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // A fresh bare-`shared` (RC-box) call / variant-ctor result
                     // passed by value: the callee inc/decs net-zero, so the caller
                     // still owns the temp's +1 and must release it — the bare-shared
-                    // sibling of the arm above (`fresh_arg_bare_shared_heap_type`
-                    // self-excludes a `g(make())` passthrough chain).
+                    // sibling of the arm above (`fresh_arg_bare_shared_heap_type`;
+                    // each link of a `g(make())` chain owns its own reference).
                     if val.is_pointer_value() {
                         if let Some(heap_type) = self.fresh_arg_bare_shared_heap_type(&a.value) {
                             self.track_rc_var(

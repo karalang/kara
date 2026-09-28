@@ -1,0 +1,70 @@
+//! B-2026-09-28-54 — a fresh `shared` argument (a struct literal, a call's
+//! result, or a struct whose only droppable part is a `shared` field) is
+//! released once, at the end of its statement, on every backend.
+
+use super::*;
+
+/// B-2026-09-28-54 — `nn(N { v: 1 })` and `yn(mky(2))` ran no `Drop` body
+/// on any surface and leaked compiled. Codegen now releases a fresh shared
+/// literal argument, a call-built struct's shared field, a handle lent to a
+/// `ref` param and one passed to a generic callee, at the statement's end;
+/// and each link of a passthrough chain (`nn(idn(mkn(18)))`) owns its own
+/// reference. The interpreter releases the handle by refcount at the same
+/// point, so a callee that dropped it on one path (`idc(mkn(21), false)`)
+/// runs its body and one that stored it (`put`) does not.
+#[test]
+fn asan_fresh_shared_arg_released_once_at_statement_end() {
+    assert_clean_asan_run_min_allocs(
+        r#"shared struct N { v: i64 }
+impl Drop for N { fn drop(mut ref self) { println(f"dN{self.v}") } }
+struct Y { h: N, k: i64 }
+fn mkn(n: i64) -> N { N { v: n } }
+fn mky(n: i64) -> Y { Y { h: N { v: n }, k: n } }
+fn nn(n: N) { println(f"n{n.v}"); }
+fn nq(n: N) -> i64 { n.v }
+fn rq(n: ref N) -> i64 { n.v }
+fn yn(y: Y) -> i64 { y.k }
+fn keepn(y: Y) -> N { y.h }
+fn idn(n: N) -> N { n }
+fn idc(n: N, c: bool) -> N { if c { n } else { mkn(0) } }
+fn bump(n: N) -> N { N { v: n.v + 100 } }
+fn two(a: N, b: N) -> i64 { a.v + b.v }
+fn put(vs: mut ref Vec[N], n: N) { vs.push(n); }
+fn gn[T](t: T, n: N) -> i64 { n.v }
+struct H { c: i64 }
+impl H {
+    fn m(ref self, n: N) -> i64 { n.v + self.c }
+    fn r(ref self, n: ref N) -> i64 { n.v + self.c }
+    fn mk(n: N) -> i64 { n.v }
+}
+fn main() {
+    nn(N { v: 1 }); println("a");
+    println(f"b{yn(mky(2))}");
+    if yn(mky(3)) > 0 { println("c") }
+    let n4 = keepn(mky(4)); println(f"d{n4.v}");
+    let e = nq(N { v: 5 }) + nq(mkn(6)); println(f"e{e}");
+    let f = rq(N { v: 7 }) + rq(mkn(8)); println(f"f{f}");
+    println(f"g{two(N { v: 9 }, mkn(10))}");
+    let mut vs: Vec[N] = Vec.new();
+    put(mut vs, N { v: 11 }); put(mut vs, mkn(12)); println(f"h{vs.len()}");
+    let h = H { c: 1 };
+    println(f"i{h.m(N { v: 13 })}{h.r(mkn(14))}{H.mk(N { v: 15 })}");
+    println(f"j{gn(0, mkn(16))}{gn(0, N { v: 17 })}");
+    nn(idn(mkn(18))); nn(idn(N { v: 19 })); println("k");
+    nn(idc(mkn(20), true)); nn(idc(mkn(21), false)); println("l");
+    nn(bump(mkn(22))); nn(idn(idn(idn(mkn(23))))); println("m");
+    let x = idn(idn(N { v: 24 })); println(f"x{x.v}");
+    for i in 0..2 { nn(N { v: 30 + i }); }
+    println("end");
+}"#,
+        &[
+            "n1", "dN1", "a", "b2", "dN2", "c", "dN3", "d4", "dN4", "dN6", "dN5", "e11", "dN8",
+            "dN7", "f15", "g19", "dN10", "dN9", "h2", "i141515", "dN15", "dN14", "dN13", "j1617",
+            "dN17", "dN16", "n18", "dN18", "n19", "dN19", "k", "n20", "dN20", "n0", "dN0", "dN21",
+            "l", "n122", "dN122", "dN22", "n23", "dN23", "m", "x24", "dN24", "n30", "dN30", "n31",
+            "dN31", "end", "dN11", "dN12",
+        ],
+        "asan_fresh_shared_arg_released_once_at_statement_end",
+        20,
+    );
+}
