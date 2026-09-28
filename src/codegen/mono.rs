@@ -2563,11 +2563,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // definitely lost, measured, on a cell that is clean both before
             // this arm and after this guard. The disarm's whole premise is that
             // some destination took the value over.
-            let param_box_handed_back =
-                !self.discarded_stmt_value_span.is_some_and(|(off, len)| {
-                    let s = a.value.span.offset;
-                    s >= off && s < off.saturating_add(len)
-                }) && generic_fn.params.get(i).is_some_and(|p| {
+            let param_box_handed_back = !self.in_discarded_stmt_value(a.value.span.offset)
+                && generic_fn.params.get(i).is_some_and(|p| {
                     if matches!(p.ty.kind, TypeKind::Ref { .. } | TypeKind::MutRef { .. }) {
                         return false;
                     }
@@ -2736,10 +2733,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // caller's binding is its only owner and standing it down strands
             // it. The guard is the same window.
             let param_box_maybe_handed_back = !param_box_handed_back
-                && !self.discarded_stmt_value_span.is_some_and(|(off, len)| {
-                    let s = a.value.span.offset;
-                    s >= off && s < off.saturating_add(len)
-                })
+                && !self.in_discarded_stmt_value(a.value.span.offset)
                 && generic_fn.params.get(i).is_some_and(|p| {
                     if matches!(p.ty.kind, TypeKind::Ref { .. } | TypeKind::MutRef { .. }) {
                         return false;
@@ -2747,10 +2741,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     if !matches!(p.pattern.kind, PatternKind::Binding(_)) {
                         return false;
                     }
-                    if !crate::ast::fn_returns_param(&generic_fn, i) {
+                    // B-2026-09-27-123 — an owned RECEIVER is param 0 of the
+                    // desugared method, but its hand-back is spelled `return
+                    // self` (a `SelfValue`, which `fn_returns_param` does not
+                    // read as the `self` binding), and its declared `G[T]`
+                    // resolves through the receiver's own recorded
+                    // instantiation rather than the call's frame. Asked of any
+                    // method returning `Self` or its own type: the check below
+                    // is the dynamic box-word compare, which cannot disarm a
+                    // box the return does not carry.
+                    let is_recv = recv_offset
+                        && i == 0
+                        && matches!(&p.pattern.kind, PatternKind::Binding(n) if n == "self");
+                    let returns = if is_recv {
+                        let ty_name = match &p.ty.kind {
+                            TypeKind::Path(tp) => tp.segments.last().cloned().unwrap_or_default(),
+                            _ => String::new(),
+                        };
+                        super::functions::returns_self_or_type(
+                            generic_fn.return_type.as_ref(),
+                            &ty_name,
+                        )
+                    } else {
+                        crate::ast::fn_returns_param(&generic_fn, i)
+                    };
+                    if !returns {
                         return false;
                     }
-                    let inst = self.callee_param_te_for_call(&p.ty, call_span);
+                    let inst = if is_recv {
+                        self.enum_inst_type_of_expr(&a.value)
+                            .unwrap_or_else(|| self.callee_param_te_for_call(&p.ty, call_span))
+                    } else {
+                        self.callee_param_te_for_call(&p.ty, call_span)
+                    };
                     !self.user_enum_boxed_payload_variants(&inst).is_empty()
                 });
             if param_box_maybe_handed_back {
@@ -2766,6 +2789,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .contains(owner.as_str())
                     {
                         maybe_handed_back_args.push(owner);
+                    } else if n.starts_with("__urecv_tmp_") {
+                        // B-2026-09-27-123 — a fresh-temp RECEIVER
+                        // (`G.X(..).id()`) is materialized into a synth slot
+                        // whose box drop is registered under another name, so
+                        // it is disarmed by SLOT, as a fresh-temp argument is.
+                        if let Some(v) = self.variables.get(n.as_str()).copied() {
+                            maybe_handed_back_slots.push((v.ptr, v.ty));
+                        }
                     }
                 }
             }

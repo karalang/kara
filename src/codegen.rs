@@ -1900,7 +1900,11 @@ pub(super) struct Codegen<'ctx> {
     /// argument disarms are keyed on the CALLEE taking the value over, which is
     /// true whether or not the caller keeps the result, so none of them wants
     /// this window.
-    pub(crate) discarded_stmt_value_span: Option<(usize, usize)>,
+    ///
+    /// B-2026-09-27-123 — a LIST of spans, not one: a discarded `if`, `match`
+    /// or loop throws away each arm's or body's TAIL, and nothing else under
+    /// it. See `Codegen::discarded_value_exprs`.
+    pub(crate) discarded_stmt_value_spans: Vec<(usize, usize)>,
     /// B-2026-08-28-44 — merge-point owner slots, keyed by the branch
     /// EXPRESSION's span (not the condition/scrutinee's), so a consuming
     /// destination takes the merged value over through the usual funnel and
@@ -6600,7 +6604,7 @@ impl<'ctx> Codegen<'ctx> {
             branch_arm_value_discarded: false,
             discarded_arm_tail_span: None,
             discarded_stmt_literal_span: None,
-            discarded_stmt_value_span: None,
+            discarded_stmt_value_spans: Vec::new(),
             branch_tail_owner_slots: std::collections::HashMap::new(),
             current_branch_expr_span: None,
             container_elem_struct_clone_slots: std::collections::HashMap::new(),

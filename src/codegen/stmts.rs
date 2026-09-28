@@ -13478,10 +13478,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // when it is an expression statement, and a `let` has a binding
                 // that owns the result outright. A block with no tail discards
                 // nothing, so the window stays closed.
-                let discarded_value = Self::discarded_value_expr(expr);
+                //
+                // B-2026-09-27-123 — and through a BRANCH or LOOP to each arm's
+                // or body's tail, for the same reason one construct out. A
+                // `while` written as a statement armed the window over its
+                // whole body, so `let d2 = idg(d)` inside it read as discarded
+                // and `d` kept a box `d2` also freed.
+                let mut discarded_values = Vec::new();
+                Self::discarded_value_exprs(expr, &mut discarded_values);
                 let saved_discarded_value = std::mem::replace(
-                    &mut self.discarded_stmt_value_span,
-                    discarded_value.map(|e| (e.span.offset, e.span.length)),
+                    &mut self.discarded_stmt_value_spans,
+                    discarded_values
+                        .iter()
+                        .map(|e| (e.span.offset, e.span.length))
+                        .collect(),
                 );
                 let prev_discard = if tail.is_some() || literal_tail.is_some() {
                     self.drop_rc
@@ -13492,7 +13502,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let val = self.compile_expr(expr);
                 self.drop_rc.discard_frame = prev_discard;
-                self.discarded_stmt_value_span = saved_discarded_value;
+                self.discarded_stmt_value_spans = saved_discarded_value;
                 self.discarded_stmt_literal_span = saved_discarded_stmt;
                 let val = val?;
                 // B-2026-08-28-53 — the argument/result boundary on this
@@ -27075,35 +27085,98 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// B-2026-09-17-7 — the expression whose VALUE a discarded statement
-    /// throws away, which is not always the statement's own expression.
+    /// B-2026-09-17-7 — the expressions whose VALUES a discarded statement
+    /// throws away, which are not always the statement's own expression.
     ///
-    /// `discarded_stmt_value_span` arms a window that two disarms read as
-    /// "nothing consumes this call's result", so it has to name the expression
-    /// that is actually unconsumed. Armed over a BLOCK's span it named far more
-    /// than that: `{ let a = …; let b = mid(a, true); match b { … } }` written
-    /// as a statement covered the inner call as well, whose result `b` owns
-    /// outright, and both disarms declined for every call in the block. The
-    /// measured cost was a use-after-free at the block's exit — `b`'s box freed
-    /// first, then `a`'s, the same pointer — on a cell whose flat twin (the
-    /// same statements without the braces) was clean.
+    /// `discarded_stmt_value_spans` arms a window that two disarms read as
+    /// "nothing consumes this call's result", so it has to name the
+    /// expressions that are actually unconsumed. Armed over a BLOCK's span it
+    /// named far more than that: `{ let a = …; let b = mid(a, true); match b {
+    /// … } }` written as a statement covered the inner call as well, whose
+    /// result `b` owns outright, and both disarms declined for every call in
+    /// the block. The measured cost was a use-after-free at the block's exit —
+    /// `b`'s box freed first, then `a`'s, the same pointer — on a cell whose
+    /// flat twin (the same statements without the braces) was clean.
     ///
     /// So follow a block to its tail, which is the only part of it whose value
-    /// is the block's value. A block with no tail discards nothing and returns
-    /// `None`, leaving the window closed. A branch or `match` is NOT followed,
-    /// for the reason its literal sibling above gives: each arm carries its own
-    /// window, armed by `compile_block_with_frame`.
-    fn discarded_value_expr(expr: &Expr) -> Option<&Expr> {
+    /// is the block's value. A block with no tail discards nothing.
+    ///
+    /// B-2026-09-27-123 — and follow a BRANCH or LOOP the same way: each arm's
+    /// tail, and each loop body's tail, is a value the statement throws away,
+    /// while the statements before a tail are not. Before this, an `if`,
+    /// `match`, `while`, `for` or `loop` statement named its WHOLE span, so
+    /// `let d2 = idg(d)` in any such body read as discarded and both hand-back
+    /// disarms declined: `d` and `d2` each freed the one box (a double free on
+    /// every compiled surface, and a crash at `-O2` for the free-fn spelling),
+    /// where the same two lines in a bare block were clean. A condition,
+    /// scrutinee or iterable is kept whole, as it was: whether a branch
+    /// consumes its scrutinee is a separate question this window never
+    /// answered.
+    fn discarded_value_exprs<'e>(expr: &'e Expr, out: &mut Vec<&'e Expr>) {
+        let block_tail = |block: &'e crate::ast::Block, out: &mut Vec<&'e Expr>| {
+            if let Some(tail) = block.final_expr.as_deref() {
+                Self::discarded_value_exprs(tail, out);
+            }
+        };
         match &expr.kind {
             ExprKind::Block(block)
             | ExprKind::Seq(block)
             | ExprKind::Unsafe(block)
-            | ExprKind::LabeledBlock { body: block, .. } => block
-                .final_expr
-                .as_deref()
-                .and_then(Self::discarded_value_expr),
-            _ => Some(expr),
+            | ExprKind::LabeledBlock { body: block, .. } => block_tail(block, out),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                out.push(condition);
+                block_tail(then_block, out);
+                if let Some(e) = else_branch {
+                    Self::discarded_value_exprs(e, out);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                out.push(value);
+                block_tail(then_block, out);
+                if let Some(e) = else_branch {
+                    Self::discarded_value_exprs(e, out);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                out.push(scrutinee);
+                for arm in arms {
+                    Self::discarded_value_exprs(&arm.body, out);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                out.push(condition);
+                block_tail(body, out);
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                out.push(value);
+                block_tail(body, out);
+            }
+            ExprKind::For { iterable, body, .. } => {
+                out.push(iterable);
+                block_tail(body, out);
+            }
+            ExprKind::Loop { body, .. } => block_tail(body, out),
+            _ => out.push(expr),
         }
+    }
+
+    /// Whether `offset` falls inside a value the current expression statement
+    /// discards — see `discarded_value_exprs`.
+    pub(super) fn in_discarded_stmt_value(&self, offset: usize) -> bool {
+        self.discarded_stmt_value_spans
+            .iter()
+            .any(|&(off, len)| offset >= off && offset < off.saturating_add(len))
     }
 
     /// Shared body of the two predicates above. `allow_movable_place` admits a
