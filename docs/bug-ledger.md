@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 537 |
-| miscompile | 532 |
+| miscompile | 533 |
 | leak | 466 |
 | double-free | 352 |
 | missing-feature | 213 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2310 |
-| interp | 667 |
+| codegen | 2311 |
+| interp | 668 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -418,6 +418,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-76 | 2026-09-28 | interp+codegen | low | REMAINDER OF B-2026-09-19-18: A DESTRUCTURED HOLDER OF A `shared enum` STILL RELEASES AT SCOPE EXIT COMPILED AND AT THE VIEWS' LAST USE UNDER `--interp`, and a plain holder of a `shared STRUCT` is left where it was: a struct FIELD holder still diverges (`--interp` at the holder's last use, compiled at scope exit), and a `Vec` or tuple holder releases at scope exit on every surface, against design.md's live-range rule | — |
 | B-2026-09-28-77 | 2026-09-28 | interp+codegen | medium | AN `Option` ARM THAT REBINDS ITS PAYLOAD INTO A LOCAL AND THEN PUSHES OR REBINDS IT AGAIN RUNS A `Drop` BODY TWICE -- `fn g(x: Option[S], v: mut ref Vec[S]) { match x { Some(y) => { let z = y; v.push(z) }, None => println("n") } }` prints `d2 n2 d1 d2 end` compiled (the named argument's body doubled) and `d1 d2 n2 d1 d2 end` under `--interp` (the temporary's doubled too) for `g(Some(mk(1)), mut v); let b = Some(mk(2)); g(b, mut v)`, owing `n2 d1 d2 end` | — |
 | B-2026-09-28-78 | 2026-09-28 | interp | medium | `--interp` RUNS A TEMPORARY `Option` / `Result` ARGUMENT'S `Drop` BODY TWICE WHEN A `ref self` METHOD'S ARM REBINDS THE PAYLOAD INTO A LOCAL -- `impl H { fn g(ref self, x: Option[S]) { match x { Some(y) => { let z = y; println(f"z{z.r.id}") }, None => println("n") }; println("post") } }` prints `z1 d1 post d1` for `h.g(Some(mk(1)))` against the compiled surfaces' `z1 post d1` | — |
+| B-2026-09-28-80 | 2026-09-28 | interp+codegen | high | A BY-VALUE PARAM HANDED TO A STORING FUNCTION FROM INSIDE A BRANCH LOSES ITS `Drop` BODY ON THE PATH THAT SKIPS THE CALL, ON EVERY SURFACE, AND A BOXED `Option` PAYLOAD CRASHES THE COMPILED ONES -- `fn csf(t: S, v: mut ref Vec[S], c: bool) { if c { skeep(t, v) } }` over `fn skeep(t: S, v: mut ref Vec[S]) { v.push(t) }` prints `n1 dS2 end` for `csf(mks(1), mut u, false); csf(mks(2), mut u, true)`, due `dS1 n1 dS2 end` | — |
 
 ### Relocated
 
