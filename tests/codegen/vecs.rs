@@ -277,17 +277,17 @@ fn e2e_declared_vec_enum_payload_runs_element_drop_bodies() {
     // the interpreter's enum-payload walk simply stopped at an enum
     // payload, where its struct / tuple / `Vec` / `Option` siblings
     // already ran the body countless-ly and agreed with this side. So the
-    // twin now prints `d2:9` too — BEFORE its `x`, where this side prints
-    // it after, which is the placement gap the four siblings also have
-    // (B-2026-09-19-18, with design.md `:866` putting the correct point at
-    // the live-range end, i.e. the interpreter's).
+    // twin now prints `d2:9` too. It printed it BEFORE its `x` and this side
+    // after, the placement gap the four siblings also had, until
+    // B-2026-09-19-18 moved this side to the live-range end (design.md
+    // `:866`); both now print it before `x`.
     //
     // `gensh` is the cell that must NOT move with it, and the reason this
     // expectation is worth reading beside the twin's: `enum G[T] { X(T), Y }`
     // at `T = SMono` is silent here, so the twin withholds the
     // own-generic-param exception from an enum payload rather than firing
     // a body this side does not.
-    assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  x\n  d2:9\ngenvec\n  d2:9\n  x\ngensh\n  x\nend\n");
+    assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  d2:9\n  x\ngenvec\n  d2:9\n  x\ngensh\n  x\nend\n");
 }
 
 /// B-2026-08-01-24 — a heap-owning `for`-loop STRUCT element pushed whole

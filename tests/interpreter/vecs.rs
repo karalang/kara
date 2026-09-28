@@ -2082,10 +2082,9 @@ fn test_nested_container_in_a_vec_field_runs_its_innermost_drop_bodies() {
 /// be an enum variant's payload at all, so the arm can only ever see the
 /// `shared` / `par` spelling the diagnostic itself prescribes.
 ///
-/// The `d2:9` lands BEFORE `x` here and after it on the compiled backends —
-/// one body either way. That placement gap is the four siblings' too, and is
-/// B-2026-09-19-18 rather than this cell's; design.md `:866` puts the correct
-/// firing point at the binding's live-range end, which is this side.
+/// The `d2:9` lands BEFORE `x` here, at the binding's live-range end design.md
+/// `:866` names; the compiled backends put it after `x` until B-2026-09-19-18
+/// moved them, and now agree.
 ///
 /// `gensh` is the cell that KEEPS the arm narrow and must not move with it.
 /// `enum G[T] { X(T), Y }` at `T = SMono` is silent on every compiled surface,

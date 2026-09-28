@@ -86,11 +86,12 @@ fn asan_declared_vec_enum_payload_elements_keep_one_owner() {
                 "  d2:9",
                 "  x",
                 "sharedec",
-                "  x",
                 // B-2026-09-17-19 — the shared enum payload's body now runs at
-                // the refcount's 0-transition. ASAN was already clean here and
-                // stays clean; only the line is new.
+                // the refcount's 0-transition. B-2026-09-19-18 — and at the
+                // holder's live-range end, before `x`, as `--interp` runs it.
+                // ASAN was clean at both placements; only the line moved.
                 "  d2:9",
+                "  x",
                 "genvec",
                 // B-2026-09-20-62 — the generic enum's `Vec` payload now runs
                 // its element's body on every surface, so this cell is an

@@ -1489,16 +1489,12 @@ fn e2e_shared_enum_ctor_named_source_runs_no_husk_drop_body() {
 /// where its struct / tuple / `Vec` / `Option` siblings already ran the
 /// body. So every cell below agrees with the twin ON THE COUNT.
 ///
-/// WHAT THIS PINS THAT THE TWIN CANNOT is the placement it still
-/// disagrees about, written out rather than left implicit. The four holder
-/// cells (`nested`, `par`, `owndrop`, `noheap`) print their body AFTER
-/// `mid` here and before it there — lexical scope exit against the
-/// binding's live-range end. That is B-2026-09-19-18, open, and design.md
-/// `:866` ("Destructor calls ... fire at each binding's LIVE-RANGE END")
-/// says the twin's placement is the correct one, so it is THIS
-/// expectation that should move when that row lands. `reclist`, `control`,
-/// `qvar` and `unitvar` are byte-identical to the twin and are not part of
-/// that trade.
+/// THE PLACEMENT NOW AGREES TOO. The four holder cells (`nested`, `par`,
+/// `owndrop`, `noheap`) printed their body AFTER `mid` here and before it
+/// there — lexical scope exit against the binding's live-range end — until
+/// B-2026-09-19-18 moved this side to the live-range end design.md `:866`
+/// ("Destructor calls ... fire at each binding's LIVE-RANGE END") names.
+/// The expectation is now byte-identical to the twin's.
 ///
 /// `par` is not decoration: `E_ENUM_NESTED_ENUM_PAYLOAD` names `shared`
 /// and `par` as the only two ways to write an enum inside an enum
@@ -1507,7 +1503,7 @@ fn e2e_shared_enum_ctor_named_source_runs_no_husk_drop_body() {
 ///
 /// The INTERPRETER twin is `tests/interpreter.rs`'s
 /// `test_shared_enum_in_plain_enum_payload_runs_its_drop_body`,
-/// byte-identical SOURCE and a deliberately different expectation.
+/// byte-identical source and expectation.
 #[test]
 fn e2e_shared_enum_in_plain_enum_payload_runs_its_drop_body() {
     let Some(out) = run_program(
@@ -1544,7 +1540,7 @@ fn main() {
     ) else {
         return;
     };
-    assert_eq!(out, "nested\n  mid\n  d2:9\n  out\npar\n  mid\n  d2:9\n  out\nowndrop\n  mid\n  dSdd\n  d2:9\n  out\nnoheap\n  mid\n  dZ4\n  out\nqvar\n  mid\n  out\nunitvar\n  mid\n  out\nreclist\n  d2:9\n  d2:9\n  mid\n  out\ncontrol\n  d2:9\n  mid\n  out\nend\n");
+    assert_eq!(out, "nested\n  d2:9\n  mid\n  out\npar\n  d2:9\n  mid\n  out\nowndrop\n  dSdd\n  d2:9\n  mid\n  out\nnoheap\n  dZ4\n  mid\n  out\nqvar\n  mid\n  out\nunitvar\n  mid\n  out\nreclist\n  d2:9\n  d2:9\n  mid\n  out\ncontrol\n  d2:9\n  mid\n  out\nend\n");
 }
 
 /// B-2026-09-17-19 — A `shared enum`'s VARIANT PAYLOAD RUNS ITS `Drop` BODY,

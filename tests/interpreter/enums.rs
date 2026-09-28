@@ -6014,13 +6014,10 @@ fn main() {
 /// payload-free variant of a payload-carrying shared enum, a payload-free
 /// holder, and a plain struct payload that was always right.
 ///
-/// THE CODEGEN TWIN IS NOT BYTE-IDENTICAL, deliberately, and that is the
-/// remaining half rather than a defect in either side. The four holder cells
-/// print their body BEFORE `mid` here and after it there: one body either way,
-/// at the binding's live-range end on this side and at lexical scope exit on
-/// that one. That is B-2026-09-19-18, which this row joins as a fourth
-/// spelling; design.md `:866` ("Destructor calls ... fire at each binding's
-/// LIVE-RANGE END") puts the correct point on this side.
+/// THE CODEGEN TWIN IS BYTE-IDENTICAL. Its four holder cells printed their
+/// body after `mid` (lexical scope exit) while this side printed it before
+/// (the binding's live-range end, which design.md `:866` names) until
+/// B-2026-09-19-18 moved the compiled side.
 #[test]
 fn test_shared_enum_in_plain_enum_payload_runs_its_drop_body() {
     let out = run(r#"struct R2 { s: String, t: String, u: String }

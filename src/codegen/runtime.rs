@@ -13711,7 +13711,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// [`UserDropKind`]'s doc-comment warns about, and it fails silently in
     /// the same way: both answers are still a legal SINGLE fire, so only the
     /// observable POSITION moves and no count-based test can see it.
-    pub(super) fn nll_fireable_binding<'a>(&self, a: &'a CleanupAction<'ctx>) -> Option<&'a str> {
+    pub(super) fn nll_fireable_binding(&self, a: &CleanupAction<'ctx>) -> Option<String> {
         match a {
             // B-2026-08-09-3 — the RC tier rides this channel via `RcDec`,
             // restricted to shared types carrying their OWN `impl Drop`...
@@ -13735,7 +13735,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // run at all.
                         || self.shared_enum_runs_payload_bodies(&n)
                 })
-                .then_some(name.as_str()),
+                .then(|| name.clone()),
             // B-2026-07-30-11 / B-2026-08-27-8 (container element bodies),
             // B-2026-07-31-5 (a value enum's own body) — see
             // `fire_due_user_drops`' doc for why each clause is admitted.
@@ -13758,9 +13758,90 @@ impl<'ctx> super::Codegen<'ctx> {
                     .enum_layouts
                     .get(type_name.as_str())
                     .is_some_and(|l| !l.is_shared))
-            .then_some(binding_name.as_str()),
+            .then(|| binding_name.clone()),
+            // B-2026-09-19-18 — a PLAIN holder of a Drop-relevant `shared`
+            // value: a struct field, a `Vec` element, an `Option` payload, an
+            // enum payload, a tuple element. See `nll_holder_binding`.
+            _ => self.nll_holder_binding(a),
+        }
+    }
+
+    /// B-2026-09-19-18 — the slot a holder release frees, for the four
+    /// alloca-keyed actions [`Self::nll_holder_binding`] admits.
+    fn nll_holder_slot(a: &CleanupAction<'ctx>) -> Option<PointerValue<'ctx>> {
+        match a {
+            CleanupAction::StructDrop { struct_alloca, .. } => Some(*struct_alloca),
+            CleanupAction::EnumDrop { enum_alloca, .. } => Some(*enum_alloca),
+            CleanupAction::FreeVecBuffer { vec_alloca, .. } => Some(*vec_alloca),
+            CleanupAction::RcDecOption { option_slot, .. } => Some(*option_slot),
             _ => None,
         }
+    }
+
+    /// B-2026-09-19-18 — the binding a holder's release belongs to, when that
+    /// release is observable: the action frees a named local's own slot, and
+    /// the local's type holds a `shared enum` whose 0-transition runs a user
+    /// body (see `shared_type_is_drop_relevant` for why enums only).
+    /// design.md § Drop ordering puts that release (an `Rc` decrement, named
+    /// there explicitly) at the binding's live-range end; these four actions
+    /// carry no binding name to key on, so each fired at lexical scope exit while
+    /// `--interp` fired it at last use, and a bare `shared` binding already
+    /// fired at last use (B-2026-09-17-19).
+    ///
+    /// Named by SLOT: the action is matched to the local whose current slot it
+    /// frees, so an action on a shadowed or temporary slot matches nothing and
+    /// stays at scope exit. The type is read from the map the action's own
+    /// kind registered, so a stale entry for another binding of the same name
+    /// is never consulted. A plain struct holder that also has its own
+    /// `UserDrop` is left to the B-2026-09-04-32 pairing, which already fires
+    /// its `StructDrop` beside that action. A holder a `let` pattern
+    /// destructures is declined too (`DropRc::nll_holder_destructured_slots`).
+    fn nll_holder_binding(&self, a: &CleanupAction<'ctx>) -> Option<String> {
+        let ptr = Self::nll_holder_slot(a)?;
+        if self.drop_rc.nll_holder_destructured_slots.contains(&ptr) {
+            return None;
+        }
+        let (name, _) = self.variables.iter().find(|(_, slot)| slot.ptr == ptr)?;
+        let vt = &self.var_types;
+        let holds = match a {
+            CleanupAction::FreeVecBuffer { .. } => vt
+                .var_elem_type_exprs
+                .get(name)
+                .is_some_and(|te| self.type_expr_holds_drop_relevant_shared(te, 1)),
+            CleanupAction::RcDecOption { .. } => vt
+                .var_option_payload_te
+                .get(name)
+                .is_some_and(|te| self.type_expr_holds_drop_relevant_shared(te, 1)),
+            CleanupAction::StructDrop { .. } => {
+                let paired = self.drop_rc.scope_cleanup_actions.iter().any(|f| {
+                    f.iter().any(|x| {
+                        matches!(x, CleanupAction::UserDrop { binding_ptr, .. } if *binding_ptr == ptr)
+                    })
+                });
+                !paired
+                    && match vt.var_type_names.get(name).map(String::as_str) {
+                        Some("Tuple") => vt.tuple_var_elem_tes.get(name).is_some_and(|tes| {
+                            tes.iter()
+                                .any(|te| self.type_expr_holds_drop_relevant_shared(te, 1))
+                        }),
+                        Some(tn) => {
+                            self.type_decls.struct_types.contains_key(tn)
+                                && !self.type_decls.shared_types.contains_key(tn)
+                                && self.type_name_holds_drop_relevant_shared(tn, 0)
+                        }
+                        None => false,
+                    }
+            }
+            CleanupAction::EnumDrop { .. } => vt.var_type_names.get(name).is_some_and(|tn| {
+                self.type_decls
+                    .enum_layouts
+                    .get(tn.as_str())
+                    .is_some_and(|l| !l.is_shared)
+                    && self.type_name_holds_drop_relevant_shared(tn, 0)
+            }),
+            _ => false,
+        };
+        holds.then(|| name.clone())
     }
 
     pub(super) fn fire_due_user_drops(
@@ -13912,7 +13993,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     .collect()
             }
         };
-        if due.is_empty() && paired.is_empty() {
+        // B-2026-09-19-18 — a PLAIN holder of a Drop-relevant `shared` value
+        // (a struct field, a `Vec` element, an `Option` / enum payload, a tuple
+        // element) released at its live-range end, as the bare `shared` binding
+        // already is. Reverse introduction order, like `due`.
+        let holders: Vec<CleanupAction<'ctx>> = self
+            .drop_rc
+            .scope_cleanup_actions
+            .last()
+            .map(|frame| {
+                frame
+                    .iter()
+                    .rev()
+                    .filter(|a| {
+                        self.nll_holder_binding(a).is_some_and(|n| {
+                            crate::interpreter::last_use_fires_at(last_use, n.as_str(), stmt_idx)
+                        })
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        if due.is_empty() && paired.is_empty() && holders.is_empty() {
             return;
         }
         // Fetched here rather than as an early-return guard on the whole
@@ -14043,6 +14145,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
             }
         }
+        // B-2026-09-19-18 — through the shared per-action emitter, with the
+        // record the `Rc` arm keeps, for the same two reasons: the scope-exit
+        // arm's guards apply to an early fire too, and a retired action the
+        // differential never saw would read as a MISSING drop.
+        let fired_holders: Vec<PointerValue<'ctx>> = match rc_ctx {
+            Some((fn_val, vec_ty, ptr_ty, i64_t)) => holders
+                .iter()
+                .filter_map(|action| {
+                    self.record_drop_obs(action, fn_val);
+                    self.emit_cleanup_action(action, fn_val, vec_ty, ptr_ty, i64_t);
+                    Self::nll_holder_slot(action)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
         // it is a dropped decrement, i.e. a leak.
         let fired_rc: Vec<(&str, PointerValue<'ctx>)> = due
             .iter()
@@ -14062,6 +14179,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     && !matches!(a, CleanupAction::StructDrop { struct_alloca, drop_fn }
                     if paired.iter().any(|d| matches!(d,
                         DueDrop::Struct { ptr, drop_fn: f } if ptr == struct_alloca && f == drop_fn)))
+                    // B-2026-09-19-18 — and each fired holder release.
+                    && !Self::nll_holder_slot(a).is_some_and(|p| fired_holders.contains(&p))
             });
         }
     }

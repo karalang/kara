@@ -2367,7 +2367,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // GENERATION, so the group swallows a firing point if it covers ANY
             // of them, not just the survivor's.
             self.nll_fireable_binding(a)
-                .and_then(|n| last_use.get(n))
+                .and_then(|n| last_use.get(n.as_str()))
                 .is_some_and(|points| points.iter().any(|lu| group.statement_indices.contains(lu)))
         })
     }
@@ -4310,6 +4310,27 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved = self.tracing.diag_span;
         self.tracing.diag_span = Some(stmt.span);
         self.forget_dead_binding_field_flags(stmt);
+        // B-2026-09-19-18 — see `DropRc::nll_holder_destructured_slots`.
+        if let StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } =
+            &stmt.kind
+        {
+            if matches!(
+                pattern.kind,
+                PatternKind::Tuple(_) | PatternKind::Struct { .. }
+            ) {
+                let mut root = value;
+                while let ExprKind::FieldAccess { object, .. }
+                | ExprKind::TupleIndex { object, .. } = &root.kind
+                {
+                    root = object;
+                }
+                if let ExprKind::Identifier(n) = &root.kind {
+                    if let Some(slot) = self.variables.get(n.as_str()).map(|v| v.ptr) {
+                        self.drop_rc.nll_holder_destructured_slots.insert(slot);
+                    }
+                }
+            }
+        }
         self.freshtemp_read_levels
             .push(super::state::FreshTempReadLevel {
                 fn_val: self.current_fn,

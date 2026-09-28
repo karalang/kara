@@ -50,6 +50,14 @@ pub(crate) struct DropRc<'ctx> {
     /// at the default opt level because a `.len()`-only Vec is a dead
     /// allocation LLVM deletes outright).
     pub(crate) inline_optres_retained_sources: std::collections::HashSet<String>,
+    /// B-2026-09-19-18 — the slots of locals DESTRUCTURED by a tuple or struct
+    /// `let` pattern (`let (s, n) = t;`, `let W { e, n } = w;`). The pattern's
+    /// bindings are bit-copy views of the source's parts and the source stays
+    /// the owner, so its release has to wait for THEIR last uses, which the
+    /// source's own last-use point cannot see. `nll_holder_binding` declines
+    /// these slots and leaves them at lexical scope exit, as they were.
+    /// Keyed by slot, so no per-function reset is needed.
+    pub(crate) nll_holder_destructured_slots: std::collections::HashSet<PointerValue<'ctx>>,
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,

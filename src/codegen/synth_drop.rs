@@ -7066,6 +7066,88 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-19-18 — is `n` a `shared ENUM` whose release is observable:
+    /// its own `impl Drop`, or a variant payload that runs one?
+    ///
+    /// ENUMS ONLY, because that is where `--interp` fires a held value at the
+    /// holder's live-range end. A `shared STRUCT` in the same five positions is
+    /// released at lexical scope exit by BOTH backends today (pinned by
+    /// `e2e_tuple_held_shared_struct_read_then_release_at_scope_exit` and its
+    /// siblings), so moving it on this side alone would open the divergence
+    /// this row closes.
+    pub(super) fn shared_type_is_drop_relevant(&self, n: &str) -> bool {
+        self.type_decls
+            .enum_layouts
+            .get(n)
+            .is_some_and(|l| l.is_shared)
+            && (self.drop_rc.user_drop_wrapper_fns.contains_key(n)
+                || self.shared_enum_runs_payload_bodies(n))
+    }
+
+    /// B-2026-09-19-18 — does a value of type `te` HOLD a Drop-relevant
+    /// `shared` value anywhere inside it: a struct field, an enum payload, a
+    /// tuple or array element, or a generic argument (`Vec[SMono]`,
+    /// `Option[SMono]`)? Such a holder's release runs a user body on the
+    /// shared value's 0-transition, so WHERE it is released is observable.
+    /// A bare type parameter answers `false`: a conservative residual that
+    /// leaves the release at scope exit, never a double fire.
+    pub(super) fn type_expr_holds_drop_relevant_shared(&self, te: &TypeExpr, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        match &te.kind {
+            TypeKind::Path(p) => {
+                p.generic_args.as_ref().is_some_and(|args| {
+                    args.iter().any(|a| {
+                        matches!(a, GenericArg::Type(t)
+                            if self.type_expr_holds_drop_relevant_shared(t, depth + 1))
+                    })
+                }) || p
+                    .segments
+                    .last()
+                    .is_some_and(|n| self.type_name_holds_drop_relevant_shared(n, depth))
+            }
+            TypeKind::Tuple(elems) => elems
+                .iter()
+                .any(|t| self.type_expr_holds_drop_relevant_shared(t, depth + 1)),
+            TypeKind::Array { element, .. } => {
+                self.type_expr_holds_drop_relevant_shared(element, depth + 1)
+            }
+            _ => false,
+        }
+    }
+
+    /// [`Self::type_expr_holds_drop_relevant_shared`] for a named type: the
+    /// shared type itself, or a plain struct / enum whose fields or payloads
+    /// hold one.
+    pub(super) fn type_name_holds_drop_relevant_shared(&self, n: &str, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        if self.type_decls.shared_types.contains_key(n) {
+            return self.shared_type_is_drop_relevant(n);
+        }
+        let Some(prog) = self.program_snapshot.as_ref() else {
+            return false;
+        };
+        prog.items.iter().any(|it| match it {
+            Item::StructDef(sd) if sd.name == n => sd
+                .fields
+                .iter()
+                .any(|f| self.type_expr_holds_drop_relevant_shared(&f.ty, depth + 1)),
+            Item::EnumDef(ed) if ed.name == n => ed.variants.iter().any(|v| match &v.kind {
+                VariantKind::Unit => false,
+                VariantKind::Tuple(tys) => tys
+                    .iter()
+                    .any(|t| self.type_expr_holds_drop_relevant_shared(t, depth + 1)),
+                VariantKind::Struct(fields) => fields
+                    .iter()
+                    .any(|f| self.type_expr_holds_drop_relevant_shared(&f.ty, depth + 1)),
+            }),
+            _ => false,
+        })
+    }
+
     /// Whether `name`, or a plain struct reachable through its fields,
     /// declares `impl Drop`. Depth-bounded like its walk sibling.
     pub(super) fn plain_struct_has_user_drop_deep(&self, name: &str, depth: u32) -> bool {

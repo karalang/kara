@@ -6545,6 +6545,7 @@ impl<'ctx> Codegen<'ctx> {
                 assign_ident_target: None,
                 zero_inited_vec_slots: rustc_hash::FxHashSet::default(),
                 inline_optres_retained_sources: std::collections::HashSet::new(),
+                nll_holder_destructured_slots: std::collections::HashSet::new(),
                 scope_cleanup_actions: Vec::new(),
                 cond_move_escaping_sites: std::collections::HashSet::new(),
                 cond_move_call_arg_sites: std::collections::HashSet::new(),
