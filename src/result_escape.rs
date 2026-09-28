@@ -37,7 +37,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 /// Per-binding-name use tally: `(total Identifier uses, uses that are a direct
 /// `match` scrutinee, uses that are a READ-ONLY position)`.
 /// B-2026-09-26-46 — see `Acc::lent`: (callee name, argument index) -> lent read.
-type LentPolicy<'a> = dyn Fn(&str, usize) -> bool + 'a;
+pub type LentPolicy<'a> = dyn Fn(&str, usize) -> bool + 'a;
 
 #[derive(Default)]
 struct Acc<'a> {
@@ -253,6 +253,30 @@ pub fn nonescaping_param_names(func: &Function) -> HashSet<String> {
 /// memory unsafety.
 pub fn by_value_nonescaping_param_names(func: &Function) -> HashSet<String> {
     let mut acc = seeded_acc(func);
+    walk_block(&func.body, &mut acc);
+    func.params
+        .iter()
+        .filter_map(|p| {
+            let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+                return None;
+            };
+            let (total, scrut, ro) = acc.counts.get(name.as_str()).copied().unwrap_or((0, 0, 0));
+            (total == scrut + ro).then(|| name.clone())
+        })
+        .collect()
+}
+
+/// B-2026-09-28-10 — [`by_value_nonescaping_param_names`] with a CALLER-SUPPLIED
+/// lent policy: a bare identifier handed, unlabelled and unmarked, to a free
+/// call counts as a read when `lent(callee, index)` says so. The policy needs
+/// type information this module does not have (whether the consumer keeps any
+/// part of an `Option`/`Result` payload), so codegen supplies it.
+pub fn by_value_nonescaping_param_names_lending<'a>(
+    func: &'a Function,
+    lent: &'a LentPolicy<'a>,
+) -> HashSet<String> {
+    let mut acc = seeded_acc(func);
+    acc.lent = Some(lent);
     walk_block(&func.body, &mut acc);
     func.params
         .iter()

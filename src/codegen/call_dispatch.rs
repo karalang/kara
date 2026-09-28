@@ -5628,7 +5628,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let crate::ast::PatternKind::Binding(pname) = &p.pattern.kind else {
                 return None;
             };
-            if !crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str()) {
+            if !crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str())
+                && !self.optres_param_only_forwarded_to_retaining_consumers(f, pname, 4)
+            {
                 return None;
             }
             // Which escape map to believe, and under which per-projection
@@ -5802,6 +5804,123 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-28-10 — is the by-value `Option`/`Result` param `pname` of
+    /// `f` only read, or handed on WHOLE to free functions whose own param
+    /// leaves every payload body with ITS caller?
+    ///
+    /// Such a param is caller-retained end to end: the consumer keeps nothing,
+    /// `f` holds only a param view, so the bodies are owed to `f`'s caller
+    /// exactly as they are for a param `f` merely reads. The stricter
+    /// `by_value_nonescaping_param_names` counts the forward as an escape, so a
+    /// FRESH TEMP argument (which has no let site to own it) ran its payload's
+    /// `Drop` body nowhere on the compiled surfaces, while a named local ran it
+    /// from its let site (`fw(Some(mks(4)))` over `fn fw(h: Option[S]) {
+    /// eat2(h) }`).
+    ///
+    /// A consumer counts only when it is a non-generic free function whose
+    /// param is itself caller-retained by this same rule and whose payload no
+    /// variant escapes: a consumer that takes the payload (into an accumulator,
+    /// or by returning it) owns the body, and answering yes there would run it
+    /// twice. Depth-bounded; running out answers "escapes", today's route.
+    pub(super) fn optres_param_only_forwarded_to_retaining_consumers(
+        &self,
+        f: &crate::ast::Function,
+        pname: &str,
+        depth: u32,
+    ) -> bool {
+        self.optres_param_only_forwarded_in(f, pname, depth, &mut Vec::new())
+    }
+
+    /// [`Self::optres_param_only_forwarded_to_retaining_consumers`] with the
+    /// params already being asked about. A forward back into one of them (a
+    /// recursive `rec(h, n - 1)`) is assumed to retain: the answer for that
+    /// param is the one being computed, and every OTHER use in its body still
+    /// has to pass, so the assumption adds no position the rule does not
+    /// already check.
+    fn optres_param_only_forwarded_in(
+        &self,
+        f: &crate::ast::Function,
+        pname: &str,
+        depth: u32,
+        asking: &mut Vec<(String, String)>,
+    ) -> bool {
+        if depth == 0 {
+            return false;
+        }
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        asking.push((f.name.clone(), pname.to_string()));
+        let asking_cell = std::cell::RefCell::new(std::mem::take(asking));
+        let lent = |cn: &str, k: usize| -> bool {
+            let Some(g) = program.items.iter().find_map(|it| match it {
+                crate::ast::Item::Function(g) if g.name == cn => Some(g),
+                _ => None,
+            }) else {
+                return false;
+            };
+            if g.generic_params.is_some() || g.self_param.is_some() {
+                return false;
+            }
+            let Some(p) = g.params.get(k) else {
+                return false;
+            };
+            let TypeKind::Path(path) = &p.ty.kind else {
+                return false;
+            };
+            if !matches!(
+                path.segments.last().map(String::as_str),
+                Some("Option") | Some("Result")
+            ) {
+                return false;
+            }
+            let crate::ast::PatternKind::Binding(gn) = &p.pattern.kind else {
+                return false;
+            };
+            // The consumer must leave EVERY body of the payload behind: a
+            // flagged variant passes only when its arm binds the payload and
+            // takes no field of it, copy reads alone, which is the full-walk
+            // answer `optres_param_payload_bodies_stay_with_caller` gives. A
+            // proper-subset mask is not enough here, since the caller at the
+            // top of the chain cannot see which fields the consumer took.
+            let payload_stays = match self
+                .optres_payload_escape_map(g, &p.ty, None)
+                .get(gn.as_str())
+            {
+                None => true,
+                Some(vs) => vs
+                    .iter()
+                    .filter(|v| !optres_variant_payload_is_bodiless(&p.ty, v))
+                    .all(|v| {
+                        self.struct_payload_arity(&p.ty, v).is_some()
+                            && self
+                                .optres_payload_taken_fields(g, &p.ty, k, v)
+                                .is_some_and(|fs| fs.is_empty())
+                            && self.optres_payload_variant_only_copy_read(g, &p.ty, k, v)
+                    }),
+            };
+            if !payload_stays {
+                return false;
+            }
+            if asking_cell
+                .borrow()
+                .iter()
+                .any(|(fname, n)| fname == &g.name && n == gn)
+            {
+                return true;
+            }
+            crate::result_escape::by_value_nonescaping_param_names(g).contains(gn.as_str()) || {
+                let mut inner = asking_cell.borrow().clone();
+                self.optres_param_only_forwarded_in(g, gn, depth - 1, &mut inner)
+            }
+        };
+        let out = crate::result_escape::by_value_nonescaping_param_names_lending(f, &lent)
+            .contains(pname);
+        *asking = asking_cell.into_inner();
+        asking.pop();
+        out
+    }
+
     /// B-2026-09-19-48 — the CALLEE-side reading of
     /// [`Self::callee_by_value_optres_param_bodies_te`]: for the by-value
     /// `Option`/`Result` param at `ast_i`, does the CALLER still own the
@@ -5848,7 +5967,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let crate::ast::PatternKind::Binding(pname) = &p.pattern.kind else {
             return false;
         };
-        if !crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str()) {
+        if !crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str())
+            && !self.optres_param_only_forwarded_to_retaining_consumers(f, pname, 4)
+        {
             return false;
         }
         let escaped = self.optres_payload_escape_map(f, &p.ty, None);
