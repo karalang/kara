@@ -455,6 +455,12 @@ fn walk_expr(expr: &Expr, isolated: bool, cands: &HashSet<String>, bad: &mut Has
             bad.insert(n.clone());
         }
     }
+    // `self` parses as its own node, so a candidate spelled `self` (an owned
+    // receiver, B-2026-09-27-129) is matched here. No deque local can be
+    // named `self`, so the head-index analysis never sees this arm fire.
+    if matches!(&expr.kind, ExprKind::SelfValue) && cands.contains("self") {
+        bad.insert("self".to_string());
+    }
 
     for_each_block(&expr.kind, &mut |b| walk_block(b, isolated, cands, bad));
     crate::rc_elide::walk_children_pub(&expr.kind, &mut |sub| walk_expr(sub, isolated, cands, bad));

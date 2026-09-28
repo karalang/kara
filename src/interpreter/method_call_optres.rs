@@ -565,30 +565,53 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
             }
-            "is_some" => {
-                return Some(match obj {
-                    Value::EnumVariant { variant, .. } if variant == "Some" => Value::Bool(true),
-                    Value::EnumVariant { variant, .. } if variant == "None" => Value::Bool(false),
-                    _ => Value::Bool(true),
-                });
-            }
-            "is_none" => {
-                return Some(match obj {
-                    Value::EnumVariant { variant, .. } if variant == "None" => Value::Bool(true),
-                    _ => Value::Bool(false),
-                });
-            }
-            "is_ok" => {
-                return Some(match obj {
-                    Value::EnumVariant { variant, .. } if variant == "Ok" => Value::Bool(true),
-                    _ => Value::Bool(false),
-                });
-            }
-            "is_err" => {
-                return Some(match obj {
-                    Value::EnumVariant { variant, .. } if variant == "Err" => Value::Bool(true),
-                    _ => Value::Bool(false),
-                });
+            "is_some" | "is_none" | "is_ok" | "is_err" => {
+                let probed = match method {
+                    "is_some" => match obj {
+                        Value::EnumVariant { variant, .. } if variant == "Some" => true,
+                        Value::EnumVariant { variant, .. } if variant == "None" => false,
+                        _ => true,
+                    },
+                    "is_none" => {
+                        matches!(obj, Value::EnumVariant { variant, .. } if variant == "None")
+                    }
+                    "is_ok" => matches!(obj, Value::EnumVariant { variant, .. } if variant == "Ok"),
+                    _ => matches!(obj, Value::EnumVariant { variant, .. } if variant == "Err"),
+                };
+                // B-2026-09-27-129 — a probe READS its receiver, so a FRESH-TEMP
+                // receiver (`mk2(3).is_some()`) has no owner after it and dies
+                // here, exactly as the discarded `mk2(3);` does: its payload's
+                // bodies run now. A named receiver keeps its own walk, and the
+                // borrow accessors (`get` / `first` / `last`) alias an element
+                // the container still owns — the gate the `if let` miss edge
+                // uses. Codegen twin: `try_compile_option_result_method`'s
+                // `is_*` arm.
+                //
+                // Not when the temp carries a param VIEW (`mk2o(x).is_some()`
+                // with `x` an owned param): under caller-retains the CALLER
+                // runs that value's body, so firing here too doubles it. The
+                // test is a deep mention, so a receiver that only READS the
+                // view stays silent as well — the pre-fix answer, never a
+                // double.
+                // An owned `self` is the same caller-retained view.
+                let owned_self = matches!(
+                    self.self_param_stack.last(),
+                    Some(crate::ast::SelfParam::Owned)
+                );
+                let carries_view = (owned_self
+                    && crate::deque_head::expr_mentions_name_deep(object, "self"))
+                    || self.owned_param_names_stack.last().is_some_and(|views| {
+                        views
+                            .iter()
+                            .any(|n| crate::deque_head::expr_mentions_name_deep(object, n))
+                    });
+                if Self::optres_freshtemp_scrutinee(object)
+                    && self.scrutinee_expr_is_consuming(object)
+                    && !carries_view
+                {
+                    self.run_optres_payload_user_drops_value(obj);
+                }
+                return Some(Value::Bool(probed));
             }
             "load" => {
                 if let Value::Atomic(cell) = obj {

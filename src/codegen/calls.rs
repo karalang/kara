@@ -3091,6 +3091,49 @@ impl<'ctx> super::Codegen<'ctx> {
         self.compile_expr(&synthesized)
     }
 
+    /// B-2026-09-27-129 — the receiver of an `is_*` probe is only READ, so a
+    /// FRESH TEMP there (`mk2(3).is_some()`) has no owner once the probe has its
+    /// tag: it dies at the probe, exactly as the discarded `mk2(3);` dies at
+    /// the `;`. Nothing registered it, so its payload's `Drop` body ran nowhere
+    /// and a boxed payload leaked. This gives it the discard statement's own
+    /// cleanup — the memory battery, then the payload-bodies walk, on a
+    /// one-shot frame drained on the spot — so the two spellings cannot
+    /// drift apart. A named receiver keeps its own drop, and the borrow
+    /// accessors alias an element the container still owns, which is the
+    /// same exclusion the battery makes. Interpreter twin: the `is_*` arm of
+    /// `try_eval_option_result_method`.
+    fn drop_probed_optres_freshtemp(&mut self, object: &Expr, recv_val: BasicValueEnum<'ctx>) {
+        if !matches!(
+            object.kind,
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+        ) || self.scrutinee_is_borrow_call(object)
+        {
+            return;
+        }
+        // A temp carrying a param VIEW (`mk2o(x).is_some()`, `x` an owned
+        // param) is the caller's to fire under caller-retains; see the
+        // interpreter twin for why the test is a deep mention.
+        let carries_view = self
+            .fn_ctx
+            .current_fn_param_names
+            .iter()
+            .filter(|n| !self.borrow_vars.ref_params.contains_key(n.as_str()))
+            .chain(self.payload_vars.param_view_locals.iter())
+            .any(|n| crate::deque_head::expr_mentions_name_deep(object, n));
+        if carries_view {
+            return;
+        }
+        self.drop_rc.scope_cleanup_actions.push(Vec::new());
+        let prev = self
+            .drop_rc
+            .discard_frame
+            .replace(self.drop_rc.scope_cleanup_actions.len() - 1);
+        self.track_discarded_temp_cleanup(object, recv_val);
+        self.track_discarded_optres_payload_bodies(object, recv_val);
+        self.drop_rc.discard_frame = prev;
+        self.drain_discard_frame_args_first(0);
+    }
+
     pub(super) fn try_compile_option_result_method(
         &mut self,
         object: &Expr,
@@ -3237,24 +3280,18 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
 
         // is_*: pure boolean reductions on the tag. No payload extraction.
-        match method {
-            "is_some" | "is_ok" => {
-                let one = i64_t.const_int(1, false);
-                let b = self
-                    .builder
-                    .build_int_compare(IntPredicate::EQ, tag, one, "or.is_present")
-                    .unwrap();
-                return Ok(Some(b.into()));
-            }
-            "is_none" | "is_err" => {
-                let zero = i64_t.const_int(0, false);
-                let b = self
-                    .builder
-                    .build_int_compare(IntPredicate::EQ, tag, zero, "or.is_absent")
-                    .unwrap();
-                return Ok(Some(b.into()));
-            }
-            _ => {}
+        if matches!(method, "is_some" | "is_ok" | "is_none" | "is_err") {
+            let (want, name) = if matches!(method, "is_some" | "is_ok") {
+                (1, "or.is_present")
+            } else {
+                (0, "or.is_absent")
+            };
+            let b = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, tag, i64_t.const_int(want, false), name)
+                .unwrap();
+            self.drop_probed_optres_freshtemp(object, recv_val);
+            return Ok(Some(b.into()));
         }
 
         // `Option[T].map(f)` / `Result[T, E].map(f)`: apply `f` to the present
