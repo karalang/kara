@@ -10393,6 +10393,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `insertvalue float into i64` slot is invalid IR
                     // (B-2026-07-20-12 companion hardening).
                     Some(n @ ("f16" | "bf16" | "f32" | "f64")) => self.llvm_type_for_name(n),
+                    // B-2026-09-28-36 — the integer twin of the float arm above,
+                    // and for the same reason: `reconstruct_payload_value`'s
+                    // scalar tail rebuilds a recorded integer surface at its
+                    // REAL width (`pat.int.tr`), so the tuple slot has to be
+                    // that width too. The `i64` default made `if let Some((a,
+                    // b)) = Some((3i32, 5))` emit `insertvalue { i64, i64 }
+                    // undef, i32` and fail module verification, for every
+                    // `bool` / `char` / `i8`..`u32` element and every distinct
+                    // type over one. Asked of `llvm_type_for_name`, the
+                    // function the rebuild itself asks, so the two answers
+                    // cannot drift. The same type is the debox LOAD type for a
+                    // boxed tuple payload, which is stored at the tuple's real
+                    // layout, so that read is corrected too.
+                    //
+                    // BELOW 64 BITS ONLY. An `i128` element also fails today,
+                    // but `pattern_payload_word_count` sizes it at one word
+                    // where the pack side splits it across two, so typing its
+                    // slot here would turn the verifier failure into a silent
+                    // misread of every element after it. It stays loud.
+                    Some(n)
+                        if matches!(
+                            self.llvm_type_for_name(n),
+                            BasicTypeEnum::IntType(it) if it.get_bit_width() < 64
+                        ) =>
+                    {
+                        self.llvm_type_for_name(n)
+                    }
                     // Shared type (struct OR enum): the value is an RC heap
                     // pointer — a single `ptr`, not the inline tagged-union /
                     // struct aggregate. Must precede the struct/enum arms: a
