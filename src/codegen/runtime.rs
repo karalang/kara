@@ -11575,6 +11575,126 @@ impl<'ctx> super::Codegen<'ctx> {
     /// so the interior walk is correct. Returns false (keep other discard
     /// paths probing) for a non-`Option` te, a payload that fits inline, or
     /// a payload that isn't a non-shared user struct.
+    /// B-2026-09-28-5 — the BOX SHELL of a borrow accessor's `Option` that
+    /// nothing binds: `v.first();` discarded, or `v.get(1).is_some()` probed.
+    ///
+    /// A borrow accessor (`get`/`first`/`last` on a `Vec`/`Slice`, `Map.get`)
+    /// hands back a bit-copy of the element, and a copy wider than the 3-word
+    /// payload area is spilled into a box `coerce_to_payload_words` mallocs on
+    /// every call. The copy's INTERIOR aliases the container, which owns it, so
+    /// the discard battery and the `is_*` probe both stand down on a borrow
+    /// call — correctly for the interior, but the box is fresh and nobody else
+    /// frees it: 32 B lost per call for a 4-word element, on every compiled
+    /// surface, with output correct.
+    ///
+    /// The bound spelling has always freed it: a borrow SCRUTINEE registers a
+    /// box-only free in `track_freshtemp_boxed_enum_scrutinee` (slice 3r leg 2)
+    /// and leaves the interior to the container. This is that registration for
+    /// the two positions with no binding. Box-only, never an interior walk —
+    /// running one freed the map's own value the first time and double-freed
+    /// the second, which is why that path is box-only.
+    ///
+    /// `payload_te` is the probe's own `inner_te` when the caller has one;
+    /// otherwise the span-keyed instantiation. No type, no registration: an
+    /// unsized payload may be inline, and a box-only free of an inline payload
+    /// would free a container word.
+    pub(super) fn track_borrow_accessor_box_shell(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+        payload_te: Option<&crate::ast::TypeExpr>,
+    ) -> bool {
+        if !self.borrow_accessor_boxes_fresh(tail) {
+            return false;
+        }
+        let payload_te = match payload_te {
+            Some(te) => te.clone(),
+            None => {
+                let key = (tail.span.offset, tail.span.length);
+                let Some(te) = self.type_decls.enum_inst_type_exprs.get(&key).cloned() else {
+                    return false;
+                };
+                let TypeKind::Path(p) = &te.kind else {
+                    return false;
+                };
+                if p.segments.last().map(|s| s.as_str()) != Some("Option") {
+                    return false;
+                }
+                let Some(GenericArg::Type(payload_te)) =
+                    p.generic_args.as_ref().and_then(|a| a.first()).cloned()
+                else {
+                    return false;
+                };
+                payload_te
+            }
+        };
+        let payload_te = match &payload_te.kind {
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner) => (**inner).clone(),
+            _ => payload_te,
+        };
+        let payload_ty = self.llvm_type_for_type_expr(&payload_te);
+        if Self::llvm_type_word_count(payload_ty) <= 3 {
+            return false;
+        }
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return false;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__borrow_box_shell", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        self.track_boxed_enum_var_with_inner_drop(
+            "__borrow_box_shell",
+            slot,
+            "Option",
+            "Some",
+            None,
+        );
+        true
+    }
+
+    /// B-2026-09-28-5 — the borrow accessors whose wide payload is a box this
+    /// very call allocated: the builtin collection lowerings, which all spill
+    /// through `coerce_to_payload_words`. A USER type's `get`/`first`/`last`
+    /// also reads as a borrow call to `scrutinee_is_borrow_call`, but its box
+    /// is whatever the method body returned, so it is not claimed here.
+    fn borrow_accessor_boxes_fresh(&self, tail: &Expr) -> bool {
+        if !self.scrutinee_is_borrow_call(tail) {
+            return false;
+        }
+        let ExprKind::MethodCall { object, .. } = &tail.kind else {
+            return false;
+        };
+        // A FIELD receiver (`h.items.first()`) has no `var_type_names` entry;
+        // its declared field type answers the same question.
+        let recv = match &object.kind {
+            ExprKind::FieldAccess {
+                object: inner,
+                field,
+            } => self.place_chain_type_name(inner).and_then(|owner| {
+                let idx = self
+                    .type_decls
+                    .struct_field_names
+                    .get(owner.as_str())?
+                    .iter()
+                    .position(|n| n == field)?;
+                let te = self
+                    .type_decls
+                    .struct_field_type_exprs
+                    .get(owner.as_str())?
+                    .get(idx)?;
+                match &te.kind {
+                    TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                }
+            }),
+            _ => self.inferred_receiver_type(object),
+        };
+        matches!(recv.as_deref(), Some("Vec" | "Slice" | "Map"))
+    }
+
     pub(super) fn try_track_discarded_boxed_option(
         &mut self,
         tail: &Expr,

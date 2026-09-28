@@ -25856,6 +25856,12 @@ impl<'ctx> super::Codegen<'ctx> {
             && !handled_boxed_result
             && not_borrow
             && self.try_track_discarded_boxed_option(tail, val);
+        // B-2026-09-28-5 — a discarded BORROW accessor (`v.first();`) owns
+        // none of its payload's interior, but a wide payload's box is fresh
+        // per call and was freed by nobody. Box-only; the container keeps the
+        // interior. Every tracker above excluded the borrow call.
+        let handled_borrow_shell =
+            !not_borrow && self.track_borrow_accessor_box_shell(tail, val, None);
         // B-2026-07-01-7 (discard position): `make();` where
         // `make() -> Guard`/`-> Sig` with a user Drop — the
         // discarded temp is caller-owned and its body must fire
@@ -25990,6 +25996,7 @@ impl<'ctx> super::Codegen<'ctx> {
             && !handled_boxed_option
             && !handled_tuple
             && !handled_array
+            && !handled_borrow_shell
         {
             // B-2026-08-25-17 — last resort, and only once every handler above
             // has declined: an inline-`Option` temp discarded inside a GENERIC

@@ -3102,12 +3102,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// accessors alias an element the container still owns, which is the
     /// same exclusion the battery makes. Interpreter twin: the `is_*` arm of
     /// `try_eval_option_result_method`.
-    fn drop_probed_optres_freshtemp(&mut self, object: &Expr, recv_val: BasicValueEnum<'ctx>) {
+    fn drop_probed_optres_freshtemp(
+        &mut self,
+        object: &Expr,
+        recv_val: BasicValueEnum<'ctx>,
+        inner_te: &crate::ast::TypeExpr,
+    ) {
+        // B-2026-09-28-5 — a probed BORROW accessor (`v.first().is_some()`)
+        // owns no payload bodies and no interior, but a wide payload's box is
+        // fresh per call: free the shell alone, at the probe, as the discard
+        // statement now does.
+        if self.scrutinee_is_borrow_call(object) {
+            self.drop_rc.scope_cleanup_actions.push(Vec::new());
+            let prev = self
+                .drop_rc
+                .discard_frame
+                .replace(self.drop_rc.scope_cleanup_actions.len() - 1);
+            self.track_borrow_accessor_box_shell(object, recv_val, Some(inner_te));
+            self.drop_rc.discard_frame = prev;
+            self.drain_discard_frame_args_first(0);
+            return;
+        }
         if !matches!(
             object.kind,
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
-        ) || self.scrutinee_is_borrow_call(object)
-            || self.optres_temp_hands_back_optres_param(object)
+        ) || self.optres_temp_hands_back_optres_param(object)
         {
             return;
         }
@@ -3288,7 +3307,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_int_compare(IntPredicate::EQ, tag, i64_t.const_int(want, false), name)
                 .unwrap();
-            self.drop_probed_optres_freshtemp(object, recv_val);
+            self.drop_probed_optres_freshtemp(object, recv_val, &inner_te);
             return Ok(Some(b.into()));
         }
 
