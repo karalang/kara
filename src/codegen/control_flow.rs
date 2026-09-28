@@ -2668,9 +2668,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // on firing — which is the point: it records WHY this leg differs
         // instead of leaving three identical ungated calls for the next
         // reader to re-derive. See the `compile_if_let` site.
+        //
+        // B-2026-09-28-28 — an owned PARAM asks the question `result_escape` asks of the same
+        // statement: does the rest of the enclosing block take the payload?
+        // When it only reads it, the caller keeps the payload's `Drop` body
+        // (design.md rule 3) and the binding is a view of what the param
+        // holds. Anything else keeps today's answer, "the escaped binding
+        // takes it".
+        let param_rest = let_else_rest
+            .as_ref()
+            .filter(|_| self.scrutinee_is_owned_param_binding(value));
         if optres_bindings_owned {
-            self.suppress_optres_payload_bodies_for_match(value, pattern);
-            self.fund_let_else_tuple_payload_binding(value, pattern);
+            let takes = param_rest.is_none_or(|rest| {
+                crate::binding_use::optres_block_takes_whole_payload(pattern, rest)
+                    && !self.optres_unowned_payload_binding_only_borrowed(value, pattern, &|n| {
+                        crate::consume_class::binding_only_borrowed_block(n, rest)
+                    })
+            });
+            self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
+            if takes {
+                self.fund_let_else_tuple_payload_binding(value, pattern);
+            }
         }
         // B-2026-08-05-3 (Option leg): a let-else binding escapes into the
         // enclosing scope, so it always takes the boxed tuple's interior.
@@ -2682,7 +2700,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .any(|b| self.payload_vars.param_payload_arm_views.contains(b));
         if !binds_param_view {
-            self.retract_boxed_tuple_inner_drop_for_block(value, pattern, None);
+            self.retract_boxed_tuple_inner_drop_for_block(value, pattern, param_rest);
         }
         // B-2026-07-21-16: `let Some(s) = a.opt else { … }` over an OWNED
         // place — zero the source field on the match edge (the escaped

@@ -159,6 +159,12 @@ struct Acc<'a> {
     /// cleared, so a later shadowing `let c = ..` keeps counting against the
     /// param, which only ever makes the param look MORE escaping.
     aliases: HashMap<&'a str, &'a str>,
+    /// B-2026-09-28-28 — the statements after the `let .. else` being walked
+    /// (and the block's tail), set by [`walk_block`] for a seeded walk. The
+    /// binding lives on in exactly that rest, so its payload questions are
+    /// asked of it, as an `if let`'s are asked of its body. `None` keeps the
+    /// old answer, that such a binding always takes the payload.
+    let_else_rest: Option<Block>,
 }
 
 /// B-2026-09-24-20 — the param a use of `name` counts against.
@@ -1106,8 +1112,8 @@ fn variant_arm_payload_escaping_parts_block<'a>(
 ) -> Option<(&'a str, BTreeSet<usize>)> {
     let variant = optres_variant_of_pattern(pattern)?;
     let parts = tuple_payload_binding_parts(pattern)?;
-    // `None` for the block is `let`-else: the bindings outlive the construct,
-    // so every NAMED part escapes. Wildcards still bind nothing.
+    // `None` for the block is `let`-else outside a seeded walk: the bindings
+    // outlive the construct, so every NAMED part escapes. Wildcards still bind nothing.
     let escaping: BTreeSet<usize> = parts
         .iter()
         .enumerate()
@@ -1191,7 +1197,8 @@ fn variant_arm_payload_escapes_proj_block<'a>(
 }
 
 /// Block sibling of [`variant_arm_payload_escapes`]. `None` for the block means
-/// the bindings escape the construct entirely (`let`-else), so they always do.
+/// the bindings escape the construct entirely (`let`-else outside a seeded
+/// walk, which passes the statements after it instead), so they always do.
 fn variant_arm_payload_escapes_block<'a>(
     pattern: &'a crate::ast::Pattern,
     block: Option<&Block>,
@@ -1225,7 +1232,7 @@ fn optres_variant_of_pattern(pattern: &crate::ast::Pattern) -> Option<&str> {
 
 /// Block-scoped sibling of [`variant_arm_takes_payload`], for `if let` /
 /// `while let` bodies. `None` for the block means the bindings escape the
-/// construct entirely (`let`-else), so they always take.
+/// construct entirely (`let`-else outside a seeded walk), so they always take.
 fn variant_arm_takes_payload_block<'a>(
     pattern: &'a crate::ast::Pattern,
     block: Option<&Block>,
@@ -1330,8 +1337,21 @@ fn walk_scrutinee<'a>(acc: &mut Acc<'a>, scrutinee: &'a Expr) {
 }
 
 fn walk_block<'a>(b: &'a Block, acc: &mut Acc<'a>) {
-    for s in &b.stmts {
+    for (i, s) in b.stmts.iter().enumerate() {
+        // B-2026-09-28-28 — a seeded walk asks a refutable `let .. else`
+        // binding's payload questions of the statements it lives on in.
+        if !acc.alias_roots.is_empty()
+            && matches!(&s.kind, StmtKind::LetElse { pattern, .. }
+                if !matches!(pattern.kind, crate::ast::PatternKind::Binding(_)))
+        {
+            acc.let_else_rest = Some(Block {
+                stmts: b.stmts[i + 1..].to_vec(),
+                final_expr: b.final_expr.clone(),
+                span: b.span,
+            });
+        }
         walk_stmt(s, acc);
+        acc.let_else_rest = None;
     }
     if let Some(fe) = &b.final_expr {
         walk_expr(fe, acc);
@@ -1379,6 +1399,7 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
             else_block,
             ..
         } => {
+            let rest = acc.let_else_rest.take();
             if let crate::ast::PatternKind::Binding(name) = &pattern.kind {
                 // Irrefutable-binding let-else (`let x = v else`, rare) —
                 // introduces `x`, so record it and treat `v` as its RHS.
@@ -1396,23 +1417,25 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                 if let Some(n) = param_ident(acc, value) {
                     let root_n = root(acc, n);
                     if let Some(v) =
-                        variant_arm_takes_payload_block(pattern, None, acc.take_copy_read)
+                        variant_arm_takes_payload_block(pattern, rest.as_ref(), acc.take_copy_read)
                     {
                         acc.payload_consumers.entry(root_n).or_default().insert(v);
                     }
-                    if let Some(v) = variant_arm_payload_escapes_block(pattern, None) {
+                    if let Some(v) = variant_arm_payload_escapes_block(pattern, rest.as_ref()) {
                         acc.payload_escapers.entry(root_n).or_default().insert(v);
                     }
                     let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
                     let fr = acc.follow_rebinds;
-                    if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, None, cr, fr) {
+                    if let Some(v) =
+                        variant_arm_payload_escapes_proj_block(pattern, rest.as_ref(), cr, fr)
+                    {
                         acc.payload_escapers_proj
                             .entry(root_n)
                             .or_default()
                             .insert(v);
                         // B-2026-09-14-18 — see the `Match` site.
                         if let Some((pv, parts)) =
-                            variant_arm_payload_escaping_parts_block(pattern, None, cr, fr)
+                            variant_arm_payload_escaping_parts_block(pattern, rest.as_ref(), cr, fr)
                         {
                             acc.payload_escaper_parts
                                 .entry(root_n)

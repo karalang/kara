@@ -18678,17 +18678,10 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
-    pub(super) fn suppress_optres_payload_bodies_for_match(
-        &mut self,
-        scrutinee: &Expr,
-        pattern: &Pattern,
-    ) {
-        self.suppress_optres_payload_bodies_for_match_scoped(scrutinee, pattern, true)
-    }
-
-    /// B-2026-09-10-14 — [`Self::suppress_optres_payload_bodies_for_match`]
-    /// with the caller's verdict on whether the arm/block actually TAKES the
-    /// payload it binds.
+    /// B-2026-09-10-14 — `suppress_optres_payload_bodies_for_match` (the
+    /// name older notes use for the `takes_payload = true` call, whose last
+    /// caller B-2026-09-28-28 turned into this one) with the caller's verdict
+    /// on whether the arm/block actually TAKES the payload it binds.
     ///
     /// `takes_payload` is `false` only where every whole-value binding of a
     /// `Some`/`Ok`/`Err` pattern is borrowed rather than materialized, by the
