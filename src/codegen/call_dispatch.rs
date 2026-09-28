@@ -4215,12 +4215,42 @@ impl<'ctx> super::Codegen<'ctx> {
     /// registers the box on the local, which frees it as the displaced value
     /// at the reassignment, so that local takes the box over exactly as a
     /// container does.
+    ///
+    /// B-2026-09-28-47 — or forwards it whole to a free function that does
+    /// ([`crate::ast::fn_forwards_param_whole_to`]), followed a few frames
+    /// deep: `ofw(t, v) { okeep(t, v) }` stores exactly as `okeep` does, and a
+    /// caller that kept its box beside the container's crashed on the second
+    /// free.
     pub(super) fn callee_stores_param_whole(&self, callee_name: &str, idx: usize) -> bool {
         self.callee_param_ast(callee_name, idx)
-            .is_some_and(|(f, ast_i)| {
-                crate::ast::fn_stores_param_whole_into_container(f, ast_i)
-                    || crate::ast::fn_reassigns_param_rebind(f, ast_i)
-            })
+            .is_some_and(|(f, ast_i)| self.fn_stores_param_whole_through_forwards(f, ast_i, 4))
+    }
+
+    /// The AST half of [`Self::callee_stores_param_whole`], for a callee
+    /// already in hand (a generic's `generic_fn`).
+    pub(super) fn fn_stores_param_whole_through_forwards(
+        &self,
+        f: &Function,
+        ast_i: usize,
+        depth: usize,
+    ) -> bool {
+        if crate::ast::fn_stores_param_whole_into_container(f, ast_i)
+            || crate::ast::fn_reassigns_param_rebind(f, ast_i)
+        {
+            return true;
+        }
+        if depth == 0 {
+            return false;
+        }
+        let Some((next, j)) = crate::ast::fn_forwards_param_whole_to(f, ast_i) else {
+            return false;
+        };
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        super::declarations::find_function_ast(program, next)
+            .filter(|g| g.self_param.is_none())
+            .is_some_and(|g| self.fn_stores_param_whole_through_forwards(g, j, depth - 1))
     }
 
     /// The caller-side owner of a fresh-temp argument's heap-boxed `Option` /

@@ -2487,7 +2487,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 let inst = self.callee_param_te_for_call_propagated(&p.ty, call_span);
                 !self.user_enum_boxed_payload_variants(&inst).is_empty()
             });
-            if param_box_taken_by_callee {
+            // B-2026-09-28-47 — the generic twin of `compile_call`'s
+            // B-2026-09-27-53 zero: a named boxed `Option` / `Result` binding
+            // handed to a keeper that stores its param whole (`gkeep[T](t: T,
+            // v: mut ref Vec[T]) { v.push(t) }`) moves its box into the
+            // container, so the binding's own drop is the second free.
+            let boxed_binding_stored_whole = matches!(
+                &a.value.kind,
+                ExprKind::Identifier(n) if self.payload_vars.boxed_struct_payload_vars.contains(n.as_str())
+            ) && self.fn_stores_param_whole_through_forwards(
+                &generic_fn,
+                i,
+                4,
+            );
+            if param_box_taken_by_callee || boxed_binding_stored_whole {
                 self.suppress_inline_option_result_binding_move(&a.value);
             }
             // B-2026-09-24-19 — the caller's half of the monomorph's

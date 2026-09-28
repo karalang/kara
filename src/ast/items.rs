@@ -9938,6 +9938,78 @@ pub fn fn_stores_param_whole_into_container(f: &Function, arg_index: usize) -> b
     param_whole_container_store(f, arg_index, true)
 }
 
+/// B-2026-09-28-47 — does `f` hand by-value parameter `arg_index` WHOLE to
+/// another free function on every path, and to which parameter of it?
+///
+/// `fn ofw(t: Option[S], v: mut ref Vec[Option[S]]) { okeep(t, v) }`: the
+/// frame stores nothing itself, but the callee it forwards to does, so the
+/// box the caller hands `ofw` ends up in that container just as surely as if
+/// `ofw` had pushed it. The same MUST shape as
+/// [`fn_stores_param_whole_into_container`]: every top-level statement up to
+/// the forward is straight-line, the forward is a top-level statement or the
+/// tail expression, the parameter is a bare argument of it, and no other
+/// statement mentions the parameter.
+pub fn fn_forwards_param_whole_to<'f>(
+    f: &'f Function,
+    arg_index: usize,
+) -> Option<(&'f str, usize)> {
+    let param = f.params.get(arg_index)?;
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return None;
+    }
+    let PatternKind::Binding(name) = &param.pattern.kind else {
+        return None;
+    };
+    let mentions = |e: &Expr| crate::deque_head::expr_mentions_name_deep(e, name);
+    let forward = |e: &'f Expr| -> Option<(&'f str, usize)> {
+        let ExprKind::Call { callee, args } = &e.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(c) = &callee.kind else {
+            return None;
+        };
+        if !args.iter().all(|a| straight_line_expr(&a.value)) {
+            return None;
+        }
+        let j = args
+            .iter()
+            .position(|a| outliving_store::is_bare(&a.value, name))?;
+        if args
+            .iter()
+            .enumerate()
+            .any(|(k, a)| k != j && mentions(&a.value))
+        {
+            return None;
+        }
+        Some((c.as_str(), j))
+    };
+    for st in &f.body.stmts {
+        match &st.kind {
+            StmtKind::Expr(e) => {
+                if let Some(hit) = forward(e) {
+                    return Some(hit);
+                }
+                if !straight_line_expr(e) || mentions(e) {
+                    return None;
+                }
+            }
+            StmtKind::Let { value, pattern, .. } => {
+                if !straight_line_expr(value) || mentions(value) {
+                    return None;
+                }
+                if matches!(&pattern.kind, PatternKind::Binding(n) if n == name) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    f.body.final_expr.as_deref().and_then(forward)
+}
+
 /// The walk behind [`fn_moves_param_into_local_container`] and
 /// [`fn_stores_param_whole_into_container`]; `outliving` admits a container
 /// the caller holds and a store in the body's tail expression, which the
