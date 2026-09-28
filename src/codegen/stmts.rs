@@ -17307,6 +17307,34 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.register_struct_pattern_dispatch(&nested, p);
                         }
                     }
+                    // B-2026-09-28-63 — a CALLEE-OWNED source (a by-value
+                    // param or receiver, entry-copied with its own
+                    // `StructDrop`) hands its nested leaves over exactly as
+                    // the projection spelling does. `let O { w: W { r, .. },
+                    // k } = o;` left `r` a bit-alias of `o.w.r` with no
+                    // transfer, so pushing or returning `r` freed the name
+                    // buffer that `o`'s drop freed again — `free(): double
+                    // free detected in tcache 2` on every compiled surface —
+                    // while `let W { r, .. } = o.w;` was clean on all four.
+                    // Recurse with that projection as the source: the
+                    // projection arm of `callee_owned_src` cap-zeroes the
+                    // moved leaf inside the param in place. Only here: the
+                    // other sources keep the enclosing-field discard below.
+                    if callee_owned_src.is_some() {
+                        let sub_src = Expr {
+                            kind: ExprKind::FieldAccess {
+                                object: Box::new(value.clone()),
+                                field: fname.clone(),
+                            },
+                            span: p.span,
+                        };
+                        if let Ok(sub_val) =
+                            self.builder
+                                .build_extract_value(sv, idx as u32, "sfield.nested")
+                        {
+                            self.finish_owned_struct_destructure(p, &sub_src, sub_val)?;
+                        }
+                    }
                 }
             }
             // Which name (if any) does the pattern bind this field to?

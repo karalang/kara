@@ -5436,14 +5436,26 @@ fn clear_alias(aliases: &mut Vec<(String, ParamPath)>, name: &str) {
 /// `r3 dR3`). One walk for every destructuring position, so the `if let`
 /// spelling cannot fall behind the `match` spelling again.
 fn alias_destructure(pattern: &Pattern, base: &ParamPath, aliases: &mut Vec<(String, ParamPath)>) {
+    // B-2026-09-28-63 — a NESTED sub-pattern (`O { w: W { r, .. }, k }`,
+    // `((r, a), b)`) extends the path once per level. Only the top level was
+    // read, so `r` denoted nothing: a leaf moved out (`xs.push(r)`, `return
+    // r`) was never reported, the caller's walk ran its body beside the new
+    // owner's, and the compiled surfaces aborted with a double free.
+    fn leaf(p: &Pattern, path: ParamPath, aliases: &mut Vec<(String, ParamPath)>) {
+        match &p.kind {
+            PatternKind::Binding(n) => set_alias(aliases, n, path),
+            PatternKind::Struct { .. } | PatternKind::Tuple(_) => {
+                alias_destructure(p, &path, aliases)
+            }
+            _ => {}
+        }
+    }
     match &pattern.kind {
         PatternKind::Tuple(pats) => {
             for (i, p) in pats.iter().enumerate() {
-                if let PatternKind::Binding(n) = &p.kind {
-                    let mut path = base.clone();
-                    path.push(ParamPart::TupleIndex(i));
-                    set_alias(aliases, n, path);
-                }
+                let mut path = base.clone();
+                path.push(ParamPart::TupleIndex(i));
+                leaf(p, path, aliases);
             }
         }
         PatternKind::Struct { fields, .. } => {
@@ -5453,12 +5465,9 @@ fn alias_destructure(pattern: &Pattern, base: &ParamPath, aliases: &mut Vec<(Str
                 match &fp.pattern {
                     // `W { r, n }` — shorthand binds the field name itself.
                     None => set_alias(aliases, &fp.name, path),
-                    // `W { r: inner, .. }` — renamed leaf.
-                    Some(p) => {
-                        if let PatternKind::Binding(n) = &p.kind {
-                            set_alias(aliases, n, path);
-                        }
-                    }
+                    // `W { r: inner, .. }` — renamed leaf, or a nested
+                    // sub-pattern.
+                    Some(p) => leaf(p, path, aliases),
                 }
             }
         }
@@ -5657,16 +5666,33 @@ fn part_paths_from_root_mode(
     // hooks follow (`destructure_part_aliases`). Bound once across every
     // `let` pattern, for the same reason `proj_lets` is.
     let mut destr_lets: Vec<&str> = Vec::new();
+    // B-2026-09-28-63 — the subset whose `let` destructures a value rooted
+    // at something no `let` binds (the param itself, or a projection of it):
+    // there both backends' hooks name the leaf's part in full (`o.w.r`), so
+    // a NESTED leaf may alias it. A leaf of a local (`let W { r, .. } = w;`
+    // after `let O { w, k } = o;`) is named relative to that local instead,
+    // so it keeps the one-level answer.
+    let mut destr_direct: Vec<&str> = Vec::new();
     {
         let mut all_pat: Vec<&str> = Vec::new();
-        part_scan_let_pattern_names(&f.body, &mut all_pat, &mut destr_lets);
-        destr_lets.retain(|n| all_pat.iter().filter(|m| *m == n).count() == 1);
+        let mut destr: Vec<(&str, Option<&str>)> = Vec::new();
+        part_scan_let_pattern_names(&f.body, &mut all_pat, &mut destr);
+        for (n, root) in destr {
+            if all_pat.iter().filter(|m| **m == n).count() != 1 {
+                continue;
+            }
+            destr_lets.push(n);
+            if root.is_some_and(|r| !all_pat.contains(&r)) {
+                destr_direct.push(n);
+            }
+        }
     }
     let cx = PartScanCx {
         program,
         roots: &roots,
         proj_lets: &proj_lets,
         destr_lets: &destr_lets,
+        destr_direct: &destr_direct,
         top_level: true,
         root_struct: root_struct.as_deref(),
         locals: &locals,
@@ -6250,6 +6276,7 @@ struct PartScanCx<'a> {
     proj_lets: &'a [&'a str],
     /// B-2026-09-28-50 — the names a destructuring `let` binds once.
     destr_lets: &'a [&'a str],
+    destr_direct: &'a [&'a str],
     /// B-2026-09-27-105 — asked for [`fn_conditionally_handed_param_parts`]:
     /// a projection hand-over nested in a branch is admitted too, where the
     /// adopting frame's per-path flag can be cleared (see `cond_site`).
@@ -6282,7 +6309,15 @@ impl PartScanCx<'_> {
         self.proj_lets.contains(&n.as_str())
             || (self.destr_lets.contains(&n.as_str())
                 && self.root_struct.is_some()
-                && denoted.is_some_and(|p| p.len() == 1))
+                // B-2026-09-28-63 — a nested struct leaf (`O { w: W { r,
+                // .. }, k }` denotes `w.r`) adopts through the same walker
+                // the projection `let r = o.w.r` already does. A TUPLE hop
+                // stays out: codegen's root walker adopts no tuple part.
+                && denoted.is_some_and(|p| {
+                    p.len() == 1
+                        || (self.destr_direct.contains(&n.as_str())
+                            && p.iter().all(|x| matches!(x, ParamPart::Field(_))))
+                }))
     }
 
     /// B-2026-09-27-105 — a nested hand-over the conditional query admits.
@@ -6303,7 +6338,11 @@ fn part_scan_let_names<'a>(b: &'a Block, out: &mut Vec<&'a str>) {
 /// B-2026-09-28-50 — every name a `let` pattern in `b` binds (`all`, at any
 /// block depth a statement reaches), and the subset bound by a DESTRUCTURING
 /// struct or tuple pattern (`destr`).
-fn part_scan_let_pattern_names<'a>(b: &'a Block, all: &mut Vec<&'a str>, destr: &mut Vec<&'a str>) {
+fn part_scan_let_pattern_names<'a>(
+    b: &'a Block,
+    all: &mut Vec<&'a str>,
+    destr: &mut Vec<(&'a str, Option<&'a str>)>,
+) {
     fn leaves<'a>(p: &'a Pattern, out: &mut Vec<&'a str>) {
         match &p.kind {
             PatternKind::Binding(n) => out.push(n.as_str()),
@@ -6327,7 +6366,11 @@ fn part_scan_let_pattern_names<'a>(b: &'a Block, all: &mut Vec<&'a str>, destr: 
             _ => {}
         }
     }
-    fn in_expr<'a>(e: &'a Expr, all: &mut Vec<&'a str>, destr: &mut Vec<&'a str>) {
+    fn in_expr<'a>(
+        e: &'a Expr,
+        all: &mut Vec<&'a str>,
+        destr: &mut Vec<(&'a str, Option<&'a str>)>,
+    ) {
         match &e.kind {
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
@@ -6368,7 +6411,20 @@ fn part_scan_let_pattern_names<'a>(b: &'a Block, all: &mut Vec<&'a str>, destr: 
                     pattern.kind,
                     PatternKind::Struct { .. } | PatternKind::Tuple(_)
                 ) {
-                    leaves(pattern, destr);
+                    // B-2026-09-28-63 — with the ROOT the value names, so
+                    // the caller can tell a destructure of the param (or a
+                    // projection of it) from one of a local alias.
+                    fn value_root(e: &Expr) -> Option<&str> {
+                        match &e.kind {
+                            ExprKind::Identifier(n) => Some(n.as_str()),
+                            ExprKind::FieldAccess { object, .. } => value_root(object),
+                            _ => None,
+                        }
+                    }
+                    let root = value_root(value);
+                    let mut names = Vec::new();
+                    leaves(pattern, &mut names);
+                    destr.extend(names.into_iter().map(|n| (n, root)));
                 }
                 in_expr(value, all, destr);
             }
