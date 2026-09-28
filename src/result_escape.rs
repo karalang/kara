@@ -38,6 +38,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 /// `match` scrutinee, uses that are a READ-ONLY position)`.
 /// B-2026-09-26-46 — see `Acc::lent`: (callee name, argument index) -> lent read.
 pub type LentPolicy<'a> = dyn Fn(&str, usize) -> bool + 'a;
+/// B-2026-09-28-24 — see `Acc::lent_call`: (call expression, argument index) -> lent read.
+pub type LentCallPolicy<'a> = dyn Fn(&Expr, usize) -> bool + 'a;
 
 #[derive(Default)]
 struct Acc<'a> {
@@ -134,6 +136,12 @@ struct Acc<'a> {
     /// with that name and the argument's index. `true` counts the use as a
     /// read. `None` everywhere else, so every other set is unchanged.
     lent: Option<&'a LentPolicy<'a>>,
+    /// B-2026-09-28-24 — the lent policy for a call [`Self::lent`] cannot
+    /// name by a bare identifier: a METHOD call (`q.eat(h)`) or an
+    /// associated / path call (`K.eat(h)`). Asked with the whole call
+    /// expression and the argument's index (the receiver excluded), so the
+    /// caller can resolve the callee with its own type information.
+    lent_call: Option<&'a LentCallPolicy<'a>>,
     /// B-2026-09-24-20 — by-value `Option`/`Result` PARAMS whose immutable
     /// whole rebinds (`let c = a;`) are read as ALIASES of the param: every
     /// later use of `c` is recorded against `a`, and the rebind itself records
@@ -274,9 +282,11 @@ pub fn by_value_nonescaping_param_names(func: &Function) -> HashSet<String> {
 pub fn by_value_nonescaping_param_names_lending<'a>(
     func: &'a Function,
     lent: &'a LentPolicy<'a>,
+    lent_call: &'a LentCallPolicy<'a>,
 ) -> HashSet<String> {
     let mut acc = seeded_acc(func);
     acc.lent = Some(lent);
+    acc.lent_call = Some(lent_call);
     walk_block(&func.body, &mut acc);
     func.params
         .iter()
@@ -1395,9 +1405,20 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                 (ExprKind::Identifier(cn), Some(l)) if !acc.in_closure => Some((cn.as_str(), l)),
                 _ => None,
             };
+            let lent_call = match (&callee.kind, acc.lent_call) {
+                (ExprKind::Identifier(_), _) => None,
+                (_, Some(l)) if !acc.in_closure => Some(l),
+                _ => None,
+            };
             for (k, a) in args.iter().enumerate() {
                 if let (Some((cn, l)), ExprKind::Identifier(n)) = (lent_to, &a.value.kind) {
                     if a.label.is_none() && !a.mut_marker && l(cn, k) {
+                        record_read_only_use(acc, n.as_str());
+                        continue;
+                    }
+                }
+                if let (Some(l), ExprKind::Identifier(n)) = (lent_call, &a.value.kind) {
+                    if a.label.is_none() && !a.mut_marker && l(e, k) {
                         record_read_only_use(acc, n.as_str());
                         continue;
                     }
@@ -1407,7 +1428,14 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         }
         ExprKind::MethodCall { object, args, .. } => {
             walk_expr(object, acc);
-            for a in args {
+            let lent_call = acc.lent_call.filter(|_| !acc.in_closure);
+            for (k, a) in args.iter().enumerate() {
+                if let (Some(l), ExprKind::Identifier(n)) = (lent_call, &a.value.kind) {
+                    if a.label.is_none() && !a.mut_marker && l(e, k) {
+                        record_read_only_use(acc, n.as_str());
+                        continue;
+                    }
+                }
                 walk_call_arg(a, acc);
             }
         }

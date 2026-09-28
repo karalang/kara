@@ -5887,53 +5887,60 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         asking.push((f.name.clone(), pname.to_string()));
         let asking_cell = std::cell::RefCell::new(std::mem::take(asking));
-        let lent = |cn: &str, k: usize| -> bool {
-            let Some(g) = program.items.iter().find_map(|it| match it {
-                crate::ast::Item::Function(g) if g.name == cn => Some(g),
-                _ => None,
-            }) else {
+        // B-2026-09-28-24 — one consumer question for every call spelling: a
+        // free function named bare (`lent`), or a method / associated call
+        // resolved through `passthrough_callee_key` (`lent_call`). For a
+        // method, `k` indexes `params`, which excludes the receiver.
+        let consumer = |g: &crate::ast::Function, k: usize| -> bool {
+            let Some(p) = g.params.get(k) else {
                 return false;
             };
-            if g.generic_params.is_some() || g.self_param.is_some() {
-                return false;
-            }
-            let Some(p) = g.params.get(k) else {
+            let crate::ast::PatternKind::Binding(gn) = &p.pattern.kind else {
                 return false;
             };
             let TypeKind::Path(path) = &p.ty.kind else {
                 return false;
             };
-            if !matches!(
-                path.segments.last().map(String::as_str),
-                Some("Option") | Some("Result")
-            ) {
+            // A generic consumer whose param is a BARE type parameter
+            // (`fn geat[T](t: T)`) cannot reach the payload at all, so only
+            // its own forwarding of `t` can take it; an `Option[T]` /
+            // `Result[T, E]` param is asked like a concrete one.
+            let bare_type_param = path.generic_args.is_none()
+                && path.segments.len() == 1
+                && g.generic_params
+                    .as_ref()
+                    .is_some_and(|gp| gp.params.iter().any(|q| q.name == path.segments[0]));
+            if !bare_type_param
+                && !matches!(
+                    path.segments.last().map(String::as_str),
+                    Some("Option") | Some("Result")
+                )
+            {
                 return false;
             }
-            let crate::ast::PatternKind::Binding(gn) = &p.pattern.kind else {
-                return false;
-            };
             // The consumer must leave EVERY body of the payload behind: a
             // flagged variant passes only when its arm binds the payload and
             // takes no field of it, copy reads alone, which is the full-walk
             // answer `optres_param_payload_bodies_stay_with_caller` gives. A
             // proper-subset mask is not enough here, since the caller at the
             // top of the chain cannot see which fields the consumer took.
-            let payload_stays = match self
-                .optres_payload_escape_map(g, &p.ty, None)
-                .get(gn.as_str())
-            {
-                None => true,
-                Some(vs) => vs
-                    .iter()
-                    .filter(|v| !optres_variant_payload_is_bodiless(&p.ty, v))
-                    .all(|v| {
-                        self.struct_payload_arity(&p.ty, v).is_some()
-                            && self
-                                .optres_payload_taken_fields(g, &p.ty, k, v)
-                                .is_some_and(|fs| fs.is_empty())
-                            && self.optres_payload_variant_only_copy_read(g, &p.ty, k, v)
-                    }),
-            };
+            let payload_stays = bare_type_param
+                || match self
+                    .optres_payload_escape_map(g, &p.ty, None)
+                    .get(gn.as_str())
+                {
+                    None => true,
+                    Some(vs) => vs
+                        .iter()
+                        .filter(|v| !optres_variant_payload_is_bodiless(&p.ty, v))
+                        .all(|v| {
+                            self.struct_payload_arity(&p.ty, v).is_some()
+                                && self
+                                    .optres_payload_taken_fields(g, &p.ty, k, v)
+                                    .is_some_and(|fs| fs.is_empty())
+                                && self.optres_payload_variant_only_copy_read(g, &p.ty, k, v)
+                        }),
+                };
             if !payload_stays {
                 return false;
             }
@@ -5949,8 +5956,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.optres_param_only_forwarded_in(g, gn, depth - 1, &mut inner)
             }
         };
-        let out = crate::result_escape::by_value_nonescaping_param_names_lending(f, &lent)
-            .contains(pname);
+        let lent = |cn: &str, k: usize| -> bool {
+            program
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    crate::ast::Item::Function(g) if g.name == cn => Some(g),
+                    _ => None,
+                })
+                .is_some_and(|g| g.self_param.is_none() && consumer(g, k))
+        };
+        let lent_call = |call: &Expr, k: usize| -> bool {
+            self.passthrough_callee_key(call)
+                .and_then(|(key, _)| crate::codegen::declarations::find_function_ast(program, &key))
+                .is_some_and(|g| !self.is_coroutine_compiled(&g.name) && consumer(g, k))
+        };
+        let out =
+            crate::result_escape::by_value_nonescaping_param_names_lending(f, &lent, &lent_call)
+                .contains(pname);
         *asking = asking_cell.into_inner();
         asking.pop();
         out
