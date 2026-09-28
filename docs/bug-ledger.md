@@ -93,11 +93,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 530 |
-| miscompile | 521 |
+| miscompile | 522 |
 | leak | 458 |
 | double-free | 339 |
 | missing-feature | 211 |
-| codegen-gap | 202 |
+| codegen-gap | 203 |
 | other | 153 |
 | diagnostics | 138 |
 | perf | 117 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2269 |
+| codegen | 2271 |
 | interp | 644 |
 | typecheck | 313 |
 | other | 111 |
@@ -406,6 +406,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-32 | 2026-09-28 | interp+codegen | medium | A NAMED `Option`/`Result` TUPLE ARG DESTRUCTURED IN THE CALLEE (`Some((w, n)) => return n`) LOSES THE ELEMENT'S `Drop` BODY -- concrete `Option[(W, i64)]`: `--interp` prints `  1 c9` with no `dW1/n1` while jit / `-O0` / `-O2` run it (and leak 2 B at `-O0`); generic `Option[(T, i64)]` and concrete `Result[(W, i64), i64]`: the body is lost on ALL FOUR surfaces with memory clean. A FRESH temp arg of the same shape runs the body everywhere, so the named binding is the axis. | — |
 | B-2026-09-28-33 | 2026-09-28 | typecheck+interp+codegen | medium | `partial_move_of_drop_enum` MISSES A PAYLOAD MOVED INTO A PRELUDE CONSTRUCTOR -- `match e { E.A(r) => { return Some(r); } ... }` and `let x = Some(r); return x;` over an `enum E` with its own `impl Drop` compile without the error that `E.A(r) => { return r; }` gets, and the backends then disagree about the enum's body: `--interp` prints no `dE` and jit / `-O0` / `-O2` print it once per call. The lint asks `binding_only_borrowed_with`, which reads the bare `Some(..)` callee as an entry-copying free function, so `r` looks borrowed. | — |
 | B-2026-09-28-34 | 2026-09-28 | codegen | medium | A FRESH `Option`/`Result` TEMP HANDED TO A CALLEE THAT ONLY CALLS `o.is_some()` / `o.is_ok()` RUNS NO PAYLOAD `Drop` BODY ON ANY COMPILED SURFACE -- `fn so(o: Option[W]) -> bool { return o.is_some(); }` called as `so(Some(mk(1)))` prints `atrue` on jit / `-O0` / `-O2` against `--interp`'s `dW1/n1 atrue`, and likewise for `Result[W, i64]` and `Result[(W, i64), i64]`. Memory is clean, so only the body is lost. | — |
+| B-2026-09-28-35 | 2026-09-28 | codegen | medium | A `match` OVER A BY-VALUE `Result` PARAM HANDED BACK THROUGH AN IDENTITY CALLEE, WHOSE ARMS ONLY READ, RUNS NO PAYLOAD `Drop` BODY ON ANY COMPILED SURFACE -- `fn peek(a: Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => 0 } }` prints `k30 end` on jit / -O0 / -O2 where `--interp` prints `d1 k30 end`; memory is balanced, only the body is lost. The `Err(e) => e` spelling is right, because one escaping name keeps the match on the consuming path | — |
+| B-2026-09-28-36 | 2026-09-28 | codegen | high | DESTRUCTURING A TUPLE PAYLOAD WITH ANY SUB-WORD ELEMENT FAILS MODULE VERIFICATION ON EVERY COMPILED SURFACE -- `let g = Some((3i32, 5)); if let Some((a, b)) = g { println(f"{a}{b}"); }` stops `karac build` and `karac run` with `insertvalue { i64, i64 } undef, i32 %pat.int.tr, 0`, while `--interp` prints `35`. Same for `bool`, `u8`, `i32` elements, in `Option`, `Result` and user enums, in `match` and `if let` | — |
 
 ### Relocated
 
