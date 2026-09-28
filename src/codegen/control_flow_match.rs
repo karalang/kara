@@ -7837,8 +7837,12 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> bool {
         let mut names: Vec<String> = Vec::new();
         collect_pattern_bindings(pattern, &mut names);
+        // B-2026-09-17-27 — a primitive leaf's move is a copy; see the arm
+        // sibling.
+        let scalars = self.arm_primitive_leaf_names(pattern);
         names
             .iter()
+            .filter(|n| !scalars.contains(*n))
             .any(|n| self.borrow_binding_escapes_block(block, n))
     }
 
@@ -7876,6 +7880,14 @@ impl<'ctx> super::Codegen<'ctx> {
             if self.pattern_is_unit_variant_test(&arm.pattern) {
                 names.clear();
             }
+            // B-2026-09-17-27 — a binding typed as a primitive scalar carries
+            // nothing out of the payload, so its move is a copy, not an escape.
+            // `Some((a, b)) => { return b; }` over `Option[(W, i64)]` read as
+            // escaping, the arm stopped being read-only, and the consuming path
+            // retracted the box's interior free while `a` registered bodies
+            // only: `W`'s `String` leaked. `return b + 0` was already clean.
+            let scalars = self.arm_primitive_leaf_names(&arm.pattern);
+            names.retain(|n| !scalars.contains(n));
             for name in &names {
                 if self.borrow_binding_escapes(&arm.body, name) {
                     return false;
@@ -16638,6 +16650,65 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => false,
         })
+    }
+
+    /// B-2026-09-17-27 — the names an `Ok(..)`/`Err(..)`/`Some(..)` arm binds
+    /// to a primitive scalar, answered only from sources that are EXACT for
+    /// the binding itself: the surface type name the typechecker records for
+    /// an integer binding, or the binding's position in a tuple sub-pattern
+    /// whose recorded type is a tuple. Never `pattern_binding_inner_types` on
+    /// a bare binding, which holds a `Vec`/`Slice` binding's ELEMENT type and
+    /// would call a `Vec[i64]` binding an `i64`.
+    ///
+    /// TUPLE LEAVES ONLY. A whole-payload binding (`Err(e) => e` with `e: i64`)
+    /// is left in the escape walk even though returning it takes no heap: that
+    /// one escaping name is what keeps `match id(a) { Ok(x) => x.r.id, Err(e)
+    /// => e }` on the consuming path, and filtering it moved the match onto the
+    /// read-only path, which runs no `Drop` body for a param handed back through
+    /// an identity callee. The same match with `Err(e) => 0` loses the body on
+    /// the tree before this fix too; that is B-2026-09-28-35's, not this row's.
+    fn arm_primitive_leaf_names(&self, pattern: &Pattern) -> std::collections::HashSet<String> {
+        let mut out = std::collections::HashSet::new();
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return out;
+        };
+        let surface_scalar = |sp: &crate::token::Span| {
+            self.pattern_state
+                .pattern_binding_types
+                .get(&(sp.offset, sp.length))
+                .is_some_and(|n| crate::codegen::param_own::is_primitive_type_name(n))
+        };
+        let prim_te = |te: &TypeExpr| {
+            matches!(&te.kind, TypeKind::Path(p)
+                if p.segments.len() == 1
+                    && p.generic_args.is_none()
+                    && crate::codegen::param_own::is_primitive_type_name(&p.segments[0]))
+        };
+        for sub in patterns {
+            let PatternKind::Tuple(elems) = &sub.kind else {
+                continue;
+            };
+            let positional = self
+                .pattern_state
+                .pattern_binding_inner_types
+                .get(&(sub.span.offset, sub.span.length))
+                .map(|te| self.subst_monomorph_type_params(te));
+            let tes = match positional.as_ref().map(|te| &te.kind) {
+                Some(TypeKind::Tuple(tes)) => Some(tes.clone()),
+                _ => None,
+            };
+            for (i, ep) in elems.iter().enumerate() {
+                let PatternKind::Binding(n) = &ep.kind else {
+                    continue;
+                };
+                if surface_scalar(&ep.span)
+                    || tes.as_ref().and_then(|t| t.get(i)).is_some_and(prim_te)
+                {
+                    out.insert(n.clone());
+                }
+            }
+        }
+        out
     }
 
     /// `Result[T, E]` sibling of `suppress_inline_option_payload_cleanup`.
