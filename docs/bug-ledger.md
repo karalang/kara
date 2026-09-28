@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 536 |
+| run-vs-build | 537 |
 | miscompile | 532 |
 | leak | 466 |
-| double-free | 347 |
+| double-free | 349 |
 | missing-feature | 213 |
 | codegen-gap | 203 |
 | other | 155 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2305 |
-| interp | 663 |
+| codegen | 2308 |
+| interp | 665 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -414,6 +414,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-71 | 2026-09-28 | codegen | medium | A DISCARDED GENERIC HAND-BACK OF A NAMED BOXED GENERIC-ENUM LOCAL, AND THE DIES-INSIDE LEG OF A BOUND ONE, LOSE THE PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `{ let d = mk(21); idg(d); println("a") }` prints `a end` on the JIT, -O0 and -O2 where `--interp` prints `dR21 a end`; `mid(d, true);`, `{ idg(d) };`, a discarded `if c { idg(d) } else { mk(14) };` and `let d2 = mid(d, false); show(d2)` (the leg where `d` dies inside `mid`) all lose the body the same way, with no leak | — |
 | B-2026-09-28-72 | 2026-09-28 | codegen+interp | medium | A DISCARDED OWNED-RECEIVER HAND-BACK OF A BOXED GENERIC ENUM LOSES THE PAYLOAD'S `Drop` BODY ON ALL FOUR SURFACES AND LEAKS 1 B COMPILED -- `{ let d = mk(22); d.id(); println("a") }` over `impl[T] G[T] { fn id(self) -> Self { return self; } }` prints `a end` everywhere, with no `dR22`, and valgrind reports `definitely lost: 1 bytes in 1 blocks` at -O0 | — |
 | B-2026-09-28-73 | 2026-09-28 | typecheck | low | INSIDE `impl[T] G[T]` THE TYPECHECKER DOES NOT UNIFY `Self`, `G` AND `G[T]` -- `fn id2(self) -> G[T] { return self; }` fails `expected 'G[T]', found 'G'`, returning a `Self`-typed param from `-> Self` fails `expected 'G', found 'Self'`, and `return G.Y` from `-> Self` fails `expected 'G', found 'G[T]'` | — |
+| B-2026-09-28-74 | 2026-09-28 | codegen | high | AN ENUM BINDING MOVED BY AN ASSIGNMENT KEEPS ITS DROP ARMED ON EVERY COMPILED SURFACE -- `let s = Pl.P(f".."); let mut k = Pl.Q; k = s;` over `enum Pl { P(String), Q }` aborts with `free(): double free` at -O0, `h.e = s` into a plain struct's enum field does the same, a payload with its own `Drop` double-frees at -O2 too, and a `shared` field (`h.e = s` over `shared enum Sh`) is a use-after-free that runs the payload's body at the store; `--interp` is right in every cell | — |
+| B-2026-09-28-75 | 2026-09-28 | interp+codegen | high | REMAINDER OF B-2026-09-28-74: FIVE NEIGHBOURS OF AN ENUM MOVED BY AN ASSIGNMENT STILL LOSE A BODY OR FREE TWICE -- a not-taken `if false { h.e = s; }` loses the payload's `Drop` body compiled, `self.e = s` from a by-value param double-frees, a `G[R2]` field runs no body and leaks, and a displaced `Option[R2]` field / `shared struct` field loses its body | — |
+| B-2026-09-28-76 | 2026-09-28 | interp+codegen | low | REMAINDER OF B-2026-09-19-18: A DESTRUCTURED HOLDER OF A `shared enum` STILL RELEASES AT SCOPE EXIT COMPILED AND AT THE VIEWS' LAST USE UNDER `--interp`, and a plain holder of a `shared STRUCT` is left where it was: a struct FIELD holder still diverges (`--interp` at the holder's last use, compiled at scope exit), and a `Vec` or tuple holder releases at scope exit on every surface, against design.md's live-range rule | — |
 
 ### Relocated
 
