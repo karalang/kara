@@ -3670,9 +3670,13 @@ impl<'ctx> super::Codegen<'ctx> {
             scalar_tes.entry(k).or_insert(v);
         }
         let prim_fields = self.arm_binding_primitive_field_reads(&scalar_tes);
+        // B-2026-09-20-2 — and one index hop into an `Array` binding.
+        let elem_tes = self.arm_binding_array_elem_tes(&scalar_tes);
+        let elem_prims = self.arm_binding_primitive_field_reads(&elem_tes);
         let copy_read = |e: &Expr| {
             Self::arm_binding_scalar_copy_read(&scalar_tes, e)
                 || Self::arm_binding_primitive_field_read(&prim_fields, e)
+                || Self::arm_binding_array_elem_copy_read(&elem_tes, &elem_prims, e)
         };
         Self::variant_arm_binds(pattern)
             .iter()
@@ -11334,9 +11338,13 @@ impl<'ctx> super::Codegen<'ctx> {
             scalar_tes.entry(k).or_insert(v);
         }
         let prim_fields = self.arm_binding_primitive_field_reads(&scalar_tes);
+        // B-2026-09-20-2 — and one index hop into an `Array` binding.
+        let elem_tes = self.arm_binding_array_elem_tes(&scalar_tes);
+        let elem_prims = self.arm_binding_primitive_field_reads(&elem_tes);
         let copy_read = |e: &Expr| {
             Self::arm_binding_scalar_copy_read(&scalar_tes, e)
                 || Self::arm_binding_primitive_field_read(&prim_fields, e)
+                || Self::arm_binding_array_elem_copy_read(&elem_tes, &elem_prims, e)
         };
         let arm_reads_only_bodies = body.is_some_and(|b| {
             !arm_binds.is_empty()
@@ -16350,6 +16358,64 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         out
+    }
+
+    /// B-2026-09-20-2 — the ELEMENT types of the arm's `Array[T, N]`
+    /// bindings, keyed by binding, so the two leaf-aware readers above can be
+    /// asked one index hop down: `x[i]` over a primitive element and `x[i].f`
+    /// over a primitive field of a struct element.
+    ///
+    /// Both readers stopped at the binding itself, so `G1.Y(x) => { let k =
+    /// x[0].id; .. }` over `G1[Array[R, 1]]` read as a partial move of `x`.
+    /// For a by-value generic-enum PARAM that one misreading took both
+    /// channels at once: the bodies mask ran with nobody to hand the body to,
+    /// and the memory retraction stripped the box's interior with nobody to
+    /// free it, so every `R`'s body was lost and its `String` leaked, while an
+    /// arm that printed the same `x[0].id` through an interpolation hole — a
+    /// read the syntactic walk already admits — was clean.
+    ///
+    /// `Array` only. A `Vec` binding's buffer is handed to the binding by the
+    /// container channel (`arm_binding_takes_container_interior`), so an index
+    /// read there is a different question with a different owner.
+    fn arm_binding_array_elem_tes(
+        &self,
+        tes: &std::collections::HashMap<String, TypeExpr>,
+    ) -> std::collections::HashMap<String, TypeExpr> {
+        tes.iter()
+            .filter_map(|(n, te)| {
+                self.array_elem_and_len(te)
+                    .map(|(elem, _)| (n.clone(), self.subst_monomorph_type_params(&elem)))
+            })
+            .collect()
+    }
+
+    /// Is `e` a read one index hop into an `Array` binding that provably
+    /// carries nothing away — `x[i]` over a primitive element, or `x[i].f`
+    /// over a primitive field? `elem_tes` / `elem_prims` are
+    /// [`Self::arm_binding_array_elem_tes`] and its primitive-field set.
+    fn arm_binding_array_elem_copy_read(
+        elem_tes: &std::collections::HashMap<String, TypeExpr>,
+        elem_prims: &std::collections::HashSet<(String, String)>,
+        e: &Expr,
+    ) -> bool {
+        let indexed_binding = |x: &Expr| match &x.kind {
+            ExprKind::Index { object, .. } => match &object.kind {
+                ExprKind::Identifier(n) => Some(n.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(n) = indexed_binding(e) {
+            return elem_tes.get(&n).is_some_and(|t| {
+                matches!(&t.kind, TypeKind::Path(p) if p.segments.last().is_some_and(
+                    |s| crate::codegen::param_own::is_primitive_type_name(s)
+                ))
+            });
+        }
+        let ExprKind::FieldAccess { object, field } = &e.kind else {
+            return false;
+        };
+        indexed_binding(object).is_some_and(|n| elem_prims.contains(&(n, field.clone())))
     }
 
     /// Is `e` a read of one of the primitive fields collected above?
