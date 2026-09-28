@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 533 |
 | miscompile | 528 |
-| leak | 460 |
+| leak | 461 |
 | double-free | 343 |
 | missing-feature | 211 |
 | codegen-gap | 203 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2285 |
+| codegen | 2286 |
 | interp | 653 |
 | typecheck | 313 |
 | other | 112 |
@@ -155,7 +155,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-53 | 2026-09-19 | codegen | high | A `shared enum`'s HEAP PAYLOAD IS NEVER FREED, whatever the arm does and whatever the payload is -- a read-only arm over `shared enum G[T] { Y(T), N }` strands 96 B for `Array[String, 2]` and 48 B for `Vec[String]` with output correct on every backend, and the `Array` hand-on arm additionally ABORTS at exit 134 with 96 B still lost, so there are two faults layered on one shape | — |
 | B-2026-09-19-54 | 2026-09-19 | codegen | medium | A GENERIC BOXED `Array[String, N]` PAYLOAD REBOUND TO A LOCAL IN THE ARM INVALID-FREES -- `match g { G.Y(x) => { let y = x; return y[0].len(); } }` reports 2 valgrind errors at `-O0` with output correct on every backend, while its mono twin and all three other arm shapes of the same payload are clean, so the move-binding path has a second owner the hand-on path does not | — |
 | B-2026-09-19-60 | 2026-09-19 | codegen | medium | A CONSUMING ARM THAT REBINDS A SEEDED `Array` PAYLOAD INTO A LOCAL LEAVES TWO OWNERS -- `match Option.Some(a) { Some(v) => { let u = v; .. } }` over a NAMED `Array[R, 2]` local aborts with two invalid frees at `-O0` against a correct `--interp`, and `@main` carries TWO `__karac_drop_array_te_R_2` calls over one element storage. No interior walk is armed for a consuming arm, so B-2026-09-19-58's paired retraction has nothing to pair with; B-2026-09-19-54 is the generic-envelope cousin (output correct, no abort) and B-2026-09-17-5 the bodies-channel twin | — |
-| B-2026-09-20-2 | 2026-09-20 | codegen+interp | high | A BOXED `Array[T, N]` ENUM PAYLOAD RUNS ITS ELEMENTS' `Drop` BODIES AT THE WRONG TIME OR NOT AT ALL -- 19 of 20 cells fail, the compiled backends running the bodies BEFORE the statement that produced them where `--interp` runs them after, and every GENERIC read-only arm losing them on both sides; independent of the element's heap and of the arity, so it is the boxed payload itself rather than any property of the element | — |
 | B-2026-09-20-3 | 2026-09-20 | codegen | medium | A CHAINED PLACE'S ENUM FIELD HANDED TO A BY-VALUE CALLEE IS STILL FREED TWICE after B-2026-09-19-51 -- `eatb(k.h.g)` over `struct Kb { h: Hb }` / `struct Hb { g: Eb }` reports 11 allocs / 14 frees and 7 errors, unchanged before and after -51's fix, because its neutraliser takes a NAMED BINDING ROOT ONLY and a two-hop place needs the GEP chain walked | — |
 | B-2026-09-20-4 | 2026-09-20 | codegen | medium | AN ENUM FIELD REACHED THROUGH AN OWNED `self` AND HANDED TO A BY-VALUE CALLEE IS FREED TWICE, and WORSE than the free-function spelling -- `eatb(self.g)` inside `impl Hb` reports 11 allocs / 17 frees and 14 errors where the free-function cell reports 14 frees / 7, so the owned receiver contributes its own over-free on top of the field hand-off; unchanged by B-2026-09-19-51 | — |
 | B-2026-09-20-5 | 2026-09-20 | codegen+interp | medium | ONE-HOP HALF FIXED BY 6adfc4cfc (B-2026-09-14-6); WHAT REMAINS IS THE TWO-HOP PROJECTION -- a NAMED LOCAL handed to a callee that returns `t.0.1` of its `Option` tuple payload (`let a = Some(((R,R), i64)); let g = m2(a)`) prints `got:22 dR22` under `--interp`, LOSING element 0.0's body, and `dR21 dR22 got:22 dR22` on every compiled surface, DOUBLING the escapee, against the due `dR21 got:22 dR22`; `remask_named_tuple_payload_arg` declines any path deeper than one hop, and the interpreter's named-local walk loses the sibling instead | — |
@@ -413,6 +412,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-50 | 2026-09-28 | interp+codegen | medium | A DESTRUCTURED OR PROJECTED PART OF A BY-VALUE PARAM MOVED INTO A CONTAINER ON ONLY SOME PATHS LOSES ITS `Drop` BODY ON THE NOT-MOVED PATH, OR RUNS IT TWICE -- `let W { r, s, b } = w; if c { xs.push(r); }` loses `r`'s body everywhere when `xs` outlives the call; into a LOCAL `xs` the compiled backends run `r`'s body on a moved-out husk (`dD5`, no name) on the not-pushed path, and on the pushed path the interpreter prints `dD6n6` twice and the compiled backends print `dD6n6` then `dD6` | — |
 | B-2026-09-28-51 | 2026-09-28 | interp | medium | `--interp` NEVER RUNS A `shared` FIELD'S `Drop` BODY WHEN THE STRUCT HOLDING IT IS A FRESH TEMPORARY PASSED BY VALUE -- `zn(mkz(1))` and `zn(Z { d: mkd(2), h: N { v: 2 } })` over `fn zn(z: Z)` print no `dN1` / `dN2` interpreted, where every compiled surface prints them; a named argument is right | — |
 | B-2026-09-28-49 | 2026-09-28 | codegen | high | A LOCAL MOVED INSIDE A BRANCH BY A BUILTIN SINK OR A `let` REBIND LOSES ITS `Drop` BODY (AND ITS MEMORY) ON THE PATH THAT DID NOT MOVE IT, ON EVERY COMPILED SURFACE -- `let b = E { id: 2 }; if flag(2) { es.push(b); }` and `let c = E { id: 3 }; if flag(3) { let k = c; .. }` print no `dE2` / `dE3` on JIT, seq and par, where `--interp` prints them; the same move through a user function (`if c { eat(a); }`) is right | — |
+| B-2026-09-28-52 | 2026-09-28 | codegen | medium | A CONSUMING ARM OVER A BY-VALUE GENERIC-ENUM PARAM WITH A HEAP-BOXED `Array[R, N]` PAYLOAD LEAKS ONE ELEMENT `String` -- `G1.Y(x) => { let k = x[0].id; let y = x; k + y[0].id }` and `G1.Y(x) => { let k = x[0].id; k + eat(x) }` each lose 1 B in 1 block at `-O0`, identically before and after B-2026-09-20-2's fix, with every `Drop` body running once | — |
 
 ### Relocated
 
@@ -3002,6 +3002,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-19-59 | codegen | high | AN `Array` ENUM PAYLOAD THAT FITS THE SEEDED ENVELOPE'S INLINE AREA IS FREED TWICE ON BOTH THE `let` AND THE `match` SPELLING -- `Array[S, 1]` over `… | 967348124 |
 | B-2026-09-19-61 | codegen+interp | high | A BY-VALUE `Array` PARAM MOVED INTO A SEEDED `match` SCRUTINEE IS FREED BY BOTH THE CALLER AND THE CALLEE -- the caller keeps its `__karac_drop_array… | cc6b901e6 |
 | B-2026-09-20-1 | codegen | high | AN INLINE-FITTING `Array[T, 1]` ENUM PAYLOAD BOUND IN A MATCH ARM DOES NOT COMPILE -- `match g { S1.M(x) => x[0].v }` is rejected with `Index operato… | 08d27cc |
+| B-2026-09-20-2 | codegen+interp | high | A BOXED `Array[T, N]` ENUM PAYLOAD RUNS ITS ELEMENTS' `Drop` BODIES AT THE WRONG TIME OR NOT AT ALL -- 19 of 20 cells fail, the compiled backends run… | 33b456c2d |
 | B-2026-09-20-9 | codegen | high | A SEEDED `Option` / `Result` ENVELOPE LOSES ITS PAYLOAD'S `Drop` BODY ON A MATCH ARM -- `match o { Some(x) => x[0].tag.len() }` over `Option[Array[S,… | 678ebf8 |
 | B-2026-09-20-10 | interp | medium | THE INTERPRETER, NOT THE COMPILED BACKENDS, LOSES A DISCARDED SEEDED-ENVELOPE VALUE'S `Drop` BODY -- `Some(a);` as a statement prints nothing under `… | 678ebf8 |
 | B-2026-09-20-12 | codegen | high | A BY-VALUE ENUM ARGUMENT SPELLED AS A FIELD PROJECTION RUNS ITS PAYLOAD'S `Drop` BODY TWICE -- `eat(b.w)` fires the body once inside the callee and a… | 58cb50cd5 |
