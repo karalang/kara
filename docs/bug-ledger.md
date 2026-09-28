@@ -96,12 +96,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 532 |
 | leak | 466 |
 | double-free | 347 |
-| missing-feature | 211 |
+| missing-feature | 213 |
 | codegen-gap | 203 |
 | other | 155 |
 | diagnostics | 138 |
 | perf | 117 |
-| false-positive | 111 |
+| false-positive | 112 |
 | crash | 101 |
 | soundness | 97 |
 | use-after-free | 62 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2303 |
-| interp | 662 |
-| typecheck | 313 |
+| codegen | 2305 |
+| interp | 663 |
+| typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
 | cli | 73 |
@@ -369,7 +369,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-120 | 2026-09-27 | codegen | low | WITH TWO CONCRETE IMPLS OF ONE GENERIC ENUM, NO METHOD OF EITHER CAN BE CALLED ON A TEMP RECEIVER -- `G1.Y([4, 5]).show()` beside `impl G1[Vec[i64]]` and `impl G1[String]` fails `no handler for method 'show' on non-identifier receiver`, and so does a method only ONE of the impls defines; named receivers dispatch correctly, and `--interp` runs all of them | — |
 | B-2026-09-27-121 | 2026-09-27 | codegen | high | A GENERIC IMPL METHOD INTERPOLATING A `Vec` PAYLOAD PRINTS RAW BYTES AND LEAKS -- `impl[T] G1[T] { fn show(self) { match self { G1.Y(v) => { println(f"vec {v}") } .. } } }` at `G1[Vec[i64]]` prints `vec \x01\0\0` (a NUL-bearing byte string) for `[1, 2, 3]` on JIT, -O0, -O2 and auto-par=0, and loses 72 B in 4 blocks at -O0; `--interp` prints `vec [1, 2, 3]`, and the CONCRETE `impl G1[Vec[i64]]` is correct after B-2026-09-17-13 | — |
 | B-2026-09-27-122 | 2026-09-27 | interp | medium | `--interp` RUNS THE PAYLOAD'S `Drop` BODY TWICE WHEN AN OWNED-`self` METHOD FORWARDS `self` TO ANOTHER THAT REBINDS IT -- `fn fwd(self) -> i64 { return self.reb(); }` over `fn reb(self) -> i64 { let e = self; match e { .. } }` prints `dR3 c7 dR3` under `--interp`; every compiled surface prints `c7 dR3`, memory clean | — |
-| B-2026-09-27-123 | 2026-09-27 | codegen | high | HANDING A BOXED GENERIC ENUM RECEIVER BACK WHOLE DOUBLE-FREES IT -- `let d2 = d.id(); match d2 { .. }` over `impl[T] G[T] { fn id(self) -> Self { return self; } }` at `G[R]` aborts `free(): double free` on JIT, -O0 and auto-par=0 (1 invalid free at -O0) where `--interp` prints `d4 dR4` | — |
 | B-2026-09-27-125 | 2026-09-27 | codegen | high | HANDING ONE LEAF OF A DESTRUCTURED TUPLE PAYLOAD TO A BY-VALUE CALLEE RUNS EVERY ELEMENT'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE AND LEAKS -- `match o { Some((a, b)) => { eat(b); .. } }` over `Option[(R, R)]` prints `e4 t3 dR3 dR4 dR3 dR4` on the JIT, -O0, -O2 and auto-par=0 against `e4 t3 dR4 dR3` under `--interp`, losing 4 B in 2 blocks; three elements run each body three times | — |
 | B-2026-09-27-126 | 2026-09-27 | codegen | low | A DESTRUCTURED TUPLE PAYLOAD WHOSE `let mut` SCRUTINEE IS REASSIGNED LATER RUNS THE LEAVES' `Drop` BODIES AT THE REASSIGNMENT ON EVERY COMPILED SURFACE AND AT ARM END UNDER `--interp` -- `if let Some((a, b)) = o { .. } println("mid"); o = Some(..)` prints `i1 dR2 dR1 mid` interpreted and `i1 mid dR2 dR1` compiled; the order agrees, only the position differs | — |
 | B-2026-09-28-1 | 2026-09-28 | codegen | medium | DESTRUCTURING A NESTED TUPLE PROJECTION INTO A `let` RUNS BOTH ELEMENTS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE -- `let (p, q) = t.0;` over a local `t: ((W, W), i64)` prints `dW9 dW109 pq1099 dW109 dW9` on the JIT, `-O0` and `-O2` against `--interp`'s `pq1099 dW109 dW9`; the first pair fires AT the `let`, before `p` and `q` are read | — |
@@ -412,6 +411,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-68 | 2026-09-28 | interp | medium | `--interp` RUNS A BOXED `Option` ARGUMENT'S `Drop` BODY TWICE, TEMPORARY OR NAMED, WHEN IT REACHES A `Vec` THROUGH TWO FORWARDING FRAMES -- `fn f2(t: Option[S], v: mut ref Vec[Option[S]]) { ofw(t, v) }` prints `dS1 n1 dS1 end` for `f2(Option.Some(mks(1)), mut u)` against the compiled surfaces' `n1 dS1 end` | — |
 | B-2026-09-28-69 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-63: A TUPLE DESTRUCTURE OR PROJECTION OF A BY-VALUE PARAM, A TWO-STEP STRUCT DESTRUCTURE THROUGH A LOCAL, AND A `self` RECEIVER'S NESTED PART, EACH WITH A PART PUSHED INTO A CONTAINER ON ONLY SOME PATHS, LOSE THE PART'S `Drop` BODY ON THE PATH THAT KEEPS IT -- on every surface for three spellings, and only compiled for two tuple spellings | — |
 | B-2026-09-28-70 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-53: NESTED-ENVELOPE SHAPES STILL LEAK COMPILED WITH OUTPUT RIGHT -- `Some(Ok(mk(1)));` 29 B (also inside `fn c(x: S)`), `m.remove(1)` / `v.pop()` of an `Option[S]` element 32 B, a discarded `Result[Option[S], i64]` 32 B (also a `let o: Result[Option[S], i64] = Ok(Some(x))` on the exit that does not return it), `E.A(Some(x))` 32 B -- AND A USER VARIANT OVER A NEST (`let e = E.A(Some(x)); e`, or `E.A(Some(mk(1)))` matched with `E.A(Some(s))`) LOSES OR DOUBLES ITS BODY: `--interp` runs none, compiled runs it (twice when a param is returned through it) | — |
+| B-2026-09-28-71 | 2026-09-28 | codegen | medium | A DISCARDED GENERIC HAND-BACK OF A NAMED BOXED GENERIC-ENUM LOCAL, AND THE DIES-INSIDE LEG OF A BOUND ONE, LOSE THE PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `{ let d = mk(21); idg(d); println("a") }` prints `a end` on the JIT, -O0 and -O2 where `--interp` prints `dR21 a end`; `mid(d, true);`, `{ idg(d) };`, a discarded `if c { idg(d) } else { mk(14) };` and `let d2 = mid(d, false); show(d2)` (the leg where `d` dies inside `mid`) all lose the body the same way, with no leak | — |
+| B-2026-09-28-72 | 2026-09-28 | codegen+interp | medium | A DISCARDED OWNED-RECEIVER HAND-BACK OF A BOXED GENERIC ENUM LOSES THE PAYLOAD'S `Drop` BODY ON ALL FOUR SURFACES AND LEAKS 1 B COMPILED -- `{ let d = mk(22); d.id(); println("a") }` over `impl[T] G[T] { fn id(self) -> Self { return self; } }` prints `a end` everywhere, with no `dR22`, and valgrind reports `definitely lost: 1 bytes in 1 blocks` at -O0 | — |
+| B-2026-09-28-73 | 2026-09-28 | typecheck | low | INSIDE `impl[T] G[T]` THE TYPECHECKER DOES NOT UNIFY `Self`, `G` AND `G[T]` -- `fn id2(self) -> G[T] { return self; }` fails `expected 'G[T]', found 'G'`, returning a `Self`-typed param from `-> Self` fails `expected 'G', found 'Self'`, and `return G.Y` from `-> Self` fails `expected 'G', found 'G[T]'` | — |
 
 ### Relocated
 
@@ -3221,6 +3223,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-98 | codegen+interp | medium | A BY-VALUE PLAIN `Drop` STRUCT PARAM THAT THE CALLEE RETURNS ON SOME PATHS AND PASSES TO A BY-VALUE CONSUMER ON THE OTHERS LOSES ITS `Drop` BODY ON T… | 06bbbf7e7 |
 | B-2026-09-27-130 | codegen | high | A NON-GENERIC USER ENUM PARAM WITH AN INLINE `Drop` PAYLOAD, RETURNED ON SOME PATHS AND PASSED TO A BY-VALUE CONSUMER ON THE OTHERS, CRASHES WITH NO… | 66ff48480 |
 | B-2026-09-27-131 | interp | medium | `--interp` LOSES THE `Drop` BODY OF A BOXED GENERIC ENUM PARAM THAT THE CALLEE REBINDS (`let m = h;`), RETURNS ON SOME PATHS AND PASSES TO A BY-VALUE… | 18f314d0c |
+| B-2026-09-27-123 | codegen | high | HANDING A BOXED GENERIC ENUM RECEIVER BACK WHOLE DOUBLE-FREES IT -- `let d2 = d.id(); match d2 { . | 8df1e0f59 |
 | B-2026-09-27-124 | codegen | medium | AN `if let` / `while let` THAT DESTRUCTURES A TUPLE PAYLOAD OUT OF A NAMED `Option` LOCAL AND ONLY READS THE LEAVES LEAKS EVERY HEAP LEAF, with no `D… | 780f957f2 |
 | B-2026-09-28-8 | codegen | high | A BOXED GENERIC-ENUM PAYLOAD FORWARDED THROUGH A GENERIC MIDDLE FUNCTION VIA A LOCAL REBOUND FROM A PASSTHROUGH CALL IS STILL FREED TWICE -- `fn gvia… | 5cc3de800 |
 | B-2026-09-28-4 | codegen+interp | medium | A FRESH TEMP THAT CARRIES AN OWNED PARAM RUNS THE PARAM'S `Drop` BODY TWICE WHEN IT IS DISCARDED OR MISSED BY `if let`, ON EVERY SURFACE -- `mk2o(x);… | bc88b572d |
