@@ -9760,8 +9760,13 @@ impl<'a> super::Interpreter<'a> {
     /// different question about the same predicate and are deliberately left
     /// alone.
     fn optres_payload_te_runs_user_drop(&self, pt: &TypeExpr) -> bool {
+        // B-2026-09-17-20 — recursive per element, like the array leg below,
+        // so a nested tuple / `Vec` / `Option` element qualifies the payload
+        // as far as the walk's tuple arm now reaches.
         if let TypeKind::Tuple(elems) = &pt.kind {
-            return elems.iter().any(|e| self.type_expr_runs_user_drop(e));
+            return elems
+                .iter()
+                .any(|e| self.optres_payload_te_runs_user_drop(e));
         }
         // B-2026-09-10-27 — an `Array[T, N]` payload qualifies on its ELEMENT,
         // exactly as the tuple arm above qualifies on its elements. Asking
@@ -9978,22 +9983,18 @@ impl<'a> super::Interpreter<'a> {
             let TypeKind::Tuple(elem_tes) = &payload_te.kind else {
                 return;
             };
+            // B-2026-09-17-20 — recurse on each ELEMENT's declared type rather
+            // than accepting a struct element only. A non-struct element (a
+            // nested tuple, a `Vec`, an `Option`) was skipped outright, so
+            // `match o { Some(t) => .. }` over `Option[((W, W), i64)]` ran no
+            // body here while every compiled surface ran both, and the same
+            // for `Option[(Vec[W], i64)]` and `Option[(Option[W], i64)]`. The
+            // struct arm below is the same declared-head-gated walk the loop
+            // carried inline, so a struct element is unchanged, and every
+            // other element shape gets the arm the payload itself would.
             let items = items.clone();
             for (elem, elem_te) in items.iter().zip(elem_tes.iter()) {
-                let Some(head) = Self::declared_field_type_head(elem_te) else {
-                    continue;
-                };
-                let Value::Struct { name: en, .. } = elem else {
-                    continue;
-                };
-                if *en != head {
-                    continue;
-                }
-                let en = en.clone();
-                if self.program.drop_method_keys.contains_key(&en) {
-                    self.run_user_drop_body_only(&en, elem.clone());
-                }
-                self.drop_user_drop_fields_of_value(elem);
+                self.run_optres_payload_bodies_for(elem_te, elem);
             }
             return;
         }

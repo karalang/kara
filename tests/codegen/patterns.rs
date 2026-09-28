@@ -2875,18 +2875,15 @@ end
 /// scrutinee is a CALL, so the payload is a fresh temp with no named place to
 /// keep a walk.
 ///
-/// THIS TRANSCRIPT IS NOT THE INTERPRETER'S, and the difference is
-/// B-2026-09-17-20, not this row: the compiled backends run the nested payload
-/// elements' `Drop` bodies (correct — the arm binding owns the payload) and the
-/// interpreter runs NONE of them for a nested tuple, though it runs them for the
-/// one-hop `n8`. The divergence was unobservable until this fix, because the
-/// compiled side refused to build at all. Memory is balanced either way:
+/// The payload elements' `Drop` bodies were for a while the compiled side's
+/// alone: the interpreter ran none of them for a nested tuple, though it ran
+/// them for the one-hop `n8` (B-2026-09-17-20). Memory is balanced either way:
 /// 48 allocs / 48 frees, 0 valgrind errors, "All heap blocks were freed" at
 /// `KARAC_OPT_LEVEL=0`.
 ///
 /// Twin: `tests/interpreter.rs`'s
 /// `test_arm_bound_nested_tuple_payload_field_read_resolves`, pinned to the
-/// INTERPRETER's transcript for the reason above.
+/// same string since B-2026-09-17-20 fixed the interpreter's walk.
 #[test]
 fn e2e_arm_bound_nested_tuple_payload_field_read_resolves() {
     assert_eq!(

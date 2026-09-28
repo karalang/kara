@@ -1,0 +1,59 @@
+//! B-2026-09-17-20 -- an `Option`/`Result` payload tuple whose element is not
+//! a struct (a nested tuple, a `Vec`, an `Option`, a user enum) runs that
+//! element's `Drop` bodies under `--interp`, as every compiled surface did.
+
+use super::*;
+
+/// B-2026-09-17-20 — `--interp` printed `  b2` where the JIT, `-O0` and `-O2`
+/// printed `  b2 dW2 dW102`. The payload walk's tuple arm accepted a STRUCT
+/// element only and skipped every other shape, and the gate that arms the walk
+/// asked the flat `type_expr_runs_user_drop` about each element, which answers
+/// false for a tuple, `Vec` or `Option` head. Both now recurse per element.
+/// Twin of `e2e_nested_tuple_payload_element_runs_its_bodies`.
+#[test]
+fn test_nested_tuple_payload_element_runs_its_bodies() {
+    let out = run(r#"struct W { id: i64, tag: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
+fn mk(i: i64) -> W { return W { id: i, tag: f"t{i}" } }
+enum U { P(W), Q }
+enum K { A, B }
+impl Drop for K { fn drop(mut ref self) { println("dK") } }
+fn a1() { let o: Option[(W, i64)] = Some((mk(1), 1)); match o { Some(t) => { println(f"  a{t.0.id}") } None => {} } }
+fn a2() { let o: Option[((W, W), i64)] = Some(((mk(2), mk(102)), 2)); match o { Some(t) => { println(f"  b{t.0.0.id}") } None => {} } }
+fn a3() { let o: Option[((W, W), i64)] = Some(((mk(3), mk(103)), 3)); match o { Some(t) => { println("  c") } None => {} } }
+fn v1() { let o: Option[(Vec[W], i64)] = Some(([mk(4), mk(104)], 4)); match o { Some(t) => { println(f"  v{t.1}") } None => {} } }
+fn o1() { let o: Option[(Option[W], i64)] = Some((Some(mk(5)), 5)); match o { Some(t) => { println(f"  o{t.1}") } None => {} } }
+fn n1() { let o: Option[(((W, i64), W), i64)] = Some((((mk(6), 6), mk(106)), 6)); match o { Some(t) => { println(f"  n{t.1}") } None => {} } }
+fn i1() { let o: Option[((W, W), i64)] = Some(((mk(7), mk(107)), 7)); if let Some(t) = o { println(f"  i{t.1}") } }
+fn p1(o: Option[((W, W), i64)]) { match o { Some(t) => { println(f"  p{t.1}") } None => {} } }
+fn r1() { let r: Result[((W, W), i64), i64] = Ok(((mk(9), mk(109)), 9)); match r { Ok(t) => { println(f"  r{t.1}") } Err(e) => {} } }
+fn u1() { let o: Option[(U, i64)] = Some((U.P(mk(10)), 10)); match o { Some(t) => { println(f"  u{t.1}") } None => {} } }
+fn k1() { let o: Option[(K, i64)] = Some((K.A, 11)); match o { Some(t) => { println(f"  k{t.1}") } None => {} } }
+fn rb() { let o: Option[((W, W), i64)] = Some(((mk(12), mk(112)), 12)); match o { Some(t) => { let u = t; println(f"  rb{u.1}") } None => {} } }
+fn le() -> i64 { let o: Option[((W, W), i64)] = Some(((mk(13), mk(113)), 13)); let Some(t) = o else { return 0 }; println(f"  le{t.1}"); return 1 }
+fn sm() { let o: Option[((W, W), i64)] = Some(((mk(14), mk(114)), 14)); println(f"  sm{o.is_some()}") }
+fn wl() { let mut o: Option[((W, W), i64)] = Some(((mk(15), mk(115)), 15)); while let Some(t) = o { println(f"  w{t.1}"); o = None; } }
+fn lp() { for i in 0..2 { let o: Option[((W, W), i64)] = Some(((mk(20 + i), mk(120 + i)), i)); match o { Some(t) => { println(f"  l{t.1}") } None => {} } } }
+fn main() {
+    a1(); println("--"); a2(); println("--"); a3(); println("--"); v1(); println("--");
+    o1(); println("--"); n1(); println("--"); i1(); println("--");
+    p1(Some(((mk(8), mk(108)), 8))); println("--"); r1(); println("--");
+    u1(); println("--"); k1(); println("--"); rb(); println("--");
+    println(f"  v{le()}"); println("--"); sm(); println("--"); wl(); println("--"); lp();
+    println("end");
+}
+"#);
+    let got: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        got,
+        [
+            "  a1", "dW1", "--", "  b2", "dW2", "dW102", "--", "  c", "dW3", "dW103", "--", "  v4",
+            "dW4", "dW104", "--", "  o5", "dW5", "--", "  n6", "dW6", "dW106", "--", "  i7", "dW7",
+            "dW107", "--", "  p8", "dW8", "dW108", "--", "  r9", "dW9", "dW109", "--", "  u10",
+            "dW10", "--", "  k11", "dK", "--", "  rb12", "dW12", "dW112", "--", "  le13", "dW13",
+            "dW113", "  v1", "--", "  smtrue", "dW14", "dW114", "--", "  w15", "dW15", "dW115",
+            "--", "  l0", "dW20", "dW120", "  l1", "dW21", "dW121", "end",
+        ],
+        "got:\n{out}"
+    );
+}

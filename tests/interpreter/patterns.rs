@@ -1916,19 +1916,14 @@ end
 
 /// B-2026-09-10-21 — the interpreter twin of
 /// `tests/codegen.rs`'s `e2e_arm_bound_nested_tuple_payload_field_read_resolves`,
-/// and deliberately NOT pinned to the same string.
+/// pinned to the same string.
 ///
-/// The field READS are what this row is about and they are identical on both
-/// backends. What differs is the payload elements' `Drop` bodies: the compiled
-/// backends run them (correct — the arm binding owns the payload, and the one-hop
-/// `n8` agrees on both), and the interpreter runs NONE of them once the payload
-/// element is itself a TUPLE. That is B-2026-09-17-20, filed, and it became
-/// observable only when this row's fix let the compiled side build at all.
-///
-/// Pinning the interpreter's own transcript here rather than the agreed one is
-/// what keeps the divergence VISIBLE in the pair: whoever fixes -19 makes this
-/// string gain the `dW…` lines its twin already has, and the two fixtures then
-/// hold the same text.
+/// The field READS are what that row is about. The payload elements' `Drop`
+/// bodies were pinned here at the interpreter's own transcript, which ran NONE
+/// of them once the payload element was itself a TUPLE, so the divergence
+/// stayed visible in the pair. B-2026-09-17-20 gave the interpreter's tuple
+/// payload walk its per-element recursion, and the two fixtures now hold one
+/// text.
 #[test]
 fn test_arm_bound_nested_tuple_payload_field_read_resolves() {
     assert_eq!(
@@ -1962,18 +1957,28 @@ fn main() {
 "#),
         r#"n1
   a1/t1
+dW1/t1
+dW101/t101
 n2
   b102
+dW2/t2
+dW102/t102
 n3
   c3
+dW3/t3
+dW103/t103
 n4
   d4
 n5
   e5
+dW5/t5
+dW105/t105
 n6
   f6/60/600
 n7
   g7/5
+dW7/t7
+dW107/t107
 n8
   h8
 dW8/t8
