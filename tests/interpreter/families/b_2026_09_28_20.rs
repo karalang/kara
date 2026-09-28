@@ -91,3 +91,42 @@ fn main() {
 }"#);
     assert_eq!(out, "dD1n1\na1\ndD3n3\nb2\ndD5n5\nc0\ndD6n6\nc1\ndD7n7\ne3\ndD9n9\nf4\ng5\ndD2n2\ndD4n4\ndD8n8\ndD10n10\nend\n");
 }
+
+/// B-2026-09-28-20 cell (i) — a by-value struct with NO `Drop` of its own
+/// whose fields run user bodies (`struct W { r: D, s: D, b: i64 }`), stored on
+/// only some paths (`if c { xs.push(w); }`), lost its fields' bodies on the
+/// path that did not store it (a fresh temporary on all four surfaces, a named
+/// argument under `--interp`) and ran them twice on the path that did (a named
+/// or projected argument, compiled). The callee now adopts the fields' bodies
+/// under the per-path store flag and the caller stands its field walk down on
+/// every path: free function, method, tail push, loop, nested struct.
+#[test]
+fn test_field_bodies_struct_stored_on_one_path_runs_its_fields_once() {
+    let out = run(r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
+fn keep(d: D) -> D { d }
+fn ownw(w: W, c: bool) -> i64 { let mut xs: Vec[W] = Vec.new(); if c { xs.push(w); } xs.len() }
+fn st(xs: mut ref Vec[W], w: W, c: bool) { if c { xs.push(w); } }
+fn tl(w: W, c: bool) -> i64 { let mut xs: Vec[W] = Vec.new(); if c { xs.push(w) } xs.len() }
+fn lst(xs: mut ref Vec[W], w: W, n: i64) { let mut i = 0; while i < n { if i == 1 { xs.push(w); return; } i = i + 1; } }
+struct H { k: i64 }
+impl H { fn m(ref self, w: W, c: bool) -> i64 { let mut xs: Vec[W] = Vec.new(); if c { xs.push(w); } xs.len() } }
+struct X { w: W, t: D }
+struct Y { w: W, n: i64 }
+fn yst(xs: mut ref Vec[Y], y: Y, c: bool) { if c { xs.push(y); } }
+fn main() {
+    println(f"a{ownw(mkw(1), false)}"); println(f"a{ownw(mkw(2), true)}")
+    let w3 = mkw(3); println(f"b{ownw(w3, false)}"); let w4 = mkw(4); println(f"b{ownw(w4, true)}")
+    let mut ws: Vec[W] = Vec.new(); st(mut ws, mkw(5), false); let w6 = mkw(6); st(mut ws, w6, true); println(f"c{ws.len()}")
+    println(f"d{tl(mkw(7), false)}"); println(f"d{tl(mkw(8), true)}")
+    let h = H { k: 0 }; println(f"e{h.m(mkw(9), false)}"); let w10 = mkw(10); println(f"e{h.m(w10, true)}")
+    let x11 = X { w: mkw(11), t: mkd(311) }; println(f"f{ownw(x11.w, false)}"); let x12 = X { w: mkw(12), t: mkd(312) }; println(f"f{ownw(x12.w, true)}")
+    let mut ys: Vec[Y] = Vec.new(); yst(mut ys, Y { w: mkw(13), n: 13 }, false); let y14 = Y { w: mkw(14), n: 14 }; yst(mut ys, y14, true); println(f"g{ys.len()}")
+    lst(mut ws, mkw(15), 1); let w16 = mkw(16); lst(mut ws, w16, 3); println(f"h{ws.len()}")
+    println("end")
+}"#);
+    assert_eq!(out, "dD101n101\ndD1n1\na0\ndD102n102\ndD2n2\na1\ndD103n103\ndD3n3\nb0\ndD104n104\ndD4n4\nb1\ndD105n105\ndD5n5\nc1\ndD107n107\ndD7n7\nd0\ndD108n108\ndD8n8\nd1\ndD109n109\ndD9n9\ne0\ndD110n110\ndD10n10\ne1\ndD111n111\ndD11n11\nf0\ndD311n311\ndD112n112\ndD12n12\nf1\ndD312n312\ndD113n113\ndD13n13\ng1\ndD114n114\ndD14n14\ndD115n115\ndD15n15\nh2\ndD106n106\ndD6n6\ndD116n116\ndD16n16\nend\n");
+}

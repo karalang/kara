@@ -15585,7 +15585,13 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         self.suppress_user_drop_body_keeping_memory(name);
-        let every_path = arg_index.is_some_and(|i| self.arg_leaves_caller_on_every_path(callee, i));
+        // B-2026-09-28-20 — or stored on some paths by a callee that adopts
+        // the fields' bodies on the others
+        // (`cond_store_field_bodies_move_to_callee`).
+        let every_path = arg_index.is_some_and(|i| {
+            self.arg_leaves_caller_on_every_path(callee, i)
+                || self.cond_store_field_bodies_move_to_callee(callee, i)
+        });
         let innermost = self
             .drop_rc
             .scope_cleanup_actions

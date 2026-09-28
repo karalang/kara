@@ -169,3 +169,96 @@ fn main() {
         30,
     );
 }
+
+/// B-2026-09-28-20 cell (i) — a by-value struct with NO `Drop` of its own
+/// whose fields run user bodies (`struct W { r: D, s: D, b: i64 }`), stored on
+/// only some paths (`if c { xs.push(w); }`), lost its fields' bodies on the
+/// path that did not store it (a fresh temporary on all four surfaces, a named
+/// argument under `--interp`) and ran them twice on the path that did (a named
+/// or projected argument, compiled). The callee now adopts the fields' bodies
+/// under the per-path store flag and the caller stands its field walk down on
+/// every path: free function, method, tail push, loop, nested struct.
+#[test]
+fn asan_field_bodies_struct_stored_on_one_path_frees_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
+fn keep(d: D) -> D { d }
+fn ownw(w: W, c: bool) -> i64 { let mut xs: Vec[W] = Vec.new(); if c { xs.push(w); } xs.len() }
+fn st(xs: mut ref Vec[W], w: W, c: bool) { if c { xs.push(w); } }
+fn tl(w: W, c: bool) -> i64 { let mut xs: Vec[W] = Vec.new(); if c { xs.push(w) } xs.len() }
+fn lst(xs: mut ref Vec[W], w: W, n: i64) { let mut i = 0; while i < n { if i == 1 { xs.push(w); return; } i = i + 1; } }
+struct H { k: i64 }
+impl H { fn m(ref self, w: W, c: bool) -> i64 { let mut xs: Vec[W] = Vec.new(); if c { xs.push(w); } xs.len() } }
+struct X { w: W, t: D }
+struct Y { w: W, n: i64 }
+fn yst(xs: mut ref Vec[Y], y: Y, c: bool) { if c { xs.push(y); } }
+fn main() {
+    println(f"a{ownw(mkw(1), false)}"); println(f"a{ownw(mkw(2), true)}")
+    let w3 = mkw(3); println(f"b{ownw(w3, false)}"); let w4 = mkw(4); println(f"b{ownw(w4, true)}")
+    let mut ws: Vec[W] = Vec.new(); st(mut ws, mkw(5), false); let w6 = mkw(6); st(mut ws, w6, true); println(f"c{ws.len()}")
+    println(f"d{tl(mkw(7), false)}"); println(f"d{tl(mkw(8), true)}")
+    let h = H { k: 0 }; println(f"e{h.m(mkw(9), false)}"); let w10 = mkw(10); println(f"e{h.m(w10, true)}")
+    let x11 = X { w: mkw(11), t: mkd(311) }; println(f"f{ownw(x11.w, false)}"); let x12 = X { w: mkw(12), t: mkd(312) }; println(f"f{ownw(x12.w, true)}")
+    let mut ys: Vec[Y] = Vec.new(); yst(mut ys, Y { w: mkw(13), n: 13 }, false); let y14 = Y { w: mkw(14), n: 14 }; yst(mut ys, y14, true); println(f"g{ys.len()}")
+    lst(mut ws, mkw(15), 1); let w16 = mkw(16); lst(mut ws, w16, 3); println(f"h{ws.len()}")
+    println("end")
+}
+"#,
+        &[
+            "dD101n101",
+            "dD1n1",
+            "a0",
+            "dD102n102",
+            "dD2n2",
+            "a1",
+            "dD103n103",
+            "dD3n3",
+            "b0",
+            "dD104n104",
+            "dD4n4",
+            "b1",
+            "dD105n105",
+            "dD5n5",
+            "c1",
+            "dD107n107",
+            "dD7n7",
+            "d0",
+            "dD108n108",
+            "dD8n8",
+            "d1",
+            "dD109n109",
+            "dD9n9",
+            "e0",
+            "dD110n110",
+            "dD10n10",
+            "e1",
+            "dD111n111",
+            "dD11n11",
+            "f0",
+            "dD311n311",
+            "dD112n112",
+            "dD12n12",
+            "f1",
+            "dD312n312",
+            "dD113n113",
+            "dD13n13",
+            "g1",
+            "dD114n114",
+            "dD14n14",
+            "dD115n115",
+            "dD15n15",
+            "h2",
+            "dD106n106",
+            "dD6n6",
+            "dD116n116",
+            "dD16n16",
+            "end",
+        ],
+        "asan_field_bodies_struct_stored_on_one_path_frees_once",
+        60,
+    );
+}

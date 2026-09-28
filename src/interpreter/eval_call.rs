@@ -2951,6 +2951,15 @@ impl<'a> super::Interpreter<'a> {
                 {
                     out.push(name.to_string());
                 }
+                // B-2026-09-28-20 cell (i) — a struct with no `Drop` of its
+                // own whose fields run user bodies, STORED on some paths only
+                // (`if c { xs.push(w); }`): the caller stood down for it, so
+                // on the path that did not store nobody ran the fields' bodies.
+                Some(Value::Struct { name: tn, .. })
+                    if self.cond_store_field_bodies_adopted(f, i, tn.as_str()) =>
+                {
+                    out.push(name.to_string());
+                }
                 // B-2026-09-23-15 — a by-value `Array` whose elements run a
                 // user `Drop` body, returned on some exits only. The caller
                 // stands down for it on every path (the same union as the
@@ -3253,8 +3262,11 @@ impl<'a> super::Interpreter<'a> {
                 continue;
             };
             let claims = match value {
+                // B-2026-09-28-20 cell (i) — or a field-bodies struct stored
+                // on some paths, as the free-function sibling claims it.
                 Value::Struct { name: tn, .. } => {
                     self.program.drop_method_keys.contains_key(tn.as_str())
+                        || self.cond_store_field_bodies_adopted(f, i, tn.as_str())
                 }
                 Value::EnumVariant { .. } => self.enum_value_runs_user_drop(&value),
                 // B-2026-09-23-19 — a by-value `Array` of user-`Drop` elements
@@ -5851,6 +5863,36 @@ impl<'a> super::Interpreter<'a> {
             })
     }
 
+    /// B-2026-09-28-20 cell (i) — codegen's
+    /// `cond_store_field_bodies_move_to_callee`: a non-generic callee that
+    /// stores by-value struct param `i` on SOME paths only, where the struct
+    /// has no `Drop` of its own and its fields run user bodies. The callee
+    /// adopts the fields' bodies per path and the caller stands its walk down
+    /// on every path, a named, fresh or projected argument alike. A struct
+    /// holding a `shared` field is left out, as codegen's forwarded arm is.
+    fn cond_store_field_bodies_adopted(
+        &self,
+        f: &crate::ast::Function,
+        i: usize,
+        tn: &str,
+    ) -> bool {
+        f.generic_params.is_none()
+            && !self.program.drop_method_keys.contains_key(tn)
+            && self
+                .typecheck_result
+                .struct_info
+                .get(tn)
+                .is_some_and(|si| !si.is_shared && si.generic_params.is_empty())
+            && !self.struct_carries_shared_field(tn, &mut Vec::new())
+            && self.type_name_runs_user_drop(tn, &mut Vec::new())
+            && crate::ast::fn_conditionally_stores_param(f, i)
+            && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
+            && f.params
+                .get(i)
+                .and_then(|p| p.name())
+                .is_some_and(|n| !crate::ast::fn_matches_on_bare_param(f, n))
+    }
+
     /// Does struct `name` hold a `shared` value anywhere in its fields?
     fn struct_carries_shared_field(&self, name: &str, seen: &mut Vec<String>) -> bool {
         if seen.iter().any(|s| s == name) {
@@ -5959,10 +6001,13 @@ impl<'a> super::Interpreter<'a> {
                     i,
                 );
             }
-            return own_drop
+            // B-2026-09-28-20 — or a field-bodies struct the callee adopts
+            // per path when stored on some paths.
+            return (own_drop
                 && (cond_return
                     || crate::ast::fn_conditionally_stores_param(f, i)
-                    || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, i));
+                    || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, i)))
+                || (!own_drop && self.cond_store_field_bodies_adopted(f, i, tn.as_str()));
         }
         let rebound = match &param.pattern.kind {
             crate::ast::PatternKind::Binding(n) => crate::ast::param_rebind_aliases(f, n).len() > 1,

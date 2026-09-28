@@ -4253,6 +4253,64 @@ impl<'ctx> super::Codegen<'ctx> {
         out
     }
 
+    /// B-2026-09-28-20 cell (i) — does a non-generic callee store by-value
+    /// parameter `arg_index` on SOME paths only (`if c { xs.push(w); }`), where
+    /// the parameter is a non-`shared` struct with NO `Drop` of its own whose
+    /// fields run user bodies (`struct W { r: D, s: D }`)?
+    ///
+    /// Then the callee adopts the fields' bodies under the per-path store flag
+    /// (`compile_function`'s conditional-store arm) and the caller stands its
+    /// field walk down on every path, for a named argument
+    /// (`suppress_moved_arg_bodies_keeping_memory`) and a projection
+    /// (`callee_adopts_projection_body_per_path`) alike. Before, nobody ran the
+    /// bodies on the path that did not store a fresh temporary, and a named or
+    /// projected argument's walk ran them beside the container's drain on the
+    /// path that did. Bodies only: the memory stays with the caller, as for
+    /// the own-`Drop` conditional-store arm. A struct owning a `shared` field
+    /// is B-2026-09-25-37's forwarded arm and is left there.
+    pub(super) fn cond_store_field_bodies_move_to_callee(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        if f.generic_params.is_some() || self.is_coroutine_compiled(&f.name) {
+            return false;
+        }
+        let Some(param) = f.params.get(arg_index) else {
+            return false;
+        };
+        let TypeKind::Path(path) = &param.ty.kind else {
+            return false;
+        };
+        if path.segments.len() != 1 {
+            return false;
+        }
+        let struct_name = path.segments[0].as_str();
+        self.type_decls.struct_types.contains_key(struct_name)
+            && !self.type_decls.shared_types.contains_key(struct_name)
+            && !program.drop_method_keys.contains_key(struct_name)
+            && self
+                .type_decls
+                .struct_generic_params
+                .get(struct_name)
+                .is_none_or(|g| g.is_empty())
+            && !self.dropless_forwarded_struct(struct_name)
+            && !self
+                .user_drop_field_indices_mono(struct_name, &std::collections::HashMap::new())
+                .is_empty()
+            && crate::ast::fn_conditionally_stores_param(f, arg_index)
+            && !crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+            && param
+                .name()
+                .is_some_and(|n| !crate::ast::fn_matches_on_bare_param(f, n))
+    }
+
     /// B-2026-09-25-37 — a non-generic struct with no `Drop` of its own that
     /// the callee FORWARDS (copy declined, no transfer) and whose value drop is
     /// the combined one because it owns a `shared` field.

@@ -4223,6 +4223,36 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .cond_store_flag_params
                                             .insert(param_name.clone());
                                     }
+                                } else if i >= recv_offset
+                                    && self.cond_store_field_bodies_move_to_callee(
+                                        &func.name,
+                                        i - recv_offset,
+                                    )
+                                {
+                                    // B-2026-09-28-20 cell (i) — the fields'
+                                    // BODIES of a struct with no `Drop` of its
+                                    // own, stored on some paths only: the
+                                    // caller stands its field walk down on
+                                    // every path, so on the path that does not
+                                    // store only this frame runs them, under
+                                    // the flag the storing statement clears.
+                                    // Bodies only; the memory stays with the
+                                    // caller, as for the own-`Drop` arm above.
+                                    if let Some(bodies) =
+                                        self.emit_struct_user_drop_bodies_only_fn(struct_name)
+                                    {
+                                        self.track_user_drop_var_with_fn(
+                                            "",
+                                            &param_name,
+                                            alloca,
+                                            bodies,
+                                            crate::codegen::state::UserDropKind::StructFieldBodies,
+                                        );
+                                        let _ = self.cond_move_drop_flag_for(&param_name);
+                                        self.drop_rc
+                                            .cond_store_flag_params
+                                            .insert(param_name.clone());
+                                    }
                                 }
                             }
                         }
