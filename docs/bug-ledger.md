@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 533 |
+| run-vs-build | 534 |
 | miscompile | 529 |
-| leak | 461 |
+| leak | 462 |
 | double-free | 343 |
 | missing-feature | 211 |
 | codegen-gap | 203 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2287 |
-| interp | 654 |
+| codegen | 2289 |
+| interp | 655 |
 | typecheck | 313 |
 | other | 112 |
 | ownership | 79 |
@@ -408,6 +408,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-49 | 2026-09-28 | codegen | high | A LOCAL MOVED INSIDE A BRANCH BY A BUILTIN SINK OR A `let` REBIND LOSES ITS `Drop` BODY (AND ITS MEMORY) ON THE PATH THAT DID NOT MOVE IT, ON EVERY COMPILED SURFACE -- `let b = E { id: 2 }; if flag(2) { es.push(b); }` and `let c = E { id: 3 }; if flag(3) { let k = c; .. }` print no `dE2` / `dE3` on JIT, seq and par, where `--interp` prints them; the same move through a user function (`if c { eat(a); }`) is right | — |
 | B-2026-09-28-52 | 2026-09-28 | codegen | medium | A CONSUMING ARM OVER A BY-VALUE GENERIC-ENUM PARAM WITH A HEAP-BOXED `Array[R, N]` PAYLOAD LEAKS ONE ELEMENT `String` -- `G1.Y(x) => { let k = x[0].id; let y = x; k + y[0].id }` and `G1.Y(x) => { let k = x[0].id; k + eat(x) }` each lose 1 B in 1 block at `-O0`, identically before and after B-2026-09-20-2's fix, with every `Drop` body running once | — |
 | B-2026-09-28-53 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-6: A RETURNED NEST OVER A PARAM (`fn c(x: S) -> Option[Option[S]] { Some(Some(x)) }`) DOUBLES OR EARLY-FIRES THE PAYLOAD'S `Drop` BODY ON EVERY SURFACE (`d1 d1 o end`; `d1 o d2 end` where `o d2 end d1` is due), AND FIVE NESTED-ENVELOPE SHAPES STILL LEAK COMPILED (`Some(Ok(mk(1)));` 29 B, `m.remove(1);` / `v.pop();` of an `Option[Option[S]]` 32 B, a discarded `Result[Option[S], i64]` 32 B, `E.A(Some(x))` 32 B) | — |
+| B-2026-09-28-54 | 2026-09-28 | interp+codegen | medium | A FRESH `shared` VALUE, OR A CALL-PRODUCED STRUCT WHOSE ONLY DROPPABLE PART IS A `shared` FIELD, PASSED BY VALUE RUNS NO `Drop` BODY ON ANY SURFACE AND LEAKS COMPILED -- `nn(N { v: 5 })` over `fn nn(n: N)` and `yn(mky(2))` over `fn yn(y: Y)`, `struct Y { h: N, k: i64 }`, print no `dN5` / `dN2` anywhere; the struct-LITERAL spelling `yn(Y { h: N { v: 4 }, k: 4 })` is right | — |
+| B-2026-09-28-55 | 2026-09-28 | codegen | low | A FRESH TEMP STRUCT ARGUMENT INSIDE AN `if` CONDITION RELEASES ITS `shared` FIELD AT THE FUNCTION'S END ON THE COMPILED SURFACES, WHERE `while`/`match` AND EVERY PLAIN STATEMENT RELEASE IT AT THE STATEMENT'S END -- `if zn(mkz(1)) > 0 { println("t1") } println("f1end")` prints `t1 f1end dN1` compiled and `t1 dN1 f1end` under `--interp`; one body either way | — |
 
 ### Relocated
 
