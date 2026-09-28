@@ -5919,6 +5919,55 @@ impl<'ctx> super::Codegen<'ctx> {
         true
     }
 
+    /// B-2026-09-17-28 — can the enum drop and the by-value entry-copy walk
+    /// this tuple payload IN PLACE, handing the payload's word region to the
+    /// tuple's own walkers as if it were the tuple?
+    ///
+    /// True exactly when the region overlays the tuple's LLVM layout, which is
+    /// the precondition both in-place walks document: the syntactic
+    /// [`Self::type_expr_word_aligned`] or its measured form
+    /// [`Self::tuple_payload_overlays_words`]. The drop and the entry-copy ask
+    /// THIS function, at emission time, so they cannot disagree about which
+    /// layout they are reading; a tuple that answers false is walked through a
+    /// rebuilt copy instead (see [`Self::tuple_payload_rebuilds_from_words`]).
+    pub(super) fn tuple_payload_walks_in_place(&self, ty: &TypeExpr) -> bool {
+        let TypeKind::Tuple(elems) = &ty.kind else {
+            return false;
+        };
+        self.type_expr_word_aligned(ty, &mut Vec::new())
+            || self.tuple_payload_overlays_words(elems, ty)
+    }
+
+    /// B-2026-09-17-28 — can a tuple payload that does NOT overlay its word
+    /// region be read back from it, so the drop and the entry-copy can walk a
+    /// rebuilt copy instead of the region?
+    ///
+    /// `coerce_to_payload_words` packs a tuple WORD-PER-ELEMENT: element `i`
+    /// starts at word `sum(word_count(e) for e before i)` whatever its LLVM
+    /// offset. `(bool, i32, String)` puts the `i32` at LLVM offset 4, inside
+    /// the `bool`'s word, while the pack gives it word 1 — so the region is not
+    /// the tuple, and walking it in place frees from the wrong offset (the
+    /// repair `da73ec3c8` and `506a91d` shipped and reverted). The reader side,
+    /// `rebuild_value_from_payload_word_slice`, inverts that packing field by
+    /// field, which is how a `match` arm already reads these payloads.
+    ///
+    /// Admitted here: every element is a sub-word primitive scalar (one word,
+    /// truncated back) or is itself word-aligned (its word image IS its
+    /// layout). A nested aggregate that is neither is left out, conservatively
+    /// — nothing measured needs it, and it would be the rebuild's recursion
+    /// that has to be right rather than one level of it.
+    fn tuple_payload_rebuilds_from_words(&self, elems: &[TypeExpr]) -> bool {
+        elems.iter().all(|e| {
+            let sub_word_scalar = matches!(&e.kind, TypeKind::Path(p)
+            if p.generic_args.is_none()
+                && matches!(
+                    p.segments.first().map(String::as_str),
+                    Some("i8" | "i16" | "i32" | "u8" | "u16" | "u32" | "f32" | "bool" | "char")
+                ));
+            sub_word_scalar || self.type_expr_word_aligned(e, &mut Vec::new())
+        })
+    }
+
     pub(super) fn enum_drop_kind_for_type_expr(&self, ty: &TypeExpr) -> EnumDropKind {
         match &ty.kind {
             TypeKind::Path(path) => {
@@ -6094,10 +6143,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // `tuple_payload_overlays_words`. It can only admit a shape the
             // syntactic gate rejected, so every shape that classifies
             // `NestedTuple` today keeps doing so.
+            // B-2026-09-17-28 — or it can be rebuilt from the word image the
+            // pack writes, for the tuples where two sub-word elements share an
+            // LLVM word and the region therefore is NOT the tuple. The drop
+            // and entry-copy route those through a rebuilt copy; see
+            // `tuple_payload_walks_in_place`.
             TypeKind::Tuple(elems)
                 if !elems.is_empty()
-                    && (self.type_expr_word_aligned(ty, &mut Vec::new())
-                        || self.tuple_payload_overlays_words(elems, ty))
+                    && (self.tuple_payload_walks_in_place(ty)
+                        || self.tuple_payload_rebuilds_from_words(elems))
                     && elems.iter().any(|e| {
                         self.type_expr_has_drop_heap(e) || self.tuple_elem_needs_deep_drop(e)
                     }) =>

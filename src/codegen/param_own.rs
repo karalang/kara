@@ -5758,14 +5758,45 @@ impl<'ctx> super::Codegen<'ctx> {
                                     _ => None,
                                 });
                         if let Some(elems) = elems {
-                            let tup_ty = match self.llvm_type_for_type_expr(&TypeExpr {
+                            let tup_te = TypeExpr {
                                 kind: TypeKind::Tuple(elems.clone()),
                                 span: Default::default(),
-                            }) {
+                            };
+                            let tup_ty = match self.llvm_type_for_type_expr(&tup_te) {
                                 BasicTypeEnum::StructType(t) => Some(t),
                                 _ => None,
                             };
-                            if let (Some(tup_ty), Ok(region_ptr)) = (
+                            // B-2026-09-17-28 — the drop's twin, asking the same
+                            // question: a region that is not the tuple is copied
+                            // through a rebuilt copy and packed back, so the
+                            // callee's words and the caller's own independent
+                            // buffers at the offsets both drops will read.
+                            if let Some(tup_ty) =
+                                tup_ty.filter(|_| !self.tuple_payload_walks_in_place(&tup_te))
+                            {
+                                if let Some(img) = self.rebuild_word_image_tuple(
+                                    enum_ty,
+                                    base_ptr,
+                                    *start_word,
+                                    *num_words,
+                                    tup_ty,
+                                    "p14e.tupimg",
+                                ) {
+                                    for (j, ete) in elems.iter().enumerate() {
+                                        self.deep_copy_one_aggregate_field(
+                                            img, tup_ty, j as u32, ete,
+                                        );
+                                    }
+                                    self.store_word_image_tuple(
+                                        enum_ty,
+                                        base_ptr,
+                                        *start_word,
+                                        *num_words,
+                                        tup_ty,
+                                        img,
+                                    );
+                                }
+                            } else if let (Some(tup_ty), Ok(region_ptr)) = (
                                 tup_ty,
                                 self.builder.build_struct_gep(
                                     enum_ty,

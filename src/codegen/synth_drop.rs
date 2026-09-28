@@ -452,7 +452,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 layout.field_drop_kinds.get(variant_name),
                 layout.field_word_offsets.get(variant_name),
             ) {
-                for (fi, (kind, (start_word, _num_words))) in
+                for (fi, (kind, (start_word, num_words))) in
                     kinds.iter().zip(offsets.iter()).enumerate()
                 {
                     match kind {
@@ -990,7 +990,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let boxed = mono_st
                                     .or_else(|| self.type_decls.struct_types.get(&sname).copied())
                                     .is_some_and(|st| {
-                                        Self::llvm_type_word_count(st.into()) > *_num_words
+                                        Self::llvm_type_word_count(st.into()) > *num_words
                                     });
                                 let mut box_join: Option<(BasicBlock<'ctx>, PointerValue<'ctx>)> =
                                     None;
@@ -1098,9 +1098,32 @@ impl<'ctx> super::Codegen<'ctx> {
                                                     "drop.ntuple.p",
                                                 )
                                                 .unwrap();
-                                            self.builder
-                                                .build_call(tdrop, &[field_ptr.into()], "")
-                                                .unwrap();
+                                            // B-2026-09-17-28 — the region is the
+                                            // tuple only when its layout overlays
+                                            // the word image. Otherwise rebuild
+                                            // the tuple from those words, exactly
+                                            // as a `match` arm reads it, and drop
+                                            // the rebuilt copy: the heap pointers
+                                            // in it are the payload's own, so this
+                                            // frees each buffer once, from the
+                                            // offset it was packed at.
+                                            let target = if self.tuple_payload_walks_in_place(&te) {
+                                                Some(field_ptr)
+                                            } else {
+                                                self.rebuild_word_image_tuple(
+                                                    layout.llvm_type,
+                                                    p_arg,
+                                                    *start_word,
+                                                    *num_words,
+                                                    agg_ty,
+                                                    "drop.ntuple.img",
+                                                )
+                                            };
+                                            if let Some(target) = target {
+                                                self.builder
+                                                    .build_call(tdrop, &[target.into()], "")
+                                                    .unwrap();
+                                            }
                                         }
                                     }
                                 }
@@ -14924,5 +14947,81 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         Some(wrapper)
+    }
+
+    /// B-2026-09-17-28 — read a tuple payload back out of an enum's word
+    /// region into a fresh stack copy, for the tuples whose layout does NOT
+    /// overlay that region (`tuple_payload_walks_in_place` answers false).
+    ///
+    /// The words are `num_words` i64s from LLVM field `start_word + 1` (the tag
+    /// is field 0), and they are rebuilt with
+    /// `rebuild_value_from_payload_word_slice`, the inverse of the
+    /// word-per-element packing `coerce_to_payload_words` wrote. The copy
+    /// holds the payload's OWN heap pointers, so a drop walked over it frees
+    /// each buffer once; an entry-copy walked over it must write the result
+    /// back with [`Self::store_word_image_tuple`]. `None` only when the rebuild
+    /// cannot produce the value, which leaves the caller's walk undone — the
+    /// leak this row started from, never a free from the wrong offset.
+    pub(super) fn rebuild_word_image_tuple(
+        &self,
+        enum_ty: StructType<'ctx>,
+        base_ptr: PointerValue<'ctx>,
+        start_word: usize,
+        num_words: usize,
+        tup_ty: StructType<'ctx>,
+        name: &str,
+    ) -> Option<PointerValue<'ctx>> {
+        let i64_t = self.context.i64_type();
+        let mut words = Vec::with_capacity(num_words);
+        for w in 0..num_words {
+            let wp = self
+                .builder
+                .build_struct_gep(enum_ty, base_ptr, (start_word + 1 + w) as u32, name)
+                .ok()?;
+            words.push(
+                self.builder
+                    .build_load(i64_t, wp, name)
+                    .ok()?
+                    .into_int_value(),
+            );
+        }
+        let val = self
+            .rebuild_value_from_payload_word_slice(tup_ty.into(), &words)
+            .ok()?;
+        let slot = self.builder.build_alloca(tup_ty, name).ok()?;
+        self.builder.build_store(slot, val).ok()?;
+        Some(slot)
+    }
+
+    /// B-2026-09-17-28 — the write-back half of
+    /// [`Self::rebuild_word_image_tuple`]: re-pack the stack copy at `slot`
+    /// into the enum's word region with the same `coerce_to_payload_words` the
+    /// constructor used, so the region stays in the one layout every reader
+    /// expects.
+    pub(super) fn store_word_image_tuple(
+        &self,
+        enum_ty: StructType<'ctx>,
+        base_ptr: PointerValue<'ctx>,
+        start_word: usize,
+        num_words: usize,
+        tup_ty: StructType<'ctx>,
+        slot: PointerValue<'ctx>,
+    ) {
+        let Ok(val) = self.builder.build_load(tup_ty, slot, "p14e.tupimg.ld") else {
+            return;
+        };
+        let Ok(words) = self.coerce_to_payload_words(val, num_words) else {
+            return;
+        };
+        for (w, word) in words.iter().take(num_words).enumerate() {
+            if let Ok(wp) = self.builder.build_struct_gep(
+                enum_ty,
+                base_ptr,
+                (start_word + 1 + w) as u32,
+                "p14e.tupimg.wp",
+            ) {
+                let _ = self.builder.build_store(wp, *word);
+            }
+        }
     }
 }
