@@ -4943,13 +4943,18 @@ impl<'a> super::Interpreter<'a> {
                     // ownership on to `o`, as the bare rebind above does for
                     // `let m = r`. Codegen's twin is the carrier registration
                     // at its `let` param-view arm.
-                    if let ExprKind::Call { args, .. } = &value.kind {
-                        let carried = !args.is_empty()
-                            && args.iter().all(|a| {
-                                matches!(&a.value.kind, ExprKind::Identifier(n)
+                    // B-2026-09-28-53 — through a nest of envelopes to the
+                    // leaf (`let o = Some(Some(s))`), as the admission
+                    // predicate's wrap walk now does; asking the outer payload
+                    // saw `Some(s)`, kept `o` a view, and the exit that does
+                    // not hand `o` back ran no body.
+                    if matches!(&value.kind, ExprKind::Call { .. }) {
+                        let carried = crate::ast::option_result_ctor_leaf_payload(value)
+                            .is_some_and(|leaf| {
+                                matches!(&leaf.kind, ExprKind::Identifier(n)
                                     if self.cond_store_param_names.contains(n.as_str()))
                             });
-                        if carried && crate::ast::option_result_ctor_payload(value).is_some() {
+                        if carried {
                             self.cond_store_param_names.insert(bname.clone());
                             return false;
                         }

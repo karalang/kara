@@ -2482,10 +2482,31 @@ impl RebindWalk {
                             for a in args {
                                 let mut inner: Vec<(String, String, ParamPath)> = Vec::new();
                                 let mut path: ParamPath = Vec::new();
-                                if let ExprKind::Identifier(y) = &a.value.kind {
+                                // B-2026-09-28-53 — through a nest of `Some` /
+                                // `Ok` / `Err` to its leaf: `let o =
+                                // Some(Some(x))` wraps `x` exactly as `let o =
+                                // Some(x)` does, one envelope deeper, and an
+                                // enum layer adds nothing to the path because
+                                // it cannot be projected into. Seeing only the
+                                // outer payload left `o` a stranger to `x`, so
+                                // `return o` stood no caller down and the body
+                                // ran in the caller AND over the result. Only
+                                // under an `Option` / `Result` head: a user
+                                // variant over a nest (`E.A(Some(x))`) still
+                                // runs no body from its own walker on
+                                // `--interp`, so standing the caller down there
+                                // traded a misplaced body for a lost one.
+                                let leaf =
+                                    if crate::ast::option_result_ctor_payload(value).is_some() {
+                                        crate::ast::option_result_ctor_leaf_payload(&a.value)
+                                            .unwrap_or(&a.value)
+                                    } else {
+                                        &a.value
+                                    };
+                                if let ExprKind::Identifier(y) = &leaf.kind {
                                     inner.push((x.clone(), y.clone(), Vec::new()));
                                 } else {
-                                    Self::collect_wrap_sources(&a.value, &mut path, x, &mut inner);
+                                    Self::collect_wrap_sources(leaf, &mut path, x, &mut inner);
                                 }
                                 for (x, y, path) in inner {
                                     self.ctor_wraps.push((x, y, (**callee).clone(), path));

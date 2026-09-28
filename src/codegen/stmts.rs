@@ -11250,7 +11250,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                             _ => None,
                         };
-                        let cond_carrier = crate::ast::option_result_ctor_payload(value)
+                        // B-2026-09-28-53 — to the leaf of a nest of
+                        // envelopes (`let o = Some(Some(s))`), as the admission
+                        // predicate's wrap walk does.
+                        let cond_carrier = crate::ast::option_result_ctor_leaf_payload(value)
                             .and_then(|p| match &p.kind {
                                 ExprKind::Identifier(n) => Some(n.clone()),
                                 _ => None,
