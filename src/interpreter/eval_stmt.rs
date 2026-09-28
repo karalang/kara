@@ -569,7 +569,35 @@ impl<'a> super::Interpreter<'a> {
                         shared_holders: Vec::new(),
                     });
             }
+            // B-2026-09-28-55 — a NESTED block's tail (a loop body `{ if
+            // zn(mkz(k)) > 0 { .. } }`) ends its fresh argument temps' `shared`
+            // holders when the tail has evaluated, before the block's locals
+            // drop (design.md § Temporary Lifetime Rules, "Tail expression of a
+            // block"), which is where codegen's block frame releases them.
+            // Parked on the enclosing statement's level, they waited for the
+            // whole `for` to finish: `k0 k1 dN11 dN10` against the compiled
+            // `k0 dN10 k1 dN11`. Only the holders move; the level's projection
+            // reads keep the enclosing statement's answer.
+            let tail_holders_mark = if tail_level {
+                None
+            } else {
+                self.freshtemp_read_levels
+                    .last()
+                    .map(|l| (self.freshtemp_read_levels.len(), l.shared_holders.len()))
+            };
             let v = self.eval_expr_inner(expr);
+            if let Some((depth, mark)) = tail_holders_mark {
+                if self.pending_cf.is_none() && self.freshtemp_read_levels.len() == depth {
+                    let due: Vec<_> = self
+                        .freshtemp_read_levels
+                        .last_mut()
+                        .map(|l| l.shared_holders.split_off(mark.min(l.shared_holders.len())))
+                        .unwrap_or_default();
+                    for h in due.into_iter().rev() {
+                        self.run_value_held_shared_user_drops(&h);
+                    }
+                }
+            }
             if tail_level {
                 // B-2026-09-26-14 — a projection that is the value of an arm or
                 // an inner block's tail is consumed too, as codegen's

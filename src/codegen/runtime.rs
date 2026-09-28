@@ -13238,7 +13238,14 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        let due: Vec<(PointerValue<'ctx>, FunctionValue<'ctx>)> = {
+        // B-2026-09-28-55 — `bool` marks a MEMORY drop (a `StructDrop` of a
+        // fresh argument temp), emitted through the guarded struct-drop call.
+        let stmt_end_slots = if call_return_only {
+            None
+        } else {
+            Some(&self.drop_rc.stmt_end_arg_memory_slots)
+        };
+        let due: Vec<(PointerValue<'ctx>, FunctionValue<'ctx>, bool)> = {
             let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() else {
                 return;
             };
@@ -13392,7 +13399,25 @@ impl<'ctx> super::Codegen<'ctx> {
                             && (binding_name == "__freshtemp_enum_scrut"
                                 || binding_name == "__freshtemp_struct_scrut")) =>
                     {
-                        fired.push((binding_ptr, drop_fn));
+                        fired.push((binding_ptr, drop_fn, false));
+                    }
+                    // B-2026-09-28-55 — a fresh argument temp's MEMORY, for
+                    // the struct that carries no `Drop` of its own (its own
+                    // wrapper already fires at the call). It sat on the scope
+                    // frame, and releasing it can be observed: a `shared`
+                    // field's last reference runs that value's body, so
+                    // `if zn(mkz(1)) > 0 { .. }` printed `dN1` after every
+                    // later statement of the function on the compiled
+                    // surfaces, where the interpreter releases it as the
+                    // statement ends (`FreshTempReadLevel::shared_holders`).
+                    // The callee entry-copies such a temp (that is why the
+                    // caller owns it at all), so nothing reads it after the
+                    // statement.
+                    CleanupAction::StructDrop {
+                        struct_alloca,
+                        drop_fn,
+                    } if stmt_end_slots.is_some_and(|s| s.contains(&struct_alloca)) => {
+                        fired.push((struct_alloca, drop_fn, true));
                     }
                     other => frame.push(other),
                 }
@@ -13400,11 +13425,16 @@ impl<'ctx> super::Codegen<'ctx> {
             fired
         };
         // LIFO — the last-materialized temp's body runs first, matching the
-        // one-shot discard frame's drain order.
-        for (ptr, drop_fn) in due.iter().rev() {
-            self.builder
-                .build_call(*drop_fn, &[(*ptr).into()], "")
-                .unwrap();
+        // one-shot discard frame's drain order. A temp's memory was pushed
+        // before its bodies, so it drains after them here too.
+        for (ptr, drop_fn, memory) in due.iter().rev() {
+            if *memory {
+                self.emit_struct_drop_call_guarded(*drop_fn, *ptr);
+            } else {
+                self.builder
+                    .build_call(*drop_fn, &[(*ptr).into()], "")
+                    .unwrap();
+            }
         }
     }
 

@@ -279,6 +279,12 @@ pub(crate) struct DropRc<'ctx> {
     /// B-2026-09-27-105 — `(local, part)` pairs already re-pointed: handing
     /// `local` over clears `part`'s flag, as handing the part itself does.
     pub(crate) cond_part_aliases: Vec<(String, String)>,
+    /// B-2026-09-28-55 — fresh-temp call-argument slots (`__owned_agg_tmp`)
+    /// whose MEMORY drop is due at the end of the statement that built them,
+    /// not at the enclosing scope's exit. See `drain_temp_user_drops`. Never
+    /// cleared: a slot is one alloca, unique for the module's life, and a
+    /// monomorph compiled NESTED inside its caller must not wipe the caller's.
+    pub(crate) stmt_end_arg_memory_slots: rustc_hash::FxHashSet<PointerValue<'ctx>>,
     /// B-2026-09-05-13 — the bindings that currently CARRY a conditionally-
     /// returned parameter's per-path `Drop` body: the parameter itself, as
     /// registered by the prologue (`compile_function` / `compile_mono_function`

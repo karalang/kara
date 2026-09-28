@@ -4593,6 +4593,37 @@ impl<'a> super::Interpreter<'a> {
         // when the return is conditional (`if k { return t.r; }`). Taken, so a
         // later call cannot inherit them.
         let dyn_escapes = std::mem::take(&mut self.pending_call_payload_escapes);
+        // B-2026-09-28-55 — the `shared` holders this walk defers, in ARGUMENT
+        // order once it is done: the walk runs right to left, and the level
+        // releases its holders last-pushed first, so without the flip below
+        // `zz(mkz(6), mkz(7))` released `dN6 dN7` where every compiled surface
+        // releases `dN7 dN6` (each argument's memory drop is pushed left to
+        // right and drains LIFO), against the argument bodies' own `dD7 dD6`.
+        let holders_mark = self
+            .freshtemp_read_levels
+            .last()
+            .map(|l| (self.freshtemp_read_levels.len(), l.shared_holders.len()));
+        self.run_fresh_temp_arg_drops_walk(callee_name, method_owner, args, arg_vals, dyn_escapes);
+        if let Some((depth, mark)) = holders_mark {
+            if self.freshtemp_read_levels.len() == depth {
+                if let Some(level) = self.freshtemp_read_levels.last_mut() {
+                    if level.shared_holders.len() > mark {
+                        level.shared_holders[mark..].reverse();
+                    }
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_fresh_temp_arg_drops_walk(
+        &mut self,
+        callee_name: &str,
+        method_owner: Option<CalleeOwner<'_>>,
+        args: &[CallArg],
+        arg_vals: &[Value],
+        dyn_escapes: Vec<(usize, Vec<String>)>,
+    ) {
         for (i, arg) in args.iter().enumerate().rev() {
             // B-2026-07-01-7 passthrough guard + B-2026-08-26-9 escape guard,
             // both now asked through `callee_owns_arg_beyond_call` so the two

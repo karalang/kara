@@ -10624,6 +10624,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // bare name's drop cannot free (B-2026-09-25-15).
                                 let inst = self.freshtemp_call_struct_inst(arg);
                                 self.track_struct_var_inst(&ret_ty_name, slot, inst);
+                                // B-2026-09-28-55 — freed at the statement's
+                                // end, where the interpreter releases it.
+                                self.drop_rc.stmt_end_arg_memory_slots.insert(slot);
                             }
                             if let Some(bodies_fn) = bodies_fn {
                                 self.track_user_drop_var_with_fn(
@@ -11560,6 +11563,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             Some(inst) => self.track_struct_var_inst(&name, slot, Some(inst)),
                             None => self.track_struct_var(&name, slot),
                         }
+                        // B-2026-09-28-55 — see the fn-call sibling.
+                        self.drop_rc.stmt_end_arg_memory_slots.insert(slot);
                     }
                     if let Some(bodies_fn) = field_bodies_fn {
                         self.track_user_drop_var_with_fn(
