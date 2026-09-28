@@ -793,7 +793,7 @@ fn variant_arm_payload_escapes_proj<'a>(
         return None;
     }
     (!names.iter().all(|v| {
-        crate::consume_class::binding_only_borrowed_with(v, body, copy_read)
+        crate::consume_class::binding_only_borrowed_escape_with(v, body, copy_read)
             && guard.is_none_or(|g| {
                 crate::consume_class::binding_only_borrowed_with(v, g, &projection_is_read)
             })
@@ -829,10 +829,11 @@ fn variant_arm_payload_escaping_parts<'a>(
         .enumerate()
         .filter_map(|(i, name)| {
             let v = (*name)?;
-            let borrowed = crate::consume_class::binding_only_borrowed_with(v, body, copy_read)
-                && guard.is_none_or(|g| {
-                    crate::consume_class::binding_only_borrowed_with(v, g, &projection_is_read)
-                });
+            let borrowed =
+                crate::consume_class::binding_only_borrowed_escape_with(v, body, copy_read)
+                    && guard.is_none_or(|g| {
+                        crate::consume_class::binding_only_borrowed_with(v, g, &projection_is_read)
+                    });
             (!borrowed).then_some(i)
         })
         .collect();
@@ -856,10 +857,10 @@ fn variant_arm_payload_escaping_parts_block<'a>(
             let v = (*name)?;
             match block {
                 None => Some(i),
-                Some(b) => {
-                    (!crate::consume_class::binding_only_borrowed_block_with(v, b, copy_read))
-                        .then_some(i)
-                }
+                Some(b) => (!crate::consume_class::binding_only_borrowed_block_escape_with(
+                    v, b, copy_read,
+                ))
+                .then_some(i),
             }
         })
         .collect();
@@ -915,9 +916,9 @@ fn variant_arm_payload_escapes_proj_block<'a>(
     }
     match block {
         None => Some(variant),
-        Some(b) => (!names
-            .iter()
-            .all(|v| crate::consume_class::binding_only_borrowed_block_with(v, b, copy_read)))
+        Some(b) => (!names.iter().all(|v| {
+            crate::consume_class::binding_only_borrowed_block_escape_with(v, b, copy_read)
+        }))
         .then_some(variant),
     }
 }

@@ -1296,6 +1296,26 @@ impl<'a> super::TypeChecker<'a> {
                 if let Type::Tuple(types) = expected {
                     for (pat, ty) in patterns.iter().zip(types.iter()) {
                         self.check_pattern_against(pat, ty, mode);
+                        // B-2026-09-17-24 — a tuple LEAF typed by a bare
+                        // generic parameter (`a` in `Some((a, b))` over
+                        // `Option[(T, i64)]`) records the parameter itself, so
+                        // the monomorph can substitute it. Nothing else
+                        // recorded a type for it, and codegen sized the leaf at
+                        // its one-word default: a heap-bearing `T` boxes the
+                        // payload, the debox predicate never fired, and `b` was
+                        // read out of the envelope (`0` for `9`).
+                        // `pattern_binding_types` is deliberately NOT written,
+                        // as for a wildcard: codegen reads this only through
+                        // `mono_payload_binding_type_expr_for`, under an active
+                        // substitution. Tuple leaves ONLY -- a bare `v => ..`
+                        // arm over a `T` scrutinee is a different shape, whose
+                        // binding already aliases the whole value.
+                        if matches!(pat.kind, PatternKind::Binding(_))
+                            && matches!(ty, Type::TypeParam(_))
+                        {
+                            self.pattern_binding_inner_types
+                                .insert(SpanKey::from_span(&pat.span), Self::type_to_type_expr(ty));
+                        }
                     }
                 }
             }

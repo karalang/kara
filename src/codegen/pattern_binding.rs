@@ -139,10 +139,28 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.pattern_state.pattern_binding_types.contains_key(key) {
             return None;
         }
-        self.mono_state
-            .mono_payload_binding_type_exprs
-            .get(key)
-            .cloned()
+        if let Some(te) = self.mono_state.mono_payload_binding_type_exprs.get(key) {
+            return Some(te.clone());
+        }
+        // B-2026-09-17-24 — the typechecker's record of a binding typed by a
+        // bare generic parameter (`a: T` in `Some((a, b))`), resolved through
+        // the active monomorph. Only a parameter THIS instantiation binds
+        // answers, so outside a monomorph the entry stays inert.
+        let te = self.pattern_state.pattern_binding_inner_types.get(key)?;
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let [seg] = p.segments.as_slice() else {
+            return None;
+        };
+        if p.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+            || !(self.mono_state.type_subst_names.contains_key(seg)
+                || self.mono_state.type_subst_type_exprs.contains_key(seg)
+                || self.mono_state.type_subst_call_te.contains_key(seg))
+        {
+            return None;
+        }
+        Some(self.subst_monomorph_type_params(te))
     }
 
     /// Sibling of [`Self::mono_payload_binding_type_expr_for`] that decomposes

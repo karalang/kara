@@ -71,6 +71,50 @@ pub(crate) fn binding_only_borrowed_with(
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
 
+/// B-2026-09-17-24 — [`binding_only_borrowed_with`] for the caller-side
+/// ESCAPE question (does a payload part outlive the call?), where a
+/// CONSTRUCTOR argument is a transfer. `Some(a)` / `Ok(a)` parse as a call
+/// with a bare-identifier callee, and the free-function arm models that as an
+/// entry copy, so `Some((a, b)) => { return Some(a); }` read `a` as borrowed,
+/// the generic call site kept the payload's body walk for a part the callee
+/// hands back, and `W`'s body ran twice. Only this question is widened: the
+/// other callers, the typechecker's partial-move checks among them, keep the
+/// syntactic answer.
+pub(crate) fn binding_only_borrowed_escape_with(
+    name: &str,
+    e: &Expr,
+    copy_read: &dyn Fn(&Expr) -> bool,
+) -> bool {
+    let c = Ctx {
+        name,
+        copy_read,
+        free_fn_arg_transfers: false,
+        callee_owns_arg: &capitalized_callee_constructs,
+    };
+    !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
+}
+
+/// Block sibling of [`binding_only_borrowed_escape_with`].
+pub(crate) fn binding_only_borrowed_block_escape_with(
+    name: &str,
+    b: &crate::ast::Block,
+    copy_read: &dyn Fn(&Expr) -> bool,
+) -> bool {
+    let c = Ctx {
+        name,
+        copy_read,
+        free_fn_arg_transfers: false,
+        callee_owns_arg: &capitalized_callee_constructs,
+    };
+    !block_consumes(&c, b)
+}
+
+/// A capitalized bare callee (`Some`, `Ok`, `Err`, a tuple-struct name)
+/// constructs a value that owns its arguments.
+fn capitalized_callee_constructs(callee: &str, _: usize) -> bool {
+    callee.starts_with(|ch: char| ch.is_ascii_uppercase())
+}
+
 /// [`binding_only_borrowed`] with the `callee_owns_arg` knob supplied
 /// (B-2026-09-19-40) — the syntactic walk, plus the caller's typed answer to
 /// "does this callee OWN and free the value at argument position `i`".
