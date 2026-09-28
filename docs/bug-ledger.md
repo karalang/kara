@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 531 |
 | miscompile | 525 |
-| leak | 459 |
+| leak | 460 |
 | double-free | 341 |
 | missing-feature | 211 |
 | codegen-gap | 203 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2278 |
+| codegen | 2279 |
 | interp | 649 |
 | typecheck | 313 |
 | other | 112 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-17-27 | 2026-09-17 | codegen | low | A DESTRUCTURING ARM OVER A BY-VALUE TUPLE PAYLOAD RETRACTS THE INTERIOR WALKER UNCONDITIONALLY -- `match o { Some((a, b)) => b }` over `Option[(W, i64)]` loses 2 B in 1 block at `-O0`, and B-2026-09-10-23's borrow-premise fix cannot reach it because `boxed_tuple_payload_arm_takes_ownership` ends `(destructures || (whole_tuple_binding && !arm_only_borrows))` -- the verdict is not consulted for a tuple pattern. Its stated premise, that each heap element gets its own `track_vec_var` owner, holds for a `Vec`/`String` element and fails for a user STRUCT element | — |
 | B-2026-09-17-28 | 2026-09-17 | codegen | low | TWO SUB-WORD TUPLE ELEMENTS SHARING A WORD STILL LOSE THE ENUM PAYLOAD -- `enum M { P((bool, i32, String)), Q }` loses 192 B over 8 rounds at `-O0`, unchanged by B-2026-09-12-10's fix and correctly so: the `i32` sits at LLVM offset 4 inside the `bool`'s word while the pack site gives it word 1, so the measured overlay precondition genuinely fails and the payload classifies `EnumDropKind::None`. Dropping through the word region here would free from the wrong offset -- the repair class this family reverted twice. The fix is the LAYOUT (word-per-element packing, or a drop that reads the real packed layout), which is what the parent row said before either of its cells was worked | — |
 | B-2026-09-17-32 | 2026-09-17 | interp+codegen | medium | B-2026-08-28-22's PER-PATH CONDITIONAL-ESCAPE FLAG COVERS AN `if`/`else` TAIL AND NOT A `match` ARM TAIL, so a by-value param that escapes on only one ARM loses its `Drop` body on all four surfaces -- `fn pick(o: Option[i64], d: W) -> W { match o { Some(n) => { return W { id: n }; } None => { return d; } } }` called `pick(Some(7), W { id: 108 })` prints `7 dW7 end` against the due `dW108 7 dW7 end`, while -28-22's own headline `if k { return r; } return W { id: 99 }` shape measures correct on the same tree; the two programs differ only in the shape of the branch, and being AGREED on every surface the A/B rule cannot see it | — |
 | B-2026-09-17-33 | 2026-09-17 | codegen+interp | medium | A NON-YIELDING EXIT LEAF THAT CONSUMES THE PARAM THROUGH A CALL LOSES THE CONSUMED VALUE'S `Drop` BODY, AND WHICH SURFACES LOSE IT DEPENDS ON THE CALL POSITION -- `fn pick(r: R, flag: bool) -> R { if flag { return r } return R { name: f"z", id: eat(r) } }` called with `flag = false` prints `k:1 dR1/z end` on all four surfaces as a FREE function (agreed loss, invisible to the A/B rule), loses it on `--interp` only as an ASSOCIATED fn (divergence), and is correct as a METHOD -- the same three-way split B-2026-09-13-13's reading leaf had on this path, which is the reason to expect one root cause rather than three; `eat` takes `x: R` by value and drops it, so the body owed is inside `eat` and `pick`'s own argument registration should not decide whether it fires | — |
@@ -411,6 +410,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-41 | 2026-09-28 | interp+codegen | medium | A `Drop`-CARRYING VALUE STORED ON ONLY SOME PATHS STILL LOSES OR DOUBLES ITS BODIES IN THREE SPELLINGS 4982484f9 DECLINES -- a GENERIC callee `fn gst[T](xs: mut ref Vec[T], x: T, c: bool) { if c { xs.push(x); } }` loses a fresh temporary's bodies on the not-stored path everywhere and runs a named argument's twice compiled (a DIVERGENCE); a struct with a `shared` field loses its `Drop` field's body on the not-stored path; a DESTRUCTURED part (`let W { r, s, b } = w; if c { xs.push(r); }`) loses `r`'s body on the not-pushed path | — |
 | B-2026-09-28-42 | 2026-09-28 | codegen | high | AN INLINE `Array` PAYLOAD CONSTRUCTED DIRECTLY AS A FREE-FUNCTION ARGUMENT STILL HAS TWO OWNERS -- `eatopt(Option.Some(a))` over `fn eatopt(o: Option[Array[S, 1]])` and a one-`String` `S` aborts with `free(): double free detected in tcache 2` on JIT, `-O0` and `-O2` against `--interp`'s `in daaaaaaaa0 end`; the `Result`, matching-callee, returning-callee and generic-passthrough spellings do the same. B-2026-09-19-59 fixed every other consumer of this payload and deliberately left this one alone | — |
 | B-2026-09-28-43 | 2026-09-28 | codegen | medium | FOUR SPELLINGS OF AN INLINE `Array` PAYLOAD RUN THE ELEMENT'S `Drop` BODY ON `--interp` AND NOWHERE COMPILED, WITH MEMORY CLEAN -- a named `Option[Array[S, 1]]` local handed to a by-value callee, the envelope in a struct-literal field, in a tuple element, and a fresh `Some([S { .. }])` literal matched in place; JIT, `-O0` and `-O2` all agree and valgrind reports nothing | — |
+| B-2026-09-28-44 | 2026-09-28 | codegen | medium | A STRUCT LEAF OF A DESTRUCTURED BY-VALUE TUPLE PAYLOAD HANDED TO A BY-VALUE CALLEE RUNS NO `Drop` BODY AND LEAKS ON EVERY COMPILED SURFACE -- `fn t(o: Option[(W, i64)]) -> i64 { match o { Some((a, b)) => { return sink(a) + b; } .. } }` over `fn sink(w: W) -> i64 { return w.id; }` prints `m10 end` on jit / -O0 / -O2 where `--interp` prints `dW1/n1 m10 end`, and valgrind reports 2 B in 1 block at -O0 | — |
 
 ### Relocated
 
@@ -2950,6 +2950,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-17-24 | codegen | low | A DESTRUCTURING ARM THAT RETURNS A GENERIC TUPLE-PAYLOAD ELEMENT FAILS MODULE VERIFICATION -- `fn e3[T](o: Option[(T, i64)], d: T) -> T { match o { S… | 9a60158b3 |
 | B-2026-09-17-25 | codegen | medium | A NAMED LOCAL MOVED INTO A `shared enum` CONSTRUCTOR LEAVES A PAYLOAD-BODY ACTION READING THE ZEROED STAGING SLOT -- `let r = mkr(1); { let s = SMono… | dbac00e |
 | B-2026-09-17-26 | codegen | low | THE `Result` LEG OF THE ARM-BOUND TUPLE-PAYLOAD LEAK IS A THIRD OWNER PATH -- `fn take(o: Result[(W, i64), i64]) { match o { Ok(t) => t.1 } }` over `… | fd3cb3f61 |
+| B-2026-09-17-27 | codegen | low | A DESTRUCTURING ARM OVER A BY-VALUE TUPLE PAYLOAD RETRACTS THE INTERIOR WALKER UNCONDITIONALLY -- `match o { Some((a, b)) => b }` over `Option[(W, i6… | 8f5ced39c |
 | B-2026-09-17-29 | codegen | high | A REMOVED `Map` VALUE HANDED STRAIGHT TO A BY-VALUE `Array[T, N]` PARAM IS FREED TWICE -- `match v.remove(j) { Some(a) => eat(a) }` over `Map[i64, Ar… | c0520ef |
 | B-2026-09-17-30 | codegen | medium | THE COMPILED BACKENDS RUN NO PART'S `Drop` BODY WHEN ONE PART OF A BY-VALUE `Option`/`Result` TUPLE PAYLOAD ESCAPES THROUGH A PROJECTION -- `fn eat(o… | 37fbf43 |
 | B-2026-09-17-31 | interp | medium | THE METHOD-CALL SPELLING LOSES AN UNMOVED `Drop`-BEARING SIBLING PART, where the free-function spelling of the identical body keeps it -- `impl H { f… | 15f13bf |
