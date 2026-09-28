@@ -16552,9 +16552,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(binds) = self.result_tuple_payload_binds(scrutinee, pattern) else {
             return false;
         };
+        // B-2026-09-17-26 — leaf-aware: `Ok(t) => return t.1` reads an `i64`
+        // element and carries nothing of the tuple away, so it borrows. The
+        // syntactic default read `t.1` as a take, suppressed the source, and the
+        // caller's retained original then had no free left to run.
+        let tes = self.arm_binding_scalar_tes(pattern);
+        let copy_read = |e: &Expr| Self::arm_binding_scalar_copy_read(&tes, e);
         binds.iter().all(|v| {
-            super::consume_class::binding_only_borrowed(v, body)
-                && guard.is_none_or(|g| super::consume_class::binding_only_borrowed(v, g))
+            super::consume_class::binding_only_borrowed_with(v, body, &copy_read)
+                && guard.is_none_or(|g| {
+                    super::consume_class::binding_only_borrowed_with(v, g, &copy_read)
+                })
         })
     }
 
@@ -16569,9 +16577,63 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(binds) = self.result_tuple_payload_binds(scrutinee, pattern) else {
             return false;
         };
+        // B-2026-09-17-26 — leaf-aware, as the arm sibling above.
+        let tes = self.arm_binding_scalar_tes(pattern);
+        let copy_read = |e: &Expr| Self::arm_binding_scalar_copy_read(&tes, e);
         binds
             .iter()
-            .all(|v| super::consume_class::binding_only_borrowed_block(v, block))
+            .all(|v| super::consume_class::binding_only_borrowed_block_with(v, block, &copy_read))
+    }
+
+    /// B-2026-09-17-26 — does every binding in this `Ok(..)`/`Err(..)` arm
+    /// bind a primitive LEAF, so the arm takes none of the payload's heap?
+    ///
+    /// Deliberately narrower than [`Self::arm_binding_scalar_tes`] for a BARE
+    /// binding: that map records a `Vec`/`Slice` binding's ELEMENT type, so a
+    /// `Err(e)` over `Result[i64, Vec[i64]]` reads as `i64` there and this
+    /// answer would leave the heap half with two owners. A bare binding passes
+    /// only on the surface type name the typechecker recorded for it.
+    fn result_arm_leaves_take_no_heap(&self, pattern: &Pattern) -> bool {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return false;
+        };
+        let surface_scalar = |sp: &crate::token::Span| {
+            self.pattern_state
+                .pattern_binding_types
+                .get(&(sp.offset, sp.length))
+                .is_some_and(|n| crate::codegen::param_own::is_primitive_type_name(n))
+        };
+        patterns.iter().all(|sub| match &sub.kind {
+            PatternKind::Wildcard => true,
+            PatternKind::Binding(_) => surface_scalar(&sub.span),
+            PatternKind::Tuple(elems) => {
+                let positional = self
+                    .pattern_state
+                    .pattern_binding_inner_types
+                    .get(&(sub.span.offset, sub.span.length))
+                    .cloned()
+                    .map(|te| self.subst_monomorph_type_params(&te));
+                let tes = match positional.as_ref().map(|te| &te.kind) {
+                    Some(TypeKind::Tuple(tes)) => Some(tes.clone()),
+                    _ => None,
+                };
+                elems.iter().enumerate().all(|(i, ep)| match &ep.kind {
+                    PatternKind::Wildcard => true,
+                    PatternKind::Binding(_) => {
+                        surface_scalar(&ep.span)
+                            || tes.as_ref().and_then(|t| t.get(i)).is_some_and(|te| {
+                                matches!(&te.kind, TypeKind::Path(p)
+                                    if p.segments.len() == 1
+                                        && p.generic_args.is_none()
+                                        && crate::codegen::param_own::is_primitive_type_name(
+                                            &p.segments[0]))
+                            })
+                    }
+                    _ => false,
+                })
+            }
+            _ => false,
+        })
     }
 
     /// `Result[T, E]` sibling of `suppress_inline_option_payload_cleanup`.
@@ -16619,6 +16681,13 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        // B-2026-09-17-26 — an arm whose every binding is a primitive LEAF
+        // (`Ok((_, n))`, a scalar `Err(e)`) takes none of the payload's heap, so
+        // there is nothing for it to hand over and the source keeps its free.
+        // Disarming here made the retained original's heap nobody's.
+        if self.result_arm_leaves_take_no_heap(pattern) {
             return;
         }
         let Some(slot) = self.variables.get(name) else {

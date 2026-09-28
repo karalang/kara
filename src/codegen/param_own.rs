@@ -1637,7 +1637,53 @@ impl<'ctx> super::Codegen<'ctx> {
                 return false;
             }
         }
-        self.field_copy_supported(te, &mut Vec::new())
+        self.field_copy_supported(te, &mut Vec::new()) || self.result_tuple_half_entry_copyable(te)
+    }
+
+    /// B-2026-09-17-26 — is `te` a `Result` whose heap-owning halves are all
+    /// inline TUPLES of copy-supported elements? `field_copy_supported` has no
+    /// tuple-payload class for `Result` (a struct FIELD of that shape stays
+    /// caller-retains), so a by-value `Result[(W, i64), E]` param was owned by
+    /// TRANSFER: the caller zeroed nothing, the callee's arm that bound the
+    /// payload and returned a scalar freed the tuple's heap, and the caller's
+    /// temp-bodies pass then ran `W`'s Drop body over the freed buffer — the
+    /// third owner of one payload. Entry-copying it gives the callee its own
+    /// copy, exactly as the struct-payload class already does, so both frames
+    /// free what they own and nothing else.
+    ///
+    /// A half that owns no heap (`i64`) is skipped; a tuple half holding a
+    /// `shared` element stays out, for the rc reason spelled out above.
+    pub(super) fn result_tuple_half_entry_copyable(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        if p.segments.first().map(String::as_str) != Some("Result") {
+            return false;
+        }
+        let halves = p.generic_args.as_deref().unwrap_or(&[]);
+        if halves.len() != 2 {
+            return false;
+        }
+        let mut tuple_half = false;
+        for a in halves {
+            let GenericArg::Type(half) = a else {
+                return false;
+            };
+            if !self.te_owns_heap_below_buffer(half) {
+                continue;
+            }
+            let TypeKind::Tuple(elems) = &half.kind else {
+                return false;
+            };
+            if elems.is_empty()
+                || self.field_owns_shared(half, &mut Vec::new())
+                || !self.field_copy_supported(half, &mut Vec::new())
+            {
+                return false;
+            }
+            tuple_half = true;
+        }
+        tuple_half
     }
 
     /// [`Self::optres_escaping_param_entry_copied`] keyed by CALL-ARGUMENT
@@ -1892,13 +1938,87 @@ impl<'ctx> super::Codegen<'ctx> {
         match p.segments.first().map(String::as_str) {
             Some("Option") => self.deep_copy_option_inline_payload_in_place(slot, te),
             Some("Result") => {
-                if self.result_field_struct_enum_payload_ok(te) {
+                if self.result_tuple_half_entry_copyable(te) {
+                    self.deep_copy_result_tuple_payload_in_place(slot, te);
+                } else if self.result_field_struct_enum_payload_ok(te) {
                     self.deep_copy_result_struct_enum_payload_in_place(slot, te);
                 } else {
                     self.deep_copy_result_inline_heap_halves_in_place(slot, te);
                 }
             }
             _ => {}
+        }
+    }
+
+    /// B-2026-09-17-26 — the entry copy for the class admitted by
+    /// [`Self::result_tuple_half_entry_copyable`]: on the live half, copy each
+    /// tuple element in place through `deep_copy_one_aggregate_field`, the same
+    /// per-element copy a struct field of that tuple type gets, so the copy is
+    /// exactly as deep as the tuple drop that frees it.
+    fn deep_copy_result_tuple_payload_in_place(&mut self, slot: PointerValue<'ctx>, te: &TypeExpr) {
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        let Some(args) = p.generic_args.clone() else {
+            return;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get("Result").cloned() else {
+            return;
+        };
+        let result_ty = layout.llvm_type;
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        for (idx, label, variant) in [(0usize, "ok", "Ok"), (1, "err", "Err")] {
+            let Some(GenericArg::Type(half)) = args.get(idx) else {
+                continue;
+            };
+            if !self.te_owns_heap_below_buffer(half) {
+                continue;
+            }
+            let TypeKind::Tuple(elems) = &half.kind else {
+                continue;
+            };
+            let BasicTypeEnum::StructType(tup_ty) = self.llvm_type_for_type_expr(half) else {
+                continue;
+            };
+            let half_tag = layout.tags.get(variant).copied().unwrap_or(idx as u64);
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(result_ty, slot, 0, "p14rt.tag.p")
+                .unwrap();
+            let tag = self
+                .builder
+                .build_load(i64_t, tag_ptr, "p14rt.tag")
+                .unwrap()
+                .into_int_value();
+            let copy_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("p14rt.{label}"));
+            let next_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("p14rt.{label}.next"));
+            let is_half = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    tag,
+                    i64_t.const_int(half_tag, false),
+                    &format!("p14rt.is_{label}"),
+                )
+                .unwrap();
+            self.builder
+                .build_conditional_branch(is_half, copy_bb, next_bb)
+                .unwrap();
+            self.builder.position_at_end(copy_bb);
+            let payload_ptr = self
+                .builder
+                .build_struct_gep(result_ty, slot, 1, "p14rt.payload")
+                .unwrap();
+            for (j, ete) in elems.iter().enumerate() {
+                self.deep_copy_one_aggregate_field(payload_ptr, tup_ty, j as u32, ete);
+            }
+            self.builder.build_unconditional_branch(next_bb).unwrap();
+            self.builder.position_at_end(next_bb);
         }
     }
 
