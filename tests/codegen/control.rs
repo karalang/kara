@@ -1107,13 +1107,12 @@ fn main() {
 /// `i64.add(90, r.id)` — measured by printing the declining leaf. A
 /// classifier with a `Binary` arm and no operator arm changed not one cell.
 ///
-/// THE TWO GUARD CELLS ARE DELIBERATELY STILL WRONG, and pinned as
-/// measured. A leaf that CONSUMES the param through a call
-/// (`R { id: eat(r) }`) is still declined — admitting it would register a
-/// body for a value handed to `eat` — and it keeps the same three-way
-/// split this row's leaf had: the free spelling loses the body on both
-/// surfaces, the associated spelling loses it on the interpreter only, the
-/// method spelling is correct. Filed as B-2026-09-17-33. Reading a
+/// CELLS 10-11 were guards pinned wrong as measured: a leaf that CONSUMES
+/// the param through a call (`R { id: eat(r) }`) was declined, and kept
+/// this row's three-way split (free lost everywhere, associated lost on the
+/// interpreter only). B-2026-09-17-33 admits it when the consumer keeps
+/// nothing of the param: `eat` is caller-retained, so the callee's per-path
+/// owner is the one that owes the body, and both cells now run it. Reading a
 /// NON-scalar field (`R { name: r.name }`) cannot reach the question at
 /// all — `partial_move_of_drop_struct` rejects it at the front end — so the
 /// scalar-field keying is belt-and-braces there rather than the only guard.
@@ -1235,9 +1234,11 @@ fn e2e_conditionally_returned_param_with_a_reading_leaf_runs_one_body() {
                 "dR1/a\nk:91\ndR91/z\nend\n",
                 "dR1/a\nk:91\ndR91/z\nend\n",
             ),
-            // 10-11 — GUARDS: a leaf that CONSUMES the param through a call is
-            //     still declined, and still wrong in the way this row's leaf
-            //     used to be. Pinned as measured; B-2026-09-17-33.
+            // 10-11 — a leaf that CONSUMES the param through a call. These
+            //     were pinned as guards, wrong as measured (the associated one
+            //     divergent, the free one an agreed loss). B-2026-09-17-33
+            //     admits the leaf when the consumer keeps nothing of the param,
+            //     and both now run `dR1/a` once, inside the callee.
             (
                 // 12 — B-2026-09-14-8's headline distinction: adding a
                 //      `mut ref self` receiver to the identical body made the
@@ -1256,7 +1257,7 @@ fn e2e_conditionally_returned_param_with_a_reading_leaf_runs_one_body() {
                 "dR1\nk:91\ndR91\nend\n",
             ),
             (
-                "guard: assoc, consuming leaf — still divergent",
+                "assoc, consuming leaf, dies-inside path",
                 format!(
                     "{RH}fn eat(x: R) -> i64 {{ return x.id; }}\n\
                      struct Sk {{ n: i64 }}\n\
@@ -1264,17 +1265,17 @@ fn e2e_conditionally_returned_param_with_a_reading_leaf_runs_one_body() {
                      fn main() {{ let k = Sk.pick(R {{ name: f\"a\", id: 1 }}, false); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
                 ),
                 "dR1/a\nk:1\ndR1/z\nend\n",
-                "k:1\ndR1/z\nend\n",
+                "dR1/a\nk:1\ndR1/z\nend\n",
             ),
             (
-                "guard: free, consuming leaf — agreed loss",
+                "free, consuming leaf, dies-inside path",
                 format!(
                     "{RH}fn eat(x: R) -> i64 {{ return x.id; }}\n\
                      fn pick(r: R, flag: bool) -> R {{ if flag {{ return r }} return R {{ name: f\"z\", id: eat(r) }} }}\n\
                      fn main() {{ let k = pick(R {{ name: f\"a\", id: 1 }}, false); println(f\"k:{{k.id}}\"); println(\"end\") }}\n"
                 ),
-                "k:1\ndR1/z\nend\n",
-                "k:1\ndR1/z\nend\n",
+                "dR1/a\nk:1\ndR1/z\nend\n",
+                "dR1/a\nk:1\ndR1/z\nend\n",
             ),
         ] {
             let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(&prog);

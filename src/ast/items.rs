@@ -4322,6 +4322,105 @@ pub fn fn_conditionally_returns_param_bare(
     /// `consume(r)` hands it away and `r.take()` may, so they keep condition
     /// 3's answer. Every shape not listed declines, which is this family's
     /// standing direction — a missed body, never a double drop.
+    fn is_scalar_type_name(n: &str) -> bool {
+        matches!(
+            n,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "f32"
+                | "f64"
+                | "bool"
+                | "char"
+        )
+    }
+    /// B-2026-09-17-33 — are ALL of `e`'s mentions of the param either copy
+    /// reads (as [`mentions_only_as_copy_read`] admits) or a bare by-value
+    /// ARGUMENT to a free function that neither hands that parameter back nor
+    /// stores it anywhere outliving its frame (`R { id: eat(r) }` with `fn
+    /// eat(x: R) -> i64`)?
+    ///
+    /// Such a leaf CONSUMES the param without handing it out. Under the
+    /// caller-retains convention `eat` does not run `x`'s body, its caller
+    /// does, and here that caller is this function. So the per-path owner the
+    /// admission registers is exactly the one owed: it stays armed on the
+    /// consuming path (nothing clears it, since no `return` yields the param)
+    /// and runs the body at this function's exit. Declined, the free leg stood
+    /// the caller down on the union answer and lost the body on every surface,
+    /// and the associated and method legs kept the caller's registration and
+    /// ran it TWICE compiled on the hand-back path.
+    fn mentions_only_as_consumed_arg(
+        e: &Expr,
+        name: &[String],
+        copy_fields: &[String],
+        program: Option<&crate::Program>,
+        self_name: &str,
+    ) -> bool {
+        let rec =
+            |x: &Expr| mentions_only_as_consumed_arg(x, name, copy_fields, program, self_name);
+        match &e.kind {
+            // An arithmetic operator reaches here as a call on a scalar
+            // type's path (`eat(r) + 1` is `i64.add(eat(r), 1)`), whose
+            // operands are values of that scalar type: the param can only
+            // appear inside them, so each operand answers for itself.
+            ExprKind::Call { callee, args }
+                if matches!(&callee.kind, ExprKind::Path { segments, .. }
+                    if segments.len() == 2 && is_scalar_type_name(&segments[0])) =>
+            {
+                args.iter().all(|a| rec(&a.value))
+            }
+            ExprKind::Call { callee, args } => {
+                let ExprKind::Identifier(g) = &callee.kind else {
+                    return mentions_only_as_copy_read(e, name, copy_fields);
+                };
+                let Some(gf) = (g != self_name)
+                    .then(|| {
+                        program.and_then(|p| {
+                            p.items.iter().find_map(|it| match it {
+                                Item::Function(gf) if &gf.name == g => Some(gf),
+                                _ => None,
+                            })
+                        })
+                    })
+                    .flatten()
+                else {
+                    return mentions_only_as_copy_read(e, name, copy_fields);
+                };
+                if gf.params.len() != args.len() {
+                    return false;
+                }
+                args.iter().enumerate().all(|(j, a)| {
+                    if matches!(&a.value.kind, ExprKind::Identifier(n) if name.iter().any(|x| x == n))
+                    {
+                        !matches!(
+                            gf.params[j].ty.kind,
+                            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+                        ) && !fn_returns_param(gf, j)
+                            && fn_returns_param_owned_part_paths(program, gf, j).is_empty()
+                            && !fn_moves_param_into_outliving_place(gf, j)
+                            && program.is_some_and(|p| {
+                                !fn_returns_param_via_call(p, gf, j)
+                                    && !fn_moves_param_into_outliving_place_via_call(p, gf, j)
+                            })
+                    } else {
+                        mentions_only_as_copy_read(&a.value, name, copy_fields)
+                    }
+                })
+            }
+            ExprKind::StructLiteral { fields, .. } => fields.iter().all(|f| rec(&f.value)),
+            ExprKind::Tuple(elems) => elems.iter().all(rec),
+            ExprKind::Binary { left, right, .. } => rec(left) && rec(right),
+            _ => mentions_only_as_copy_read(e, name, copy_fields),
+        }
+    }
     fn mentions_only_as_copy_read(e: &Expr, name: &[String], copy_fields: &[String]) -> bool {
         match &e.kind {
             // THE one admitted shape. Does not recurse into `object`: this arm
@@ -4781,7 +4880,15 @@ pub fn fn_conditionally_returns_param_bare(
             // leaves the param to die inside the callee exactly as a constant
             // leaf would, so this counts as a non-yielding exit rather than a
             // refusal; see `mentions_only_as_copy_read` for what that cost.
-            if !mentions_only_as_copy_read(leaf, name, &copy_fields) {
+            if !mentions_only_as_copy_read(leaf, name, &copy_fields)
+                && !mentions_only_as_consumed_arg(
+                    leaf,
+                    name,
+                    &copy_fields,
+                    program,
+                    f.name.as_str(),
+                )
+            {
                 return false;
             }
             yields_nothing = true;
@@ -5069,6 +5176,101 @@ pub enum ParamPart {
 /// extends the first's path instead of failing a whole-param gate.
 pub fn fn_returns_param_part_paths(f: &Function, arg_index: usize) -> Vec<ParamPath> {
     returned_param_part_paths_impl(f, arg_index, None)
+}
+
+/// B-2026-09-17-33 — the one call inside `handed` that takes the flagged
+/// param `name` as a bare argument, when that is the param's ONLY appearance
+/// there: `R { name: f"z", id: eat(r) }` gives `eat(r)`.
+///
+/// Both backends' statement disarms read any appearance of the param in a
+/// handed-over expression as a hand-over, and their stays-with-caller tests
+/// only recognise a call that IS the handed expression. So a consuming call
+/// nested in a returned aggregate cleared the flag, and the body owed on that
+/// path ran nowhere. `None` for a call that is itself `handed` (the direct
+/// test already covers it), for a param also handed out any other way, and
+/// for two consuming calls.
+pub fn sole_nested_consuming_call<'e>(handed: &'e Expr, name: &str) -> Option<&'e Expr> {
+    fn is_name(e: &Expr, name: &str) -> bool {
+        matches!(&e.kind, ExprKind::Identifier(n) if n == name)
+    }
+    fn walk<'e>(e: &'e Expr, name: &str, calls: &mut Vec<&'e Expr>, other: &mut bool) {
+        match &e.kind {
+            ExprKind::Identifier(n) if n == name => *other = true,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                if projection_binding_name(e).is_some_and(|p| p.split('.').next() == Some(name)) {
+                    *other = true;
+                }
+            }
+            ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                if args.iter().any(|a| is_name(&a.value, name)) {
+                    calls.push(e);
+                }
+                for a in args.iter().filter(|a| !is_name(&a.value, name)) {
+                    walk(&a.value, name, calls, other);
+                }
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                for f in fields {
+                    walk(&f.value, name, calls, other);
+                }
+            }
+            ExprKind::Tuple(elems) => {
+                for el in elems {
+                    walk(el, name, calls, other);
+                }
+            }
+            ExprKind::Binary { left, right, .. } => {
+                walk(left, name, calls, other);
+                walk(right, name, calls, other);
+            }
+            _ => {}
+        }
+    }
+    if matches!(
+        handed.kind,
+        ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+    ) {
+        return None;
+    }
+    let mut calls = Vec::new();
+    let mut other = false;
+    walk(handed, name, &mut calls, &mut other);
+    match (other, calls.as_slice()) {
+        (false, [call]) => Some(call),
+        _ => None,
+    }
+}
+
+/// B-2026-09-17-33 — [`fn_returns_param_part_paths`] without the one-level
+/// paths onto an owned SCALAR field (`return x.id` where `id: i64`).
+///
+/// Returning such a field is a COPY READ: it carries nothing of the param out
+/// of the frame, which is the same classification condition 3 of
+/// [`fn_conditionally_returns_param_bare`] makes through
+/// [`param_scalar_field_names`]. The stays-with-caller tests on both backends
+/// (`flagged_array_arg_stays_with_caller` in codegen,
+/// `user_drop_array_arg_stays_with_caller` in the interpreter) asked the
+/// unfiltered question, so a consumer as plain as `fn eat(x: R) -> i64 {
+/// return x.id; }` read as taking part of `x` over, the adopted flag was
+/// cleared at `eat(r)`, and the body owed on that path ran nowhere.
+pub fn fn_returns_param_owned_part_paths(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> Vec<ParamPath> {
+    let paths = fn_returns_param_part_paths(f, arg_index);
+    if paths.is_empty() {
+        return paths;
+    }
+    let scalars = f
+        .params
+        .get(arg_index)
+        .map(|p| param_scalar_field_names(program, &p.ty))
+        .unwrap_or_default();
+    paths
+        .into_iter()
+        .filter(|path| !matches!(path.as_slice(), [ParamPart::Field(n)] if scalars.contains(n)))
+        .collect()
 }
 
 /// B-2026-09-05-36 — [`fn_returns_param_part_paths`] plus the routes only a

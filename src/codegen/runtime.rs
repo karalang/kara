@@ -15206,6 +15206,23 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-17-33 — [`Self::flagged_array_arg_stays_with_caller`] for a
+    /// flagged param handed to a consuming call NESTED inside the handed-over
+    /// expression, `return R { name: f"z", id: eat(r) }`.
+    ///
+    /// `hands_over` recurses through the struct literal into the call's
+    /// arguments and reads `eat(r)` as a hand-over, while the stays-with-caller
+    /// test only recognises a call AS the handed expression. So the flag was
+    /// cleared on the consuming path and nothing ran `r`'s body there: `eat`
+    /// is caller-retained and runs none, and the caller had stood down on the
+    /// conditional hand-back. Answers true only when the param's ONLY
+    /// appearance in `handed` is as a bare argument of exactly one call, and
+    /// that call is one the direct test keeps with the caller.
+    fn nested_call_arg_stays_with_caller(&self, handed: &Expr, name: &str) -> bool {
+        crate::ast::sole_nested_consuming_call(handed, name)
+            .is_some_and(|call| self.flagged_array_arg_stays_with_caller(call, name))
+    }
+
     fn disarm_conditional_store_flags_handed_by(&mut self, handed: &Expr) {
         /// Does `e` hand `name` over BY VALUE — bare, or nested inside an
         /// aggregate or call being built around it? The same move shapes
@@ -15268,6 +15285,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .any(|(l, p)| p == *n && hands_over(handed, l))
             })
             .filter(|n| !self.flagged_array_arg_stays_with_caller(handed, n))
+            .filter(|n| !self.nested_call_arg_stays_with_caller(handed, n))
             // B-2026-09-23-36 — only while the generation the bit was made for
             // is the live one. A later generation of a shadowed name handed
             // over here is not the value the bit guards: clearing it took the
@@ -15291,6 +15309,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .filter(|n| param_side(self, n))
             .filter(|n| hands_over(handed, n))
             .filter(|n| !self.flagged_array_arg_stays_with_caller(handed, n))
+            .filter(|n| !self.nested_call_arg_stays_with_caller(handed, n))
             .filter_map(|n| {
                 let cur = self.variables.get(n.as_str())?.ptr;
                 self.drop_rc

@@ -6814,6 +6814,13 @@ impl<'a> super::Interpreter<'a> {
             .filter(|n| !parts_only || n.contains('.'))
             .filter(|n| hands_over(handed, n))
             .filter(|n| !self.user_drop_array_arg_stays_with_caller(handed, n))
+            // B-2026-09-17-33 — and one nested in the handed aggregate
+            // (`return R { id: eat(r) }`). Codegen's twin is
+            // `nested_call_arg_stays_with_caller`.
+            .filter(|n| {
+                !crate::ast::sole_nested_consuming_call(handed, n)
+                    .is_some_and(|call| self.user_drop_array_arg_stays_with_caller(call, n))
+            })
             .cloned()
             .collect();
         for n in hits {
@@ -7004,7 +7011,7 @@ impl<'a> super::Interpreter<'a> {
         is_array_param
             && !crate::ast::fn_returns_param(f, i)
             && !crate::ast::fn_returns_param_via_call(self.program, f, i)
-            && crate::ast::fn_returns_param_part_paths(f, i).is_empty()
+            && crate::ast::fn_returns_param_owned_part_paths(Some(self.program), f, i).is_empty()
             && !crate::ast::fn_moves_param_into_outliving_place(f, i)
             && !crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
     }

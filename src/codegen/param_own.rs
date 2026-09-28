@@ -3408,7 +3408,7 @@ impl<'ctx> super::Codegen<'ctx> {
         shape_ok
             && !crate::ast::fn_returns_param(f, i)
             && !crate::ast::fn_returns_param_via_call(program, f, i)
-            && crate::ast::fn_returns_param_part_paths(f, i).is_empty()
+            && crate::ast::fn_returns_param_owned_part_paths(Some(program), f, i).is_empty()
             && !crate::ast::fn_moves_param_into_outliving_place(f, i)
             && !crate::ast::fn_moves_param_into_outliving_place_via_call(program, f, i)
     }
