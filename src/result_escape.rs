@@ -58,6 +58,13 @@ struct Acc<'a> {
     /// resolve. The walk stays here; the policy comes from whoever can answer
     /// it. See [`optres_payload_escaping_param_variants_with`].
     copy_read: Option<&'a dyn Fn(&Expr) -> bool>,
+    /// B-2026-09-28-48 — follow a WHOLE immutable rebind of an arm's payload
+    /// binding (`Some(y) => { let z = y; .. }`) and ask the rest of the arm
+    /// about `z`. Set only by [`optres_payload_escaping_param_variants_with_rebinds`]
+    /// for a payload whose rebind the callee lowers as a view (a named
+    /// struct); a `Vec` payload's rebind is its only owner, so for it the
+    /// rebind stays an escape.
+    follow_rebinds: bool,
     /// B-2026-09-17-23 — the MEMORY sibling of `copy_read`, consulted only by
     /// the `payload_consumers` arms: a projection this answers `true` for is a
     /// copy read that takes nothing out of the payload. `None` keeps the plain
@@ -614,8 +621,20 @@ pub fn optres_payload_escaping_param_variants_with(
     func: &Function,
     copy_read: &dyn Fn(&Expr) -> bool,
 ) -> HashMap<String, HashSet<String>> {
+    optres_payload_escaping_param_variants_with_rebinds(func, copy_read, false)
+}
+
+/// B-2026-09-28-48 — [`optres_payload_escaping_param_variants_with`], and
+/// with `follow_rebinds` a whole immutable rebind of an arm's payload binding
+/// is followed rather than read as an escape (see `Acc::follow_rebinds`).
+pub fn optres_payload_escaping_param_variants_with_rebinds(
+    func: &Function,
+    copy_read: &dyn Fn(&Expr) -> bool,
+    follow_rebinds: bool,
+) -> HashMap<String, HashSet<String>> {
     let mut acc = Acc {
         copy_read: Some(copy_read),
+        follow_rebinds,
         ..seeded_acc(func)
     };
     walk_block(&func.body, &mut acc);
@@ -893,6 +912,7 @@ fn variant_arm_payload_escapes_proj<'a>(
     guard: Option<&Expr>,
     body: &Expr,
     copy_read: &dyn Fn(&Expr) -> bool,
+    follow_rebinds: bool,
 ) -> Option<&'a str> {
     let variant = optres_variant_of_pattern(pattern)?;
     let names = pattern.binding_names();
@@ -900,7 +920,7 @@ fn variant_arm_payload_escapes_proj<'a>(
         return None;
     }
     (!names.iter().all(|v| {
-        crate::consume_class::binding_only_borrowed_escape_with(v, body, copy_read)
+        crate::consume_class::binding_only_borrowed_escape_with(v, body, copy_read, follow_rebinds)
             && guard.is_none_or(|g| {
                 crate::consume_class::binding_only_borrowed_with(v, g, &projection_is_read)
             })
@@ -928,6 +948,7 @@ fn variant_arm_payload_escaping_parts<'a>(
     guard: Option<&Expr>,
     body: &Expr,
     copy_read: &dyn Fn(&Expr) -> bool,
+    follow_rebinds: bool,
 ) -> Option<(&'a str, BTreeSet<usize>)> {
     let variant = optres_variant_of_pattern(pattern)?;
     let parts = tuple_payload_binding_parts(pattern)?;
@@ -936,11 +957,14 @@ fn variant_arm_payload_escaping_parts<'a>(
         .enumerate()
         .filter_map(|(i, name)| {
             let v = (*name)?;
-            let borrowed =
-                crate::consume_class::binding_only_borrowed_escape_with(v, body, copy_read)
-                    && guard.is_none_or(|g| {
-                        crate::consume_class::binding_only_borrowed_with(v, g, &projection_is_read)
-                    });
+            let borrowed = crate::consume_class::binding_only_borrowed_escape_with(
+                v,
+                body,
+                copy_read,
+                follow_rebinds,
+            ) && guard.is_none_or(|g| {
+                crate::consume_class::binding_only_borrowed_with(v, g, &projection_is_read)
+            });
             (!borrowed).then_some(i)
         })
         .collect();
@@ -952,6 +976,7 @@ fn variant_arm_payload_escaping_parts_block<'a>(
     pattern: &'a crate::ast::Pattern,
     block: Option<&Block>,
     copy_read: &dyn Fn(&Expr) -> bool,
+    follow_rebinds: bool,
 ) -> Option<(&'a str, BTreeSet<usize>)> {
     let variant = optres_variant_of_pattern(pattern)?;
     let parts = tuple_payload_binding_parts(pattern)?;
@@ -965,7 +990,10 @@ fn variant_arm_payload_escaping_parts_block<'a>(
             match block {
                 None => Some(i),
                 Some(b) => (!crate::consume_class::binding_only_borrowed_block_escape_with(
-                    v, b, copy_read,
+                    v,
+                    b,
+                    copy_read,
+                    follow_rebinds,
                 ))
                 .then_some(i),
             }
@@ -1015,6 +1043,7 @@ fn variant_arm_payload_escapes_proj_block<'a>(
     pattern: &'a crate::ast::Pattern,
     block: Option<&Block>,
     copy_read: &dyn Fn(&Expr) -> bool,
+    follow_rebinds: bool,
 ) -> Option<&'a str> {
     let variant = optres_variant_of_pattern(pattern)?;
     let names = pattern.binding_names();
@@ -1024,7 +1053,12 @@ fn variant_arm_payload_escapes_proj_block<'a>(
     match block {
         None => Some(variant),
         Some(b) => (!names.iter().all(|v| {
-            crate::consume_class::binding_only_borrowed_block_escape_with(v, b, copy_read)
+            crate::consume_class::binding_only_borrowed_block_escape_with(
+                v,
+                b,
+                copy_read,
+                follow_rebinds,
+            )
         }))
         .then_some(variant),
     }
@@ -1237,14 +1271,15 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                         acc.payload_escapers.entry(root_n).or_default().insert(v);
                     }
                     let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
-                    if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, None, cr) {
+                    let fr = acc.follow_rebinds;
+                    if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, None, cr, fr) {
                         acc.payload_escapers_proj
                             .entry(root_n)
                             .or_default()
                             .insert(v);
                         // B-2026-09-14-18 — see the `Match` site.
                         if let Some((pv, parts)) =
-                            variant_arm_payload_escaping_parts_block(pattern, None, cr)
+                            variant_arm_payload_escaping_parts_block(pattern, None, cr, fr)
                         {
                             acc.payload_escaper_parts
                                 .entry(root_n)
@@ -1300,6 +1335,7 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
             if let ExprKind::Identifier(n) = &scrutinee.kind {
                 let root_n = root(acc, n.as_str());
                 let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
+                let fr = acc.follow_rebinds;
                 for a in arms {
                     if let Some(v) = variant_arm_takes_payload(
                         &a.pattern,
@@ -1314,9 +1350,13 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                     {
                         acc.payload_escapers.entry(root_n).or_default().insert(v);
                     }
-                    if let Some(v) =
-                        variant_arm_payload_escapes_proj(&a.pattern, a.guard.as_ref(), &a.body, cr)
-                    {
+                    if let Some(v) = variant_arm_payload_escapes_proj(
+                        &a.pattern,
+                        a.guard.as_ref(),
+                        &a.body,
+                        cr,
+                        fr,
+                    ) {
                         acc.payload_escapers_proj
                             .entry(root_n)
                             .or_default()
@@ -1328,6 +1368,7 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                             a.guard.as_ref(),
                             &a.body,
                             cr,
+                            fr,
                         ) {
                             acc.payload_escaper_parts
                                 .entry(root_n)
@@ -1476,8 +1517,9 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                     acc.payload_escapers.entry(root_n).or_default().insert(v);
                 }
                 let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
+                let fr = acc.follow_rebinds;
                 if let Some(v) =
-                    variant_arm_payload_escapes_proj_block(pattern, Some(then_block), cr)
+                    variant_arm_payload_escapes_proj_block(pattern, Some(then_block), cr, fr)
                 {
                     acc.payload_escapers_proj
                         .entry(root_n)
@@ -1485,7 +1527,7 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                         .insert(v);
                     // B-2026-09-14-18 — see the `Match` site.
                     if let Some((pv, parts)) =
-                        variant_arm_payload_escaping_parts_block(pattern, Some(then_block), cr)
+                        variant_arm_payload_escaping_parts_block(pattern, Some(then_block), cr, fr)
                     {
                         acc.payload_escaper_parts
                             .entry(root_n)
@@ -1526,14 +1568,16 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                     acc.payload_escapers.entry(root_n).or_default().insert(v);
                 }
                 let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
-                if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, Some(body), cr) {
+                let fr = acc.follow_rebinds;
+                if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, Some(body), cr, fr)
+                {
                     acc.payload_escapers_proj
                         .entry(root_n)
                         .or_default()
                         .insert(v);
                     // B-2026-09-14-18 — see the `Match` site.
                     if let Some((pv, parts)) =
-                        variant_arm_payload_escaping_parts_block(pattern, Some(body), cr)
+                        variant_arm_payload_escaping_parts_block(pattern, Some(body), cr, fr)
                     {
                         acc.payload_escaper_parts
                             .entry(root_n)

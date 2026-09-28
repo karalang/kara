@@ -1925,6 +1925,27 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .boxed_optres_payload_view_vars
                                         .insert(name.clone(), slot);
                                 }
+                                // B-2026-09-28-48 — a view whose bodies the
+                                // CALLER runs is a param view: a whole rebind
+                                // (`Some(y) => { let z = y; .. }`) must hand
+                                // `z` the memory alone, as the inline payload
+                                // and the `Result` spelling already do. Left
+                                // out, `z` armed the field bodies at its NLL
+                                // point beside the caller's walk.
+                                if self
+                                    .pattern_state
+                                    .pattern_binding_scrutinee_optres_bodies_are_caller_retained
+                                {
+                                    self.payload_vars.param_view_locals.insert(name.clone());
+                                    // A FIELD moved out of the view (`let x =
+                                    // y.r`) is masked out of the caller's walk,
+                                    // so its destination is that field's only
+                                    // owner: the inline spelling's rule, read
+                                    // at the move-out let site.
+                                    self.payload_vars
+                                        .caller_retained_payload_arm_bindings
+                                        .insert(name.clone());
+                                }
                             }
                             if is_boxed_optres_drop_payload {
                                 if let Some((src_ptr, src_fn)) = rehome_src {

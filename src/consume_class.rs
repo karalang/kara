@@ -67,6 +67,7 @@ pub(crate) fn binding_only_borrowed_with(
         copy_read,
         free_fn_arg_transfers: false,
         callee_owns_arg: &|_, _| false,
+        follow_let_rebinds: false,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -84,12 +85,14 @@ pub(crate) fn binding_only_borrowed_escape_with(
     name: &str,
     e: &Expr,
     copy_read: &dyn Fn(&Expr) -> bool,
+    follow_let_rebinds: bool,
 ) -> bool {
     let c = Ctx {
         name,
         copy_read,
         free_fn_arg_transfers: false,
         callee_owns_arg: &capitalized_callee_constructs,
+        follow_let_rebinds,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -99,12 +102,14 @@ pub(crate) fn binding_only_borrowed_block_escape_with(
     name: &str,
     b: &crate::ast::Block,
     copy_read: &dyn Fn(&Expr) -> bool,
+    follow_let_rebinds: bool,
 ) -> bool {
     let c = Ctx {
         name,
         copy_read,
         free_fn_arg_transfers: false,
         callee_owns_arg: &capitalized_callee_constructs,
+        follow_let_rebinds,
     };
     !block_consumes(&c, b)
 }
@@ -136,6 +141,7 @@ pub(crate) fn binding_only_borrowed_with_callee_owns(
         copy_read: &|_| false,
         free_fn_arg_transfers: false,
         callee_owns_arg,
+        follow_let_rebinds: false,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -151,6 +157,7 @@ pub(crate) fn binding_only_borrowed_block_with(
         copy_read,
         free_fn_arg_transfers: false,
         callee_owns_arg: &|_, _| false,
+        follow_let_rebinds: false,
     };
     !block_consumes(&c, b)
 }
@@ -196,6 +203,7 @@ pub(crate) fn binding_materialized(
         copy_read,
         free_fn_arg_transfers: true,
         callee_owns_arg: &|_, _| false,
+        follow_let_rebinds: false,
     };
     value_derived_from(&c, e) || has_consuming_sink(&c, e)
 }
@@ -212,6 +220,7 @@ pub(crate) fn binding_materialized_block(
         copy_read,
         free_fn_arg_transfers: true,
         callee_owns_arg: &|_, _| false,
+        follow_let_rebinds: false,
     };
     block_consumes(&c, b)
 }
@@ -256,6 +265,19 @@ struct Ctx<'a> {
     /// that cannot answer pass the `false` closure and are byte-identical to
     /// before.
     callee_owns_arg: &'a dyn Fn(&str, usize) -> bool,
+    /// B-2026-09-28-48 — follow a WHOLE immutable rebind (`let z = y;`) of the
+    /// tracked binding instead of scoring it as a transfer: the move is a sink
+    /// only when the new name is itself consumed in the rest of its block.
+    ///
+    /// Set only by the ESCAPE question ([`binding_only_borrowed_escape_with`]
+    /// and its block sibling), which asks whether a value OUTLIVES the call. A
+    /// local that is only read and then dies inside the frame keeps the value
+    /// in the frame, so it outlives nothing; scoring it as an escape stood the
+    /// caller's payload walk down while the callee's arm armed no body of its
+    /// own for one variant and armed one at the local's NLL point for the
+    /// other. Every other question keeps the syntactic "a move-binding
+    /// transfers", which is the right answer for a drop DISARM.
+    follow_let_rebinds: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -265,6 +287,7 @@ impl<'a> Ctx<'a> {
             copy_read: &|_| false,
             free_fn_arg_transfers: false,
             callee_owns_arg: &|_, _| false,
+            follow_let_rebinds: false,
         }
     }
 }
@@ -479,7 +502,23 @@ fn has_consuming_sink(c: &Ctx<'_>, e: &Expr) -> bool {
 }
 
 fn block_has_sink(c: &Ctx<'_>, b: &crate::ast::Block) -> bool {
-    for s in &b.stmts {
+    for (i, s) in b.stmts.iter().enumerate() {
+        // B-2026-09-28-48 — see `Ctx::follow_let_rebinds`. The tracked name is
+        // moved here, so it has no later use; the question passes to the new
+        // name over the rest of this block, value included.
+        if let Some(w) = whole_rebind_target(c, s) {
+            let wc = Ctx {
+                name: w,
+                copy_read: c.copy_read,
+                free_fn_arg_transfers: c.free_fn_arg_transfers,
+                callee_owns_arg: c.callee_owns_arg,
+                follow_let_rebinds: true,
+            };
+            return b.stmts[i + 1..].iter().any(|s| stmt_has_sink(&wc, s))
+                || b.final_expr
+                    .as_deref()
+                    .is_some_and(|e| value_derived_from(&wc, e) || has_consuming_sink(&wc, e));
+        }
         if stmt_has_sink(c, s) {
             return true;
         }
@@ -487,6 +526,31 @@ fn block_has_sink(c: &Ctx<'_>, b: &crate::ast::Block) -> bool {
     b.final_expr
         .as_deref()
         .is_some_and(|e| has_consuming_sink(c, e))
+}
+
+/// The name an immutable `let <w> = <tracked name>;` binds, when `c` follows
+/// rebinds. A projection, a typed or mutable binding, or a destructure is not
+/// a whole rebind and keeps the syntactic answer.
+fn whole_rebind_target<'b>(c: &Ctx<'_>, s: &'b Stmt) -> Option<&'b str> {
+    if !c.follow_let_rebinds {
+        return None;
+    }
+    let StmtKind::Let {
+        is_mut: false,
+        pattern,
+        ty: None,
+        value,
+    } = &s.kind
+    else {
+        return None;
+    };
+    let ExprKind::Identifier(src) = &value.kind else {
+        return None;
+    };
+    let crate::ast::PatternKind::Binding(w) = &pattern.kind else {
+        return None;
+    };
+    (src == c.name).then_some(w.as_str())
 }
 
 fn stmt_has_sink(c: &Ctx<'_>, s: &Stmt) -> bool {

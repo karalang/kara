@@ -38,6 +38,7 @@ pub(super) type ScrutineeShapeFlags<'ctx> = (
     bool,
     bool,
     bool,
+    bool,
 );
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -1556,6 +1557,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .pattern_binding_seeded_array_payload_stays_with_caller,
             self.pattern_state
                 .pattern_binding_payload_arm_binds_are_caller_views,
+            self.pattern_state
+                .pattern_binding_scrutinee_optres_bodies_are_caller_retained,
         );
         self.pattern_state
             .pattern_binding_scrutinee_is_fresh_owning_temp =
@@ -1563,6 +1566,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-01-13 — see `compile_match`'s twin derivation.
         self.pattern_state.pattern_binding_scrutinee_is_owned_param =
             self.scrutinee_is_owned_param_binding(scrutinee);
+        // B-2026-09-28-48 — see `compile_match`'s twin derivation. Only the
+        // match path set it, so an `if let Some(y) = x` over a caller-retained
+        // param armed the boxed payload's rebind with a second body.
+        self.pattern_state
+            .pattern_binding_scrutinee_optres_bodies_are_caller_retained =
+            self.scrutinee_optres_param_bodies_are_caller_retained(scrutinee);
         // B-2026-09-19-61 / B-2026-09-22-8 — see `compile_match`'s twin
         // derivation. `compile_match` set this and the three `let`-pattern
         // forms did not, so `if let Some(v) = Some(a)` over a by-value `Array`
@@ -1652,6 +1661,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .pattern_binding_seeded_array_payload_stays_with_caller = saved.8;
         self.pattern_state
             .pattern_binding_payload_arm_binds_are_caller_views = saved.9;
+        self.pattern_state
+            .pattern_binding_scrutinee_optres_bodies_are_caller_retained = saved.10;
     }
 
     /// B-2026-09-17-5 — see

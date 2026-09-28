@@ -6537,7 +6537,88 @@ impl<'ctx> super::Codegen<'ctx> {
         if payload_owns_its_drop_body {
             return crate::result_escape::optres_payload_escaping_param_variants_ignoring_projections(f);
         }
-        crate::result_escape::optres_payload_escaping_param_variants_with(f, &leaf_is_copy_read)
+        // B-2026-09-28-48 — a whole immutable rebind of the arm's binding
+        // (`Some(y) => { let z = y; .. }`) is followed, not read as an escape,
+        // for a NAMED STRUCT payload only: the callee lowers that rebind as a
+        // view of the caller's bodies (`param_view_locals`), so the caller
+        // must keep its walk. A `Vec` / array / tuple payload's rebind is its
+        // own owner in the callee (`e2e_arm_bound_param_payload_rebind_runs_its_bodies_once`'s
+        // `c`), so there it stays an escape and the caller stands down.
+        // Asked of the callee's DECLARED param types too, so a generic callee
+        // (`fn ms[T](a: Option[T])`, whose caller asks with the instantiated
+        // `Option[S]` while its monomorph's frame entry asks with `Option[T]`)
+        // gets one answer at both ends: not followed.
+        let follow_rebinds = self.optres_payload_rebind_is_followed(param_te, want_variant)
+            && f.params.iter().all(|p| {
+                !matches!(&p.ty.kind, TypeKind::Path(pp)
+                    if pp.segments.last().is_some_and(|h| h == "Option" || h == "Result"))
+                    || self.optres_payload_rebind_is_followed(&p.ty, None)
+            });
+        crate::result_escape::optres_payload_escaping_param_variants_with_rebinds(
+            f,
+            &leaf_is_copy_read,
+            follow_rebinds,
+        )
+    }
+
+    /// B-2026-09-28-48 — does the payload escape walk follow a whole
+    /// immutable rebind of an arm's binding for this param? Only when every
+    /// payload it can carry (the one `want_variant` names, or all of them when
+    /// it names none, which is how the callee's frame-entry seeding asks) is a
+    /// named non-`shared` struct or a plain scalar, and at least one is a
+    /// struct: the callee lowers a struct payload's rebind as a view, while a
+    /// `Vec` / array / tuple payload's rebind owns its elements.
+    pub(super) fn optres_payload_rebind_is_followed(
+        &self,
+        param_te: &TypeExpr,
+        want_variant: Option<&str>,
+    ) -> bool {
+        let variants: &[&str] = match want_variant {
+            Some(v) => &[v][..],
+            None => match &param_te.kind {
+                TypeKind::Path(p) if p.segments.last().is_some_and(|h| h == "Option") => &["Some"],
+                TypeKind::Path(p) if p.segments.last().is_some_and(|h| h == "Result") => {
+                    &["Ok", "Err"]
+                }
+                _ => return false,
+            },
+        };
+        let mut any_struct = false;
+        for v in variants {
+            let Some(te) = optres_payload_te(param_te, Some(v)) else {
+                return false;
+            };
+            let TypeKind::Path(pp) = &te.kind else {
+                return false;
+            };
+            if pp.segments.len() != 1 || pp.generic_args.as_ref().is_some_and(|a| !a.is_empty()) {
+                return false;
+            }
+            let head = pp.segments[0].as_str();
+            if self.type_decls.struct_field_names.contains_key(head)
+                && !self.type_decls.shared_types.contains_key(head)
+            {
+                any_struct = true;
+            } else if !matches!(
+                head,
+                "i8" | "i16"
+                    | "i32"
+                    | "i64"
+                    | "isize"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "usize"
+                    | "f32"
+                    | "f64"
+                    | "bool"
+                    | "char"
+            ) {
+                return false;
+            }
+        }
+        any_struct
     }
 
     /// B-2026-09-09-18 — spill a fresh-temp `Option`/`Result` argument and give
