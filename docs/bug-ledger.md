@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 526 |
-| miscompile | 513 |
-| leak | 454 |
+| run-vs-build | 527 |
+| miscompile | 514 |
+| leak | 456 |
 | double-free | 337 |
 | missing-feature | 210 |
 | codegen-gap | 201 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2247 |
-| interp | 633 |
+| codegen | 2251 |
+| interp | 635 |
 | typecheck | 312 |
 | other | 111 |
 | ownership | 79 |
@@ -374,8 +374,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-111 | 2026-09-27 | codegen | high | REASSIGNING A CONCRETE ENUM LOCAL INSIDE A READ-ONLY `match` ARM OVER IT FREES THE PAYLOAD THE ARM BINDING STILL READS -- `match g { E.X(t) => { g = E.X(mk(3)); println(t.tag) } }` prints garbage (`x` then a blank field) with 2 invalid reads on every compiled surface; the generic-enum twin leaks the payload's `String` instead (2 B) | — |
 | B-2026-09-27-112 | 2026-09-27 | interp+codegen | medium | A BY-VALUE PLAIN STRUCT PARAM PUSHED INTO A CALLEE-LOCAL `Vec` ONLY ON SOME PATHS LOSES ITS `Drop` BODY WHERE IT IS NOT PUSHED ON EVERY SURFACE, AND RUNS IT TWICE COMPILED FOR A NAMED ARGUMENT THAT IS PUSHED -- the plain-struct twin of B-2026-09-27-79: `fn rb(a: S, f: bool) -> i64 { let mut v: Vec[S] = Vec.new(); if f { v.push(a) } println("in"); 5 }` called as `rb(mk(1), true)`, `rb(mk(2), false)`, `let x = mk(3); rb(x, true)` prints `d1 in k5 in k5 d3 in k5 end` interpreted and `d1 in k5 in k5 d3 in d3 k5 end` compiled, where `d2` is due and `d3` once | — |
 | B-2026-09-27-105 | 2026-09-27 | interp+codegen | medium | A PARAM'S OR RECEIVER'S `Drop` FIELD HANDED TO ANOTHER OWNER ON ONLY SOME PATHS, OR OFF `self`, STILL RUNS ITS BODY TWICE OR NOT AT ALL, ON ALL FOUR SURFACES ALIKE -- `if c { let k = keep(w.r); return k.id; }` doubles `w.r` on the leg that keeps; the alias spelling `let r = w.r; if c { keep(r) .. }` LOSES it on the leg that does not; `fn take(self) -> i64 { let k = keep(self.r); k.id }` doubles for a named and a temp receiver; plus B-2026-09-27-99's cells (2) and (3) | — |
-| B-2026-09-27-128 | 2026-09-27 | interp+codegen | medium | A GENERIC FN THAT RETURNS ITS `Option[T]` PARAM ON ONLY SOME PATHS LOSES A FRESH-TEMP ARGUMENT'S `Drop` BODY ON THE PATH THAT DOES NOT RETURN IT, ON EVERY SURFACE, AND LEAKS ITS BOX COMPILED -- `mg(Some(mk(2)), false)` over `fn mg[T](a: Option[T], c: bool) -> Option[T] { if c { a } else { None } }` prints no `d2` | — |
-| B-2026-09-27-129 | 2026-09-27 | interp+codegen | medium | A CALL RESULT USED AS THE RECEIVER OF `is_some()` NEVER RUNS ITS PAYLOAD'S `Drop` BODY, ON EVERY SURFACE, AND LEAKS ITS BOX COMPILED -- `let n = mk2(3).is_some()` over `fn mk2(i: i64) -> Option[S] { Some(mk(i)) }` prints `ntrue end` where `d3` is due | — |
 | B-2026-09-27-97 | 2026-09-27 | codegen+interp | medium | A `let`-BOUND CONDITIONAL HAND-BACK OF `Option[Vec[R]]` OR `Option[(R, i64)]` (R has a `Drop`) STILL SPLITS THE BACKENDS, the non-struct remainder of B-2026-09-24-11 -- `let r: Option[Vec[R]] = if c { a } else { None }; println("mid"); r` with c=true prints `mid d1 n1 d1 end` under `--interp` (body run twice) and `mid n1 d1 end` compiled; from a TEMP argument with c=false the interpreter runs the body (`mid d1 none end`) and every compiled build loses it (`mid none end`) | — |
 | B-2026-09-27-98 | 2026-09-27 | codegen+interp | medium | A BY-VALUE PLAIN `Drop` STRUCT PARAM THAT THE CALLEE RETURNS ON SOME PATHS AND PASSES TO A BY-VALUE CONSUMER ON THE OTHERS LOSES ITS `Drop` BODY ON THE PASSING PATH, ON ALL FOUR SURFACES -- `fn pk(s: S, k: bool) -> S { if k { return s } eat(s); return mks(0) }` over `fn eat(s: S) { println("x") }` prints `x dS0 end` for `let a = mks(4); let r = pk(a, false)` where `x dS4 dS0 end` is owed; the `Some(s)`-wrapped return (`-> Option[S]`) prints `x end` | — |
 | B-2026-09-27-131 | 2026-09-27 | interp | medium | `--interp` LOSES THE `Drop` BODY OF A BOXED GENERIC ENUM PARAM THAT THE CALLEE REBINDS (`let m = h;`), RETURNS ON SOME PATHS AND PASSES TO A BY-VALUE CONSUMER ON THE OTHERS, WHILE EVERY COMPILED SURFACE RUNS IT -- `fn pkl(h: Ho[S], k: bool) -> Ho[S] { let m = h; if k { return m } shows(m); return Ho.Empty }` prints `s2 e` under `--interp` against `s2 dS2 e` compiled | — |
@@ -397,6 +395,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-3 | 2026-09-28 | interp | medium | THE INTERPRETER LOSES A SHADOWED OUTER GENERATION'S `Drop` BODIES ON A RETURN FROM INSIDE A NESTED SHADOW, AND RUNS AN `Array` REBOUND BY `let x = x` TWICE, where every compiled build is right -- `let x: R = mkr(1); { let x: R = mkr(8); if c { return x } }; ..` with c=true prints `y8 d8` under `--interp` and `d1 y8 d8` on jit / -O0 / -O2 (the outer `x` dies at the return and its body never runs in the interpreter) | — |
 | B-2026-09-28-8 | 2026-09-28 | codegen | high | A BOXED GENERIC-ENUM PAYLOAD FORWARDED THROUGH A GENERIC MIDDLE FUNCTION VIA A LOCAL REBOUND FROM A PASSTHROUGH CALL IS STILL FREED TWICE -- `fn gvia[T](g: G[T]) -> i64 { let h = gid(g); return glen(h) }` over `fn gid[T](g: G[T]) -> G[T] { return g }` aborts with a double free on every compiled build (5 valgrind errors at -O0 for a `Drop` payload, 7 for `Array[String, 2]`), where the same two statements in `main`, or in a CONCRETE middle `fn cvia(g: G[R])`, are clean | — |
 | B-2026-09-28-9 | 2026-09-28 | codegen | medium | A BOXED GENERIC-ENUM VALUE PASSED TO A GENERIC FUNCTION WHOSE PARAMETER IS A BARE `T` LEAKS ITS BOX AND LOSES THE PAYLOAD'S `Drop` BODY -- `gany(g)` over `fn gany[T](x: T) -> i64 { return 3 }` with `let g: G[R] = G.Y(mk(6))` prints `a6 3 end` on every compiled build (no `d6`) and leaks 32 B at -O0, where `--interp` prints `a6 3 d6 end` | — |
+| B-2026-09-28-4 | 2026-09-28 | codegen+interp | medium | A FRESH TEMP THAT CARRIES AN OWNED PARAM RUNS THE PARAM'S `Drop` BODY TWICE WHEN IT IS DISCARDED OR MISSED BY `if let`, ON EVERY SURFACE -- `mk2o(x);` inside `fn chk(x: S) -> bool` prints `d4 d4` for `chk(mk(4))`: the caller retains the argument's body and the callee's discard runs it too. The `is_some` spelling of the same temp is right on bodies but leaks the box compiled, because B-2026-09-27-129 skips any receiver that mentions an owned param | — |
+| B-2026-09-28-5 | 2026-09-28 | codegen | low | A BORROW ACCESSOR WHOSE `Option` PAYLOAD IS BOXED LEAKS THE BOX WHEN ITS RESULT IS PROBED OR DISCARDED -- `v.first().is_some()`, `v.get(1).is_some()`, `v.last();` and `m.get(1).is_some()` over a `Vec[S]` / `Map[i64, S]` each leak 32 B at -O0; the same accessor bound by `if let Some(x) = v.first()` is clean, and a one-word payload (`Vec[R]`) is clean | — |
+| B-2026-09-28-6 | 2026-09-28 | codegen+interp | low | A DISCARDED NESTED `Option[Option[S]]` TEMP LEAKS ITS INNER BOX COMPILED, AND THE BARE-STATEMENT CTOR SPELLING `Some(Some(mk(1)));` RUNS NO `Drop` BODY UNDER `--interp` WHILE BOTH COMPILED SURFACES RUN `d1` | — |
+| B-2026-09-28-7 | 2026-09-28 | codegen | medium | A FRESH-TEMP `Option[S]` OR `Result[S, i64]` ARGUMENT TO A GENERIC FN'S BY-VALUE `Option[T]` / `Result[T, E]` PARAM LEAKS THE PAYLOAD'S `String` ON EVERY COMPILED SURFACE WHERE THE NON-GENERIC TWIN IS CLEAN -- `mh(Some(mk(2)), false)` over `fn mh[T](a: Option[T], c: bool) -> i64 { if c { 1 } else { 2 } }` prints the due `d2 n2 end` and leaks 1 record at -O0; the `Result` spelling leaks whether or not the param is returned | — |
 
 ### Relocated
 
@@ -3185,6 +3187,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-104 | interp+codegen | medium | A CALL WHOSE ARGUMENT IS AN `if`/`match` HANDING A LOCAL'S `Drop` FIELD OVER ON ONE ARM LOSES THE OTHER ARM'S BODY IN THE INTERPRETER AND RUNS THE FI… | d066dc514 |
 | B-2026-09-27-106 | interp+codegen | medium | A METHOD THAT RETURNS ONE FIELD OF A FRESH-TEMP STRUCT LOSES THE OTHER FIELD'S `Drop` BODY UNDER `--interp`, AND FOR A TEMP RECEIVER COMPILED CODE RU… | 46e4cd9b1 |
 | B-2026-09-27-96 | codegen+interp | high | THE REMAINDER OF B-2026-09-27-102: A BOXED GENERIC ENUM PARAM HANDED BACK ON ONE PATH STILL DOUBLE-FREES WHEN THE OTHER PATH PUSHES IT INTO A `mut re… | 2c7ef666f |
+| B-2026-09-27-128 | interp+codegen | medium | A GENERIC FN THAT RETURNS ITS `Option[T]` PARAM ON ONLY SOME PATHS LOSES A FRESH-TEMP ARGUMENT'S `Drop` BODY ON THE PATH THAT DOES NOT RETURN IT, ON… | 70c7ac194 |
+| B-2026-09-27-129 | interp+codegen | medium | A CALL RESULT USED AS THE RECEIVER OF `is_some()` NEVER RUNS ITS PAYLOAD'S `Drop` BODY, ON EVERY SURFACE, AND LEAKS ITS BOX COMPILED -- `let n = mk2(… | 2314366db |
 | B-2026-09-27-130 | codegen | high | A NON-GENERIC USER ENUM PARAM WITH AN INLINE `Drop` PAYLOAD, RETURNED ON SOME PATHS AND PASSED TO A BY-VALUE CONSUMER ON THE OTHERS, CRASHES WITH NO… | 66ff48480 |
 | B-2026-09-27-124 | codegen | medium | AN `if let` / `while let` THAT DESTRUCTURES A TUPLE PAYLOAD OUT OF A NAMED `Option` LOCAL AND ONLY READS THE LEAVES LEAKS EVERY HEAP LEAF, with no `D… | 780f957f2 |
 
