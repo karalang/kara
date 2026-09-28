@@ -2379,6 +2379,11 @@ pub(super) struct Codegen<'ctx> {
     /// a box that lives on the stack.
     pub(crate) enum_box_stack_args: Option<usize>,
     pub(crate) enum_box_use_alloca: bool,
+    /// B-2026-09-19-53 — set by `coerce_to_payload_words`: did its LAST call
+    /// heap-box the value (`malloc`, not the stack-box mode above)? Read by
+    /// the generic `shared` enum constructor, the one caller that must know
+    /// which payload words hold a box it has to hand an owner.
+    pub(crate) last_payload_box_heap: std::cell::Cell<bool>,
     pub(crate) enum_box_was_stack: bool,
     /// Per-function scoped-alias metadata for slice parameters (alias-metadata
     /// slice 4). Keyed by param binding name → the `!alias.scope` / `!noalias`
@@ -6709,6 +6714,7 @@ impl<'ctx> Codegen<'ctx> {
                 enum_discriminants: crate::ast::EnumDiscriminantTable::default(),
                 seeded_enum_names: HashSet::new(),
                 shared_types: HashMap::new(),
+                shared_genum_drop_word: HashMap::new(),
                 enum_inst_type_exprs: HashMap::new(),
                 enum_inst_var_types: HashMap::new(),
                 struct_moved_field_bodies: HashMap::new(),
@@ -6915,6 +6921,7 @@ impl<'ctx> Codegen<'ctx> {
             freshtemp_read_through: None,
             enum_box_stack_args: None,
             enum_box_use_alloca: false,
+            last_payload_box_heap: std::cell::Cell::new(false),
             enum_box_was_stack: false,
             bce: BceState {
                 len_alias: HashMap::new(),

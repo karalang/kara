@@ -13599,6 +13599,70 @@ impl<'ctx> super::Codegen<'ctx> {
         !boxed && self.inline_heap_payload_elem(&payload).is_some()
     }
 
+    /// B-2026-09-19-53 — is field `i` of `enum_name.variant` one the layout
+    /// left UNCLASSIFIED (`EnumDropKind::None`)? For a generic shared enum
+    /// that is an erased `T`, whose box nothing else frees; a field the
+    /// declaration classified (a `BoxedArray`, say) is freed by the layout's
+    /// own release and must not get a second owner here.
+    pub(super) fn shared_genum_field_unclassified(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        i: usize,
+    ) -> bool {
+        if !self
+            .type_decls
+            .shared_genum_drop_word
+            .contains_key(enum_name)
+        {
+            return false;
+        }
+        self.type_decls
+            .enum_layouts
+            .get(enum_name)
+            .and_then(|l| l.field_drop_kinds.get(variant))
+            .and_then(|k| k.get(i))
+            .is_none_or(|k| *k == super::state::EnumDropKind::None)
+    }
+
+    /// B-2026-09-19-53 — the INSTANTIATED type of field `i` of a generic
+    /// enum's `variant`, from the constructor site's recorded instantiation.
+    /// `None` when the site recorded none or the arity does not line up.
+    pub(super) fn shared_genum_payload_te(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        i: usize,
+        site_inst: Option<&TypeExpr>,
+    ) -> Option<TypeExpr> {
+        let TypeKind::Path(ip) = &site_inst?.kind else {
+            return None;
+        };
+        let args: Vec<TypeExpr> = ip
+            .generic_args
+            .as_ref()?
+            .iter()
+            .filter_map(|g| match g {
+                GenericArg::Type(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        let params = self.enum_generic_param_names(enum_name);
+        if params.is_empty() || params.len() != args.len() {
+            return None;
+        }
+        let (_, _, decls) = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, n, _)| n == variant)?;
+        let subst: std::collections::HashMap<String, TypeExpr> =
+            params.into_iter().zip(args).collect();
+        Some(crate::codegen::helpers::subst_type_params_in_type_expr(
+            decls.get(i)?,
+            &subst,
+        ))
+    }
+
     /// Try to construct an enum variant value if `name` matches a known variant.
     /// Returns `None` if `name` is not an enum variant.
     pub(super) fn try_compile_enum_variant(
@@ -13766,6 +13830,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(name)
                 .cloned()
                 .unwrap_or_default();
+            let mut shgen_boxed_words: Vec<(u32, Option<FunctionValue<'ctx>>)> = Vec::new();
             for (i, arg) in args.iter().enumerate() {
                 let val = self.compile_expr(&arg.value)?;
                 // B-2026-09-15-16 — a WHOLE non-shared struct moved into a variant
@@ -13860,6 +13925,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
                 let words = self.coerce_to_payload_words(val, num_words)?;
+                // B-2026-09-19-53 — a heap box made for an erased generic
+                // field; a field the layout already classified has its owner.
+                // The INTERIOR rides along where this site can name the
+                // payload's type and the payload runs no `Drop` body: the
+                // source was moved (its caps zeroed) or was a temporary, so
+                // nothing else frees it. A named ARRAY source keeps its own
+                // element drop, so it is retracted to match, the pairing
+                // B-2026-09-17-21 made for the monomorphic twin.
+                if self.last_payload_box_heap.get()
+                    && self.shared_genum_field_unclassified(&enum_name, name, i)
+                {
+                    let interior = self
+                        .shared_genum_payload_te(&enum_name, name, i, site_inst.as_ref())
+                        .filter(|te| !self.vec_elem_te_reaches_user_drop_nested(te))
+                        .and_then(|te| self.enum_boxed_payload_interior_drop(&te, true));
+                    if interior.is_some() {
+                        self.suppress_array_local_move_into_ctor(&arg.value);
+                    }
+                    shgen_boxed_words.push(((start_word + 2) as u32, interior));
+                }
                 for (j, w) in words.into_iter().enumerate() {
                     let word_ptr = self
                         .builder
@@ -13935,6 +14020,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            self.record_shared_genum_payload_release(
+                &enum_name,
+                info.heap_type,
+                ptr,
+                &shgen_boxed_words,
+            );
             return Ok(Some(ptr.into()));
         }
 
@@ -14272,6 +14363,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder
                 .build_store(tag_ptr, i64_t.const_int(tag, false))
                 .unwrap();
+            let mut shgen_boxed_words: Vec<(u32, Option<FunctionValue<'ctx>>)> = Vec::new();
             for (i, fname) in field_names.iter().enumerate() {
                 let init = fields.iter().find(|f| &f.name == fname).ok_or_else(|| {
                     format!("missing field `{fname}` in `{enum_name}.{variant}` construction")
@@ -14300,6 +14392,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 let val = self.coerce_enum_payload_scalar(enum_name, variant, i, val, &init.value);
                 let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
                 let words = self.coerce_to_payload_words(val, num_words)?;
+                // B-2026-09-19-53 — the struct-variant twin of the tuple path,
+                // ENVELOPE ONLY: this constructor has no instantiation to name
+                // the payload's type by, so the interior keeps today's owner.
+                if self.last_payload_box_heap.get()
+                    && self.shared_genum_field_unclassified(enum_name, variant, i)
+                {
+                    shgen_boxed_words.push(((start_word + 2) as u32, None));
+                }
                 for (j, w) in words.into_iter().enumerate() {
                     let word_ptr = self
                         .builder
@@ -14319,6 +14419,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_inline_option_agg_value_transfer(&init.value);
                 self.suppress_map_cleanup_for_moved_expr(&init.value);
             }
+            self.record_shared_genum_payload_release(
+                enum_name,
+                info.heap_type,
+                ptr,
+                &shgen_boxed_words,
+            );
             return Ok(ptr.into());
         }
 
@@ -20051,6 +20157,7 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         num_words: usize,
     ) -> Result<Vec<inkwell::values::IntValue<'ctx>>, String> {
+        self.last_payload_box_heap.set(false);
         // Primitive fast path — ONLY when `val` genuinely fits one word.
         //
         // #49 (phase-12 self-hosting): a struct whose enum-payload AREA was
@@ -20293,13 +20400,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // the box never outlives the iteration that made it.
             let box_ptr = match (self.enum_box_use_alloca, self.current_fn) {
                 (true, Some(fn_val)) => self.create_entry_alloca(fn_val, "enumbox.stack", val_ty),
-                _ => self
-                    .builder
-                    .build_call(self.runtime_fns.malloc_fn, &[size.into()], "enumbox")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_pointer_value(),
+                _ => {
+                    self.last_payload_box_heap.set(true);
+                    self.builder
+                        .build_call(self.runtime_fns.malloc_fn, &[size.into()], "enumbox")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_pointer_value()
+                }
             };
             // `malloc` guarantees 16-byte alignment; an over-aligned value
             // (a `<4 x i64>` wants 32) would otherwise get LLVM's natural
@@ -20326,6 +20435,9 @@ impl<'ctx> super::Codegen<'ctx> {
         while out.len() < num_words {
             out.push(i64_t.const_int(0, false));
         }
+        // Reset AFTER any recursion, so the flag answers for this outermost
+        // call alone.
+        self.last_payload_box_heap.set(false);
         Ok(out)
     }
 

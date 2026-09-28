@@ -133,6 +133,11 @@ pub(crate) struct TypeDecls<'ctx> {
     // ── Shared types (RC) ─────────────────────────────────────────
     /// Shared type metadata (struct/enum name → heap layout info).
     pub(crate) shared_types: HashMap<String, SharedTypeInfo<'ctx>>,
+    /// B-2026-09-19-53 — a GENERIC `shared` / `par` enum's heap box carries
+    /// one trailing pointer word after its payload words: the payload-box
+    /// release fn its constructor stored, or null. Enum name → that word's
+    /// heap field index. See `emit_shared_generic_enum_payload_release`.
+    pub(crate) shared_genum_drop_word: HashMap<String, u32>,
     /// Fully-instantiated surface `TypeExpr` per *generic* `Named`
     /// instantiation expression (`Option[String]`, `Result[i64, AllocError]`,
     /// generic user enums) — populated from `Program.enum_inst_type_exprs`

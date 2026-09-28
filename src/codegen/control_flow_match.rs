@@ -1431,6 +1431,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         );
                     }
                 }
+                self.register_freshtemp_shared_genum_array_alias(scrutinee, scrut, &arm.pattern);
             }
 
             // B-2026-09-17-14 — a read-only destructure of a boxed tuple
@@ -2691,7 +2692,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // still box-only, and still must not be disarmed.
         // The per-FIELD half of this test is in the loop below, beside the
         // kind check, because a variant's boxed array need not be its field 0.
-        if layout.is_shared && !self.shared_enum_variant_has_armed_interior(enum_name, &variant) {
+        // B-2026-09-19-53 — a generic shared enum's erased `T` field is boxed
+        // by `coerce_to_payload_words`, and its box is released through the
+        // object's own release fn, which the layout's arming test cannot see.
+        let shgen = layout.is_shared
+            && self
+                .type_decls
+                .shared_genum_drop_word
+                .contains_key(enum_name);
+        if layout.is_shared
+            && !shgen
+            && !self.shared_enum_variant_has_armed_interior(enum_name, &variant)
+        {
             return;
         }
         // B-2026-09-15-15 — EVERY bound field, in BOTH pattern shapes. This
@@ -2761,22 +2773,33 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, _, tes)| tes)
             .unwrap_or_default();
         for (pos, bound) in binds {
-            // Read the KIND rather than re-deriving the boxing decision, so
-            // this tracks whatever `declarations.rs` classified.
-            if kinds.get(pos).copied() != Some(super::state::EnumDropKind::BoxedArray) {
-                continue;
+            // B-2026-09-19-53 — an erased `T` field bound as an `Array`: the
+            // binding's instantiated type is the typechecker's record for the
+            // sub-pattern, and it stands in for the declared `T` below.
+            let shgen_te =
+                if shgen && self.shared_genum_field_unclassified(enum_name, &variant, pos) {
+                    self.shared_genum_arm_binding_array_te(pattern, pos)
+                } else {
+                    None
+                };
+            if shgen_te.is_none() {
+                // Read the KIND rather than re-deriving the boxing decision, so
+                // this tracks whatever `declarations.rs` classified.
+                if kinds.get(pos).copied() != Some(super::state::EnumDropKind::BoxedArray) {
+                    continue;
+                }
+                // B-2026-09-17-21 — and for a shared enum, THIS field's box must be
+                // the one that was armed. The variant-level gate above only
+                // establishes that some field was.
+                if layout.is_shared
+                    && !self.shared_enum_field_interior_is_armed(enum_name, &variant, pos)
+                {
+                    continue;
+                }
             }
-            // B-2026-09-17-21 — and for a shared enum, THIS field's box must be
-            // the one that was armed. The variant-level gate above only
-            // establishes that some field was.
-            if layout.is_shared
-                && !self.shared_enum_field_interior_is_armed(enum_name, &variant, pos)
-            {
-                continue;
-            }
-            let elem_runs_body = tes
-                .get(pos)
-                .cloned()
+            let elem_runs_body = shgen_te
+                .clone()
+                .or_else(|| tes.get(pos).cloned())
                 .and_then(|te| self.array_elem_and_len(&te))
                 .and_then(|(elem, _)| match &elem.kind {
                     TypeKind::Path(p) => p.segments.first().cloned(),
@@ -2804,6 +2827,93 @@ impl<'ctx> super::Codegen<'ctx> {
                 ),
             );
         }
+    }
+
+    /// B-2026-09-19-53 — the `if let` / `while let` / `let ... else` legs of
+    /// the shared-enum move-out disarm the `match` arm loop runs. Those legs
+    /// never called it, so a `String`/`Vec` binding out of a shared box was
+    /// freed by the binding and again by the box: measured on the
+    /// monomorphic `shared enum M { Y(Vec[String]), N }` as two invalid frees
+    /// per `if let M.Y(x) = g`, READ-ONLY arm included, and on the generic
+    /// twin once its box gained an owner. After `bind_pattern_values`, like
+    /// the `match` site, so the binding has already read the payload.
+    pub(super) fn shared_enum_let_pattern_handoff(
+        &mut self,
+        scrutinee: &Expr,
+        scrut: BasicValueEnum<'ctx>,
+        pattern: &Pattern,
+    ) {
+        if self.pattern_state.pattern_binding_is_borrow || !scrut.is_pointer_value() {
+            return;
+        }
+        let Some(en) = self.variant_pattern_enum_name(pattern) else {
+            return;
+        };
+        if !self
+            .type_decls
+            .shared_types
+            .get(&en)
+            .is_some_and(|i| i.is_enum)
+        {
+            return;
+        }
+        self.suppress_shared_enum_payload_move_out(scrut.into_pointer_value(), &en, pattern);
+        self.register_freshtemp_shared_genum_array_alias(scrutinee, scrut, pattern);
+    }
+
+    /// B-2026-09-19-53 — the FRESH-TEMP spelling of the generic shared
+    /// enum's boxed-`Array` alias. A named scrutinee registers through
+    /// `suppress_destructured_enum_payload_cleanup` against its own slot; a
+    /// temporary has no slot, so the handle is spilled to one here for the
+    /// move site to zero the box interior through.
+    pub(super) fn register_freshtemp_shared_genum_array_alias(
+        &mut self,
+        scrutinee: &Expr,
+        scrut: BasicValueEnum<'ctx>,
+        pattern: &Pattern,
+    ) {
+        if self.pattern_state.pattern_binding_is_borrow
+            || !scrut.is_pointer_value()
+            || matches!(
+                scrutinee.kind,
+                ExprKind::Identifier(_) | ExprKind::SelfValue
+            )
+        {
+            return;
+        }
+        let Some(en) = self.variant_pattern_enum_name(pattern) else {
+            return;
+        };
+        if !self.type_decls.shared_genum_drop_word.contains_key(&en) {
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let slot = self.create_entry_alloca(fn_val, "shgen.scrut", ptr_ty.into());
+        let _ = self.builder.build_store(slot, scrut.into_pointer_value());
+        self.register_boxed_array_payload_alias(slot, &en, pattern);
+    }
+
+    /// B-2026-09-19-53 — the instantiated `Array` type of the TUPLE-variant
+    /// sub-pattern at `pos`, when it is a plain binding the typechecker typed
+    /// as an array. `None` otherwise, including every struct-shaped variant.
+    fn shared_genum_arm_binding_array_te(&self, pattern: &Pattern, pos: usize) -> Option<TypeExpr> {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return None;
+        };
+        let sub = patterns.get(pos)?;
+        if !matches!(sub.kind, PatternKind::Binding(_)) {
+            return None;
+        }
+        let key = (sub.span.offset, sub.span.length);
+        if self.pattern_state.pattern_binding_types.get(&key)?.as_str() != "Array" {
+            return None;
+        }
+        let te = self.pattern_state.pattern_binding_inner_types.get(&key)?;
+        let te = self.subst_monomorph_type_params(te);
+        self.array_elem_and_len(&te).map(|_| te)
     }
 
     /// B-2026-09-12-25 — disarm the drop INSIDE a boxed enum payload when the
@@ -15306,6 +15416,85 @@ impl<'ctx> super::Codegen<'ctx> {
                 ) {
                     let _ = self.builder.build_store(word_ptr, zero);
                 }
+            }
+        }
+        // B-2026-09-19-53 — a generic shared enum's erased `T` payload is
+        // heap-boxed (`coerce_to_payload_words`) and the box, interior
+        // included, belongs to the object's release fn. A `String`/`Vec` arm
+        // binding takes the interior (`bind_pattern_values`' end-of-arm
+        // `track_vec_var`), so zero the interior's words inside the box: the
+        // release fn's interior drop then drains a zero `len` and skips a zero
+        // `cap`, and still frees the box itself. Every other binding shape is
+        // a view here (the shared-enum flag gates its registration off), so
+        // it leaves the interior with the box.
+        if self
+            .type_decls
+            .shared_genum_drop_word
+            .contains_key(enum_name)
+            && !self.pattern_state.pattern_binding_is_borrow
+        {
+            let sub_pats: Vec<(usize, &Pattern)> = match &pattern.kind {
+                PatternKind::TupleVariant { patterns, .. } => patterns.iter().enumerate().collect(),
+                PatternKind::Struct { fields, .. } => {
+                    let field_names = self
+                        .enum_variant_struct_field_names(enum_name, variant_name)
+                        .unwrap_or_default();
+                    fields
+                        .iter()
+                        .filter_map(|fp| {
+                            let sub = fp.pattern.as_ref()?;
+                            let pos = field_names.iter().position(|n| n == &fp.name)?;
+                            Some((pos, sub))
+                        })
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            for (pos, sub) in sub_pats {
+                if !consumed_positions.contains(&pos)
+                    || !self.shared_genum_field_unclassified(enum_name, variant_name, pos)
+                {
+                    continue;
+                }
+                let key = (sub.span.offset, sub.span.length);
+                let takes = self
+                    .pattern_state
+                    .pattern_binding_types
+                    .get(&key)
+                    .cloned()
+                    .or_else(|| self.mono_payload_binding_surface(&key).map(|(n, _)| n))
+                    .is_some_and(|n| {
+                        matches!(n.as_str(), "String" | "CString" | "Vec" | "VecDeque")
+                    });
+                let (start_word, num_words) = match offsets.get(pos) {
+                    Some(o) => *o,
+                    None => continue,
+                };
+                let want = self.pattern_payload_word_count(sub);
+                if !takes || !matches!(sub.kind, PatternKind::Binding(_)) || want <= num_words {
+                    continue;
+                }
+                let Ok(word_ptr) = self.builder.build_struct_gep(
+                    heap_type,
+                    box_ptr,
+                    (start_word + 2) as u32,
+                    "match.shgen.suppress.wp",
+                ) else {
+                    continue;
+                };
+                let Ok(word) = self.builder.build_load(i64_t, word_ptr, "match.shgen.box") else {
+                    continue;
+                };
+                let Ok(interior) = self.builder.build_int_to_ptr(
+                    word.into_int_value(),
+                    ptr_ty,
+                    "match.shgen.interior",
+                ) else {
+                    continue;
+                };
+                let words_ty = i64_t.array_type(want as u32);
+                let _ = self.builder.build_store(interior, words_ty.const_zero());
             }
         }
         // Map / Set payload (`Full(Map[i64, u64])`): the enum RC drop frees the

@@ -387,6 +387,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let (alloca, struct_name) = (*alloca, struct_name.clone());
             self.suppress_destructured_struct_pattern_cleanup_at(alloca, &struct_name, pattern);
         }
+        // B-2026-09-19-53 — see the helper: the `match` arm loop's shared-enum
+        // move-out disarm, which this leg never ran.
+        self.shared_enum_let_pattern_handoff(value, val, pattern);
         self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
         // B-track: zero the caps of moved-in fields so the source EnumDrop
         // (registered above) frees only the *unbound* heap fields, not the ones
@@ -1320,6 +1323,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let (alloca, struct_name) = (*alloca, struct_name.clone());
             self.suppress_destructured_struct_pattern_cleanup_at(alloca, &struct_name, pattern);
         }
+        // B-2026-09-19-53 — see the helper: the `match` arm loop's shared-enum
+        // move-out disarm, which this leg never ran.
+        self.shared_enum_let_pattern_handoff(value, val, pattern);
         self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             // B-2026-09-14-17 — the FRESH-TEMP spelling of the boxed `Array`
@@ -2540,6 +2546,9 @@ impl<'ctx> super::Codegen<'ctx> {
             let (alloca, struct_name) = (*alloca, struct_name.clone());
             self.suppress_destructured_struct_pattern_cleanup_at(alloca, &struct_name, pattern);
         }
+        // B-2026-09-19-53 — see the helper: the `match` arm loop's shared-enum
+        // move-out disarm, which this leg never ran.
+        self.shared_enum_let_pattern_handoff(value, val, pattern);
         self.pattern_state.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             // B-2026-09-14-17 — the FRESH-TEMP spelling of the boxed `Array`

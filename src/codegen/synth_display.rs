@@ -3542,9 +3542,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .llvm_type;
         let box_fields = heap_type.get_field_types();
         let enum_fields = enum_llvm.get_field_types();
+        // B-2026-09-19-53 — a generic shared enum's box carries one trailing
+        // release-fn word after the enum's own.
+        let trailing = usize::from(
+            self.type_decls
+                .shared_genum_drop_word
+                .contains_key(enum_name),
+        );
         assert_eq!(
             box_fields.len(),
-            enum_fields.len() + field_base as usize,
+            enum_fields.len() + field_base as usize + trailing,
             "shared enum `{enum_name}`: box is not the control header plus the enum's words"
         );
         assert!(

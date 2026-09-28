@@ -290,7 +290,137 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_store(weak_ptr, self.context.i64_type().const_int(1, false))
                 .unwrap();
         }
+        // B-2026-09-19-53 — a generic shared enum's release-fn word starts
+        // null, so a unit variant or an inline payload releases nothing extra.
+        if let Some(idx) = self.shared_genum_drop_word_index(heap_type) {
+            let w = self
+                .builder
+                .build_struct_gep(heap_type, ptr, idx, "shgen.rel.p")
+                .unwrap();
+            self.builder
+                .build_store(
+                    w,
+                    self.context.ptr_type(AddressSpace::default()).const_null(),
+                )
+                .unwrap();
+        }
         ptr
+    }
+
+    /// B-2026-09-19-53 — the heap field index of a generic shared enum's
+    /// trailing release-fn word, or `None` for every other heap type.
+    pub(super) fn shared_genum_drop_word_index(&self, heap_type: StructType<'ctx>) -> Option<u32> {
+        if self.type_decls.shared_genum_drop_word.is_empty() {
+            return None;
+        }
+        self.type_decls
+            .shared_types
+            .iter()
+            .find(|(_, i)| i.heap_type == heap_type)
+            .and_then(|(n, _)| self.type_decls.shared_genum_drop_word.get(n).copied())
+    }
+
+    /// B-2026-09-19-53 — at a generic shared enum's constructor, give the
+    /// payload boxes it just made an owner: store the fn that frees them into
+    /// the box's trailing word, which `emit_shared_enum_payload_box_free` calls
+    /// at `rc == 0`. `boxed_words` are the HEAP field indices holding a box.
+    ///
+    /// ENVELOPE ONLY. The interior keeps whatever owner it has today — a named
+    /// source still frees its own elements — exactly the line B-2026-09-15-10
+    /// drew for the monomorphic twin before B-2026-09-17-21 armed the interior
+    /// together with the source retraction; arming one without the other is a
+    /// double free or a leak.
+    pub(super) fn record_shared_genum_payload_release(
+        &mut self,
+        enum_name: &str,
+        heap_type: StructType<'ctx>,
+        obj: PointerValue<'ctx>,
+        boxed_words: &[(u32, Option<FunctionValue<'ctx>>)],
+    ) {
+        if boxed_words.is_empty() {
+            return;
+        }
+        let Some(&idx) = self.type_decls.shared_genum_drop_word.get(enum_name) else {
+            return;
+        };
+        let words = boxed_words
+            .iter()
+            .map(|(w, f)| match f {
+                Some(f) => format!("{w}i{}", f.get_name().to_string_lossy()),
+                None => w.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("_");
+        let fn_name = format!("__karac_shgenum_release_{enum_name}_{words}");
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let rel_fn = match self.module.get_function(&fn_name) {
+            Some(f) => f,
+            None => {
+                let f = self.module.add_function(
+                    &fn_name,
+                    self.context.void_type().fn_type(&[ptr_ty.into()], false),
+                    Some(inkwell::module::Linkage::Internal),
+                );
+                let saved_bb = self.builder.get_insert_block();
+                let saved_fn = self.current_fn;
+                let saved_loc = self
+                    .debug_info
+                    .as_ref()
+                    .and_then(|_| self.builder.get_current_debug_location());
+                self.current_fn = Some(f);
+                let entry = self.context.append_basic_block(f, "entry");
+                self.builder.position_at_end(entry);
+                if self.debug_info.is_some() {
+                    self.builder.unset_current_debug_location();
+                }
+                let o = f.get_first_param().unwrap().into_pointer_value();
+                let i64_t = self.context.i64_type();
+                for &(w, interior) in boxed_words {
+                    let wp = self
+                        .builder
+                        .build_struct_gep(heap_type, o, w, "rel.w.p")
+                        .unwrap();
+                    let raw = self
+                        .builder
+                        .build_load(i64_t, wp, "rel.w")
+                        .unwrap()
+                        .into_int_value();
+                    let bp = self.builder.build_int_to_ptr(raw, ptr_ty, "rel.p").unwrap();
+                    let is_null = self.builder.build_is_null(bp, "rel.isnull").unwrap();
+                    let do_bb = self.context.append_basic_block(f, "rel.do");
+                    let skip_bb = self.context.append_basic_block(f, "rel.skip");
+                    self.builder
+                        .build_conditional_branch(is_null, skip_bb, do_bb)
+                        .unwrap();
+                    self.builder.position_at_end(do_bb);
+                    if let Some(inner) = interior {
+                        self.builder.build_call(inner, &[bp.into()], "").unwrap();
+                    }
+                    self.builder
+                        .build_call(self.runtime_fns.free_fn, &[bp.into()], "")
+                        .unwrap();
+                    self.builder.build_store(wp, i64_t.const_zero()).unwrap();
+                    self.builder.build_unconditional_branch(skip_bb).unwrap();
+                    self.builder.position_at_end(skip_bb);
+                }
+                self.builder.build_return(None).unwrap();
+                self.current_fn = saved_fn;
+                if let Some(bb) = saved_bb {
+                    self.builder.position_at_end(bb);
+                }
+                if let Some(loc) = saved_loc {
+                    self.builder.set_current_debug_location(loc);
+                }
+                f
+            }
+        };
+        let w = self
+            .builder
+            .build_struct_gep(heap_type, obj, idx, "shgen.rel.p")
+            .unwrap();
+        self.builder
+            .build_store(w, rel_fn.as_global_value().as_pointer_value())
+            .unwrap();
     }
 
     /// Reverse lookup: does the box `heap_type` belong to a `weak`-targeted
@@ -847,6 +977,7 @@ impl<'ctx> super::Codegen<'ctx> {
         heap_type: StructType<'ctx>,
         ptr: PointerValue<'ctx>,
     ) {
+        self.emit_shared_generic_enum_payload_release(heap_type, ptr);
         let Some(name) = self
             .type_decls
             .shared_types
@@ -993,6 +1124,45 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             self.builder.build_unconditional_branch(join_bb).unwrap();
         }
+        self.builder.position_at_end(join_bb);
+    }
+
+    /// B-2026-09-19-53 — call the release fn a generic shared enum's
+    /// constructor stored in the box's trailing word, when there is one. A
+    /// no-op for every heap type without that word.
+    fn emit_shared_generic_enum_payload_release(
+        &self,
+        heap_type: StructType<'ctx>,
+        ptr: PointerValue<'ctx>,
+    ) {
+        let Some(idx) = self.shared_genum_drop_word_index(heap_type) else {
+            return;
+        };
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let wp = self
+            .builder
+            .build_struct_gep(heap_type, ptr, idx, "shgen.rel.p")
+            .unwrap();
+        let f = self
+            .builder
+            .build_load(ptr_ty, wp, "shgen.rel")
+            .unwrap()
+            .into_pointer_value();
+        let is_null = self.builder.build_is_null(f, "shgen.rel.isnull").unwrap();
+        let do_bb = self.context.append_basic_block(cur_fn, "shgen.rel.do");
+        let join_bb = self.context.append_basic_block(cur_fn, "shgen.rel.join");
+        self.builder
+            .build_conditional_branch(is_null, join_bb, do_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        let fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        self.builder
+            .build_indirect_call(fn_ty, f, &[ptr.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
         self.builder.position_at_end(join_bb);
     }
 

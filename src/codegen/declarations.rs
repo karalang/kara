@@ -3895,6 +3895,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     // are atomic (see `SharedTypeInfo::is_par`).
                     let mut heap_fields: Vec<BasicTypeEnum<'ctx>> = vec![i64_t]; // refcount
                     heap_fields.extend_from_slice(&field_types); // tag + payload words
+                                                                 // B-2026-09-19-53 — a GENERIC shared enum lays its `T`
+                                                                 // fields out erased at one word, so an instantiation whose
+                                                                 // payload is wider heap-BOXES it at the constructor, and
+                                                                 // the box had no owner: this one heap type serves every
+                                                                 // instantiation, so the release at `rc == 0` cannot tell
+                                                                 // a box from an inline scalar (`G[String]` vs `G[i64]`).
+                                                                 // The constructor is the only site that knows, so it
+                                                                 // records its answer in a trailing word — the release fn
+                                                                 // for the boxes it made, or null. TRAILING so the tag and
+                                                                 // payload indices every other site hardcodes do not move.
+                    if e.generic_params
+                        .as_ref()
+                        .is_some_and(|g| !g.params.is_empty())
+                    {
+                        self.type_decls
+                            .shared_genum_drop_word
+                            .insert(e.name.clone(), heap_fields.len() as u32);
+                        heap_fields.push(self.context.ptr_type(AddressSpace::default()).into());
+                    }
                     let heap_type = self.named_shared_heap_type(&e.name, &heap_fields);
 
                     self.type_decls.shared_types.insert(

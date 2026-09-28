@@ -8964,7 +8964,24 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
-        let interior_ty = self.llvm_type_for_type_expr(&payload_te);
+        // B-2026-09-19-53 — a generic shared enum declares the field as an
+        // erased `T`; the binding's own slot carries the instantiated type.
+        let interior_ty = if self
+            .type_decls
+            .shared_genum_drop_word
+            .contains_key(enum_name.as_str())
+            && self
+                .enum_generic_param_names(enum_name.as_str())
+                .iter()
+                .any(|g| matches!(&payload_te.kind, TypeKind::Path(p) if p.segments.len() == 1 && &p.segments[0] == g))
+        {
+            let Some(ty) = self.variables.get(root).map(|s| s.ty) else {
+                return;
+            };
+            ty
+        } else {
+            self.llvm_type_for_type_expr(&payload_te)
+        };
         let Some(cur_fn) = self
             .builder
             .get_insert_block()
