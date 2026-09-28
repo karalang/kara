@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 535 |
 | miscompile | 532 |
-| leak | 464 |
-| double-free | 344 |
+| leak | 465 |
+| double-free | 345 |
 | missing-feature | 211 |
 | codegen-gap | 203 |
 | other | 155 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2298 |
+| codegen | 2300 |
 | interp | 659 |
 | typecheck | 313 |
 | other | 112 |
@@ -412,6 +412,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-62 | 2026-09-28 | codegen | medium | A `shared enum` STRUCT-VARIANT CONSTRUCTOR PASSED STRAIGHT TO A BY-VALUE PARAMETER (`rd(H.Y { v: mkv(..) })`) IS NEVER RELEASED -- the whole RC object leaks (160 B in 4 blocks over 4 calls) while the tuple-variant spelling is clean; the generic twin leaks the same objects | — |
 | B-2026-09-28-63 | 2026-09-28 | interp+codegen | high | REMAINDER OF B-2026-09-28-50: A TUPLE OR NESTED-STRUCT DESTRUCTURE OF A BY-VALUE PARAM, WITH ONE PART PUSHED INTO A `mut ref` CONTAINER ON SOME PATHS, STILL LOSES OR DOUBLES THE PART -- `let (r, k) = t; if c { xs.push(r); }` loses `r`'s body on the not-pushed path everywhere, and `let O { w: W { r, s, b }, k } = o; if c { xs.push(r); }` prints `dD4n4` twice on the pushed path under `--interp` and aborts `free(): double free detected in tcache 2` on the compiled surfaces | — |
 | B-2026-09-28-65 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-37 (THE BODY FACES): A PARAM-VIEW FRESH-TEMP SCRUTINEE'S ARM BINDING RUNS THE BODY EARLY UNDER `--interp` (`match mk2o(x) { Some(s) => .. }` prints `m4 d4 in` where the named oracle prints `m4 in d4`) AND TWICE COMPILED UNDER `if let` (`m4 d4 in d4`), `let Some(s) = mk2o(x) else ..; keep(s)` AND `match Some(x) { Some(s) => .. }` DOUBLE IT ON EVERY SURFACE, AN ARM YIELDING THE BINDING (`Some(s) => s`) DOUBLES IT COMPILED AND LEAKS THE BOX, A USER-ENUM PARAM WRAPPED THE SAME WAY LOSES ITS BODY COMPILED AND LEAKS 40 B, AND A FRESH TEMP'S WILDCARD PAYLOAD (`match mk2(3) { None => .., _ => .. }`) RUNS NO BODY ON ANY SURFACE | — |
+| B-2026-09-28-66 | 2026-09-28 | codegen | medium | A GENERIC `shared enum`'s TUPLE, ENUM, `Option` OR MAP PAYLOAD LEAKS ITS INTERIOR AGAIN -- a read-only `G[(String, String)]` arm loses its Strings (10 B in 4 blocks over two calls) and a tuple or enum handed to a by-value param loses 3-4 B, because B-2026-09-28-64 took the interior walk away from payloads whose arm binding is a view that no hand-off site takes off the box | — |
 
 ### Relocated
 
@@ -3240,6 +3241,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-46 | interp+codegen | high | FIXED (668ed9e89): a value handed to a GENERIC callee that stores it on only some paths lost or doubled its `Drop` bodies, and a projected shared-fie… | 668ed9e89 |
 | B-2026-09-28-51 | interp | medium | FIXED (8330f0640): `--interp` never ran a `shared` field's `Drop` body when the struct holding it was a fresh temporary passed by value or discarded… | 8330f0640 |
 | B-2026-09-28-49 | codegen | high | FIXED (9855c929d): a local moved inside a branch by a builtin sink or a `let` rebind lost its `Drop` body (and its memory) on the path that did not m… | 9855c929d |
+| B-2026-09-28-64 | codegen | high | A TUPLE, ENUM, `Option` OR `Array` BOUND OUT OF A GENERIC `shared enum`'s BOXED PAYLOAD AND HANDED ON IS FREED TWICE ON EVERY COMPILED BACKEND -- `ma… | 01aebe5ee |
 
 </details>
 
