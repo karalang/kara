@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 530 |
-| miscompile | 522 |
+| miscompile | 523 |
 | leak | 459 |
 | double-free | 340 |
 | missing-feature | 211 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2273 |
-| interp | 646 |
+| codegen | 2274 |
+| interp | 647 |
 | typecheck | 313 |
 | other | 111 |
 | ownership | 79 |
@@ -392,7 +392,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-12 | 2026-09-28 | interp+codegen | low | A BY-VALUE STRUCT PARAM REBOUND INTO A LOCAL THAT IS RETURNED WRAPPED ON SOME PATHS RUNS ITS `Drop` BODY AT DIFFERENT POINTS PER BACKEND -- `fn ps(r: S, k: bool) -> Option[S] { let m = r; if k { return Option.Some(m) } println("drop-here"); return Option.None }` prints `dS7 drop-here` under `--interp` and `drop-here dS7` compiled | — |
 | B-2026-09-28-20 | 2026-09-28 | interp+codegen | medium | A `Drop` PART HANDED OVER ON ONLY SOME PATHS STILL RUNS TWICE OR NOT AT ALL WHERE THE PARAM IS NOT A FREE FUNCTION'S OWN STRUCT PART -- `maybew(x.w, true)` and `csg(mut xs, v.g, true)` double the handed leg on all four surfaces; a METHOD's by-value param (`h.ownw3(w, true)` over `if c { keep(w.r) }`) and an owned RECEIVER (`fn take(self, c: bool) -> i64 { if c { keep(self.r) .. } 0 }`) double `w.r` on the keeping leg; a whole field-bodies struct pushed on one path (`if c { xs.push(w); }`) loses its fields' bodies on the interpreter's not-pushed leg and doubles them on the compiled pushed leg | — |
 | B-2026-09-28-21 | 2026-09-28 | codegen | medium | A CONCRETE FUNCTION THAT REBINDS ITS BOXED GENERIC-ENUM PARAM THROUGH A PASSTHROUGH CALL LOSES THE PAYLOAD'S `Drop` BODY WHERE THE LOCAL DIES INSIDE -- `fn ckeep(g: G[R]) -> i64 { let h = gid(g); println("keep"); return 0 }` prints `keep a7 0 end` on every compiled build where `--interp` prints `keep a7 0 d7 end`; memory is balanced | — |
-| B-2026-09-28-22 | 2026-09-28 | interp+codegen | medium | B-2026-09-27-98'S FORWARD STILL LOSES THE BODY WHEN THE CONSUMER IS A METHOD OR A GENERIC FN -- `fn pm(s: S, k: bool, q: K) -> S { if k { return s } q.eat(s); return mks(0) }` over `impl K { fn eat(ref self, s: S) { println("mx") } }` prints `mx dS0` and never `dS3`, and `geat(s)` over `fn geat[T](t: T) { println("gx") }` the same, on every surface | — |
 | B-2026-09-28-23 | 2026-09-28 | interp+codegen | medium | A BY-VALUE STRUCT PARAM WHOSE ONLY `Drop` IS A FIELD'S, RETURNED ON SOME PATHS, NEVER RUNS THAT FIELD'S BODY ON THE PATHS THAT DO NOT RETURN IT, ON EVERY SURFACE -- `fn pf(f: F, k: bool) -> F { if k { return f } println("n"); return mkf(0) }` over `struct F { s: S, n: i64 }` prints `n dS0` for `pf(mkf(6), false)` and never `dS6` | — |
 | B-2026-09-28-24 | 2026-09-28 | codegen | medium | B-2026-09-28-10'S FORWARD STILL LOSES A TEMPORARY `Option` / `Result` ARGUMENT'S `Drop` BODY WHEN THE CONSUMER IS A METHOD OR A GENERIC FN, OR MOVES THE PAYLOAD INTO A LOCAL, ON EVERY COMPILED SURFACE -- `fn fw(h: Option[S]) { let k = K { z: 0 }; k.ea(h); println("after") }` over `impl K { fn ea(ref self, o: Option[S]) { println("xm") } }` prints `xm after end` compiled for `fw(Option.Some(mks(1)))` against `--interp`'s `xm after dS1 end` | — |
 | B-2026-09-28-25 | 2026-09-28 | interp+codegen | medium | A BY-VALUE `Result` PARAM FORWARDED WHOLE TO A CONSUMER THAT TAKES ITS PAYLOAD RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` FOR EVERY ARGUMENT, AND ON EVERY COMPILED SURFACE FOR A NAMED-LOCAL ARGUMENT -- `fn f(a: Result[S, i64]) { let r = eat(a); println("after") }` over `fn eat(x: Result[S, i64]) -> Result[S, i64] { match x { Ok(y) => Ok(y), Err(e) => Err(e) } }` prints `d2 after d2` for `let b: Result[S, i64] = Ok(mk(2)); f(b)` on all four surfaces | — |
@@ -409,6 +408,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-36 | 2026-09-28 | codegen | high | DESTRUCTURING A TUPLE PAYLOAD WITH ANY SUB-WORD ELEMENT FAILS MODULE VERIFICATION ON EVERY COMPILED SURFACE -- `let g = Some((3i32, 5)); if let Some((a, b)) = g { println(f"{a}{b}"); }` stops `karac build` and `karac run` with `insertvalue { i64, i64 } undef, i32 %pat.int.tr, 0`, while `--interp` prints `35`. Same for `bool`, `u8`, `i32` elements, in `Option`, `Result` and user enums, in `match` and `if let` | — |
 | B-2026-09-28-13 | 2026-09-28 | interp+codegen | high | HANDING BACK A PARAM DECLARED `Option`/`Result` THROUGH AN IDENTITY CALL WHOSE RESULT IS DISCARDED, BOUND, PASSED ON OR MISSED DOUBLES OR LOSES ITS `Drop` BODY -- `id(a);` inside `fn f(a: Option[S])` over `fn id(a: Option[S]) -> Option[S] { a }` prints `d1 in d1` under `--interp` and double-frees compiled (no output at -O0, valgrind 4 invalid frees); `id(a).is_some()` loses the body compiled. Only `match id(a) { .. }` is right on every surface | — |
 | B-2026-09-28-37 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-4: A FRESH-TEMP SCRUTINEE WHOSE PAYLOAD IS A PARAM VIEW LEAKS ITS BOX COMPILED (`if let None = mk2o(x)`, `match mk2o(x) { .. }`, `while let`, `let .. else`: 32 B each at -O0), `--interp` RUNS AN ARM BINDING'S BODY BEFORE THE STATEMENTS AFTER THE `match` (`m4 d4 in` where the named oracle prints `m4 in d4`), AND `match Some(x) { Some(s) => .. }` STILL DOUBLES THE BODY ON EVERY SURFACE | — |
+| B-2026-09-28-38 | 2026-09-28 | interp+codegen | medium | A METHOD PARAM RETURNED ON SOME PATHS AND PASSED TO A METHOD OF `self` ON THE OTHERS NEVER RUNS ITS `Drop` BODY ON THAT PATH, ON EVERY SURFACE -- `fn pq(ref self, s: S, k: bool) -> S { if k { return s } self.eat(s); return mks(0) }` over `fn eat(ref self, s: S) { println("qx") }` prints `qx a0 dS0` for `q.pq(mks(1), false)` and never `dS1` | — |
 
 ### Relocated
 
@@ -3213,6 +3213,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-8 | codegen | high | A BOXED GENERIC-ENUM PAYLOAD FORWARDED THROUGH A GENERIC MIDDLE FUNCTION VIA A LOCAL REBOUND FROM A PASSTHROUGH CALL IS STILL FREED TWICE -- `fn gvia… | 5cc3de800 |
 | B-2026-09-28-4 | codegen+interp | medium | A FRESH TEMP THAT CARRIES AN OWNED PARAM RUNS THE PARAM'S `Drop` BODY TWICE WHEN IT IS DISCARDED OR MISSED BY `if let`, ON EVERY SURFACE -- `mk2o(x);… | bc88b572d |
 | B-2026-09-28-10 | codegen | medium | A TEMPORARY `Option` / `Result` ARGUMENT TO A PARAM THAT THE CALLEE FORWARDS TO A BY-VALUE CONSUMER NEVER RUNS ITS PAYLOAD'S `Drop` BODY ON ANY COMPI… | 67ef15b98 |
+| B-2026-09-28-22 | interp+codegen | medium | B-2026-09-27-98'S FORWARD STILL LOSES THE BODY WHEN THE CONSUMER IS A METHOD OR A GENERIC FN -- `fn pm(s: S, k: bool, q: K) -> S { if k { return s }… | 884974c55 |
 
 </details>
 
