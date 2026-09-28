@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 532 |
-| miscompile | 526 |
+| run-vs-build | 533 |
+| miscompile | 528 |
 | leak | 460 |
-| double-free | 342 |
+| double-free | 343 |
 | missing-feature | 211 |
 | codegen-gap | 203 |
 | other | 154 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2282 |
-| interp | 650 |
+| codegen | 2285 |
+| interp | 653 |
 | typecheck | 313 |
 | other | 112 |
 | ownership | 79 |
@@ -405,13 +405,16 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-37 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-4: A FRESH-TEMP SCRUTINEE WHOSE PAYLOAD IS A PARAM VIEW LEAKS ITS BOX COMPILED (`if let None = mk2o(x)`, `match mk2o(x) { .. }`, `while let`, `let .. else`: 32 B each at -O0), `--interp` RUNS AN ARM BINDING'S BODY BEFORE THE STATEMENTS AFTER THE `match` (`m4 d4 in` where the named oracle prints `m4 in d4`), AND `match Some(x) { Some(s) => .. }` STILL DOUBLES THE BODY ON EVERY SURFACE | — |
 | B-2026-09-28-38 | 2026-09-28 | interp+codegen | medium | A METHOD PARAM RETURNED ON SOME PATHS AND PASSED TO A METHOD OF `self` ON THE OTHERS NEVER RUNS ITS `Drop` BODY ON THAT PATH, ON EVERY SURFACE -- `fn pq(ref self, s: S, k: bool) -> S { if k { return s } self.eat(s); return mks(0) }` over `fn eat(ref self, s: S) { println("qx") }` prints `qx a0 dS0` for `q.pq(mks(1), false)` and never `dS1` | — |
 | B-2026-09-28-40 | 2026-09-28 | interp+codegen | medium | A STRUCT PROJECTION HANDED TO A CALLEE THAT RETURNS IT IN `Some` ON ONLY SOME PATHS RUNS ITS FIELDS' `Drop` BODIES TWICE ON THE HANDED PATH, ON EVERY SURFACE -- `maybew(x.w, true)` with `fn maybew(x: W, c: bool) -> Option[W] { if c { return Some(x); } None }` prints `dD1n1` and `dD101n101` from `x`'s walk and again from the returned `Option` | — |
-| B-2026-09-28-41 | 2026-09-28 | interp+codegen | medium | A `Drop`-CARRYING VALUE STORED ON ONLY SOME PATHS STILL LOSES OR DOUBLES ITS BODIES IN THREE SPELLINGS 4982484f9 DECLINES -- a GENERIC callee `fn gst[T](xs: mut ref Vec[T], x: T, c: bool) { if c { xs.push(x); } }` loses a fresh temporary's bodies on the not-stored path everywhere and runs a named argument's twice compiled (a DIVERGENCE); a struct with a `shared` field loses its `Drop` field's body on the not-stored path; a DESTRUCTURED part (`let W { r, s, b } = w; if c { xs.push(r); }`) loses `r`'s body on the not-pushed path | — |
 | B-2026-09-28-42 | 2026-09-28 | codegen | high | AN INLINE `Array` PAYLOAD CONSTRUCTED DIRECTLY AS A FREE-FUNCTION ARGUMENT STILL HAS TWO OWNERS -- `eatopt(Option.Some(a))` over `fn eatopt(o: Option[Array[S, 1]])` and a one-`String` `S` aborts with `free(): double free detected in tcache 2` on JIT, `-O0` and `-O2` against `--interp`'s `in daaaaaaaa0 end`; the `Result`, matching-callee, returning-callee and generic-passthrough spellings do the same. B-2026-09-19-59 fixed every other consumer of this payload and deliberately left this one alone | — |
 | B-2026-09-28-43 | 2026-09-28 | codegen | medium | FOUR SPELLINGS OF AN INLINE `Array` PAYLOAD RUN THE ELEMENT'S `Drop` BODY ON `--interp` AND NOWHERE COMPILED, WITH MEMORY CLEAN -- a named `Option[Array[S, 1]]` local handed to a by-value callee, the envelope in a struct-literal field, in a tuple element, and a fresh `Some([S { .. }])` literal matched in place; JIT, `-O0` and `-O2` all agree and valgrind reports nothing | — |
 | B-2026-09-28-44 | 2026-09-28 | codegen | medium | A STRUCT LEAF OF A DESTRUCTURED BY-VALUE TUPLE PAYLOAD HANDED TO A BY-VALUE CALLEE RUNS NO `Drop` BODY AND LEAKS ON EVERY COMPILED SURFACE -- `fn t(o: Option[(W, i64)]) -> i64 { match o { Some((a, b)) => { return sink(a) + b; } .. } }` over `fn sink(w: W) -> i64 { return w.id; }` prints `m10 end` on jit / -O0 / -O2 where `--interp` prints `dW1/n1 m10 end`, and valgrind reports 2 B in 1 block at -O0 | — |
 | B-2026-09-28-45 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-7: A REBIND OF A GENERIC `Option[T]` PARAM LOSES THE PAYLOAD'S `Drop` BODY COMPILED AND LEAKS ITS `String` (`let b = a; 5` prints `n5 end` where `--interp` prints `d2 n5 end`), `let mut b = a; b = None` LOSES IT ON EVERY SURFACE, AND AN ARM REBIND OF A `Result` STRUCT PAYLOAD (`Ok(s) => { let t = s; 6 }`) LOSES IT COMPILED, GENERIC OR NOT | — |
 | B-2026-09-28-47 | 2026-09-28 | codegen | high | REMAINDER OF B-2026-09-27-53: A BOXED `Option[S]` THAT REACHES A `Vec` THROUGH A FORWARDING FRAME OR A GENERIC KEEPER CRASHES WITH NO OUTPUT ON EVERY COMPILED SURFACE -- `let h = Option.Some(mks(3)); gkeep(h, mut u)` over `fn gkeep[T](t: T, v: mut ref Vec[T]) { v.push(t) }` prints nothing on the JIT, -O0 and -O2 (valgrind: invalid reads, an invalid free) against `--interp`'s `n1 dS3 end`, while the concrete keeper `okeep(h, mut u)` is right everywhere | — |
 | B-2026-09-28-48 | 2026-09-28 | codegen | medium | A BY-VALUE `Option` / `Result` PARAM WHOSE ARM MOVES THE PAYLOAD INTO A LOCAL RUNS ITS `Drop` BODY AT THE WRONG POINT OR NOT AT ALL, COMPILED, WITH NO FORWARD INVOLVED -- `fn eat(x: Result[S, i64]) { match x { Ok(y) => { let z = y; println("z") }, Err(e) => println("e") } }` prints `z z d2 end` for `eat(Ok(mk(1))); let b: Result[S, i64] = Ok(mk(2)); eat(b)` on the JIT, -O0 and -O2 against `--interp`'s `z d1 z d2 end` | — |
+| B-2026-09-28-46 | 2026-09-28 | interp+codegen | high | A VALUE HANDED TO A GENERIC CALLEE THAT STORES IT ON ONLY SOME PATHS LOSES OR DOUBLES ITS `Drop` BODIES, AND A PROJECTED SHARED-FIELD STRUCT DOUBLE-FREES COMPILED -- `fn gst[T](xs: mut ref Vec[T], x: T, c: bool) { if c { xs.push(x); } }` loses a fresh temporary's bodies on the not-stored path everywhere, runs a named argument's twice compiled on the stored path, and `gst(mut zs, q.z, false)` over `struct Z { d: D, h: N }` with `shared struct N` aborts with `free(): double free` on JIT, seq and par | — |
+| B-2026-09-28-50 | 2026-09-28 | interp+codegen | medium | A DESTRUCTURED OR PROJECTED PART OF A BY-VALUE PARAM MOVED INTO A CONTAINER ON ONLY SOME PATHS LOSES ITS `Drop` BODY ON THE NOT-MOVED PATH, OR RUNS IT TWICE -- `let W { r, s, b } = w; if c { xs.push(r); }` loses `r`'s body everywhere when `xs` outlives the call; into a LOCAL `xs` the compiled backends run `r`'s body on a moved-out husk (`dD5`, no name) on the not-pushed path, and on the pushed path the interpreter prints `dD6n6` twice and the compiled backends print `dD6n6` then `dD6` | — |
+| B-2026-09-28-51 | 2026-09-28 | interp | medium | `--interp` NEVER RUNS A `shared` FIELD'S `Drop` BODY WHEN THE STRUCT HOLDING IT IS A FRESH TEMPORARY PASSED BY VALUE -- `zn(mkz(1))` and `zn(Z { d: mkd(2), h: N { v: 2 } })` over `fn zn(z: Z)` print no `dN1` / `dN2` interpreted, where every compiled surface prints them; a named argument is right | — |
+| B-2026-09-28-49 | 2026-09-28 | codegen | high | A LOCAL MOVED INSIDE A BRANCH BY A BUILTIN SINK OR A `let` REBIND LOSES ITS `Drop` BODY (AND ITS MEMORY) ON THE PATH THAT DID NOT MOVE IT, ON EVERY COMPILED SURFACE -- `let b = E { id: 2 }; if flag(2) { es.push(b); }` and `let c = E { id: 3 }; if flag(3) { let k = c; .. }` print no `dE2` / `dE3` on JIT, seq and par, where `--interp` prints them; the same move through a user function (`if c { eat(a); }`) is right | — |
 
 ### Relocated
 
@@ -3223,6 +3226,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-22 | interp+codegen | medium | B-2026-09-27-98'S FORWARD STILL LOSES THE BODY WHEN THE CONSUMER IS A METHOD OR A GENERIC FN -- `fn pm(s: S, k: bool, q: K) -> S { if k { return s }… | 884974c55 |
 | B-2026-09-28-24 | codegen | medium | B-2026-09-28-10'S FORWARD STILL LOSES A TEMPORARY `Option` / `Result` ARGUMENT'S `Drop` BODY WHEN THE CONSUMER IS A METHOD OR A GENERIC FN (the paylo… | 4807d6a90 |
 | B-2026-09-28-39 | other | medium | A FIXTURE THAT PANICS AFTER LINKING LEAVES ITS EXECUTABLE IN `/tmp`, SO A STALE `target/release/karac_jit_runner` UNDER `KARAC_REQUIRE_RUNTIME_ARCHIV… | bd3aed5db |
+| B-2026-09-28-41 | interp+codegen | medium | A `Drop`-CARRYING VALUE STORED ON ONLY SOME PATHS LOST OR DOUBLED ITS BODIES IN THREE SPELLINGS 4982484f9 DECLINED -- FIXED for a struct with a `shar… | 789467fc9 |
 
 </details>
 
