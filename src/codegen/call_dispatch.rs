@@ -4226,6 +4226,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|(f, ast_i)| self.fn_stores_param_whole_through_forwards(f, ast_i, 4))
     }
 
+    /// B-2026-09-28-80 — does `f` hand by-value param `ast_i` bare, from
+    /// inside a branch, to free functions that each take its box over whole
+    /// ([`Self::fn_stores_param_whole_through_forwards`])? The frame then owns
+    /// the whole value per path, and the caller hands the box over.
+    pub(super) fn fn_branch_hands_param_whole(&self, f: &Function, ast_i: usize) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        if f.generic_params.is_some() {
+            return false;
+        }
+        crate::ast::fn_branch_hands_param_to(f, ast_i, &|g, j| {
+            super::declarations::find_function_ast(program, g)
+                .filter(|gf| gf.self_param.is_none() && gf.name != f.name)
+                .is_some_and(|gf| self.fn_stores_param_whole_through_forwards(gf, j, 3))
+        })
+    }
+
     /// The AST half of [`Self::callee_stores_param_whole`], for a callee
     /// already in hand (a generic's `generic_fn`).
     pub(super) fn fn_stores_param_whole_through_forwards(
@@ -4246,7 +4264,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // the callee's on every path.
         if f.generic_params.is_none()
             && !self.is_coroutine_compiled(&f.name)
-            && crate::ast::fn_branch_stores_param_whole(f, ast_i)
+            && (crate::ast::fn_branch_stores_param_whole(f, ast_i)
+                || self.fn_branch_hands_param_whole(f, ast_i))
         {
             return true;
         }

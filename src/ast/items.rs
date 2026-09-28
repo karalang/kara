@@ -10455,11 +10455,82 @@ pub fn fn_branch_stores_param_whole(f: &Function, arg_index: usize) -> bool {
     if fn_stores_param_whole_into_container(f, arg_index) {
         return false;
     }
-    let Some(param) = f.params.get(arg_index) else {
+    branch_handover_tally(f, arg_index, None).is_some_and(|t| t.stores > 0 && !t.other)
+}
+
+/// B-2026-09-28-80 — the CALL sibling of [`fn_branch_stores_param_whole`]:
+/// does `f` hand by-value parameter `arg_index` bare to a call `takes(callee,
+/// j)` accepts from inside a branch, with every other mention of the parameter
+/// being such a hand-over or a whole store?
+///
+/// `fn cf(t: S, v: mut ref Vec[S], c: bool) { if c { keep(t, v) } }` over
+/// `fn keep(t: S, v: mut ref Vec[S]) { v.push(t) }`: the caller stands down
+/// for `t` (`fn_moves_param_into_outliving_place_via_call` sees the store one
+/// call in), `keep` owns it once handed, and on the path that never reaches
+/// the call nobody ran its body. The frame owns the value per path under the
+/// conditional-store flag, which the handing statement clears, exactly as for
+/// a store it makes itself.
+///
+/// At least one hand-over must sit inside a branch: an unconditional top-level
+/// forward leaves no path on which the value dies here, and that shape keeps
+/// its measured arrangement (B-2026-09-28-47).
+pub fn fn_branch_hands_param_to(
+    f: &Function,
+    arg_index: usize,
+    takes: &dyn Fn(&str, usize) -> bool,
+) -> bool {
+    branch_handover_tally(f, arg_index, Some(takes))
+        .is_some_and(|t| t.calls > 0 && t.nested && !t.other)
+}
+
+/// B-2026-09-28-80 — [`fn_branch_hands_param_to`] with the acceptance the
+/// caller's stand-down uses (`stored_via_call`'s direct leg): a free function
+/// that moves that parameter into a place outliving its call, on any path.
+/// Such a callee owns the value outright once it has it, per path or by its
+/// container.
+pub fn fn_branch_hands_param_to_storer(
+    program: &crate::Program,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    if f.generic_params.is_some() {
         return false;
-    };
+    }
+    fn_branch_hands_param_to(f, arg_index, &|g, j| {
+        resolve_free_or_assoc_fn(program, g)
+            .is_some_and(|gf| gf.self_param.is_none() && fn_moves_param_into_outliving_place(gf, j))
+    })
+}
+
+/// Which `(callee, argument index)` hand-overs [`branch_handover_tally`]
+/// accepts.
+type HandoverAccept<'a> = &'a dyn Fn(&str, usize) -> bool;
+
+struct BranchHandoverTally {
+    stores: usize,
+    calls: usize,
+    nested: bool,
+    other: bool,
+}
+
+/// The walk behind [`fn_branch_stores_param_whole`] and
+/// [`fn_branch_hands_param_to`]: classifies every mention of the parameter as a
+/// whole store into a container, a bare hand-over to an accepted call (when
+/// `takes` is given), or something else.
+fn branch_handover_tally(
+    f: &Function,
+    arg_index: usize,
+    takes: Option<HandoverAccept<'_>>,
+) -> Option<BranchHandoverTally> {
+    let param = f.params.get(arg_index)?;
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return None;
+    }
     let PatternKind::Binding(name) = &param.pattern.kind else {
-        return false;
+        return None;
     };
     let mut roots: Vec<&str> = Vec::new();
     if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
@@ -10475,16 +10546,28 @@ pub fn fn_branch_stores_param_whole(f: &Function, arg_index: usize) -> bool {
             }
         }
     }
-    struct W<'a> {
+    struct W<'a, 't> {
         name: &'a str,
         roots: Vec<&'a str>,
-        stores: usize,
-        other: bool,
+        takes: Option<HandoverAccept<'t>>,
+        depth: usize,
+        t: BranchHandoverTally,
     }
     fn mentions(e: &Expr, name: &str) -> bool {
         crate::deque_head::expr_mentions_name_deep(e, name)
     }
-    fn is_whole_store(e: &Expr, w: &W<'_>) -> bool {
+    /// Exactly one argument is the bare parameter, and no other argument
+    /// mentions it.
+    fn sole_bare_arg(args: &[crate::ast::CallArg], name: &str) -> Option<usize> {
+        let j = args
+            .iter()
+            .position(|a| outliving_store::is_bare(&a.value, name))?;
+        args.iter()
+            .enumerate()
+            .all(|(k, a)| k == j || !mentions(&a.value, name))
+            .then_some(j)
+    }
+    fn is_whole_store(e: &Expr, w: &W<'_, '_>) -> bool {
         let ExprKind::MethodCall {
             object,
             method,
@@ -10499,21 +10582,29 @@ pub fn fn_branch_stores_param_whole(f: &Function, arg_index: usize) -> bool {
             "push" | "push_back" | "push_front" | "insert"
         ) && outliving_store::place_root_outlives(object, &w.roots)
             && !mentions(object, w.name)
-            && args
-                .iter()
-                .any(|a| outliving_store::is_bare(&a.value, w.name))
-            && args
-                .iter()
-                .all(|a| outliving_store::is_bare(&a.value, w.name) || !mentions(&a.value, w.name))
-            && args
-                .iter()
-                .filter(|a| outliving_store::is_bare(&a.value, w.name))
-                .count()
-                == 1
+            && sole_bare_arg(args, w.name).is_some()
     }
-    fn classify<'a>(e: &'a Expr, w: &mut W<'a>) {
+    fn is_accepted_call(e: &Expr, w: &W<'_, '_>) -> bool {
+        let Some(takes) = w.takes else {
+            return false;
+        };
+        let ExprKind::Call { callee, args } = &e.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(g) = &callee.kind else {
+            return false;
+        };
+        sole_bare_arg(args, w.name).is_some_and(|j| takes(g, j))
+    }
+    fn classify<'a>(e: &'a Expr, w: &mut W<'a, '_>) {
         if is_whole_store(e, w) {
-            w.stores += 1;
+            w.t.stores += 1;
+            w.t.nested |= w.depth > 0;
+            return;
+        }
+        if is_accepted_call(e, w) {
+            w.t.calls += 1;
+            w.t.nested |= w.depth > 0;
             return;
         }
         match &e.kind {
@@ -10523,30 +10614,34 @@ pub fn fn_branch_stores_param_whole(f: &Function, arg_index: usize) -> bool {
                 then_block,
                 else_branch,
             } => {
-                w.other |= mentions(condition, w.name);
+                w.t.other |= mentions(condition, w.name);
+                w.depth += 1;
                 walk(then_block, w);
                 if let Some(x) = else_branch.as_deref() {
                     classify(x, w);
                 }
+                w.depth -= 1;
             }
             ExprKind::Match { scrutinee, arms } => {
-                w.other |= mentions(scrutinee, w.name);
+                w.t.other |= mentions(scrutinee, w.name);
+                w.depth += 1;
                 for a in arms {
-                    w.other |= a.guard.as_ref().is_some_and(|g| mentions(g, w.name));
+                    w.t.other |= a.guard.as_ref().is_some_and(|g| mentions(g, w.name));
                     classify(&a.body, w);
                 }
+                w.depth -= 1;
             }
-            _ => w.other |= mentions(e, w.name),
+            _ => w.t.other |= mentions(e, w.name),
         }
     }
-    fn walk<'a>(b: &'a Block, w: &mut W<'a>) {
+    fn walk<'a>(b: &'a Block, w: &mut W<'a, '_>) {
         for st in &b.stmts {
             match &st.kind {
                 StmtKind::Let { pattern, value, .. } => {
-                    w.other |= mentions(value, w.name);
+                    w.t.other |= mentions(value, w.name);
                     if let PatternKind::Binding(n) = &pattern.kind {
                         if n == w.name {
-                            w.other = true;
+                            w.t.other = true;
                         }
                         w.roots.push(n.as_str());
                     }
@@ -10555,9 +10650,9 @@ pub fn fn_branch_stores_param_whole(f: &Function, arg_index: usize) -> bool {
                 StmtKind::LetUninit { .. } => {}
                 StmtKind::Assign { target, value }
                 | StmtKind::CompoundAssign { target, value, .. } => {
-                    w.other |= mentions(target, w.name) || mentions(value, w.name);
+                    w.t.other |= mentions(target, w.name) || mentions(value, w.name);
                 }
-                _ => w.other = true,
+                _ => w.t.other = true,
             }
         }
         if let Some(fe) = b.final_expr.as_deref() {
@@ -10567,11 +10662,17 @@ pub fn fn_branch_stores_param_whole(f: &Function, arg_index: usize) -> bool {
     let mut w = W {
         name: name.as_str(),
         roots,
-        stores: 0,
-        other: false,
+        takes,
+        depth: 0,
+        t: BranchHandoverTally {
+            stores: 0,
+            calls: 0,
+            nested: false,
+            other: false,
+        },
     };
     walk(&f.body, &mut w);
-    w.stores > 0 && !w.other
+    Some(w.t)
 }
 
 /// B-2026-09-25-10 — the caller's side of the local-container handover: the

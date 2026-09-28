@@ -2942,8 +2942,13 @@ impl<'a> super::Interpreter<'a> {
                     && !crate::ast::fn_moves_param_into_outliving_place(f, i);
             // B-2026-09-06-13 — and the hand-over to a callee that returns it
             // on some exits, the conditional store's twin; see the predicate.
+            // B-2026-09-28-80 — or handed, from inside a branch, to a callee
+            // that stores it: the caller stands down through the via-call
+            // channel, so on the path that never reaches the hand-over this
+            // frame is the only owner left.
             let cond_stored = crate::ast::fn_conditionally_stores_param(f, i)
-                || crate::ast::fn_conditionally_hands_param_to_flip_callee(self.program, f, i);
+                || crate::ast::fn_conditionally_hands_param_to_flip_callee(self.program, f, i)
+                || crate::ast::fn_branch_hands_param_to_storer(self.program, f, i);
             if !cond_returned && !cond_stored {
                 continue;
             }
@@ -3260,7 +3265,10 @@ impl<'a> super::Interpreter<'a> {
             // stands its binding down for it (`record_method_arg_moves`), so
             // this frame owns the body on the paths that did not store, and the
             // storing statement disarms it — the free-fn sibling's split.
-            let cond_stored = crate::ast::fn_conditionally_stores_param(f, i);
+            // B-2026-09-28-80 — or handed to a storing callee from inside a
+            // branch, the free-function sibling's third route.
+            let cond_stored = crate::ast::fn_conditionally_stores_param(f, i)
+                || crate::ast::fn_branch_hands_param_to_storer(self.program, f, i);
             let caller_still_owns = args
                 .get(i)
                 .is_some_and(|a| Self::arg_place_reaches_caller_drop_fire(&a.value))

@@ -919,7 +919,12 @@ impl<'a> super::Interpreter<'a> {
                                         Some(self.program),
                                         f,
                                         i,
-                                    ) || crate::ast::fn_conditionally_stores_param(f, i));
+                                    ) || crate::ast::fn_conditionally_stores_param(f, i)
+                                        || crate::ast::fn_branch_hands_param_to_storer(
+                                            self.program,
+                                            f,
+                                            i,
+                                        ));
                                 // B-2026-09-27-128 — a generic method's `Option[T]`
                                 // resolved to the bound value's type, as the
                                 // free-fn frame does.

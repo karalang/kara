@@ -3511,6 +3511,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         && (crate::ast::fn_conditionally_stores_param(func, i)
                             || self.program_snapshot.as_deref().is_some_and(|p| {
                                 crate::ast::fn_conditionally_hands_param_to_flip_callee(p, func, i)
+                                    // B-2026-09-28-80 — or to a storing callee.
+                                    || crate::ast::fn_branch_hands_param_to_storer(p, func, i)
                             }));
                     let boxed_type_name = cond_stored
                         .then(|| self.rc_fallback_boxed_type_name(&param_name, val_ty))
@@ -4083,7 +4085,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // memory, as it does for the conditional hand-back.
                 if func.generic_params.is_none()
                     && !self.is_coroutine_compiled(&func.name)
-                    && crate::ast::fn_conditionally_stores_param(func, i)
+                    && (crate::ast::fn_conditionally_stores_param(func, i)
+                        // B-2026-09-28-80 — or handed to a storing callee
+                        // from inside a branch.
+                        || self.program_snapshot.as_deref().is_some_and(|p| {
+                            crate::ast::fn_branch_hands_param_to_storer(p, func, i)
+                        }))
                     && !crate::ast::fn_matches_on_bare_param(func, &param_name)
                     && matches!(&param.ty.kind, TypeKind::Path(p)
                         if p.segments.len() == 1
@@ -4120,7 +4127,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the container and the storing path freed it twice.
                 if func.generic_params.is_none()
                     && !self.is_coroutine_compiled(&func.name)
-                    && crate::ast::fn_branch_stores_param_whole(func, i)
+                    && (crate::ast::fn_branch_stores_param_whole(func, i)
+                        // B-2026-09-28-80 — or handed from inside a branch to
+                        // a callee that takes the box over whole.
+                        || self.fn_branch_hands_param_whole(func, i))
                     && !self.boxed_enum_payload_variants(&param.ty).is_empty()
                 {
                     if let Some(whole) = self.emit_optres_param_whole_drop_fn(&param.ty) {
@@ -4184,6 +4194,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     && (crate::ast::fn_conditionally_stores_param(func, i)
                         || self.program_snapshot.as_deref().is_some_and(|p| {
                             crate::ast::fn_conditionally_hands_param_to_flip_callee(p, func, i)
+                                // B-2026-09-28-80 — or to a storing callee.
+                                || crate::ast::fn_branch_hands_param_to_storer(p, func, i)
                         }))
                 {
                     if let TypeKind::Path(path) = &param.ty.kind {
