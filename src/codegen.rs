@@ -7078,6 +7078,7 @@ impl<'ctx> Codegen<'ctx> {
                 vec_index_cloned_sites: FxHashSet::default(),
                 uam_consume_sites: std::collections::HashSet::new(),
                 uam_copied_sites: std::collections::HashSet::new(),
+                inline_array_ctor_disarm_declined: std::collections::HashSet::new(),
             },
             iter_let_bindings: HashMap::new(),
             ref_return_inner_types: HashMap::new(),
@@ -10184,6 +10185,8 @@ impl<'ctx> Codegen<'ctx> {
         // with its reason, so a third exemption cannot be added silently.
         let mut t_uam_consume_sites = std::collections::HashSet::new();
         let mut t_uam_copied_sites = std::collections::HashSet::new();
+        // B-2026-09-19-59 — written during lowering, like the two above.
+        let mut t_inline_array_ctor_disarm_declined = std::collections::HashSet::new();
         let mut t_vec_index_cloned_sites = FxHashSet::default();
         macro_rules! swap_all {
             () => {{
@@ -10198,6 +10201,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.span_tables.uam_copied_sites,
                     &mut t_uam_copied_sites,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.inline_array_ctor_disarm_declined,
+                    &mut t_inline_array_ctor_disarm_declined,
                 );
                 std::mem::swap(
                     &mut self.span_tables.vec_index_cloned_sites,

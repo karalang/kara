@@ -325,4 +325,10 @@ pub(crate) struct SpanTables {
     /// widening the copy to more types can never get out of step with the
     /// disarm.
     pub(crate) uam_copied_sites: std::collections::HashSet<(usize, usize)>,
+    /// B-2026-09-19-59 — `Option`/`Result` constructor sites whose inline
+    /// `Array` payload source must NOT be disarmed at the constructor, because
+    /// the constructor is the direct argument of a free-function call or a
+    /// tuple-literal element: consumers that do not (or do not yet) take the
+    /// payload over. See `seeded_inline_array_payload_claimed`.
+    pub(crate) inline_array_ctor_disarm_declined: std::collections::HashSet<(usize, usize)>,
 }

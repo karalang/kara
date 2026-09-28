@@ -20,6 +20,13 @@ use inkwell::{FloatPredicate, IntPredicate};
 
 impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn compile_tuple(&mut self, elems: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
+        // B-2026-09-19-59 — a tuple element keeps its inline `Array` payload
+        // source armed; see `seeded_inline_array_payload_claimed`.
+        for e in elems {
+            self.span_tables
+                .inline_array_ctor_disarm_declined
+                .insert((e.span.offset, e.span.length));
+        }
         // B-2026-08-13-17 — the ANNOTATED binding's declared element types, when
         // the enclosing `let` staged them. The aggregate is laid out at these
         // widths rather than at the compiled values' own widths.

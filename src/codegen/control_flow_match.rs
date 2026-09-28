@@ -15597,18 +15597,40 @@ impl<'ctx> super::Codegen<'ctx> {
             // out, and `Some(s) => s` freed the elements the caller's result
             // now held. The direct push stays for an element the registrar
             // declines, which is exactly the set it declined before.
-            if self.make_array_param_callee_owned(bound, &elem_te, n, elem_ty, slot.ptr) {
-                continue;
-            }
-            if let Some(drop_fn) = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n) {
-                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
-                    frame.push(super::state::CleanupAction::StructDrop {
-                        struct_alloca: slot.ptr,
-                        drop_fn,
-                    });
+            if !self.make_array_param_callee_owned(bound, &elem_te, n, elem_ty, slot.ptr) {
+                if let Some(drop_fn) = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n) {
+                    if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+                        frame.push(super::state::CleanupAction::StructDrop {
+                            struct_alloca: slot.ptr,
+                            drop_fn,
+                        });
+                    }
                 }
             }
+            self.drain_array_bodies_before_memory(bound);
         }
+    }
+
+    /// B-2026-09-19-59 — the arm binding's element BODIES walk
+    /// (`__karac_dropelems_array_<T>_<N>`) was registered when the pattern
+    /// bound, BEFORE [`Self::own_disarmed_inline_array_payload`] handed it the
+    /// memory drop, and a frame drains LIFO: the memory half ran first and
+    /// each `Drop` body then read a freed field (`dd` + garbage where
+    /// `daaaaaaaa0` is due, on every compiled surface). Move that bodies
+    /// action to the top of the frame, so it drains before the memory it
+    /// reads, as a `let`-bound array's does.
+    fn drain_array_bodies_before_memory(&mut self, bound: &str) {
+        let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() else {
+            return;
+        };
+        let Some(idx) = frame.iter().rposition(|a| {
+            matches!(a, super::state::CleanupAction::UserDrop { binding_name, kind, .. }
+                if binding_name == bound && *kind == UserDropKind::ContainerElemBodies)
+        }) else {
+            return;
+        };
+        let action = frame.remove(idx);
+        frame.push(action);
     }
 
     /// Container-move sibling of `suppress_inline_option_payload_cleanup`
@@ -16722,7 +16744,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// non-consuming `Ok(_)` / `Err(_)` / wildcard arm runs no suppression
     /// and the source free fires for the live payload.
     pub(super) fn suppress_inline_result_payload_cleanup(
-        &self,
+        &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
@@ -16814,6 +16836,10 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         self.zero_result_payload_area(layout.llvm_type, slot.ptr, "respl.suppress");
+        // B-2026-09-19-59 — the delivery half, as the `Option` twin has had
+        // since B-2026-09-13-18: the zero above hands an `Array` payload to
+        // the arm binding, and nothing else frees its elements.
+        self.own_disarmed_inline_array_payload(pattern);
     }
 
     /// Suppress the scope-exit `FreeInlineOptionPayload` /
@@ -23403,7 +23429,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// is NOT consuming, so the free stays armed and reclaims the discarded
     /// payload. The CALLER gates a borrow-only STRUCT-WRAPPER arm out.
     pub(super) fn suppress_inline_result_payload_cleanup_at(
-        &self,
+        &mut self,
         slot: PointerValue<'ctx>,
         pattern: &Pattern,
     ) {
@@ -23421,6 +23447,8 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         self.zero_result_payload_area(layout.llvm_type, slot, "respl.suppress.at");
+        // B-2026-09-19-59 — see `suppress_inline_result_payload_cleanup`.
+        self.own_disarmed_inline_array_payload(pattern);
     }
 
     /// Zero every payload word of a materialized `Result` scrutinee slot

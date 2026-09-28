@@ -1075,6 +1075,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // call's own argument temps; a nested call in argument
                 // position opens its own window here and drains first.
                 self.note_nested_call_arg_sites(expr, args);
+                // B-2026-09-19-59 — a free-function argument keeps its inline
+                // `Array` payload source armed; see
+                // `seeded_inline_array_payload_claimed`.
+                if matches!(callee.kind, ExprKind::Identifier(_)) {
+                    for a in args {
+                        self.span_tables
+                            .inline_array_ctor_disarm_declined
+                            .insert((a.value.span.offset, a.value.span.length));
+                    }
+                }
                 let arg_temp_mark = self.call_arg_temp_mark();
                 let v = self.compile_call(callee, args, &expr.span)?;
                 self.drain_call_arg_temp_user_drops(arg_temp_mark);

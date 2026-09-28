@@ -13501,6 +13501,59 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
     }
 
+    /// B-2026-09-19-59 — does this `Some(a)` / `Ok(a)` / `Err(a)` take its
+    /// `Array` payload over from a named source, where the payload is laid
+    /// INLINE in the envelope's payload area rather than boxed?
+    ///
+    /// Such a payload is `Array[T, 1]` over a three-word heap `T` (`String`, a
+    /// struct wrapping one). The inline cleanups the envelope's consumers
+    /// register (`FreeInlineOptionPayload` at a `let`, the fresh-temp
+    /// scrutinee's, a `Vec` element's, a struct field's) all free those words,
+    /// and the source local kept the `StructDrop` it got at its own `let`, so
+    /// the elements had two owners: `free(): double free detected in tcache 2`
+    /// on the match, `let`, `if let`, push, field and passthrough spellings on
+    /// every compiled surface, against a correct `--interp`. The BOXED widths
+    /// are not this: their consumer sites decide (`seeded_array_source_needs_disarm`).
+    ///
+    /// Asked at the constructor, which cannot see its consumer, so the two
+    /// consumers that take nothing over are named by span and declined:
+    /// a free-function ARGUMENT (a generic callee's monomorph never frees the
+    /// param, so disarming leaked 9 B, the B-2026-09-17-9 mirror; a concrete
+    /// callee frees it but its caller runs the bodies after the call) and a
+    /// TUPLE-literal element (the tuple registers no drop for the payload).
+    fn seeded_inline_array_payload_claimed(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        site_inst: Option<&TypeExpr>,
+        call_span: Option<&crate::token::Span>,
+    ) -> bool {
+        if call_span.is_some_and(|sp| {
+            self.span_tables
+                .inline_array_ctor_disarm_declined
+                .contains(&(sp.offset, sp.length))
+        }) {
+            return false;
+        }
+        if !self.type_decls.seeded_enum_names.contains(enum_name) {
+            return false;
+        }
+        let Some(inst) = site_inst else {
+            return false;
+        };
+        let Some(payload) = Self::seeded_variant_payload_te(inst, variant) else {
+            return false;
+        };
+        if self.array_elem_and_len(&payload).is_none() {
+            return false;
+        }
+        let boxed = match variant {
+            "Some" => self.option_payload_is_boxed(&payload),
+            _ => self.result_payload_is_boxed(&payload),
+        };
+        !boxed && self.inline_heap_payload_elem(&payload).is_some()
+    }
+
     /// Try to construct an enum variant value if `name` matches a known variant.
     /// Returns `None` if `name` is not an enum variant.
     pub(super) fn try_compile_enum_variant(
@@ -13914,7 +13967,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // the argument temp a plain `free` and no interior walk: retract
             // without arming, the LEAK mirror that exclusion existed to
             // prevent. The two consumer sites that CAN see it carry it now.
-            if disarm_array_sources {
+            // B-2026-09-19-59 — or a seeded envelope that lays the `Array`
+            // payload inline, whose consumers all own it.
+            if disarm_array_sources
+                || self.seeded_inline_array_payload_claimed(
+                    &enum_name,
+                    name,
+                    site_inst.as_ref(),
+                    call_span,
+                )
+            {
                 self.suppress_array_local_move_into_ctor(&arg.value);
             }
             // B-2026-07-16-5: a payload sourced from a BORROW — `Some(s)`
