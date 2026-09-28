@@ -10575,7 +10575,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // row's run-vs-build half. `option_result_ctor_payload` is the shape
         // test the admission predicate and both tail-source walkers already
         // share, so the four now agree on what a constructor is.
-        crate::ast::option_result_ctor_payload(value).is_some_and(|p| self.expr_is_param_view(p))
+        //
+        // B-2026-09-28-6 — through the LEAF of a nest (`Some(Some(x))`), which
+        // is the value the caller still fires. Interpreter twins:
+        // `let_ctor_payloads_are_param_views` and `optres_temp_is_param_view`.
+        crate::ast::option_result_ctor_leaf_payload(value)
+            .is_some_and(|p| self.expr_is_param_view(p))
     }
 
     /// B-2026-08-29-24 — the element indices of a TUPLE LITERAL that were
@@ -11710,6 +11715,57 @@ impl<'ctx> super::Codegen<'ctx> {
                 inner_drop_fn,
             );
             return true;
+        }
+        // B-2026-09-28-6 — a nested ENVELOPE payload (`Option[Option[S]]`,
+        // `Option[Result[S, i64]]`). The outer box holds another seeded
+        // `Option`/`Result`, which is not a user struct name, so the struct arm
+        // below declined it and the temp fell through to
+        // `materialize_owned_temp` with no owner at all: the outer box, the
+        // inner box and the leaf's heap leaked on every discard spelling
+        // (`mm(1);`, `let _ = mm(1)`, `Some(Some(mk(1)));`, and the
+        // `.is_some()` probe), 93 B in 3 blocks for `Option[Option[S]]`.
+        //
+        // The owner is the WHOLE value's memory-only drop, the resolver a
+        // `Vec[Option[Option[S]]]` element already frees through, pushed as
+        // the `EnumDrop` the boxed-`Result` sibling uses. Bodies stay on the
+        // body walker (`track_discarded_optres_payload_bodies`), which recurses
+        // the envelope, so the two compose without doubling.
+        //
+        // A PLAIN CALL only, for the reason the array arm above gives: a map
+        // hand-back of the same type is freed at the map site, and claiming it
+        // here too is a double free. A method-call producer keeps leaking.
+        if matches!(
+            &payload_te.kind,
+            TypeKind::Path(pp) if pp.segments.len() == 1
+                && matches!(pp.segments[0].as_str(), "Option" | "Result")
+        ) {
+            if !matches!(tail.kind, ExprKind::Call { .. }) {
+                return false;
+            }
+            let payload_ty = self.llvm_type_for_type_expr(&payload_te);
+            if Self::llvm_type_word_count(payload_ty) <= 3 {
+                return false;
+            }
+            let Some(drop_fn) = self.vec_elem_agg_drop_for_type_expr(&te) else {
+                return false;
+            };
+            let Some(cur_fn) = self
+                .builder
+                .get_insert_block()
+                .and_then(|bb| bb.get_parent())
+            else {
+                return false;
+            };
+            let slot = self.create_entry_alloca(cur_fn, "__owned_boxed_opt_tmp", val.get_type());
+            self.builder.build_store(slot, val).unwrap();
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+                frame.push(CleanupAction::EnumDrop {
+                    enum_alloca: slot,
+                    drop_fn,
+                });
+                return true;
+            }
+            return false;
         }
         let TypeKind::Path(pp) = &payload_te.kind else {
             return false;

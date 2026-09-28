@@ -4099,8 +4099,10 @@ impl<'a> super::Interpreter<'a> {
         if self.let_call_result_param_view_source(e).is_some() {
             return !self.optres_temp_hands_back_optres_param(e);
         }
+        // B-2026-09-28-6 — the leaf of a nest (`Some(Some(x))`), as codegen's
+        // `optres_ctor_payloads_are_all_param_views` asks.
         if let Some(ExprKind::Identifier(src)) =
-            crate::ast::option_result_ctor_payload(e).map(|p| &p.kind)
+            crate::ast::option_result_ctor_leaf_payload(e).map(|p| &p.kind)
         {
             if self
                 .owned_param_names_stack
@@ -4245,14 +4247,40 @@ impl<'a> super::Interpreter<'a> {
             return false;
         }
         let mut visited_any = false;
+        let seeded = matches!(variant.as_str(), "Some" | "Ok" | "Err");
         for (i, payload) in payloads.iter().enumerate() {
-            if !self.ctor_payload_owes_user_drop(payload) {
+            // B-2026-09-28-6 — a nested seeded envelope (`Some(Some(x))`)
+            // owes its LEAF's bodies; the envelope value itself answers no.
+            let mut owed = payload;
+            while let Value::EnumVariant {
+                enum_name,
+                data: EnumData::Tuple(inner),
+                ..
+            } = owed
+            {
+                if !seeded || !(enum_name == "Option" || enum_name == "Result") || inner.len() != 1
+                {
+                    break;
+                }
+                owed = &inner[0];
+            }
+            if !self.ctor_payload_owes_user_drop(owed) {
                 continue;
             }
             let Some(arg) = args.get(i) else {
                 return false;
             };
-            let is_view = matches!(&arg.value.kind, ExprKind::Identifier(src)
+            // B-2026-09-28-6 — a NESTED seeded constructor's payload
+            // (`Some(Some(x))`) is a view when its leaf is, as codegen's
+            // `optres_ctor_payloads_are_all_param_views` peels it. Seeded
+            // outer constructors only: a user enum's twin
+            // (`enum_ctor_payload_bodies_are_caller_owned`) does not peel.
+            let arg_leaf = if seeded {
+                crate::ast::option_result_ctor_leaf_payload(&arg.value).unwrap_or(&arg.value)
+            } else {
+                &arg.value
+            };
+            let is_view = matches!(&arg_leaf.kind, ExprKind::Identifier(src)
                 if self.owned_param_names_stack
                     .last()
                     .is_some_and(|params| params.contains(src.as_str())));
@@ -11755,7 +11783,17 @@ impl<'a> super::Interpreter<'a> {
                             // there; the statement position was never given the
                             // same treatment, so the two statement kinds
                             // disagreed for one spelling and not the other.
-                            if self.find_enum_for_variant(fn_name).is_some() {
+                            //
+                            // B-2026-09-28-6 — and the SEEDED constructors,
+                            // which `find_enum_for_variant` cannot see:
+                            // `Some(mk(1));` / `Ok(..);` / `Err(..);` ran NO
+                            // body here against compiled's one. The `let _ =`
+                            // spelling was widened for this in B-2026-09-20-10
+                            // (`discard_rhs_produces_owned_value`'s `Call` arm); this is
+                            // the same clause, verbatim, for the statement.
+                            if self.find_enum_for_variant(fn_name).is_some()
+                                || matches!(fn_name.as_str(), "Some" | "Ok" | "Err")
+                            {
                                 let payload_src = discarded.clone();
                                 self.run_discarded_value_user_drops(discarded);
                                 if let Value::EnumVariant { enum_name, .. } = &payload_src {

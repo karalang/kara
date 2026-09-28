@@ -3900,6 +3900,26 @@ pub fn option_result_ctor_payload(e: &Expr) -> Option<&Expr> {
     }
 }
 
+/// B-2026-09-28-6 — the payload at the BOTTOM of a nest of `Some`/`Ok`/`Err`
+/// constructors: `x` for `Some(Some(x))` and `Some(Ok(x))`, the same as
+/// [`option_result_ctor_payload`] for a single constructor. `None` when `e` is
+/// not a constructor at all.
+///
+/// A nested envelope over a param VIEW is still a view: `Some(Some(x))` in
+/// `fn c(x: S)` moves the caller's value exactly as `Some(x)` does, one
+/// envelope deeper. Asking only the outer payload saw `Some(x)` rather than
+/// `x` and ran the body in the frame as well as in the caller, on every
+/// backend and at the `let`, `let _`, discard and `is_*` probe positions. Both
+/// backends' view predicates peel through this one helper so they agree on
+/// what the leaf is.
+pub fn option_result_ctor_leaf_payload(e: &Expr) -> Option<&Expr> {
+    let mut leaf = option_result_ctor_payload(e)?;
+    while let Some(inner) = option_result_ctor_payload(leaf) {
+        leaf = inner;
+    }
+    Some(leaf)
+}
+
 /// B-2026-09-13-13 — is `name` one of the built-in scalar type names, i.e. the
 /// receiver of a DESUGARED operator call (`i64.add`, `f64.mul`, `bool.not`)?
 ///
