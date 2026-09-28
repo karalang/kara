@@ -6671,6 +6671,63 @@ impl<'ctx> super::Codegen<'ctx> {
         super::helpers::subst_type_params_in_type_expr(param_te, &subst)
     }
 
+    /// B-2026-09-20-38 — [`Self::callee_param_te_for_call`] plus the
+    /// PROPAGATED bindings, which the `TypeExpr` frame deliberately omits: a
+    /// call inside a monomorph that hands the caller's own `T` on
+    /// (`fn gfwd[T](g: G[T]) { glen(g) }`) records no `T -> T` entry, only a
+    /// name-frame entry naming the caller's param. `compile_generic_call`
+    /// resolves those through the caller's live substitution before it
+    /// compiles the body (B-2026-09-03-2); this does the same, so a
+    /// caller-side question about the monomorph is asked of the type it
+    /// lowers. Without it a NAMELESS binding (`Array[String, 2]`) stayed `T`
+    /// and read as an unboxed payload, where a named one happened to resolve
+    /// through the head-name channel.
+    pub(super) fn callee_param_te_for_call_propagated(
+        &self,
+        param_te: &TypeExpr,
+        call_span: &crate::token::Span,
+    ) -> TypeExpr {
+        let key = (call_span.offset, call_span.length);
+        let mut subst: std::collections::HashMap<String, TypeExpr> = self
+            .span_tables
+            .call_type_subs_te
+            .get(&key)
+            .map(|frame| {
+                frame
+                    .iter()
+                    .map(|(k, te)| (k.clone(), self.subst_monomorph_type_params(te)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(name_frame) = self.span_tables.call_type_subs.get(&key) {
+            for (param, named) in name_frame {
+                if subst.contains_key(param) {
+                    continue;
+                }
+                let probe = TypeExpr {
+                    kind: TypeKind::Path(crate::ast::PathExpr {
+                        segments: vec![named.clone()],
+                        generic_args: None,
+                        span: *call_span,
+                    }),
+                    span: *call_span,
+                };
+                let flat = self.subst_monomorph_type_params(&probe);
+                let unresolved = matches!(&flat.kind, TypeKind::Path(fp)
+                    if fp.generic_args.is_none()
+                        && fp.segments.len() == 1
+                        && fp.segments[0] == *named);
+                if !unresolved {
+                    subst.insert(param.clone(), flat);
+                }
+            }
+        }
+        if subst.is_empty() {
+            return param_te.clone();
+        }
+        super::helpers::subst_type_params_in_type_expr(param_te, &subst)
+    }
+
     /// B-2026-09-02-46 — own the heap BOX behind a FRESH-TEMP `Option`/`Result`
     /// argument to a GENERIC callee whose monomorph boxes the payload.
     ///

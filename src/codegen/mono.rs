@@ -2469,15 +2469,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 let PatternKind::Binding(pname) = &p.pattern.kind else {
                     return false;
                 };
+                // B-2026-09-20-38 — the TAKEN set, which adds a param
+                // forwarded to a generic callee that takes it; the prologue
+                // asks the same set (`mono_boxed_param_taken`).
                 if !by_value_nonescaping_generic_params
-                    .get_or_insert_with(|| {
-                        crate::result_escape::by_value_nonescaping_param_names(&generic_fn)
+                    .get_or_insert_with(|| match self.program_snapshot.as_deref() {
+                        Some(prog) => crate::result_escape::by_value_boxed_param_taken_names(
+                            prog,
+                            &generic_fn,
+                        ),
+                        None => crate::result_escape::by_value_nonescaping_param_names(&generic_fn),
                     })
                     .contains(pname.as_str())
                 {
                     return false;
                 }
-                let inst = self.callee_param_te_for_call(&p.ty, call_span);
+                let inst = self.callee_param_te_for_call_propagated(&p.ty, call_span);
                 !self.user_enum_boxed_payload_variants(&inst).is_empty()
             });
             if param_box_taken_by_callee {
@@ -5444,7 +5451,21 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Params of THIS mono body that never escape (used only as a `match`
         // scrutinee, or unused) — gates the owned boxed-enum param drop below.
-        let nonescaping_params = crate::result_escape::nonescaping_param_names(func);
+        let mut nonescaping_params = crate::result_escape::nonescaping_param_names(func);
+        // B-2026-09-20-38 — plus a param whose only escape is a forward to a
+        // generic callee that takes the box: `compile_generic_call` retracts
+        // the caller's drop for it (`by_value_boxed_param_taken_names`), so
+        // this frame owns it until that forward zeroes the slot. Only the
+        // names the forward ADDS over the caller's older set, so every param
+        // that set already decided keeps its registration unchanged.
+        if let Some(prog) = self.program_snapshot.as_deref() {
+            let loose = crate::result_escape::by_value_nonescaping_param_names(func);
+            nonescaping_params.extend(
+                crate::result_escape::by_value_boxed_param_taken_names(prog, func)
+                    .into_iter()
+                    .filter(|n| !loose.contains(n)),
+            );
+        }
 
         for (i, param) in func.params.iter().enumerate() {
             let param_name = self.param_name(param);

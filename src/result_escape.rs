@@ -331,6 +331,81 @@ fn read_or_lent_names(
         .collect()
 }
 
+/// B-2026-09-20-38 — [`by_value_nonescaping_param_names`] with one more
+/// position: a parameter handed on, bare and by value, to a GENERIC free
+/// function whose matching by-value parameter is itself in this set -- that is,
+/// to a monomorph whose prologue TAKES a boxed enum payload's box.
+///
+/// This is the set the two halves of a generic call's box hand-off have to
+/// agree on: the caller (`compile_generic_call`) retracts its own box drop for
+/// a param in it, and the monomorph's prologue registers the box drop for it.
+/// A forwarding middle function was left out of both, so the chain
+/// `main` (keeps) -> `gfwd[T](g) { glen(g) }` (declines, escaping) ->
+/// `glen[T](g)` (takes) had two owners: `glen` freed the box and `main` freed
+/// it again. With the forward counted, `main` stands down, `gfwd` owns the box
+/// on entry, and its call to `glen` zeroes that ownership exactly as `main`'s
+/// direct call does -- so a forward on only some paths still leaves `gfwd` the
+/// owner on the others. Unlike [`by_value_read_or_lent_param_names`] a `ref`
+/// callee is NOT followed: lending to it takes nothing, which is the other
+/// question. Depth-bounded; running out answers "escapes" (caller-retained),
+/// today's route.
+pub fn by_value_boxed_param_taken_names(
+    program: &crate::ast::Program,
+    func: &Function,
+) -> HashSet<String> {
+    taken_names(program, func, 4)
+}
+
+fn taken_names(program: &crate::ast::Program, func: &Function, depth: u32) -> HashSet<String> {
+    let lent = |cn: &str, k: usize| -> bool {
+        if depth == 0 {
+            return false;
+        }
+        let Some(g) = program.items.iter().find_map(|it| match it {
+            crate::ast::Item::Function(f) if f.name == cn => Some(f),
+            _ => None,
+        }) else {
+            return false;
+        };
+        if g.generic_params.is_none() || g.self_param.is_some() {
+            return false;
+        }
+        let Some(p) = g.params.get(k) else {
+            return false;
+        };
+        // A BARE type param (`fn gany[T](x: T)`) is not followed: its
+        // monomorph's prologue registers no box for it (the payload type it
+        // would ask is the whole `T`), so counting it a taker strands the box
+        // with nobody -- measured as a lost `Drop` body and a 32 B leak.
+        let bare_type_param = matches!(&p.ty.kind, crate::ast::TypeKind::Path(path)
+        if path.generic_args.is_none()
+            && path.segments.len() == 1
+            && g.generic_params.as_ref().is_some_and(|gp| {
+                gp.params.iter().any(|q| q.name == path.segments[0])
+            }));
+        !bare_type_param
+            && !matches!(
+                &p.ty.kind,
+                crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+            )
+            && matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(n)
+                if taken_names(program, g, depth - 1).contains(n))
+    };
+    let mut acc = seeded_acc(func);
+    acc.lent = Some(&lent);
+    walk_block(&func.body, &mut acc);
+    func.params
+        .iter()
+        .filter_map(|p| {
+            let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+                return None;
+            };
+            let (total, scrut, ro) = acc.counts.get(name.as_str()).copied().unwrap_or((0, 0, 0));
+            (total == scrut + ro).then(|| name.clone())
+        })
+        .collect()
+}
+
 /// Names of `func`'s PARAMETERS that appear NOWHERE in the body.
 ///
 /// Strictly stronger than [`nonescaping_param_names`], which also admits a param
