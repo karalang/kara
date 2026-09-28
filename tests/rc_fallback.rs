@@ -1781,3 +1781,67 @@ fn loop_body_let_rebind_moved_out_no_rc() {
         result.rc_values.get("f"),
     );
 }
+
+// ── B-2026-09-28-61: a `Drop` payload is not moved out of a `shared enum` ──
+
+/// Every E0514 raised for moving a payload out of a `shared enum`.
+fn shared_enum_payload_move_rejections(src: &str) -> Vec<String> {
+    let source = format!(
+        "{DROP_R}shared enum G[T] {{ Y(T), N }}\nshared enum M {{ Y(R), N }}\n\
+         fn look(r: ref R) -> i64 {{ r.id }}\nfn main() {{\n{src}\n}}\n"
+    );
+    run(&source)
+        .errors
+        .iter()
+        .filter(|e| {
+            e.kind == OwnershipErrorKind::RcFallbackOfDropType
+                && e.message.contains("cannot be moved out of a shared value")
+        })
+        .map(|e| e.message.clone())
+        .collect()
+}
+
+#[test]
+fn moving_a_drop_payload_out_of_a_shared_enum_is_rejected() {
+    // Gowtham's choice on B-2026-09-28-61: a `Drop` body has no shared
+    // meaning, so the payload of a shared object is read in place. Before the
+    // rejection every one of these compiled; the compiled backends ran the
+    // body for the moved copy and again when the object died, and the
+    // interpreter ran it once and then read the destroyed value.
+    let moves = [
+        "let g: G[R] = G.Y(mk(1)); let r = match g { G.Y(x) => x, G.N => mk(0) }; println(f\"{r.id}\");",
+        "let g: G[R] = G.Y(mk(1)); match g { G.Y(x) => { eat(x); } G.N => {} }",
+        "let m: M = M.Y(mk(1)); if let M.Y(x) = m { let y = x; println(f\"{y.id}\") }",
+        "let g: G[R] = G.Y(mk(1)); let mut n = 0; while let G.Y(x) = g { eat(x); n = n + 1; if n > 0 { break } }",
+        "let g: G[R] = G.Y(mk(1)); let G.Y(x) = g else { return }; eat(x);",
+        "let g: G[Vec[R]] = G.Y([mk(1)]); match g { G.Y(v) => { let w = v; println(f\"{w.len()}\") } G.N => {} }",
+        "let m: M = M.Y(mk(1)); match m { M.Y(x) => { idr(x); } M.N => {} }",
+    ];
+    for src in moves {
+        let hits = shared_enum_payload_move_rejections(src);
+        assert_eq!(
+            hits.len(),
+            1,
+            "expected one rejection for `{src}`, got {hits:?}"
+        );
+    }
+}
+
+#[test]
+fn reading_a_drop_payload_of_a_shared_enum_is_accepted() {
+    // The other half of the rule: reads, `ref` hand-offs, a copied field as
+    // the arm's value, the whole shared object bound by `@`, and moving a
+    // payload that runs no `Drop` body all stay legal.
+    let reads = [
+        "let g: G[R] = G.Y(mk(1)); match g { G.Y(x) => { println(f\"{x.id} {look(x)}\") } G.N => {} }",
+        "let g: G[R] = G.Y(mk(1)); let n = match g { G.Y(x) => x.id, G.N => 0 }; println(f\"{n}\");",
+        "let m: M = M.Y(mk(1)); if let M.Y(x) = m { println(f\"{x.id}\") }",
+        "let g: G[R] = G.Y(mk(1)); let G.Y(x) = g else { return }; println(f\"{x.id}\");",
+        "let g: G[R] = G.Y(mk(1)); match g { h @ G.Y(_) => { let k = h; match k { G.Y(x) => { println(f\"{x.id}\") } G.N => {} } } G.N => {} }",
+        "let g: G[String] = G.Y(f\"s\"); match g { G.Y(s) => { let t = s; println(t) } G.N => {} }",
+    ];
+    for src in reads {
+        let hits = shared_enum_payload_move_rejections(src);
+        assert!(hits.is_empty(), "`{src}` must stay legal, got {hits:?}");
+    }
+}

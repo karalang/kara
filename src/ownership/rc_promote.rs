@@ -235,6 +235,105 @@ impl<'a> super::OwnershipChecker<'a> {
     /// `type_runs_user_drop`, over the tables it exports: a `shared` type is
     /// not descended into, since sharing its handle retains rather than
     /// duplicates, and `seen` breaks recursive declarations.
+    /// E0514's second face (B-2026-09-28-61) — moving a payload whose type
+    /// runs a user `Drop` body out of a `shared enum` BY VALUE.
+    ///
+    /// The object is shared, so its payload belongs to every holder, and a
+    /// `Drop` body has no shared meaning, the same argument as RC fallback
+    /// above. Measured before the rejection, on `match g { M.Y(x) => x }`: the
+    /// compiled backends copied the payload out and ran its body once for the
+    /// copy and again when the object died, and the interpreter ran it once
+    /// and then read the destroyed value through `g`, for a generic and a
+    /// plain `shared enum` alike. Reading the payload stays legal; moving it
+    /// needs a non-shared enum. Gowtham's choice, 2026-09-28.
+    ///
+    /// Asked of each binding the arm's pattern introduces, after the arm body
+    /// ran: a binding the body CONSUMED (`states` says `Moved`), or one that is
+    /// the arm's own value (`tail`), whose type runs a `Drop` body. A binding
+    /// of a `shared` type is exempt, since moving it only shares it again.
+    pub(crate) fn reject_shared_enum_drop_payload_move(
+        &mut self,
+        scrutinee: &crate::ast::Expr,
+        pattern: &crate::ast::Pattern,
+        states: &std::collections::HashMap<String, crate::ownership::ValueState>,
+        tail: Option<&crate::ast::Expr>,
+    ) {
+        use crate::typechecker::Type;
+        let tc = self.typecheck_result;
+        let Some(Type::Named {
+            name: enum_name, ..
+        }) = tc
+            .expr_types
+            .get(&crate::resolver::SpanKey::from_span(&scrutinee.span))
+        else {
+            return;
+        };
+        if !tc
+            .enum_info
+            .get(enum_name)
+            .is_some_and(|i| i.is_shared || i.is_par)
+        {
+            return;
+        }
+        let enum_name = enum_name.clone();
+        // The whole object bound by `v @ ..` is the shared value itself.
+        let top_at = match &pattern.kind {
+            crate::ast::PatternKind::AtBinding { name, .. } => Some(name.clone()),
+            _ => None,
+        };
+        let tail_ident = tail.and_then(|t| match &t.kind {
+            crate::ast::ExprKind::Identifier(n) => Some((n.clone(), t.span)),
+            _ => None,
+        });
+        for binding in pattern.binding_names() {
+            if top_at.as_deref() == Some(binding.as_str()) {
+                continue;
+            }
+            let moved_at = match states.get(&binding) {
+                Some(crate::ownership::ValueState::Moved { at }) => Some(*at),
+                _ => None,
+            };
+            let site = moved_at.or_else(|| {
+                tail_ident
+                    .as_ref()
+                    .filter(|(n, _)| *n == binding)
+                    .map(|(_, sp)| *sp)
+            });
+            let Some(site) = site else {
+                continue;
+            };
+            let ty = tc
+                .expr_types
+                .get(&crate::resolver::SpanKey::from_span(&site))
+                .or_else(|| self.binding_types.get(&binding));
+            let Some(ty) = ty.cloned() else {
+                continue;
+            };
+            if !self.type_runs_user_drop(&ty, &mut Vec::new()) {
+                continue;
+            }
+            let ty_text = match &ty {
+                Type::Named { name, .. } => name.clone(),
+                other => crate::typechecker::type_display(other),
+            };
+            self.errors.push(OwnershipError {
+                message: format!(
+                    "'{binding}' is moved out of the `shared enum {enum_name}` here; its type \
+                     `{ty_text}` runs a user `Drop` body, so it cannot be moved out of a \
+                     shared value"
+                ),
+                span: site,
+                kind: OwnershipErrorKind::RcFallbackOfDropType,
+                suggestion: Some(format!(
+                    "read '{binding}' in place (field reads and `ref` parameters are fine), \
+                     or make `{enum_name}` a non-shared enum so the payload can be moved"
+                )),
+                replacement: None,
+                consume_span: Some(site),
+            });
+        }
+    }
+
     fn type_runs_user_drop(&self, ty: &crate::typechecker::Type, seen: &mut Vec<String>) -> bool {
         use crate::typechecker::{Type, VariantTypeInfo};
         let tc = self.typecheck_result;

@@ -320,6 +320,33 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|(n, _)| self.type_decls.shared_genum_drop_word.get(n).copied())
     }
 
+    /// B-2026-09-28-61 — does binding `name` of the generic shared enum
+    /// `enum_name` hold an instantiation whose payload runs a user `Drop`
+    /// body? Its release fn then runs that body on the refcount's
+    /// 0-transition, so the release belongs at the binding's last use, the
+    /// placement a monomorphic shared enum with payload bodies already gets.
+    pub(super) fn shared_genum_binding_runs_bodies(&self, enum_name: &str, name: &str) -> bool {
+        if !self
+            .type_decls
+            .shared_genum_drop_word
+            .contains_key(enum_name)
+        {
+            return false;
+        }
+        let Some(inst) = self.type_decls.enum_inst_var_types.get(name) else {
+            return false;
+        };
+        let TypeKind::Path(p) = &inst.kind else {
+            return false;
+        };
+        p.generic_args.as_ref().is_some_and(|args| {
+            args.iter().any(|a| match a {
+                crate::ast::GenericArg::Type(t) => self.vec_elem_te_reaches_user_drop_nested(t),
+                _ => false,
+            })
+        })
+    }
+
     /// B-2026-09-19-53 — at a generic shared enum's constructor, give the
     /// payload boxes it just made an owner: store the fn that frees them into
     /// the box's trailing word, which `emit_shared_enum_payload_box_free` calls
@@ -13781,6 +13808,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         // commit that made a shared enum's PAYLOAD bodies
                         // run at all.
                         || self.shared_enum_runs_payload_bodies(&n)
+                        // B-2026-09-28-61 — a GENERIC shared enum runs its
+                        // payload's bodies from the per-object release fn,
+                        // which only this binding's instantiation can tell.
+                        || self.shared_genum_binding_runs_bodies(&n, name)
                 })
                 .then(|| name.clone()),
             // B-2026-07-30-11 / B-2026-08-27-8 (container element bodies),

@@ -547,6 +547,15 @@ impl<'a> super::OwnershipChecker<'a> {
     }
 
     /// Check an expression in a "reading" context. Values are not moved.
+    /// The expression whose value a branch arm yields: a block's tail,
+    /// followed through nested blocks.
+    pub(crate) fn value_tail(e: &Expr) -> &Expr {
+        match &e.kind {
+            ExprKind::Block(b) => b.final_expr.as_deref().map_or(e, Self::value_tail),
+            _ => e,
+        }
+    }
+
     pub(crate) fn check_expr_reading(
         &mut self,
         expr: &Expr,
@@ -807,6 +816,12 @@ impl<'a> super::OwnershipChecker<'a> {
                 let mut then_states = states.clone();
                 self.define_pattern_states(pattern, &mut then_states);
                 self.check_block(then_block, &mut then_states, param_types, param_usage);
+                self.reject_shared_enum_drop_payload_move(
+                    value,
+                    pattern,
+                    &then_states,
+                    then_block.final_expr.as_deref().map(Self::value_tail),
+                );
                 if let Some(ref else_expr) = else_branch {
                     let mut else_states = states.clone();
                     self.check_expr_reading(else_expr, &mut else_states, param_types, param_usage);
@@ -854,6 +869,12 @@ impl<'a> super::OwnershipChecker<'a> {
                         self.check_expr_reading(guard, &mut arm_states, param_types, param_usage);
                     }
                     self.check_expr_reading(&arm.body, &mut arm_states, param_types, param_usage);
+                    self.reject_shared_enum_drop_payload_move(
+                        scrutinee,
+                        &arm.pattern,
+                        &arm_states,
+                        Some(Self::value_tail(&arm.body)),
+                    );
                     all_arm_states.push(arm_states);
                 }
                 // Merge all arm states — moved in any arm → BranchMerged.
@@ -931,6 +952,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     .push(LoopDaFrame::non_collecting(label.clone()));
                 self.check_block(body, states, param_types, param_usage);
                 self.loop_da_stack.pop();
+                self.reject_shared_enum_drop_payload_move(value, pattern, states, None);
                 restore_uninit_after_loop(pre_uninit, states);
             }
             ExprKind::For {

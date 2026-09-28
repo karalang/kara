@@ -13826,6 +13826,62 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-28-61 — the walk a generic shared enum's release fn runs
+    /// over a boxed payload's interior: the payload's `Drop` BODIES, then its
+    /// memory. The memory half alone is `enum_boxed_payload_interior_drop`,
+    /// which deliberately runs no body (its callers register a bodies walker
+    /// beside it); the release fn is the only owner here, so it runs both, in
+    /// the order a monomorphic shared enum's rc-drop does. `None` when either
+    /// half cannot be built, which leaves the interior with its old owner.
+    pub(super) fn shared_genum_interior_drop(
+        &mut self,
+        te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let mem = self.enum_boxed_payload_interior_drop(te, true)?;
+        if !self.vec_elem_te_reaches_user_drop_nested(te) {
+            return Some(mem);
+        }
+        let bodies = self.emit_slot_bodies_walker_fn(te)?;
+        let fn_name = format!(
+            "__karac_shgen_interior_{}_{}",
+            bodies.get_name().to_string_lossy(),
+            mem.get_name().to_string_lossy()
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let f = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let saved_loc = self
+            .debug_info
+            .as_ref()
+            .and_then(|_| self.builder.get_current_debug_location());
+        self.current_fn = Some(f);
+        let entry = self.context.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        if self.debug_info.is_some() {
+            self.builder.unset_current_debug_location();
+        }
+        let p = f.get_first_param().unwrap().into_pointer_value();
+        self.builder.build_call(bodies, &[p.into()], "").unwrap();
+        self.builder.build_call(mem, &[p.into()], "").unwrap();
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        if let Some(loc) = saved_loc {
+            self.builder.set_current_debug_location(loc);
+        }
+        Some(f)
+    }
+
     /// B-2026-09-19-53 — the INSTANTIATED type of field `i` of a generic
     /// enum's `variant`, from the constructor site's recorded instantiation.
     /// `None` when the site recorded none or the arity does not line up.
@@ -14139,11 +14195,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let interior = self
                         .shared_genum_payload_te(&enum_name, name, i, site_inst.as_ref())
-                        .filter(|te| !self.vec_elem_te_reaches_user_drop_nested(te))
-                        .filter(|te| self.shared_genum_interior_moves_tracked(te))
-                        .and_then(|te| self.enum_boxed_payload_interior_drop(&te, true));
+                        // B-2026-09-28-61 — a payload whose type runs a user
+                        // `Drop` body cannot be moved out by value (E0514), so
+                        // only reads reach it and the release fn is its one
+                        // owner; the -64 view filter is for the rest.
+                        .filter(|te| {
+                            self.vec_elem_te_reaches_user_drop_nested(te)
+                                || self.shared_genum_interior_moves_tracked(te)
+                        })
+                        .and_then(|te| self.shared_genum_interior_drop(&te));
                     if interior.is_some() {
                         self.suppress_array_local_move_into_ctor(&arg.value);
+                        // B-2026-09-28-61 — and its element BODIES, which a
+                        // named `Array` or `Vec` local registers as a separate
+                        // `ContainerElemBodies` walk that no memory retraction
+                        // touches. The release fn runs them now, so leaving it
+                        // would run each body twice, the second time over
+                        // elements the release fn already freed.
+                        if let ExprKind::Identifier(src) = &arg.value.kind {
+                            let src = src.clone();
+                            let bodies_in_box = self
+                                .shared_genum_payload_te(&enum_name, name, i, site_inst.as_ref())
+                                .is_some_and(|te| self.vec_elem_te_reaches_user_drop_nested(&te));
+                            if bodies_in_box {
+                                self.suppress_container_elem_bodies_for_var(&src);
+                            }
+                        }
                     }
                     shgen_boxed_words.push(((start_word + 2) as u32, interior));
                 }

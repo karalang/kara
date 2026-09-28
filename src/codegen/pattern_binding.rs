@@ -3276,7 +3276,31 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-09-21-11 — the `Vec` walker, reachable only through the
             // husk-stood-down disjunct above. A zero-length array still has no
             // element to run.
-            None if husk_stood_down => {
+            None if husk_stood_down => self.arm_vec_payload_elem_bodies_fn(elem_te, elem_ty),
+            _ => None,
+        };
+        let Some(bodies) = bodies else {
+            return;
+        };
+        self.track_user_drop_var_with_fn(
+            "",
+            name,
+            slot.ptr,
+            bodies,
+            UserDropKind::ContainerElemBodies,
+        );
+    }
+
+    /// The `Vec` element-bodies walker an arm binding registers when it owns
+    /// a `Vec` payload's elements outright (B-2026-09-21-11's husk case, and
+    /// B-2026-09-28-61's generic shared-enum box).
+    pub(super) fn arm_vec_payload_elem_bodies_fn(
+        &mut self,
+        elem_te: &TypeExpr,
+        elem_ty: BasicTypeEnum<'ctx>,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        {
+            {
                 // The same element admission the `let`-bound, discarded-literal
                 // and named-scrutinee registrations use, so all four resolve
                 // the identical walker for one element type.
@@ -3300,17 +3324,6 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.emit_vec_elem_user_drop_bodies_fn_mono(&n, elem_ty, &subst)
                 })
             }
-            _ => None,
-        };
-        let Some(bodies) = bodies else {
-            return;
-        };
-        self.track_user_drop_var_with_fn(
-            "",
-            name,
-            slot.ptr,
-            bodies,
-            UserDropKind::ContainerElemBodies,
-        );
+        }
     }
 }

@@ -15429,7 +15429,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// buffer the binding owns. The heap-word index mirrors
     /// `emit_shared_enum_rc_drop_fn`'s `start_word + 2` (the `{rc, tag}` prefix).
     pub(super) fn suppress_shared_enum_payload_move_out(
-        &self,
+        &mut self,
         box_ptr: PointerValue<'ctx>,
         enum_name: &str,
         pattern: &Pattern,
@@ -15587,6 +15587,41 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let words_ty = i64_t.array_type(want as u32);
                 let _ = self.builder.build_store(interior, words_ty.const_zero());
+                // B-2026-09-28-61 — the interior's element BODIES go with it:
+                // the release fn would have run them, and the binding's own
+                // end-of-arm drain frees memory only. Registered after that
+                // drain was queued, so LIFO runs the bodies over a live buffer.
+                let PatternKind::Binding(bname) = &sub.kind else {
+                    continue;
+                };
+                let elem_te = self
+                    .pattern_state
+                    .pattern_binding_inner_types
+                    .get(&key)
+                    .cloned()
+                    .map(|te| self.subst_monomorph_type_params(&te));
+                let slot = self.variables.get(bname.as_str()).copied();
+                if let (Some(elem_te), Some(slot)) = (elem_te, slot) {
+                    let is_vec = self
+                        .pattern_state
+                        .pattern_binding_types
+                        .get(&key)
+                        .is_some_and(|n| matches!(n.as_str(), "Vec" | "VecDeque"));
+                    if is_vec && self.elem_te_runs_user_drop(&elem_te) {
+                        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                        if let Some(bodies) = self.arm_vec_payload_elem_bodies_fn(&elem_te, elem_ty)
+                        {
+                            let bname = bname.clone();
+                            self.track_user_drop_var_with_fn(
+                                "",
+                                &bname,
+                                slot.ptr,
+                                bodies,
+                                UserDropKind::ContainerElemBodies,
+                            );
+                        }
+                    }
+                }
             }
         }
         // Map / Set payload (`Full(Map[i64, u64])`): the enum RC drop frees the

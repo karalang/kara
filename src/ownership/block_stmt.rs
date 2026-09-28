@@ -38,6 +38,14 @@ impl<'a> super::OwnershipChecker<'a> {
         if let Some(ref expr) = block.final_expr {
             self.check_expr_consuming(expr, states, param_types, param_usage);
         }
+        // B-2026-09-28-61 — a `let ... else` binding lives to the end of the
+        // enclosing block, so whether it was moved out of a `shared enum` is
+        // known only here.
+        for stmt in &block.stmts {
+            if let StmtKind::LetElse { pattern, value, .. } = &stmt.kind {
+                self.reject_shared_enum_drop_payload_move(value, pattern, states, None);
+            }
+        }
         self.drain_borrows_at_depth(entered_depth);
         self.current_scope_depth = entered_depth - 1;
     }
