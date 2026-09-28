@@ -3308,11 +3308,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 None => return false,
             }
         };
-        let ExprKind::Call { callee, args } = &handed.kind else {
-            return false;
-        };
-        let ExprKind::Identifier(fname) = &callee.kind else {
-            return false;
+        // B-2026-09-28-22 — the consumer may also be an instance METHOD
+        // (`q.eat(s)`), an ASSOCIATED function (`K.eat(s)`) or, for the
+        // struct / `Option` / `Result` shapes, a GENERIC free function whose
+        // param is a bare type parameter: all caller-retained like the free
+        // one. `passthrough_callee_key` resolves every spelling to the key
+        // `find_function_ast` takes; for a method the param index is the
+        // argument index, since `params` excludes the receiver.
+        let (fname, args) = match &handed.kind {
+            ExprKind::Call { callee, args } => match &callee.kind {
+                ExprKind::Identifier(fname) => (fname.clone(), args.as_slice()),
+                _ => match self.passthrough_callee_key(handed) {
+                    Some(k) => k,
+                    None => return false,
+                },
+            },
+            ExprKind::MethodCall { .. } => match self.passthrough_callee_key(handed) {
+                Some(k) => k,
+                None => return false,
+            },
+            _ => return false,
         };
         let mut hits = args
             .iter()
@@ -3324,15 +3339,23 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(program) = self.program_snapshot.as_deref() else {
             return false;
         };
-        let Some(f) = crate::codegen::declarations::find_function_ast(program, fname) else {
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, &fname) else {
             return false;
         };
-        if f.generic_params.is_some() || self.is_coroutine_compiled(&f.name) {
+        if (f.generic_params.is_some() && same_type.is_none())
+            || self.is_coroutine_compiled(&f.name)
+        {
             return false;
         }
         let Some(param) = f.params.get(i) else {
             return false;
         };
+        let bare_type_param = matches!(&param.ty.kind, TypeKind::Path(p)
+        if p.generic_args.is_none()
+            && p.segments.len() == 1
+            && f.generic_params.as_ref().is_some_and(|gp| {
+                gp.params.iter().any(|q| q.name == p.segments[0])
+            }));
         // A consumer that rebinds or wraps its param is declined for the
         // struct / `Option` / `Result` shapes: the predicates below do not all
         // follow an alias, and `let m = r; if c { return m }` in the consumer
@@ -3352,6 +3375,18 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         let shape_ok = match (&enum_name, &same_type) {
+            (_, Some(_)) if bare_type_param => true,
+            // A generic `Option[T]` / `Result[T, E]` consumer param, matched by
+            // its head: the monomorph's param is caller-retained like the
+            // concrete one.
+            (_, Some(te)) if f.generic_params.is_some() => match (&param.ty.kind, &te.kind) {
+                (TypeKind::Path(pp), TypeKind::Path(tp)) => {
+                    pp.segments.len() == 1
+                        && matches!(pp.segments[0].as_str(), "Option" | "Result")
+                        && tp.segments == pp.segments
+                }
+                _ => false,
+            },
             (_, Some(te)) => {
                 crate::formatter::render_type_expr(&param.ty)
                     == crate::formatter::render_type_expr(te)

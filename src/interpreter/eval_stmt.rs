@@ -6828,10 +6828,49 @@ impl<'a> super::Interpreter<'a> {
     /// bodies never ran (`c1 dies y8` against `c1 dies d1 d2 y8`). Codegen's
     /// twin is `flagged_array_arg_stays_with_caller`, on the same predicates.
     fn user_drop_array_arg_stays_with_caller(&self, handed: &Expr, name: &str) -> bool {
-        let ExprKind::Call { callee, args } = &handed.kind else {
-            return false;
+        // B-2026-09-28-22 — the consumer may also be an instance METHOD
+        // (`q.eat(s)`), an ASSOCIATED function (`K.eat(s)`) or a GENERIC free
+        // function (`geat(s)` over `fn geat[T](t: T)`): each is caller-retained
+        // exactly as the free-function consumer is (the unconditional forward
+        // runs the body at the forwarding frame's exit on every surface), so
+        // the same exception holds once the callee is resolved.
+        let (f, args) = match &handed.kind {
+            ExprKind::Call { callee, args } => {
+                let f = match &callee.kind {
+                    ExprKind::Identifier(fname) => self.callee_fn_for_param_ownership(fname),
+                    ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                        .impl_method_ast(&segments[0], &segments[1])
+                        .filter(|f| f.self_param.is_none()),
+                    _ => None,
+                };
+                (f, args)
+            }
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                let recv = match &object.kind {
+                    ExprKind::Identifier(recv) => Some(recv.as_str()),
+                    ExprKind::SelfValue => Some("self"),
+                    _ => None,
+                };
+                let f = recv.and_then(|recv| match self.env.get(recv) {
+                    Some(Value::Struct { name: ty, .. })
+                    | Some(Value::EnumVariant { enum_name: ty, .. }) => self
+                        .impl_method_ast(&ty, method)
+                        .filter(|f| f.self_param.is_some()),
+                    Some(_) => None,
+                    None => self
+                        .impl_method_ast(recv, method)
+                        .filter(|f| f.self_param.is_none()),
+                });
+                (f, args)
+            }
+            _ => return false,
         };
-        let ExprKind::Identifier(fname) = &callee.kind else {
+        let Some(f) = f else {
             return false;
         };
         // B-2026-09-27-96 — and a by-value USER enum whose payload runs a user
@@ -6899,28 +6938,34 @@ impl<'a> super::Interpreter<'a> {
         let (Some((i, _)), None) = (hits.next(), hits.next()) else {
             return false;
         };
-        let Some(f) = self.callee_fn_for_param_ownership(fname) else {
-            return false;
-        };
-        if f.generic_params.is_some() {
+        // A generic consumer is admitted for the B-2026-09-27-98 shapes only,
+        // and a bare type parameter (`t: T`) matches any of them.
+        if f.generic_params.is_some() && !new_shape {
             return false;
         }
         let Some(param) = f.params.get(i) else {
             return false;
         };
-        let is_array_param = match (&param.ty.kind, &shape) {
-            (crate::ast::TypeKind::Array { .. }, Shape::Array) => true,
-            (crate::ast::TypeKind::Path(p), Shape::Array) => {
-                p.segments.len() == 1 && p.segments[0] == "Array"
-            }
-            (crate::ast::TypeKind::Path(p), Shape::Named(en)) => {
-                p.segments.last().is_some_and(|s| s == en)
-            }
-            (crate::ast::TypeKind::Path(p), Shape::Builtin(en)) => {
-                p.segments.len() == 1 && p.segments[0] == *en
-            }
-            _ => false,
-        };
+        let bare_type_param = matches!(&param.ty.kind, crate::ast::TypeKind::Path(p)
+        if p.generic_args.is_none()
+            && p.segments.len() == 1
+            && f.generic_params.as_ref().is_some_and(|gp| {
+                gp.params.iter().any(|q| q.name == p.segments[0])
+            }));
+        let is_array_param = bare_type_param
+            || match (&param.ty.kind, &shape) {
+                (crate::ast::TypeKind::Array { .. }, Shape::Array) => true,
+                (crate::ast::TypeKind::Path(p), Shape::Array) => {
+                    p.segments.len() == 1 && p.segments[0] == "Array"
+                }
+                (crate::ast::TypeKind::Path(p), Shape::Named(en)) => {
+                    p.segments.last().is_some_and(|s| s == en)
+                }
+                (crate::ast::TypeKind::Path(p), Shape::Builtin(en)) => {
+                    p.segments.len() == 1 && p.segments[0] == *en
+                }
+                _ => false,
+            };
         // B-2026-09-27-98 — a consumer that rebinds or wraps its param is
         // declined for the new shapes: the predicates below do not all follow
         // an alias, and `let m = r; if c { return m }` in the consumer hands
