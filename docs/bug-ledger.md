@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 527 |
+| run-vs-build | 530 |
 | miscompile | 514 |
 | leak | 456 |
 | double-free | 337 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2251 |
-| interp | 635 |
+| codegen | 2254 |
+| interp | 636 |
 | typecheck | 312 |
 | other | 111 |
 | ownership | 79 |
@@ -376,7 +376,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-105 | 2026-09-27 | interp+codegen | medium | A PARAM'S OR RECEIVER'S `Drop` FIELD HANDED TO ANOTHER OWNER ON ONLY SOME PATHS, OR OFF `self`, STILL RUNS ITS BODY TWICE OR NOT AT ALL, ON ALL FOUR SURFACES ALIKE -- `if c { let k = keep(w.r); return k.id; }` doubles `w.r` on the leg that keeps; the alias spelling `let r = w.r; if c { keep(r) .. }` LOSES it on the leg that does not; `fn take(self) -> i64 { let k = keep(self.r); k.id }` doubles for a named and a temp receiver; plus B-2026-09-27-99's cells (2) and (3) | — |
 | B-2026-09-27-97 | 2026-09-27 | codegen+interp | medium | A `let`-BOUND CONDITIONAL HAND-BACK OF `Option[Vec[R]]` OR `Option[(R, i64)]` (R has a `Drop`) STILL SPLITS THE BACKENDS, the non-struct remainder of B-2026-09-24-11 -- `let r: Option[Vec[R]] = if c { a } else { None }; println("mid"); r` with c=true prints `mid d1 n1 d1 end` under `--interp` (body run twice) and `mid n1 d1 end` compiled; from a TEMP argument with c=false the interpreter runs the body (`mid d1 none end`) and every compiled build loses it (`mid none end`) | — |
 | B-2026-09-27-98 | 2026-09-27 | codegen+interp | medium | A BY-VALUE PLAIN `Drop` STRUCT PARAM THAT THE CALLEE RETURNS ON SOME PATHS AND PASSES TO A BY-VALUE CONSUMER ON THE OTHERS LOSES ITS `Drop` BODY ON THE PASSING PATH, ON ALL FOUR SURFACES -- `fn pk(s: S, k: bool) -> S { if k { return s } eat(s); return mks(0) }` over `fn eat(s: S) { println("x") }` prints `x dS0 end` for `let a = mks(4); let r = pk(a, false)` where `x dS4 dS0 end` is owed; the `Some(s)`-wrapped return (`-> Option[S]`) prints `x end` | — |
-| B-2026-09-27-131 | 2026-09-27 | interp | medium | `--interp` LOSES THE `Drop` BODY OF A BOXED GENERIC ENUM PARAM THAT THE CALLEE REBINDS (`let m = h;`), RETURNS ON SOME PATHS AND PASSES TO A BY-VALUE CONSUMER ON THE OTHERS, WHILE EVERY COMPILED SURFACE RUNS IT -- `fn pkl(h: Ho[S], k: bool) -> Ho[S] { let m = h; if k { return m } shows(m); return Ho.Empty }` prints `s2 e` under `--interp` against `s2 dS2 e` compiled | — |
 | B-2026-09-27-132 | 2026-09-27 | codegen+interp | medium | A PLAIN STRUCT WITH A FIELD OF A BOXED GENERIC ENUM NEVER RUNS THE PAYLOAD'S `Drop` BODY AND LEAKS ITS HEAP ON EVERY COMPILED SURFACE, AND `--interp` RUNS IT TWICE WHEN THE STRUCT IS BUILT FROM A PARAM -- `struct W { h: Ho[S] }`, `let w = W { h: b }` prints `w end` compiled (vg=1, 4 B) against `dS2 w end` under `--interp`; `fn pkw(h: Ho[S]) { let w = W { h: h }; println("w") }` prints `dS2 w dS2 end` under `--interp` | — |
 | B-2026-09-27-114 | 2026-09-27 | codegen | medium | A TEMP RECEIVER OF AN OWNED-`self` METHOD LOSES A GENERIC ENUM'S OWN `Drop` BODY ON EVERY COMPILED SURFACE -- `G.X(R { .. }).look()` over `impl[T] Drop for G[T]` and `fn look(self) -> i64 { match self { G.X(t) => .. } }` prints `dR3 c7` where `--interp` prints `dG dR3 c7`; a named receiver and a NON-generic enum temp are correct, and the concrete `impl G[R]` spelling now behaves identically to the generic one | — |
 | B-2026-09-27-115 | 2026-09-27 | typecheck | medium | A CONCRETE IMPL BLOCK OVER A GENERIC ENUM TYPES `self` AS THE BARE HEAD, SO ITS PAYLOAD'S FIELDS AND METHODS AND ITS OWN SIBLING METHODS ARE REJECTED -- `impl G[R] { fn peek(ref self) -> i64 { match self { G.X(t) => { return t.id; } .. } } }` fails `no field 'id' on type 'this type'`, `v.len()` over `impl G1[String]` fails `no method 'len' on type parameter 'T'`, and `self.n()` fails `no method 'n' on type 'G1'`; `--interp` refuses them too, since it is the checker | — |
@@ -399,6 +398,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-5 | 2026-09-28 | codegen | low | A BORROW ACCESSOR WHOSE `Option` PAYLOAD IS BOXED LEAKS THE BOX WHEN ITS RESULT IS PROBED OR DISCARDED -- `v.first().is_some()`, `v.get(1).is_some()`, `v.last();` and `m.get(1).is_some()` over a `Vec[S]` / `Map[i64, S]` each leak 32 B at -O0; the same accessor bound by `if let Some(x) = v.first()` is clean, and a one-word payload (`Vec[R]`) is clean | — |
 | B-2026-09-28-6 | 2026-09-28 | codegen+interp | low | A DISCARDED NESTED `Option[Option[S]]` TEMP LEAKS ITS INNER BOX COMPILED, AND THE BARE-STATEMENT CTOR SPELLING `Some(Some(mk(1)));` RUNS NO `Drop` BODY UNDER `--interp` WHILE BOTH COMPILED SURFACES RUN `d1` | — |
 | B-2026-09-28-7 | 2026-09-28 | codegen | medium | A FRESH-TEMP `Option[S]` OR `Result[S, i64]` ARGUMENT TO A GENERIC FN'S BY-VALUE `Option[T]` / `Result[T, E]` PARAM LEAKS THE PAYLOAD'S `String` ON EVERY COMPILED SURFACE WHERE THE NON-GENERIC TWIN IS CLEAN -- `mh(Some(mk(2)), false)` over `fn mh[T](a: Option[T], c: bool) -> i64 { if c { 1 } else { 2 } }` prints the due `d2 n2 end` and leaks 1 record at -O0; the `Result` spelling leaks whether or not the param is returned | — |
+| B-2026-09-28-10 | 2026-09-28 | codegen | medium | A TEMPORARY `Option` / `Result` ARGUMENT TO A PARAM THAT THE CALLEE FORWARDS TO A BY-VALUE CONSUMER NEVER RUNS ITS PAYLOAD'S `Drop` BODY ON ANY COMPILED SURFACE, WHILE `--interp` RUNS IT -- `fn fw(h: Option[S]) { eat2(h); println("after") }` called as `fw(Option.Some(mks(4)))` prints `x after end` compiled against `x after dS4 end` under `--interp`; the same call through a named local (`let o = Option.Some(mks(5)); fw(o)`) runs it on every surface | — |
+| B-2026-09-28-11 | 2026-09-28 | codegen | medium | A PLAIN REBIND OF A BOXED GENERIC ENUM PARAM THAT IS NEVER RETURNED (`fn f1(h: Ho[S]) { let m = h; println("f1") }`) NEVER RUNS ITS PAYLOAD'S `Drop` BODY ON ANY COMPILED SURFACE, WHILE `--interp` PRINTS `f1 dS1` -- the inline-enum and `Option` twins run it everywhere | — |
+| B-2026-09-28-12 | 2026-09-28 | interp+codegen | low | A BY-VALUE STRUCT PARAM REBOUND INTO A LOCAL THAT IS RETURNED WRAPPED ON SOME PATHS RUNS ITS `Drop` BODY AT DIFFERENT POINTS PER BACKEND -- `fn ps(r: S, k: bool) -> Option[S] { let m = r; if k { return Option.Some(m) } println("drop-here"); return Option.None }` prints `dS7 drop-here` under `--interp` and `drop-here dS7` compiled | — |
 
 ### Relocated
 
@@ -3190,6 +3192,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-128 | interp+codegen | medium | A GENERIC FN THAT RETURNS ITS `Option[T]` PARAM ON ONLY SOME PATHS LOSES A FRESH-TEMP ARGUMENT'S `Drop` BODY ON THE PATH THAT DOES NOT RETURN IT, ON… | 70c7ac194 |
 | B-2026-09-27-129 | interp+codegen | medium | A CALL RESULT USED AS THE RECEIVER OF `is_some()` NEVER RUNS ITS PAYLOAD'S `Drop` BODY, ON EVERY SURFACE, AND LEAKS ITS BOX COMPILED -- `let n = mk2(… | 2314366db |
 | B-2026-09-27-130 | codegen | high | A NON-GENERIC USER ENUM PARAM WITH AN INLINE `Drop` PAYLOAD, RETURNED ON SOME PATHS AND PASSED TO A BY-VALUE CONSUMER ON THE OTHERS, CRASHES WITH NO… | 66ff48480 |
+| B-2026-09-27-131 | interp | medium | `--interp` LOSES THE `Drop` BODY OF A BOXED GENERIC ENUM PARAM THAT THE CALLEE REBINDS (`let m = h;`), RETURNS ON SOME PATHS AND PASSES TO A BY-VALUE… | 18f314d0c |
 | B-2026-09-27-124 | codegen | medium | AN `if let` / `while let` THAT DESTRUCTURES A TUPLE PAYLOAD OUT OF A NAMED `Option` LOCAL AND ONLY READS THE LEAVES LEAKS EVERY HEAP LEAF, with no `D… | 780f957f2 |
 
 </details>
