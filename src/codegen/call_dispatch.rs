@@ -13736,6 +13736,36 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_none_or(|k| *k == super::state::EnumDropKind::None)
     }
 
+    /// B-2026-09-28-64 — may a generic shared enum's release fn free this
+    /// payload's INTERIOR? Only where every way an arm binding can move the
+    /// payload out is known to take it off the box first: a `String`/`Vec`
+    /// binding zeroes the interior at the bind, an `Array` binding is a
+    /// registered alias whose hand-offs zero it, and a plain struct binding is
+    /// an owned clone. A tuple, a nested enum, an `Option` or a map binding is
+    /// a bare VIEW of the interior, and handing it on (`return x`, an arm's
+    /// value) left the box and the new owner both freeing it. Those keep the
+    /// interior with nobody, the leak they had before the box had an owner.
+    pub(super) fn shared_genum_interior_moves_tracked(&self, te: &TypeExpr) -> bool {
+        if self.array_elem_and_len(te).is_some() {
+            return true;
+        }
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let [head] = p.segments.as_slice() else {
+            return false;
+        };
+        match head.as_str() {
+            "String" | "str" | "CString" | "Vec" | "VecDeque" => true,
+            tn => {
+                p.generic_args.is_none()
+                    && self.type_decls.struct_types.contains_key(tn)
+                    && !self.type_decls.shared_types.contains_key(tn)
+                    && self.struct_clone_fully_duplicates(tn, &mut Vec::new())
+            }
+        }
+    }
+
     /// B-2026-09-19-53 — the INSTANTIATED type of field `i` of a generic
     /// enum's `variant`, from the constructor site's recorded instantiation.
     /// `None` when the site recorded none or the arity does not line up.
@@ -14050,6 +14080,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let interior = self
                         .shared_genum_payload_te(&enum_name, name, i, site_inst.as_ref())
                         .filter(|te| !self.vec_elem_te_reaches_user_drop_nested(te))
+                        .filter(|te| self.shared_genum_interior_moves_tracked(te))
                         .and_then(|te| self.enum_boxed_payload_interior_drop(&te, true));
                     if interior.is_some() {
                         self.suppress_array_local_move_into_ctor(&arg.value);

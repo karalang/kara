@@ -1659,6 +1659,15 @@ impl<'ctx> super::Codegen<'ctx> {
                             );
                         }
                     }
+                    // B-2026-09-28-64 — and an `Array` bound out of a generic
+                    // shared enum's heap box, whose alias the hand-off sites
+                    // disarm but an arm's VALUE did not reach.
+                    if let ExprKind::Identifier(n) = &Self::block_tail_expr(&arm.body).kind {
+                        if arm.pattern.binding_names().iter().any(|b| b == n) {
+                            let n = n.clone();
+                            self.suppress_boxed_array_payload_alias_move(&n);
+                        }
+                    }
                     self.note_boxed_array_view_move(scrutinee, Self::block_tail_expr(&arm.body));
                     self.suppress_boxed_payload_view_move(Self::block_tail_expr(&arm.body));
                     self.neutralize_aliased_box_payload_move(

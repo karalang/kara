@@ -8927,7 +8927,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Safe against the binding because the copy is already taken: the arm's
     /// pattern binds before the body is compiled, and this fires at a call or
     /// literal INSIDE that body.
-    fn suppress_boxed_array_payload_alias_move(&mut self, root: &str) {
+    pub(super) fn suppress_boxed_array_payload_alias_move(&mut self, root: &str) {
         let Some((slot, bound_slot, enum_name, variant, pos)) =
             self.payload_vars.boxed_array_payload_alias.remove(root)
         else {
