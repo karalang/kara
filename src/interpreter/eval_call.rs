@@ -5867,7 +5867,8 @@ impl<'a> super::Interpreter<'a> {
     }
 
     /// B-2026-09-28-20 cell (i) — codegen's
-    /// `cond_store_field_bodies_move_to_callee`: a non-generic callee that
+    /// `cond_store_field_bodies_move_to_callee` (and, since B-2026-09-28-46, its
+    /// `_mono_callee` form, asked here with the runtime type): a callee that
     /// stores by-value struct param `i` on SOME paths only, where the struct
     /// has no `Drop` of its own and its fields run user bodies. The callee
     /// adopts the fields' bodies per path and the caller stands its walk down
@@ -5907,7 +5908,10 @@ impl<'a> super::Interpreter<'a> {
         tn: &str,
         returned: bool,
     ) -> bool {
-        f.generic_params.is_none()
+        // B-2026-09-28-46 — a GENERIC callee is admitted on the store route
+        // (codegen's `cond_store_field_bodies_move_to_mono_callee`); the
+        // return route has no mono twin yet and stays non-generic.
+        (!returned || f.generic_params.is_none())
             && !self.program.drop_method_keys.contains_key(tn)
             && self
                 .typecheck_result
@@ -6034,12 +6038,14 @@ impl<'a> super::Interpreter<'a> {
                 return false;
             }
             if f.generic_params.is_some() {
+                // B-2026-09-28-46 — or a field-bodies struct a generic callee stores
+                // on some paths, adopted as by the non-generic callee below.
                 return self.generic_callee_owns_body_per_path_for(
                     &tn,
                     callee_name,
                     method_owner,
                     i,
-                );
+                ) || (!own_drop && self.cond_store_field_bodies_adopted(f, i, tn.as_str()));
             }
             // B-2026-09-28-20 — or a field-bodies struct the callee adopts
             // per path when stored on some paths.

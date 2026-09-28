@@ -4326,7 +4326,48 @@ impl<'ctx> super::Codegen<'ctx> {
         if path.segments.len() != 1 {
             return false;
         }
-        let struct_name = path.segments[0].as_str();
+        self.field_bodies_per_path_shape(program, f, arg_index, path.segments[0].as_str(), returned)
+    }
+
+    /// B-2026-09-28-46 — [`Self::cond_store_field_bodies_move_to_callee`]
+    /// for a GENERIC callee, asked with the param's SUBSTITUTED type
+    /// (`fn gst[T](xs: mut ref Vec[T], x: T, c: bool) { if c { xs.push(x); } }`
+    /// at `T = W`). Same consumers: the mono prologue registers the fields'
+    /// bodies under the per-path store flag, and the caller stands its walk
+    /// down on every path.
+    pub(super) fn cond_store_field_bodies_move_to_mono_callee(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+        struct_name: &str,
+    ) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = crate::codegen::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        f.generic_params.is_some()
+            && !self.is_coroutine_compiled(&f.name)
+            && self.field_bodies_per_path_shape(program, f, arg_index, struct_name, false)
+    }
+
+    /// The shared shape behind the predicates above: `struct_name` is a
+    /// non-`shared`, non-generic struct with no `Drop` of its own and no
+    /// `shared` field, whose fields run user bodies, and the callee stores
+    /// (or, when `returned`, hands back) the whole param `arg_index` on some
+    /// paths only.
+    fn field_bodies_per_path_shape(
+        &self,
+        program: &crate::ast::Program,
+        f: &crate::ast::Function,
+        arg_index: usize,
+        struct_name: &str,
+        returned: bool,
+    ) -> bool {
+        let Some(param) = f.params.get(arg_index) else {
+            return false;
+        };
         self.type_decls.struct_types.contains_key(struct_name)
             && !self.type_decls.shared_types.contains_key(struct_name)
             && !program.drop_method_keys.contains_key(struct_name)

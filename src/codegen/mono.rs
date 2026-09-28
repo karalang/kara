@@ -6389,6 +6389,33 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .cond_store_flag_params
                                         .insert(param_name.clone());
                                 }
+                            } else if i >= recv_offset
+                                && self.cond_store_field_bodies_move_to_mono_callee(
+                                    &func.name,
+                                    i - recv_offset,
+                                    struct_name,
+                                )
+                            {
+                                // B-2026-09-28-46 — the non-generic site's field-bodies
+                                // arm (B-2026-09-28-20 cell (i)): the caller
+                                // stands its walk down on every path, so on the
+                                // path that does not store only this frame runs
+                                // the fields' bodies. Bodies only.
+                                if let Some(bodies) =
+                                    self.emit_struct_user_drop_bodies_only_fn(struct_name)
+                                {
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        &param_name,
+                                        alloca,
+                                        bodies,
+                                        crate::codegen::state::UserDropKind::StructFieldBodies,
+                                    );
+                                    let _ = self.cond_move_drop_flag_for(&param_name);
+                                    self.drop_rc
+                                        .cond_store_flag_params
+                                        .insert(param_name.clone());
+                                }
                             }
                         }
                     }

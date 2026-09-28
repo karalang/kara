@@ -15686,11 +15686,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-28-20 — or stored on some paths by a callee that adopts
         // the fields' bodies on the others
         // (`cond_store_field_bodies_move_to_callee`).
+        // B-2026-09-28-46 — the generic callee's form, asked with the binding's type.
         let every_path = arg_index.is_some_and(|i| {
             self.arg_leaves_caller_on_every_path(callee, i)
                 || self.cond_store_field_bodies_move_to_callee(callee, i)
                 // B-2026-09-28-40 — or handed back on some paths.
                 || self.cond_return_field_bodies_move_to_callee(callee, i)
+                || self.var_types.var_type_names.get(name).is_some_and(|tn| {
+                    self.cond_store_field_bodies_move_to_mono_callee(callee, i, tn)
+                })
         });
         let innermost = self
             .drop_rc

@@ -12088,6 +12088,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 return None;
             }
             if f.generic_params.is_some() {
+                // B-2026-09-28-46 — the Drop-less leaves the mono prologue adopts per
+                // path: a forwarded one whole, a field-bodies one bodies only.
+                if !own_drop {
+                    if self.cond_store_dropless_memory_moves_to_mono_callee(
+                        callee_name,
+                        arg_index,
+                        &tn,
+                    ) {
+                        return Some(true);
+                    }
+                    return self
+                        .cond_store_field_bodies_move_to_mono_callee(callee_name, arg_index, &tn)
+                        .then_some(false);
+                }
                 return self
                     .mono_callee_owns_projection_body_per_path(callee_name, arg_index, value)
                     .then_some(false);
