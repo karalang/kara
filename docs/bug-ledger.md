@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 535 |
 | miscompile | 531 |
 | leak | 464 |
-| double-free | 343 |
+| double-free | 344 |
 | missing-feature | 211 |
 | codegen-gap | 203 |
 | other | 155 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2296 |
-| interp | 657 |
+| codegen | 2297 |
+| interp | 658 |
 | typecheck | 313 |
 | other | 112 |
 | ownership | 79 |
@@ -412,6 +412,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-60 | 2026-09-28 | codegen | medium | TWO `shared enum`s THAT SHARE A VARIANT NAME (`G[T] { Y(T) }` and `M { Y(Vec[String]) }`) ICE CODEGEN NONDETERMINISTICALLY at `pattern_binding.rs`'s `sh_payload` GEP unwrap, 3 of 6 builds, and never once the names differ | — |
 | B-2026-09-28-61 | 2026-09-28 | codegen | high | A GENERIC `shared enum G[T]` OVER A `Drop`-BODIED PAYLOAD (`G[R]`) NEVER RUNS `R`'s BODY ON ANY COMPILED BACKEND and still leaks `R`'s heap: B-2026-09-19-53 frees the box envelope but arms the interior only for a payload with no `Drop` body | — |
 | B-2026-09-28-62 | 2026-09-28 | codegen | medium | A `shared enum` STRUCT-VARIANT CONSTRUCTOR PASSED STRAIGHT TO A BY-VALUE PARAMETER (`rd(H.Y { v: mkv(..) })`) IS NEVER RELEASED -- the whole RC object leaks (160 B in 4 blocks over 4 calls) while the tuple-variant spelling is clean; the generic twin leaks the same objects | — |
+| B-2026-09-28-63 | 2026-09-28 | interp+codegen | high | REMAINDER OF B-2026-09-28-50: A TUPLE OR NESTED-STRUCT DESTRUCTURE OF A BY-VALUE PARAM, WITH ONE PART PUSHED INTO A `mut ref` CONTAINER ON SOME PATHS, STILL LOSES OR DOUBLES THE PART -- `let (r, k) = t; if c { xs.push(r); }` loses `r`'s body on the not-pushed path everywhere, and `let O { w: W { r, s, b }, k } = o; if c { xs.push(r); }` prints `dD4n4` twice on the pushed path under `--interp` and aborts `free(): double free detected in tcache 2` on the compiled surfaces | — |
 
 ### Relocated
 
