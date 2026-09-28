@@ -17351,6 +17351,41 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-28-37 — does this hand-back call (see
+    /// [`Self::handback_call_owned_param_arg`]) return an `Option` whose box
+    /// the CALLEE minted around the param? True when the handed-back argument
+    /// is not itself an envelope: a struct param cannot be the `Option`'s box,
+    /// so the result wraps it (`Some(x)`), and the box is fresh. An
+    /// `Option`/`Result`-typed argument (or one whose type is unknown) may be
+    /// handed back bare, box and all, and stays with the caller (B-2026-09-24-12,
+    /// B-2026-09-28-13).
+    fn handback_call_wraps_param_in_fresh_box(&self, scrutinee: &Expr) -> bool {
+        let Some(arg) = self.handback_call_owned_param_arg(scrutinee) else {
+            return false;
+        };
+        let ExprKind::Identifier(name) = &arg.kind else {
+            return false;
+        };
+        let key = (scrutinee.span.offset, scrutinee.span.length);
+        let result_is_option = self
+            .type_decls
+            .enum_inst_type_exprs
+            .get(&key)
+            .is_some_and(|te| {
+                matches!(&te.kind, TypeKind::Path(p)
+                    if p.segments.last().map(|s| s.as_str()) == Some("Option"))
+            });
+        result_is_option
+            && self
+                .var_types
+                .var_type_names
+                .get(name.as_str())
+                .is_some_and(|t| {
+                    !matches!(t.as_str(), "Option" | "Result")
+                        && self.type_decls.struct_types.contains_key(t.as_str())
+                })
+    }
+
     /// B-2026-09-24-12 — is the payload an `Option` / `Result` scrutinee's
     /// variant arms bind wider than the enum's inline area (3 words for
     /// `Option`, 5 for `Result`), i.e. heap-BOXED? Sized from the scrutinee's
@@ -22605,8 +22640,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // is actually BOXED: an inline payload has no box to double-free, and
         // its arm bindings already own their bodies against a caller that
         // stood its walk down (B-2026-09-24-9).
+        // B-2026-09-28-37 — except a hand-back that WRAPS a non-envelope param
+        // (`mk2o(x)` over `fn mk2o(x: S) -> Option[S] { Some(x) }`): the callee
+        // minted that box around the param, so no binding holds it and it is
+        // this temp's to free, box and interior, like any fresh temp's. Only
+        // the payload's BODY stays the caller's, which B-2026-09-28-4's
+        // `optres_temp_is_param_view` already withholds.
         let param_box_alias = self.handback_call_owned_param_arg(scrutinee).is_some()
-            && self.optres_scrutinee_payload_is_boxed(scrutinee, patterns);
+            && self.optres_scrutinee_payload_is_boxed(scrutinee, patterns)
+            && !self.handback_call_wraps_param_in_fresh_box(scrutinee);
         if (self.call_result_aliases_armed_binding(scrutinee) || param_box_alias)
             && patterns.iter().any(|pat| {
                 matches!(
@@ -23025,7 +23067,67 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             return Some(alloca);
         }
-        None
+        self.track_freshtemp_boxed_option_unbound_payload(scrutinee, patterns, sv)
+    }
+
+    /// B-2026-09-28-37 — a fresh `Option` temp whose patterns never name the
+    /// `Some` payload (`if let None = mk2(3)`, `match mk2(3) { None => .., _ =>
+    /// .. }`). The arm loop above registers per `Some(..)` arm, so with none
+    /// the box was freed by nobody: 32 B per evaluation of an `Option[S]` over
+    /// a 4-word `S`, whether or not the temp carried a param. Nothing binds the
+    /// payload, so this temp owns the box and the payload's memory (its
+    /// `Drop` body is the bodies walker's, which already runs it); a borrow
+    /// accessor owns only the box (B-2026-09-28-5), and a temp aliasing a box
+    /// some binding or caller still holds owns nothing.
+    fn track_freshtemp_boxed_option_unbound_payload(
+        &mut self,
+        scrutinee: &Expr,
+        patterns: &[&Pattern],
+        sv: inkwell::values::StructValue<'ctx>,
+    ) -> Option<PointerValue<'ctx>> {
+        let unbound = |p: &Pattern| match &p.kind {
+            PatternKind::Wildcard => true,
+            PatternKind::Binding(n) => n == "None",
+            _ => false,
+        };
+        if !patterns.iter().all(|p| unbound(p))
+            || !patterns
+                .iter()
+                .any(|p| matches!(&p.kind, PatternKind::Binding(n) if n == "None"))
+        {
+            return None;
+        }
+        if self.call_result_aliases_armed_binding(scrutinee)
+            || (self.handback_call_owned_param_arg(scrutinee).is_some()
+                && !self.handback_call_wraps_param_in_fresh_box(scrutinee))
+        {
+            return None;
+        }
+        let payload_te = self.optres_scrutinee_payload_te_for(scrutinee, "Some")?;
+        let payload_te = match &payload_te.kind {
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner) => (**inner).clone(),
+            _ => payload_te,
+        };
+        if Self::llvm_type_word_count(self.llvm_type_for_type_expr(&payload_te)) <= 3 {
+            return None;
+        }
+        let inner_drop = if self.scrutinee_is_borrow_call(scrutinee) {
+            None
+        } else {
+            self.vec_elem_agg_drop_for_type_expr(&payload_te)
+        };
+        let fn_val = self.current_fn?;
+        let alloca =
+            self.create_entry_alloca(fn_val, "__freshtemp_boxed_scrut", sv.get_type().into());
+        let _ = self.builder.build_store(alloca, sv);
+        self.track_boxed_enum_var_with_inner_drop(
+            "__freshtemp_boxed_scrut",
+            alloca,
+            "Option",
+            "Some",
+            inner_drop,
+        );
+        Some(alloca)
     }
 
     /// Fresh-temp INLINE (fitting, `<=` area) heap `Result` match scrutinee
