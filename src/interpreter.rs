@@ -1293,6 +1293,9 @@ impl<'a> Interpreter<'a> {
     }
 
     pub fn new(program: &'a Program, typecheck_result: &'a TypeCheckResult) -> Self {
+        // B-2026-09-28-13 — the escape walk's identity hand-backs, for this
+        // program, as codegen installs them for the one it compiles.
+        crate::result_escape::set_program(program);
         // Install this thread's derived-Ord declaration-order registry so the
         // free `value_compare` / `OrdValue::cmp` can order structs/enums by
         // source order, not alphabetically (B-2026-07-03-12). Every eval path

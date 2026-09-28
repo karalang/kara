@@ -3126,15 +3126,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if !matches!(
             object.kind,
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
-        ) || self.optres_temp_hands_back_optres_param(object)
+        ) || self.optres_handback_box_is_callers(object)
         {
             return;
         }
         // A temp that hands back a param declared `Option`/`Result`
-        // (`id(a).is_some()` in `fn f(a: Option[S])`) is left alone, as
-        // B-2026-09-27-129 left it: its box is the caller's, and which frame
-        // runs its bodies is still split by position and backend
-        // (B-2026-09-28-13).
+        // (`id(a).is_some()` in `fn f(a: Option[S])`) holds the caller's
+        // envelope, which the caller frees and walks (B-2026-09-28-13).
         //
         // A temp that is a param VIEW (`mk2o(x).is_some()`, `x` an owned
         // param) keeps the memory half and loses the bodies inside

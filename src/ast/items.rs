@@ -3482,6 +3482,93 @@ pub fn fn_always_returns_param(
     fn_always_returns_param_ex(program, f, arg_index, false, false)
 }
 
+/// B-2026-09-28-13 — does `e` denote the parameter `param` itself: the bare
+/// identifier, or an identity hand-back of it (`id(a)`,
+/// `result_escape::is_identity_handback_of`), whose result is the param's own
+/// envelope? The param-payload channels ask this of a scrutinee so that
+/// `match id(a)` and `match a` answer alike.
+pub(crate) fn expr_denotes_param(e: &Expr, param: &str) -> bool {
+    matches!(&e.kind, ExprKind::Identifier(n) if n == param)
+        || crate::result_escape::is_identity_handback_of(e, param)
+}
+
+/// B-2026-09-28-13 — the argument a call hands back WHOLE: the callee is a
+/// free function whose parameter there is declared `Option`/`Result`, whose
+/// return type is that same type, and which returns the parameter on every
+/// exit (`id(a)` over `fn id(a: Option[S]) -> Option[S] { a }`). The result
+/// IS the argument's envelope -- the same box, the same payload -- so an
+/// analysis with a rule for a bare `a` has the same rule for `id(a)`, in
+/// every position. Both backends and the escape walk
+/// (`result_escape::set_program`) ask this one question.
+pub fn call_hands_back_optres_arg_whole(program: &crate::Program, call: &Expr) -> Option<usize> {
+    let ExprKind::Call { callee, args } = &call.kind else {
+        return None;
+    };
+    let ExprKind::Identifier(name) = &callee.kind else {
+        return None;
+    };
+    let f = program.items.iter().find_map(|it| match it {
+        crate::ast::Item::Function(f) if &f.name == name => Some(f),
+        _ => None,
+    })?;
+    let k = optres_identity_arg(program, f)?;
+    let a = args.get(k)?;
+    (args.len() == f.params.len()
+        && a.label.is_none()
+        && !a.mut_marker
+        && matches!(a.value.kind, ExprKind::Identifier(_)))
+    .then_some(k)
+}
+
+/// The per-function half of [`call_hands_back_optres_arg_whole`]: `f`'s one
+/// parameter that it hands back whole on every exit, typed `Option`/`Result`
+/// exactly as its return. A single-parameter free function only, so a call
+/// has no other argument whose uses the escape walk would have to account
+/// for separately.
+pub fn optres_identity_arg(program: &crate::Program, f: &Function) -> Option<usize> {
+    if f.self_param.is_some() || f.params.len() != 1 {
+        return None;
+    }
+    let ret = f.return_type.as_ref()?;
+    let p = &f.params[0];
+    (type_expr_is_optres_envelope(&p.ty)
+        && type_expr_same_shape(&p.ty, ret)
+        && fn_always_returns_param(Some(program), f, 0))
+    .then_some(0)
+}
+
+/// Do two type expressions spell the same type? Paths (with their generic
+/// arguments), tuples and borrows only; anything else answers `false`, the
+/// conservative direction for [`call_hands_back_optres_arg_whole`].
+fn type_expr_same_shape(a: &TypeExpr, b: &TypeExpr) -> bool {
+    use crate::ast::{GenericArg, TypeKind};
+    match (&a.kind, &b.kind) {
+        (TypeKind::Path(pa), TypeKind::Path(pb)) => {
+            pa.segments == pb.segments
+                && match (&pa.generic_args, &pb.generic_args) {
+                    (None, None) => true,
+                    (Some(xa), Some(xb)) => {
+                        xa.len() == xb.len()
+                            && xa.iter().zip(xb).all(|(x, y)| match (x, y) {
+                                (GenericArg::Type(x), GenericArg::Type(y)) => {
+                                    type_expr_same_shape(x, y)
+                                }
+                                _ => false,
+                            })
+                    }
+                    _ => false,
+                }
+        }
+        (TypeKind::Tuple(xa), TypeKind::Tuple(xb)) => {
+            xa.len() == xb.len() && xa.iter().zip(xb).all(|(x, y)| type_expr_same_shape(x, y))
+        }
+        (TypeKind::Ref(x), TypeKind::Ref(y)) | (TypeKind::MutRef(x), TypeKind::MutRef(y)) => {
+            type_expr_same_shape(x, y)
+        }
+        _ => false,
+    }
+}
+
 /// B-2026-09-26-15 — [`fn_always_returns_param`] with a payload-less `None`
 /// admitted as the other kind of exit: every exit hands the param back (inside
 /// `Some`, typically) or returns `None`, and at least one hands it back. So the
@@ -7390,7 +7477,7 @@ fn escaping_param_payload_part_paths_impl(
         tail: bool,
         any_path: bool,
     ) {
-        let is_param = |s: &Expr| matches!(&s.kind, ExprKind::Identifier(n) if n == param);
+        let is_param = |s: &Expr| expr_denotes_param(s, param);
         match &e.kind {
             ExprKind::Match { scrutinee, arms } if is_param(scrutinee) => {
                 for a in arms {
@@ -7616,7 +7703,7 @@ pub fn fn_consumed_param_payload_part_paths(
     /// the escaping sibling's `scan` shape so the two channels see the same
     /// set of arms.
     fn scan(e: &Expr, param: &str, variant: Option<&str>, out: &mut Vec<(String, ParamPath)>) {
-        let is_param = |s: &Expr| matches!(&s.kind, ExprKind::Identifier(n) if n == param);
+        let is_param = |s: &Expr| expr_denotes_param(s, param);
         match &e.kind {
             ExprKind::Match { scrutinee, arms } if is_param(scrutinee) => {
                 for a in arms {
@@ -7830,6 +7917,7 @@ fn escaping_param_payload_variants_impl(
         // aware only; the `Any` rule cannot see the callee.
         let scrutinee_is_param = |s: &Expr| match &s.kind {
             ExprKind::Identifier(n) => n == param,
+            _ if crate::result_escape::is_identity_handback_of(s, param) => true,
             ExprKind::Call { callee, args } => {
                 let CallYieldRule::ReturnsIt(program) = rule else {
                     return false;
@@ -7852,7 +7940,12 @@ fn escaping_param_payload_variants_impl(
         };
         match &e.kind {
             ExprKind::Match { scrutinee, arms } if scrutinee_is_param(scrutinee) => {
-                let via_handback_call = !matches!(scrutinee.kind, ExprKind::Identifier(_));
+                // B-2026-09-28-13 — not an IDENTITY hand-back of an
+                // `Option`/`Result` param (`match id(a)`): its result is the
+                // param's own envelope, whose arm bindings are views exactly
+                // as `match a`'s are, so it is read as `match a`.
+                let via_handback_call = !matches!(scrutinee.kind, ExprKind::Identifier(_))
+                    && !crate::result_escape::is_identity_handback_of(scrutinee, param);
                 for a in arms {
                     if matches!(a.pattern.kind, PatternKind::Tuple(_)) {
                         walk(&a.body, param, fn_body, rule, stored, stored_block, out);
@@ -7891,6 +7984,7 @@ fn escaping_param_payload_variants_impl(
                     payload_names_that_can_carry_a_body(pattern, pattern.binding_names(), rule);
                 // B-2026-09-24-9 — the `if let` twin of the `match` arm above.
                 let via_handback_call = !matches!(value.kind, ExprKind::Identifier(_))
+                    && !crate::result_escape::is_identity_handback_of(value, param)
                     && !matches!(
                         pattern.kind,
                         PatternKind::Binding(_) | PatternKind::Wildcard
@@ -8075,8 +8169,7 @@ pub fn fn_returns_param_tuple_arm_elems(
         roots: &roots,
     };
     fn walk(e: &Expr, param: &str, cx: TupleArmCx<'_>, out: &mut Vec<usize>) {
-        let scrutinee_is_param =
-            |s: &Expr| matches!(&s.kind, ExprKind::Identifier(n) if n == param);
+        let scrutinee_is_param = |s: &Expr| expr_denotes_param(s, param);
         match &e.kind {
             ExprKind::Match { scrutinee, arms } => {
                 walk(scrutinee, param, cx, out);
@@ -8330,8 +8423,7 @@ pub fn fn_escaping_param_payload_destructured_elems(
         cx: TupleArmCx<'_>,
         out: &mut Vec<usize>,
     ) {
-        let scrutinee_is_param =
-            |s: &Expr| matches!(&s.kind, ExprKind::Identifier(n) if n == param);
+        let scrutinee_is_param = |s: &Expr| expr_denotes_param(s, param);
         match &e.kind {
             ExprKind::Match { scrutinee, arms } => {
                 walk(scrutinee, param, variant, cx, out);
@@ -10735,7 +10827,7 @@ fn collect_moved_fields_of_binding(body: &Expr, binding: &str, out: &mut Vec<Str
 fn collect_payload_moved_fields_in_expr(e: &Expr, param_name: &str, out: &mut Vec<String>) {
     match &e.kind {
         ExprKind::Match { scrutinee, arms } => {
-            if matches!(&scrutinee.kind, ExprKind::Identifier(n) if n == param_name) {
+            if expr_denotes_param(scrutinee, param_name) {
                 for arm in arms {
                     if let Some(binding) = whole_payload_binding(&arm.pattern) {
                         collect_moved_fields_of_binding(&arm.body, binding, out);
@@ -10753,7 +10845,7 @@ fn collect_payload_moved_fields_in_expr(e: &Expr, param_name: &str, out: &mut Ve
             then_block,
             else_branch,
         } => {
-            if matches!(&value.kind, ExprKind::Identifier(n) if n == param_name) {
+            if expr_denotes_param(value, param_name) {
                 if let Some(binding) = whole_payload_binding(pattern) {
                     collect_moved_fields_in_block_of_binding(then_block, binding, out);
                 }

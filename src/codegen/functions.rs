@@ -2548,6 +2548,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.track_inline_result_payload_var(&param_name, alloca, &te);
                             self.track_inline_option_map_payload_var(&param_name, alloca, &te);
                             if self.optres_param_entry_copied_te(&te) {
+                                self.optres_entry_copied_params
+                                    .insert((func.name.clone(), param_name.clone()));
                                 self.deep_copy_optres_param_in_place(alloca, &te);
                             }
                         }

@@ -4321,6 +4321,8 @@ impl<'ctx> super::Codegen<'ctx> {
             && val.is_struct_value()
             && self.expr_yields_fresh_owned_temp(arg)
             && !self.call_result_aliases_armed_binding(arg)
+            // B-2026-09-28-13 — `eat(id(a))` hands on the caller's envelope.
+            && !self.optres_handback_box_is_callers(arg)
             && self
                 .owned_boxed_option_param_struct(name, i, inst)
                 .is_some()

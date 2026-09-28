@@ -254,6 +254,9 @@ impl<'a> super::Interpreter<'a> {
                         if self.owned_param_names_stack
                             .last()
                             .is_some_and(|params| params.contains(n.as_str())))
+                        // B-2026-09-28-13 — or an identity hand-back of one
+                        // (`match id(a)`), which is the param's own envelope.
+                        || self.expr_is_owned_param_handback(sp)
                 });
                 let scrutinee_projects_owned_param = !scrutinee_is_owned_param_name
                     && matches!(
@@ -1530,6 +1533,25 @@ impl<'a> super::Interpreter<'a> {
             .is_some_and(|sole| sole.iter().any(|n| n == name))
     }
 
+    /// B-2026-09-28-13 — is `e` an identity hand-back of an owned param
+    /// (`id(a)` over `fn id(a: Option[S]) -> Option[S] { a }`, `a` a by-value
+    /// param of this frame)? Its result is `a`'s own envelope, so every
+    /// position answers for it what it answers for the bare `a`. Codegen
+    /// twin: `optres_temp_hands_back_optres_param`.
+    pub(super) fn expr_is_owned_param_handback(&self, e: &Expr) -> bool {
+        let Some(k) = crate::ast::call_hands_back_optres_arg_whole(self.program, e) else {
+            return false;
+        };
+        let ExprKind::Call { args, .. } = &e.kind else {
+            return false;
+        };
+        matches!(args.get(k).map(|a| &a.value.kind), Some(ExprKind::Identifier(n))
+            if self
+                .owned_param_names_stack
+                .last()
+                .is_some_and(|params| params.contains(n.as_str())))
+    }
+
     pub(super) fn scrutinee_expr_is_consuming(&self, e: &Expr) -> bool {
         // B-2026-08-29-10 — a method frame's owned-param scrutinee is NOT
         // consuming, and this is the RETRACTION of 57bfb26, which made it so on
@@ -1554,7 +1576,10 @@ impl<'a> super::Interpreter<'a> {
                 .owned_param_names_stack
                 .last()
                 .is_some_and(|params| params.contains(n.as_str())),
-            ExprKind::Call { .. } => true,
+            // B-2026-09-28-13 — except an identity hand-back of an owned param
+            // (`id(a)`), which is that param's envelope and consumes nothing,
+            // exactly as the bare `a` above.
+            ExprKind::Call { .. } => !self.expr_is_owned_param_handback(e),
             // B-2026-08-31-32 — a struct LITERAL scrutinee is as ownerless as a
             // call result: `match P { r: R { .. }, n: 4 } { .. }` builds the
             // value at the match and nothing else can free it.

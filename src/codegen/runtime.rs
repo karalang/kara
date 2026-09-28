@@ -10288,17 +10288,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// a temp built from `self` had before. Interpreter twin:
     /// `optres_temp_is_param_view` in `eval_stmt.rs`.
     ///
-    /// A call that hands back a param DECLARED as an `Option`/`Result`
-    /// (`match id(a)` in `fn peek(a: Option[S])`) is not admitted: that temp
-    /// is the envelope itself, whose payload bodies this frame runs once `a`
-    /// is handed on (B-2026-09-24-12), and standing down lost them on every
-    /// compiled surface.
+    /// B-2026-09-28-13 — a call that hands back a param DECLARED as an
+    /// `Option`/`Result` (`id(a)` in `fn f(a: Option[S])`) is admitted too:
+    /// that temp is the param's own envelope, so its bodies are the caller's
+    /// exactly as `a`'s are. This clause used to exclude it, because the
+    /// caller's escape walk read `id(a)` as an escape and stood down, so the
+    /// frame had to run the bodies; the walk now reads it as `a`
+    /// (`result_escape::param_ident`), and the two ends agree. Its MEMORY is
+    /// [`Self::optres_handback_box_is_callers`].
     pub(super) fn optres_temp_is_param_view(&self, e: &Expr) -> bool {
         if self.optres_ctor_payloads_are_all_param_views(e) {
             return true;
         }
         if self.let_call_result_is_param_view(e) {
-            return !self.optres_temp_hands_back_optres_param(e);
+            return true;
         }
         let owned_self = self.fn_ctx.current_fn_param_names.contains("self")
             && !self.borrow_vars.ref_params.contains_key("self");
@@ -10307,10 +10310,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 if matches!(object.kind, ExprKind::SelfValue))
     }
 
+    /// B-2026-09-28-13 — does `e`, a call handing back an owned
+    /// `Option`/`Result` param (`id(a)`), carry the CALLER's envelope? It
+    /// does unless this frame deep-copied `a` at entry
+    /// (`optres_entry_copied_params`), which it never does for a boxed
+    /// payload. A caller's envelope is freed by the caller, so every position
+    /// that would otherwise free the temp -- a discard, a `let`, a by-value
+    /// argument, a probe -- registers nothing for it, as it registers nothing
+    /// for a bare `a`.
+    pub(super) fn optres_handback_box_is_callers(&self, e: &Expr) -> bool {
+        self.optres_temp_hands_back_optres_param(e)
+            && self.call_result_param_view_source(e).is_some_and(|src| {
+                !self
+                    .optres_entry_copied_params
+                    .contains(&(self.fn_ctx.current_fn_name.clone(), src))
+            })
+    }
+
     /// Is `e` a call handing back an owned param DECLARED as an
     /// `Option`/`Result` on every exit (`id(a)` in `fn f(a: Option[S])`)?
     /// Keyed on the callee's declaration, the one fact the interpreter's twin
-    /// can also read.
+    /// (`expr_is_owned_param_handback`) can also read.
     pub(super) fn optres_temp_hands_back_optres_param(&self, e: &Expr) -> bool {
         let Some(src) = self.call_result_param_view_source(e) else {
             return false;

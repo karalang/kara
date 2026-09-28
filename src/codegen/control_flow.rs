@@ -1649,6 +1649,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_private_box_variants
             .clear();
+
         // B-2026-09-06-20 — cleared rather than restored: the enclosing
         // construct's arm bindings were bound before this one compiled.
         self.pattern_state.pattern_binding_masked_view_names.clear();
@@ -1959,6 +1960,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     hops += 1;
                     continue;
                 }
+                // B-2026-09-28-13 — an identity hand-back of a param
+                // (`id(a)`) IS that param's envelope, so it reads as `a`.
+                ExprKind::Call { .. } if hops == 0 => {
+                    match crate::result_escape::identity_handback_arg(cur) {
+                        Some(arg) => {
+                            cur = arg;
+                            continue;
+                        }
+                        None => return false,
+                    }
+                }
                 ExprKind::Identifier(n) => n.as_str(),
                 // B-2026-08-31-43 — an OWNED `self` receiver is a by-value
                 // parameter like any other: `lower_method` inserts it into
@@ -2025,6 +2037,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let name = match &e.kind {
             ExprKind::Identifier(n) => n.as_str(),
             ExprKind::SelfValue => "self",
+            // B-2026-09-28-13 — an identity hand-back (`idres(a)`) answers
+            // for the param it returns.
+            ExprKind::Call { .. } => {
+                return crate::result_escape::identity_handback_arg(e).is_some_and(|arg| {
+                    self.scrutinee_optres_param_bodies_are_caller_retained(arg)
+                });
+            }
             _ => return false,
         };
         self.payload_vars
@@ -2077,6 +2096,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     cur = object;
                     hops += 1;
                     continue;
+                }
+                // B-2026-09-28-13 — an identity hand-back of a param
+                // (`id(a)`) IS that param's envelope, so it reads as `a`.
+                ExprKind::Call { .. } if hops == 0 => {
+                    match crate::result_escape::identity_handback_arg(cur) {
+                        Some(arg) => {
+                            cur = arg;
+                            continue;
+                        }
+                        None => return false,
+                    }
                 }
                 ExprKind::Identifier(n) => n.as_str(),
                 ExprKind::SelfValue
@@ -2265,7 +2295,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// payload's body rides the binding-side channel).
     pub(super) fn scrutinee_expr_is_owning_fresh_temp(&self, e: &Expr) -> bool {
         match &e.kind {
-            ExprKind::Call { .. } => true,
+            // B-2026-09-28-13 — not an identity hand-back of an owned param
+            // (`id(a)`): its result IS the param's envelope, which the caller
+            // retains, so a payload binding over it is a view exactly as one
+            // over `a` is.
+            ExprKind::Call { .. } => !self.scrutinee_is_owned_param_binding(e),
             ExprKind::MethodCall { .. } => !self.scrutinee_is_borrow_call(e),
             _ => false,
         }

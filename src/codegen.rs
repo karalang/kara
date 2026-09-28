@@ -2179,6 +2179,12 @@ pub(super) struct Codegen<'ctx> {
     /// reads the same analysis off the callee's AST — B-2026-09-01-29 /
     /// B-2026-09-01-35 are what the two answering differently cost.
     pub(crate) optres_by_value_nonescaping_param_names: std::collections::HashSet<String>,
+    /// B-2026-09-28-13 — `(function, param)` pairs whose by-value
+    /// `Option`/`Result` param this frame deep-copied at entry, so an identity
+    /// hand-back of it (`id(a)`) carries THIS frame's copy rather than the
+    /// caller's envelope. Keyed by function so a monomorph compiled mid-body
+    /// cannot read its enclosing function's entries.
+    pub(crate) optres_entry_copied_params: std::collections::HashSet<(String, String)>,
     /// Staging slot — set by `compile_expr`'s `InterpolatedStringLit` arm
     /// to the f-string's accumulator alloca. The Let / Assign handlers
     /// consume it when the RHS is an f-string AND the LHS is a tracked
@@ -6843,6 +6849,7 @@ impl<'ctx> Codegen<'ctx> {
             result_shared_nonescaping_let_spans: std::collections::HashSet::new(),
             result_shared_nonescaping_param_names: std::collections::HashSet::new(),
             optres_by_value_nonescaping_param_names: std::collections::HashSet::new(),
+            optres_entry_copied_params: std::collections::HashSet::new(),
             mapset: MapSet {
                 pending_map_insert_old_dec: false,
                 map_tag_override: match std::env::var("KARAC_MAP_TAG").as_deref() {
@@ -8327,6 +8334,9 @@ impl<'ctx> Codegen<'ctx> {
         // `compile_expr` → `compile_call` → `compile_generic_call`.
         // Cheap `Rc` clones flow to per-mono callers as they fire.
         self.program_snapshot = Some(Rc::new(program.clone()));
+        // B-2026-09-28-13 — the escape walk's identity hand-backs, for this
+        // program (the interpreter installs its own at construction).
+        crate::result_escape::set_program(program);
         // B-2026-09-06-69 — the CONDITIONAL hand-back's call-site gate, for the
         // same structural reason as the transfer gate above: one callee body
         // serves every call site, so the callee may only take the memory where

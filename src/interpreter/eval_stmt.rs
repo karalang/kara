@@ -4155,12 +4155,13 @@ impl<'a> super::Interpreter<'a> {
     /// `if let` / `while let` / `let … else` miss edge and an `is_*` probe.
     /// A constructor over an owned param (`Some(x)`), a call that hands a
     /// whole-param alias back on every exit (`mk2o(x)`), or a method on an
-    /// owned `self`. A hand-back of a param DECLARED as an `Option`/`Result`
-    /// is the envelope itself and is not admitted. Codegen twin:
-    /// `optres_temp_is_param_view` in `runtime.rs`.
+    /// owned `self`. B-2026-09-28-13 — a hand-back of a param DECLARED as an
+    /// `Option`/`Result` (`id(a)`) is admitted too: it is the param's own
+    /// envelope, whose bodies are the caller's exactly as `a`'s are. Codegen
+    /// twin: `optres_temp_is_param_view` in `runtime.rs`.
     pub(super) fn optres_temp_is_param_view(&self, e: &Expr) -> bool {
         if self.let_call_result_param_view_source(e).is_some() {
-            return !self.optres_temp_hands_back_optres_param(e);
+            return true;
         }
         // B-2026-09-28-6 — the leaf of a nest (`Some(Some(x))`), as codegen's
         // `optres_ctor_payloads_are_all_param_views` asks.
@@ -4180,34 +4181,6 @@ impl<'a> super::Interpreter<'a> {
             Some(crate::ast::SelfParam::Owned)
         ) && matches!(&e.kind, ExprKind::MethodCall { object, .. }
             if matches!(object.kind, ExprKind::SelfValue))
-    }
-
-    /// Is `e` a call handing back an owned param declared as an
-    /// `Option`/`Result`? Codegen twin: `optres_temp_hands_back_optres_param`.
-    pub(super) fn optres_temp_hands_back_optres_param(&self, e: &Expr) -> bool {
-        let Some(src) = self.let_call_result_param_view_source(e) else {
-            return false;
-        };
-        let ExprKind::Call { callee, args } = &e.kind else {
-            return false;
-        };
-        let name = match &callee.kind {
-            ExprKind::Identifier(n) => n.as_str(),
-            ExprKind::Path { segments, .. } => match segments.last() {
-                Some(n) => n.as_str(),
-                None => return false,
-            },
-            _ => return false,
-        };
-        let Some(f) = self.callee_fn_for_param_ownership(name) else {
-            return false;
-        };
-        args.iter().enumerate().any(|(i, a)| {
-            matches!(&a.value.kind, ExprKind::Identifier(n) if *n == src)
-                && f.params
-                    .get(i)
-                    .is_some_and(|p| crate::ast::type_expr_is_optres_envelope(&p.ty))
-        })
     }
 
     fn value_is_optres(v: &Value) -> bool {
@@ -5048,25 +5021,28 @@ impl<'a> super::Interpreter<'a> {
         // a second owner — `b12 dR12 dR12` against a due `b12 dR12`, agreed on
         // all four surfaces because codegen's own marking was gated to
         // identifiers purely to match this bail.
-        let root_is_owned = match self.destructure_source_param_root(value) {
-            Some(n) => self
-                .owned_param_names_stack
-                .last()
-                .is_some_and(|params| params.contains(n)),
-            // B-2026-08-31-43 — a projection off an owned `self` receiver
-            // (`let E.A(r) = self.e else { .. }`): the root walk above stops
-            // at an identifier and `self` is its own expression kind. Same
-            // gate as the `match` leg's `place_root_is_owned_param` — a
-            // PROJECTION only, so a bare `let x = self` keeps its transfer.
-            None => {
-                // B-2026-09-06-15 — a bare owned struct `self` too, decided
-                // inside `place_root_is_owned_param`.
-                matches!(
-                    &value.kind,
-                    ExprKind::FieldAccess { .. } | ExprKind::SelfValue
-                ) && self.place_root_is_owned_param(value)
-            }
-        };
+        // B-2026-09-28-13 — an identity hand-back of an owned param (`let
+        // Some(x) = id(a) else { .. }`) is the param's own envelope.
+        let root_is_owned = self.expr_is_owned_param_handback(value)
+            || match self.destructure_source_param_root(value) {
+                Some(n) => self
+                    .owned_param_names_stack
+                    .last()
+                    .is_some_and(|params| params.contains(n)),
+                // B-2026-08-31-43 — a projection off an owned `self` receiver
+                // (`let E.A(r) = self.e else { .. }`): the root walk above stops
+                // at an identifier and `self` is its own expression kind. Same
+                // gate as the `match` leg's `place_root_is_owned_param` — a
+                // PROJECTION only, so a bare `let x = self` keeps its transfer.
+                None => {
+                    // B-2026-09-06-15 — a bare owned struct `self` too, decided
+                    // inside `place_root_is_owned_param`.
+                    matches!(
+                        &value.kind,
+                        ExprKind::FieldAccess { .. } | ExprKind::SelfValue
+                    ) && self.place_root_is_owned_param(value)
+                }
+            };
         if !root_is_owned {
             return false;
         }
@@ -10835,6 +10811,15 @@ impl<'a> super::Interpreter<'a> {
                     // B-2026-09-28-4 — as the bare discard: a param VIEW's
                     // body is the caller's.
                     && !(Self::value_is_optres(&val) && self.optres_temp_is_param_view(value))
+                    // B-2026-09-28-13 — and so is an owned param's own
+                    // (`let _ = a;`), which the bare `a;` already leaves to
+                    // the caller; running it here as well doubled it
+                    // (`d1 in d1` against every compiled surface's `in d1`).
+                    && !matches!(&value.kind, ExprKind::Identifier(n)
+                        if self
+                            .owned_param_names_stack
+                            .last()
+                            .is_some_and(|params| params.contains(n.as_str())))
                 {
                     self.run_discarded_value_user_drops(val.clone());
                     // B-2026-08-31-35 — this site now owns the value, so the

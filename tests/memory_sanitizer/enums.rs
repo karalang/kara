@@ -11148,6 +11148,10 @@ fn main() {
 /// argument fired the body as well: twice on all four surfaces, and twice
 /// under `--interp` for a temp argument. Read-only and moving arms, named and
 /// temp arguments, a `let`-bound match, `if let`, `Result`, a user enum.
+/// B-2026-09-28-13 moved the named-argument bodies (`d5`, `d6`, `d8`, `d9`)
+/// to the caller: an identity hand-back of an `Option`/`Result` param is the
+/// param itself, so each now runs where the plain `match a` spelling runs it.
+/// The user-enum cells (`ide`) are outside that rule and keep their order.
 #[test]
 fn asan_handback_call_scrutinee_over_param() {
     assert_clean_asan_run(
@@ -11191,8 +11195,8 @@ fn main() {
 }
 "#,
         &[
-            "k1", "d1", "k2", "d2", "k3", "d3", "d4", "k4", "d5", "k5", "d6", "mid", "k6", "d7",
-            "k7", "d8", "k8", "d9", "k9", "d10", "k10", "d11", "k11", "d12", "k12", "end",
+            "k1", "d1", "k2", "d2", "k3", "d3", "d4", "k4", "k5", "d5", "mid", "k6", "d6", "d7",
+            "k7", "k8", "d8", "k9", "d9", "d10", "k10", "d11", "k11", "d12", "k12", "end",
         ],
         "asan_handback_call_scrutinee_over_param",
     );
@@ -11205,6 +11209,9 @@ fn main() {
 /// tracker freed it too: nothing printed on jit and -O0 and a double free at
 /// -O2. Read, moved out, `if let`, a `None` argument, and a Drop-less
 /// payload with a moved field; named and temp arguments.
+/// B-2026-09-28-13 moved `d1` and `d5` to the caller for the same reason as
+/// B-2026-09-24-9's pin: `id(a)` is `a`, and these now read exactly as the
+/// plain `match a` spelling does.
 #[test]
 fn asan_boxed_handback_call_scrutinee_over_param() {
     assert_clean_asan_run(
@@ -11241,16 +11248,16 @@ fn main() {
 }
 "#,
         &[
-            "d1",
             "k30",
+            "d1",
             "d2",
             "k31",
             "k3",
             "d3",
             "k4",
             "d4",
-            "d5",
             "k5",
+            "d5",
             "d6",
             "k6",
             "k0",

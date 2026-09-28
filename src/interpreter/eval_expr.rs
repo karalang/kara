@@ -1456,6 +1456,9 @@ impl<'a> super::Interpreter<'a> {
                         if self.owned_param_names_stack
                             .last()
                             .is_some_and(|params| params.contains(n.as_str())))
+                        // B-2026-09-28-13 — or an identity hand-back of one
+                        // (`if let Some(x) = id(a)`), the param's own envelope.
+                        || self.expr_is_owned_param_handback(value)
                     {
                         {
                             for bound in pattern.binding_names() {
@@ -1952,6 +1955,9 @@ impl<'a> super::Interpreter<'a> {
                         if self.owned_param_names_stack
                             .last()
                             .is_some_and(|params| params.contains(n.as_str())))
+                        // B-2026-09-28-13 — or an identity hand-back of one
+                        // (`if let Some(x) = id(a)`), the param's own envelope.
+                        || self.expr_is_owned_param_handback(value)
                     {
                         {
                             for bound in pattern.binding_names() {

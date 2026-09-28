@@ -13034,6 +13034,10 @@ fn main() {
 /// argument fired the body as well: twice on all four surfaces, and twice
 /// under `--interp` for a temp argument. Read-only and moving arms, named and
 /// temp arguments, a `let`-bound match, `if let`, `Result`, a user enum.
+/// B-2026-09-28-13 moved the named-argument bodies (`d5`, `d6`, `d8`, `d9`)
+/// to the caller: an identity hand-back of an `Option`/`Result` param is the
+/// param itself, so each now runs where the plain `match a` spelling runs it.
+/// The user-enum cells (`ide`) are outside that rule and keep their order.
 #[test]
 fn e2e_handback_call_scrutinee_over_param() {
     let Some(out) = run_program(
@@ -13079,7 +13083,7 @@ fn main() {
     ) else {
         return;
     };
-    assert_eq!(out, "k1\nd1\nk2\nd2\nk3\nd3\nd4\nk4\nd5\nk5\nd6\nmid\nk6\nd7\nk7\nd8\nk8\nd9\nk9\nd10\nk10\nd11\nk11\nd12\nk12\nend\n", "got:\n{out}");
+    assert_eq!(out, "k1\nd1\nk2\nd2\nk3\nd3\nd4\nk4\nk5\nd5\nmid\nk6\nd6\nd7\nk7\nk8\nd8\nk9\nd9\nd10\nk10\nd11\nk11\nd12\nk12\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-24-12 — a by-value `Option` param with a heap-BOXED payload
@@ -13089,6 +13093,9 @@ fn main() {
 /// tracker freed it too: nothing printed on jit and -O0 and a double free at
 /// -O2. Read, moved out, `if let`, a `None` argument, and a Drop-less
 /// payload with a moved field; named and temp arguments.
+/// B-2026-09-28-13 moved `d1` and `d5` to the caller for the same reason as
+/// B-2026-09-24-9's pin: `id(a)` is `a`, and these now read exactly as the
+/// plain `match a` spelling does.
 #[test]
 fn e2e_boxed_handback_call_scrutinee_over_param() {
     let Some(out) = run_program(
@@ -13127,7 +13134,7 @@ fn main() {
     ) else {
         return;
     };
-    assert_eq!(out, "d1\nk30\nd2\nk31\nk3\nd3\nk4\nd4\nd5\nk5\nd6\nk6\nk0\nk29\nheap-string-longer-than-sso-9\nend\n", "got:\n{out}");
+    assert_eq!(out, "k30\nd1\nd2\nk31\nk3\nd3\nk4\nd4\nk5\nd5\nd6\nk6\nk0\nk29\nheap-string-longer-than-sso-9\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-24-14 — a by-value `Option[String]` / `Result[String, _]` /

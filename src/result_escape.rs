@@ -166,6 +166,109 @@ fn root<'a>(acc: &Acc<'a>, name: &'a str) -> &'a str {
     acc.aliases.get(name).copied().unwrap_or(name)
 }
 
+thread_local! {
+    /// B-2026-09-28-13 — the program's identity hand-backs
+    /// (`crate::ast::optres_identity_arg`), by function name. Owned data
+    /// rather than a borrow of the program, so it cannot dangle; replaced
+    /// wholesale by [`set_program`] at the start of every compile and every
+    /// interpreter run, so a map left by an earlier program on this thread is
+    /// never read against a later one.
+    static OPTRES_IDENTITY_FNS: std::cell::RefCell<HashMap<String, usize>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// B-2026-09-28-13 — record `program`'s identity hand-backs for the seeded
+/// walks. Both backends call this for the program they are about to run, so
+/// the escape questions they ask of one function answer alike.
+pub fn set_program(program: &crate::ast::Program) {
+    let map: HashMap<String, usize> = program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            crate::ast::Item::Function(f) => {
+                crate::ast::optres_identity_arg(program, f).map(|k| (f.name.clone(), k))
+            }
+            _ => None,
+        })
+        .collect();
+    OPTRES_IDENTITY_FNS.with(|m| *m.borrow_mut() = map);
+}
+
+/// B-2026-09-28-13 — is `e` an identity hand-back of `param` (`id(a)` for
+/// `param == "a"`), under the program [`set_program`] installed? The AST's
+/// param-payload channels ask this beside their bare-identifier test, so
+/// every one of them reads `id(a)` as `a`.
+pub fn is_identity_handback_of(e: &Expr, param: &str) -> bool {
+    identity_handback_arg(e)
+        .is_some_and(|a| matches!(&a.kind, ExprKind::Identifier(n) if n == param))
+}
+
+/// B-2026-09-28-13 — the argument an identity hand-back returns (`a` in
+/// `id(a)`), when `e` is one under the program [`set_program`] installed and
+/// the argument is a plain unlabelled, unmarked identifier. The result IS that
+/// argument's envelope, so a caller can read the call as the identifier.
+pub fn identity_handback_arg(e: &Expr) -> Option<&Expr> {
+    let ExprKind::Call { callee, args } = &e.kind else {
+        return None;
+    };
+    let ExprKind::Identifier(cn) = &callee.kind else {
+        return None;
+    };
+    if args.len() != 1 {
+        return None;
+    }
+    let k = OPTRES_IDENTITY_FNS.with(|m| m.borrow().get(cn.as_str()).copied())?;
+    let a = args.get(k)?;
+    (a.label.is_none() && !a.mut_marker && matches!(&a.value.kind, ExprKind::Identifier(_)))
+        .then_some(&a.value)
+}
+
+/// B-2026-09-28-13 — the by-value `Option`/`Result` PARAM that `e` IS: a bare
+/// identifier, or an identity hand-back of one (`id(a)` over `fn id(a:
+/// Option[S]) -> Option[S] { a }`), whose result is the argument's own
+/// envelope. The hand-back is read through only for a seeded param (an
+/// `alias_roots` member) and outside a closure, the terms `let c = a;` is
+/// read through on.
+fn param_ident<'a>(acc: &Acc<'a>, e: &'a Expr) -> Option<&'a str> {
+    match &e.kind {
+        ExprKind::Identifier(n) => Some(n.as_str()),
+        ExprKind::Call { callee, args } if !acc.in_closure && !acc.alias_roots.is_empty() => {
+            let ExprKind::Identifier(cn) = &callee.kind else {
+                return None;
+            };
+            let k = OPTRES_IDENTITY_FNS.with(|m| m.borrow().get(cn.as_str()).copied())?;
+            if args.len() != 1 {
+                return None;
+            }
+            let a = args.get(k)?;
+            if a.label.is_some() || a.mut_marker {
+                return None;
+            }
+            let ExprKind::Identifier(n) = &a.value.kind else {
+                return None;
+            };
+            acc.alias_roots
+                .contains(root(acc, n.as_str()))
+                .then_some(n.as_str())
+        }
+        _ => None,
+    }
+}
+
+/// B-2026-09-28-13 — a seeded param in a position that drops or probes it and
+/// nothing else, for the LENDING walk that answers the bodies question: a
+/// discard statement (`a;`, `id(a);`), `let _ = a;`, and a variant probe
+/// (`a.is_some()`). None of them hands the payload anywhere, so the caller
+/// still owes its bodies; counting them as escapes stood a fresh temp's
+/// bodies down with nobody to run them (B-2026-09-28-34).
+fn dead_end_param<'a>(acc: &Acc<'a>, e: &'a Expr) -> Option<&'a str> {
+    if acc.lent.is_none() || acc.in_closure {
+        return None;
+    }
+    let n = param_ident(acc, e)?;
+    acc.alias_roots.contains(root(acc, n)).then_some(n)
+}
+
 /// B-2026-09-24-20 — an accumulator that reads `let c = a;` over a by-value
 /// `Option`/`Result` param as an alias of `a`.
 ///
@@ -1208,8 +1311,9 @@ fn record_read_only_use<'a>(acc: &mut Acc<'a>, name: &'a str) {
 /// it as a plain use); any other scrutinee shape recurses normally. All four
 /// pattern-match forms are match-sugar, so they share this consume semantics.
 fn walk_scrutinee<'a>(acc: &mut Acc<'a>, scrutinee: &'a Expr) {
-    if let ExprKind::Identifier(n) = &scrutinee.kind {
-        record_use(acc, n.as_str(), !acc.in_closure);
+    // B-2026-09-28-13 — or an identity hand-back of a seeded param.
+    if let Some(n) = param_ident(acc, scrutinee) {
+        record_use(acc, n, !acc.in_closure);
     } else {
         walk_expr(scrutinee, acc);
     }
@@ -1236,8 +1340,9 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                 // B-2026-09-24-20 — `let c = a;` over a seeded param is an
                 // alias, not a use: see `Acc::alias_roots`. Immutable only, so
                 // `c` cannot be reassigned to something `a` never held.
-                if let ExprKind::Identifier(src) = &value.kind {
-                    let r = root(acc, src.as_str());
+                // B-2026-09-28-13 — `let c = id(a);` is the same alias.
+                if let Some(src) = param_ident(acc, value) {
+                    let r = root(acc, src);
                     // B-2026-09-27-51 — or a `let mut` never mutated, which
                     // codegen compiles as the `let` it is.
                     if (!*is_mut || acc.demoted.contains(name.as_str()))
@@ -1250,6 +1355,11 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                 }
                 acc.lets
                     .push((name.as_str(), (value.span.offset, value.span.length)));
+            } else if matches!(pattern.kind, crate::ast::PatternKind::Wildcard) {
+                if let Some(n) = dead_end_param(acc, value) {
+                    record_read_only_use(acc, n);
+                    return;
+                }
             }
             walk_expr(value, acc);
         }
@@ -1273,8 +1383,8 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                 // enclosing scope, so it always takes the payload. Same rule
                 // `retract_boxed_tuple_inner_drop_for_block` states by passing
                 // `None` for its block.
-                if let ExprKind::Identifier(n) = &value.kind {
-                    let root_n = root(acc, n.as_str());
+                if let Some(n) = param_ident(acc, value) {
+                    let root_n = root(acc, n);
                     if let Some(v) =
                         variant_arm_takes_payload_block(pattern, None, acc.take_copy_read)
                     {
@@ -1320,7 +1430,13 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                 walk_expr(v, acc);
             }
         }
-        StmtKind::Expr(e) => walk_expr(e, acc),
+        StmtKind::Expr(e) => {
+            if let Some(n) = dead_end_param(acc, e) {
+                record_read_only_use(acc, n);
+            } else {
+                walk_expr(e, acc);
+            }
+        }
     }
 }
 
@@ -1345,8 +1461,8 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         ExprKind::Identifier(n) => record_use(acc, n.as_str(), false),
         ExprKind::Match { scrutinee, arms } => {
             walk_scrutinee(acc, scrutinee);
-            if let ExprKind::Identifier(n) = &scrutinee.kind {
-                let root_n = root(acc, n.as_str());
+            if let Some(n) = param_ident(acc, scrutinee) {
+                let root_n = root(acc, n);
                 let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
                 let fr = acc.follow_rebinds;
                 for a in arms {
@@ -1465,28 +1581,48 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                 _ => None,
             };
             for (k, a) in args.iter().enumerate() {
-                if let (Some((cn, l)), ExprKind::Identifier(n)) = (lent_to, &a.value.kind) {
+                // B-2026-09-28-13 — `eat(id(a))` lends `a` as `eat(a)` does.
+                let n = param_ident(acc, &a.value);
+                if let (Some((cn, l)), Some(n)) = (lent_to, n) {
                     if a.label.is_none() && !a.mut_marker && l(cn, k) {
-                        record_read_only_use(acc, n.as_str());
+                        record_read_only_use(acc, n);
                         continue;
                     }
                 }
-                if let (Some(l), ExprKind::Identifier(n)) = (lent_call, &a.value.kind) {
+                if let (Some(l), Some(n)) = (lent_call, n) {
                     if a.label.is_none() && !a.mut_marker && l(e, k) {
-                        record_read_only_use(acc, n.as_str());
+                        record_read_only_use(acc, n);
                         continue;
                     }
                 }
                 walk_call_arg(a, acc);
             }
         }
-        ExprKind::MethodCall { object, args, .. } => {
-            walk_expr(object, acc);
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            // B-2026-09-28-34 — a variant probe reads the tag and nothing else.
+            let probed = if args.is_empty()
+                && matches!(method.as_str(), "is_some" | "is_none" | "is_ok" | "is_err")
+            {
+                dead_end_param(acc, object)
+            } else {
+                None
+            };
+            if let Some(n) = probed {
+                record_read_only_use(acc, n);
+            } else {
+                walk_expr(object, acc);
+            }
             let lent_call = acc.lent_call.filter(|_| !acc.in_closure);
             for (k, a) in args.iter().enumerate() {
-                if let (Some(l), ExprKind::Identifier(n)) = (lent_call, &a.value.kind) {
+                let n = param_ident(acc, &a.value);
+                if let (Some(l), Some(n)) = (lent_call, n) {
                     if a.label.is_none() && !a.mut_marker && l(e, k) {
-                        record_read_only_use(acc, n.as_str());
+                        record_read_only_use(acc, n);
                         continue;
                     }
                 }
@@ -1519,8 +1655,8 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         } => {
             // `if let Pat = <scrutinee>` is match-sugar — consume-in-place.
             walk_scrutinee(acc, value);
-            if let ExprKind::Identifier(n) = &value.kind {
-                let root_n = root(acc, n.as_str());
+            if let Some(n) = param_ident(acc, value) {
+                let root_n = root(acc, n);
                 if let Some(v) =
                     variant_arm_takes_payload_block(pattern, Some(then_block), acc.take_copy_read)
                 {
@@ -1570,8 +1706,8 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         } => {
             // `while let Pat = <scrutinee>` is match-sugar — consume-in-place.
             walk_scrutinee(acc, value);
-            if let ExprKind::Identifier(n) = &value.kind {
-                let root_n = root(acc, n.as_str());
+            if let Some(n) = param_ident(acc, value) {
+                let root_n = root(acc, n);
                 if let Some(v) =
                     variant_arm_takes_payload_block(pattern, Some(body), acc.take_copy_read)
                 {

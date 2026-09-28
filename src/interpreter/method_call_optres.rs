@@ -589,13 +589,12 @@ impl<'a> super::Interpreter<'a> {
                 //
                 // Not when the temp is a param VIEW (`mk2o(x).is_some()` with
                 // `x` an owned param): under caller-retains the CALLER runs
-                // that value's body (B-2026-09-28-4). Nor when it hands back a
-                // param declared `Option`/`Result` (`id(a).is_some()`), which
-                // B-2026-09-27-129 left alone and B-2026-09-28-13 tracks.
+                // that value's body (B-2026-09-28-4), which includes a
+                // hand-back of a param declared `Option`/`Result`
+                // (`id(a).is_some()`, B-2026-09-28-13).
                 if Self::optres_freshtemp_scrutinee(object)
                     && self.scrutinee_expr_is_consuming(object)
                     && !self.optres_temp_is_param_view(object)
-                    && !self.optres_temp_hands_back_optres_param(object)
                 {
                     self.run_optres_payload_user_drops_value(obj);
                 }

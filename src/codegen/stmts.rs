@@ -8372,6 +8372,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // The alias zeroes nothing by itself, so the
                                 // discarded-result case this rule was built for
                                 // (`id(bound);`) is unchanged.
+                                // B-2026-09-28-13 — `let g = id(a)` holds the
+                                // caller's envelope, which the caller frees, as
+                                // `let g = a` does.
+                                if self.optres_handback_box_is_callers(value) {
+                                    boxed.clear();
+                                }
                                 if let Some(src) = self.call_passthrough_armed_boxed_source(value) {
                                     let callee_owns_box = boxed
                                         .iter()
@@ -25877,6 +25883,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `tail` to `val`; every registration lands on that frame and fires at
     /// the `;` when the caller drains it.
     pub(super) fn track_discarded_temp_cleanup(&mut self, tail: &Expr, val: BasicValueEnum<'ctx>) {
+        // B-2026-09-28-13 — `id(a);` drops the caller's envelope, which the
+        // caller frees, exactly as `a;` does.
+        if self.optres_handback_box_is_callers(tail) {
+            return;
+        }
         // B-2026-06-10-6: a discarded inline-`Option` temp
         // (`v.pop();`, `make_opt();`) leaks its `String`/`Vec`
         // payload — the erased Option drop switch can't free it
