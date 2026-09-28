@@ -15689,6 +15689,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let every_path = arg_index.is_some_and(|i| {
             self.arg_leaves_caller_on_every_path(callee, i)
                 || self.cond_store_field_bodies_move_to_callee(callee, i)
+                // B-2026-09-28-40 — or handed back on some paths.
+                || self.cond_return_field_bodies_move_to_callee(callee, i)
         });
         let innermost = self
             .drop_rc

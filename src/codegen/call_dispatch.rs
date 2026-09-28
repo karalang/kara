@@ -12102,9 +12102,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // B-2026-09-28-20 — a field-bodies struct the prologue adopts
                 // per path when stored on some paths: bodies only.
-                return self
-                    .cond_store_field_bodies_move_to_callee(callee_name, arg_index)
-                    .then_some(false);
+                // B-2026-09-28-40 — or handed back on some paths.
+                return (self.cond_store_field_bodies_move_to_callee(callee_name, arg_index)
+                    || self.cond_return_field_bodies_move_to_callee(callee_name, arg_index))
+                .then_some(false);
             }
             // The memory half of each prologue arm: the conditional-return
             // arm's `conditional_handback_memory_moves_to_callee`, and the

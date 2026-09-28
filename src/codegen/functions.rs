@@ -3812,6 +3812,36 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .cond_returned_owned_params
                                             .insert(param_name.clone());
                                     }
+                                } else if i >= recv_offset
+                                    && self.cond_return_field_bodies_move_to_callee(
+                                        &func.name,
+                                        i - recv_offset,
+                                    )
+                                {
+                                    // B-2026-09-28-40 / B-2026-09-28-23 — the
+                                    // fields' BODIES of a struct with no `Drop`
+                                    // of its own, handed back on some paths:
+                                    // the caller stands its field walk down on
+                                    // every path, so on the exit that keeps
+                                    // nothing only this frame runs them, under
+                                    // the flag the hand-back exit clears. The
+                                    // own-`Drop` arm's bodies-only registration
+                                    // above, with the field walker in place of
+                                    // the body.
+                                    if let Some(bodies) =
+                                        self.emit_struct_user_drop_bodies_only_fn(struct_name)
+                                    {
+                                        self.track_user_drop_var_with_fn(
+                                            "",
+                                            &param_name,
+                                            alloca,
+                                            bodies,
+                                            crate::codegen::state::UserDropKind::StructFieldBodies,
+                                        );
+                                        self.drop_rc
+                                            .cond_returned_body_params
+                                            .insert(param_name.clone());
+                                    }
                                 }
                             }
                         }

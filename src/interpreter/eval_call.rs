@@ -2955,8 +2955,10 @@ impl<'a> super::Interpreter<'a> {
                 // own whose fields run user bodies, STORED on some paths only
                 // (`if c { xs.push(w); }`): the caller stood down for it, so
                 // on the path that did not store nobody ran the fields' bodies.
+                // B-2026-09-28-40 — or handed back on some paths.
                 Some(Value::Struct { name: tn, .. })
-                    if self.cond_store_field_bodies_adopted(f, i, tn.as_str()) =>
+                    if self.cond_store_field_bodies_adopted(f, i, tn.as_str())
+                        || self.cond_return_field_bodies_adopted(f, i, tn.as_str()) =>
                 {
                     out.push(name.to_string());
                 }
@@ -3267,6 +3269,7 @@ impl<'a> super::Interpreter<'a> {
                 Value::Struct { name: tn, .. } => {
                     self.program.drop_method_keys.contains_key(tn.as_str())
                         || self.cond_store_field_bodies_adopted(f, i, tn.as_str())
+                        || self.cond_return_field_bodies_adopted(f, i, tn.as_str())
                 }
                 Value::EnumVariant { .. } => self.enum_value_runs_user_drop(&value),
                 // B-2026-09-23-19 — a by-value `Array` of user-`Drop` elements
@@ -5877,6 +5880,33 @@ impl<'a> super::Interpreter<'a> {
         i: usize,
         tn: &str,
     ) -> bool {
+        self.field_bodies_adopted_per_path(f, i, tn, false)
+    }
+
+    /// B-2026-09-28-40 / B-2026-09-28-23 — codegen's
+    /// `cond_return_field_bodies_move_to_callee`: the conditional-RETURN twin
+    /// of [`Self::cond_store_field_bodies_adopted`], for the same field-bodies
+    /// struct handed back on SOME paths only, bare or wrapped (`if c { return
+    /// Some(w); } None`). The callee adopts the fields' bodies per path and the
+    /// caller stands its walk down on every path.
+    fn cond_return_field_bodies_adopted(
+        &self,
+        f: &crate::ast::Function,
+        i: usize,
+        tn: &str,
+    ) -> bool {
+        self.field_bodies_adopted_per_path(f, i, tn, true)
+    }
+
+    /// The shared body of the two predicates above: `returned` picks the
+    /// conditional-return route over the conditional-store one.
+    fn field_bodies_adopted_per_path(
+        &self,
+        f: &crate::ast::Function,
+        i: usize,
+        tn: &str,
+        returned: bool,
+    ) -> bool {
         f.generic_params.is_none()
             && !self.program.drop_method_keys.contains_key(tn)
             && self
@@ -5885,8 +5915,18 @@ impl<'a> super::Interpreter<'a> {
                 .get(tn)
                 .is_some_and(|si| !si.is_shared && si.generic_params.is_empty())
             && self.type_name_runs_user_drop(tn, &mut Vec::new())
-            && crate::ast::fn_conditionally_stores_param(f, i)
-            && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
+            // B-2026-09-28-40 — the RETURN route still leaves a struct holding
+            // a `shared` field to B-2026-09-25-37's forwarded arm, as codegen's
+            // twin does (`dropless_forwarded_struct`); B-2026-09-28-41 lifted
+            // that exclusion for the store route only.
+            && (!returned || !self.struct_carries_shared_field(tn, &mut Vec::new()))
+            && if returned {
+                crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
+                    && !crate::ast::fn_moves_param_into_outliving_place(f, i)
+            } else {
+                crate::ast::fn_conditionally_stores_param(f, i)
+                    && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
+            }
             && f.params
                 .get(i)
                 .and_then(|p| p.name())
@@ -6007,7 +6047,9 @@ impl<'a> super::Interpreter<'a> {
                 && (cond_return
                     || crate::ast::fn_conditionally_stores_param(f, i)
                     || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, i)))
-                || (!own_drop && self.cond_store_field_bodies_adopted(f, i, tn.as_str()));
+                || (!own_drop
+                    && (self.cond_store_field_bodies_adopted(f, i, tn.as_str())
+                        || self.cond_return_field_bodies_adopted(f, i, tn.as_str())));
         }
         let rebound = match &param.pattern.kind {
             crate::ast::PatternKind::Binding(n) => crate::ast::param_rebind_aliases(f, n).len() > 1,

@@ -3386,9 +3386,14 @@ impl H { fn mmaybe(ref self, x: D, c: bool) -> Option[D] { if c { return Some(x)
             "dGo\ndD4n4\nk\nb2\nend\n",
         ),
         (
-            "control: a Drop-less leaf dropped inside runs its fields once (B-2026-09-26-63)",
+            // B-2026-09-28-40 — the callee now adopts a Drop-less leaf's field
+            // bodies per path, so on the path that keeps nothing they run where
+            // the param dies, inside the call, as a leaf with its own `Drop`
+            // does ("a free fn, dies inside" above). Before, the caller's walk
+            // ran them at `x`'s scope end.
+            "control: a Drop-less leaf dropped inside runs its fields once, inside the call (B-2026-09-26-63, B-2026-09-28-40)",
             "let x = mkx(7); let o = maybew(x.w, false); println(f\"o{o.is_some()}\"); println(f\"t{x.t.id}\");",
-            "ofalse\nt307\ndD307n307\ndD107n107\ndD7n7\nend\n",
+            "dD107n107\ndD7n7\nofalse\nt307\ndD307n307\nend\n",
         ),
     ] {
         let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");

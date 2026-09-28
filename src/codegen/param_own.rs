@@ -4279,6 +4279,35 @@ impl<'ctx> super::Codegen<'ctx> {
         callee_name: &str,
         arg_index: usize,
     ) -> bool {
+        self.field_bodies_param_adopted_per_path(callee_name, arg_index, false)
+    }
+
+    /// B-2026-09-28-40 / B-2026-09-28-23 — the conditional-RETURN twin of
+    /// [`Self::cond_store_field_bodies_move_to_callee`]: the same field-bodies
+    /// struct, handed back on SOME paths only, bare (`if c { return w }`) or
+    /// wrapped (`if c { return Some(w); } None`). `compile_function`'s
+    /// conditional-return arm adopts the fields' bodies under the per-path flag
+    /// the hand-back exit clears, and the caller stands its field walk down on
+    /// every path. Before, only a struct with its OWN `Drop` was adopted, so a
+    /// fresh temporary lost the bodies on the path that kept nothing and a
+    /// named or projected argument ran them twice on the path that handed it
+    /// back.
+    pub(super) fn cond_return_field_bodies_move_to_callee(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        self.field_bodies_param_adopted_per_path(callee_name, arg_index, true)
+    }
+
+    /// The shared body of the two predicates above: `returned` picks the
+    /// conditional-return route over the conditional-store one.
+    fn field_bodies_param_adopted_per_path(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+        returned: bool,
+    ) -> bool {
         let Some(program) = self.program_snapshot.as_deref() else {
             return false;
         };
@@ -4310,8 +4339,13 @@ impl<'ctx> super::Codegen<'ctx> {
             && !self
                 .user_drop_field_indices_mono(struct_name, &std::collections::HashMap::new())
                 .is_empty()
-            && crate::ast::fn_conditionally_stores_param(f, arg_index)
-            && !crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+            && if returned {
+                crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+                    && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+            } else {
+                crate::ast::fn_conditionally_stores_param(f, arg_index)
+                    && !crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+            }
             && param
                 .name()
                 .is_some_and(|n| !crate::ast::fn_matches_on_bare_param(f, n))
