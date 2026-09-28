@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 535 |
+| run-vs-build | 536 |
 | miscompile | 532 |
 | leak | 465 |
 | double-free | 347 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2301 |
-| interp | 660 |
+| codegen | 2302 |
+| interp | 661 |
 | typecheck | 313 |
 | other | 112 |
 | ownership | 79 |
@@ -397,7 +397,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-44 | 2026-09-28 | codegen | medium | A STRUCT LEAF OF A DESTRUCTURED BY-VALUE TUPLE PAYLOAD HANDED TO A BY-VALUE CALLEE RUNS NO `Drop` BODY AND LEAKS ON EVERY COMPILED SURFACE -- `fn t(o: Option[(W, i64)]) -> i64 { match o { Some((a, b)) => { return sink(a) + b; } .. } }` over `fn sink(w: W) -> i64 { return w.id; }` prints `m10 end` on jit / -O0 / -O2 where `--interp` prints `dW1/n1 m10 end`, and valgrind reports 2 B in 1 block at -O0 | — |
 | B-2026-09-28-45 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-7: A REBIND OF A GENERIC `Option[T]` PARAM LOSES THE PAYLOAD'S `Drop` BODY COMPILED AND LEAKS ITS `String` (`let b = a; 5` prints `n5 end` where `--interp` prints `d2 n5 end`), `let mut b = a; b = None` LOSES IT ON EVERY SURFACE, AND AN ARM REBIND OF A `Result` STRUCT PAYLOAD (`Ok(s) => { let t = s; 6 }`) LOSES IT COMPILED, GENERIC OR NOT | — |
 | B-2026-09-28-48 | 2026-09-28 | codegen | medium | A BY-VALUE `Option` / `Result` PARAM WHOSE ARM MOVES THE PAYLOAD INTO A LOCAL RUNS ITS `Drop` BODY AT THE WRONG POINT OR NOT AT ALL, COMPILED, WITH NO FORWARD INVOLVED -- `fn eat(x: Result[S, i64]) { match x { Ok(y) => { let z = y; println("z") }, Err(e) => println("e") } }` prints `z z d2 end` for `eat(Ok(mk(1))); let b: Result[S, i64] = Ok(mk(2)); eat(b)` on the JIT, -O0 and -O2 against `--interp`'s `z d1 z d2 end` | — |
-| B-2026-09-28-50 | 2026-09-28 | interp+codegen | medium | A DESTRUCTURED OR PROJECTED PART OF A BY-VALUE PARAM MOVED INTO A CONTAINER ON ONLY SOME PATHS LOSES ITS `Drop` BODY ON THE NOT-MOVED PATH, OR RUNS IT TWICE -- `let W { r, s, b } = w; if c { xs.push(r); }` loses `r`'s body everywhere when `xs` outlives the call; into a LOCAL `xs` the compiled backends run `r`'s body on a moved-out husk (`dD5`, no name) on the not-pushed path, and on the pushed path the interpreter prints `dD6n6` twice and the compiled backends print `dD6n6` then `dD6` | — |
 | B-2026-09-28-52 | 2026-09-28 | codegen | medium | A CONSUMING ARM OVER A BY-VALUE GENERIC-ENUM PARAM WITH A HEAP-BOXED `Array[R, N]` PAYLOAD LEAKS ONE ELEMENT `String` -- `G1.Y(x) => { let k = x[0].id; let y = x; k + y[0].id }` and `G1.Y(x) => { let k = x[0].id; k + eat(x) }` each lose 1 B in 1 block at `-O0`, identically before and after B-2026-09-20-2's fix, with every `Drop` body running once | — |
 | B-2026-09-28-53 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-6: A RETURNED NEST OVER A PARAM (`fn c(x: S) -> Option[Option[S]] { Some(Some(x)) }`) DOUBLES OR EARLY-FIRES THE PAYLOAD'S `Drop` BODY ON EVERY SURFACE (`d1 d1 o end`; `d1 o d2 end` where `o d2 end d1` is due), AND FIVE NESTED-ENVELOPE SHAPES STILL LEAK COMPILED (`Some(Ok(mk(1)));` 29 B, `m.remove(1);` / `v.pop();` of an `Option[Option[S]]` 32 B, a discarded `Result[Option[S], i64]` 32 B, `E.A(Some(x))` 32 B) | — |
 | B-2026-09-28-54 | 2026-09-28 | interp+codegen | medium | A FRESH `shared` VALUE, OR A CALL-PRODUCED STRUCT WHOSE ONLY DROPPABLE PART IS A `shared` FIELD, PASSED BY VALUE RUNS NO `Drop` BODY ON ANY SURFACE AND LEAKS COMPILED -- `nn(N { v: 5 })` over `fn nn(n: N)` and `yn(mky(2))` over `fn yn(y: Y)`, `struct Y { h: N, k: i64 }`, print no `dN5` / `dN2` anywhere; the struct-LITERAL spelling `yn(Y { h: N { v: 4 }, k: 4 })` is right | — |
@@ -409,11 +408,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-60 | 2026-09-28 | codegen | medium | TWO `shared enum`s THAT SHARE A VARIANT NAME (`G[T] { Y(T) }` and `M { Y(Vec[String]) }`) ICE CODEGEN NONDETERMINISTICALLY at `pattern_binding.rs`'s `sh_payload` GEP unwrap, 3 of 6 builds, and never once the names differ | — |
 | B-2026-09-28-61 | 2026-09-28 | codegen | high | A GENERIC `shared enum G[T]` OVER A `Drop`-BODIED PAYLOAD (`G[R]`) NEVER RUNS `R`'s BODY ON ANY COMPILED BACKEND and still leaks `R`'s heap: B-2026-09-19-53 frees the box envelope but arms the interior only for a payload with no `Drop` body | — |
 | B-2026-09-28-62 | 2026-09-28 | codegen | medium | A `shared enum` STRUCT-VARIANT CONSTRUCTOR PASSED STRAIGHT TO A BY-VALUE PARAMETER (`rd(H.Y { v: mkv(..) })`) IS NEVER RELEASED -- the whole RC object leaks (160 B in 4 blocks over 4 calls) while the tuple-variant spelling is clean; the generic twin leaks the same objects | — |
-| B-2026-09-28-63 | 2026-09-28 | interp+codegen | high | REMAINDER OF B-2026-09-28-50: A TUPLE OR NESTED-STRUCT DESTRUCTURE OF A BY-VALUE PARAM, WITH ONE PART PUSHED INTO A `mut ref` CONTAINER ON SOME PATHS, STILL LOSES OR DOUBLES THE PART -- `let (r, k) = t; if c { xs.push(r); }` loses `r`'s body on the not-pushed path everywhere, and `let O { w: W { r, s, b }, k } = o; if c { xs.push(r); }` prints `dD4n4` twice on the pushed path under `--interp` and aborts `free(): double free detected in tcache 2` on the compiled surfaces | — |
 | B-2026-09-28-65 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-37 (THE BODY FACES): A PARAM-VIEW FRESH-TEMP SCRUTINEE'S ARM BINDING RUNS THE BODY EARLY UNDER `--interp` (`match mk2o(x) { Some(s) => .. }` prints `m4 d4 in` where the named oracle prints `m4 in d4`) AND TWICE COMPILED UNDER `if let` (`m4 d4 in d4`), `let Some(s) = mk2o(x) else ..; keep(s)` AND `match Some(x) { Some(s) => .. }` DOUBLE IT ON EVERY SURFACE, AN ARM YIELDING THE BINDING (`Some(s) => s`) DOUBLES IT COMPILED AND LEAKS THE BOX, A USER-ENUM PARAM WRAPPED THE SAME WAY LOSES ITS BODY COMPILED AND LEAKS 40 B, AND A FRESH TEMP'S WILDCARD PAYLOAD (`match mk2(3) { None => .., _ => .. }`) RUNS NO BODY ON ANY SURFACE | — |
 | B-2026-09-28-66 | 2026-09-28 | codegen | medium | A GENERIC `shared enum`'s TUPLE, ENUM, `Option` OR MAP PAYLOAD LEAKS ITS INTERIOR AGAIN -- a read-only `G[(String, String)]` arm loses its Strings (10 B in 4 blocks over two calls) and a tuple or enum handed to a by-value param loses 3-4 B, because B-2026-09-28-64 took the interior walk away from payloads whose arm binding is a view that no hand-off site takes off the box | — |
 | B-2026-09-28-67 | 2026-09-28 | codegen | high | A BOXED `Option[S]` PARAM STORED INTO A `Vec` ON ONLY SOME PATHS CRASHES WITH NO OUTPUT ON EVERY COMPILED SURFACE -- `fn cp(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t) } }` prints nothing for `cp(Option.Some(mks(1)), mut u, true)` on the JIT, -O0 and -O2 (valgrind: invalid reads, an invalid free) against `--interp`'s `n1 dS1 end` | — |
 | B-2026-09-28-68 | 2026-09-28 | interp | medium | `--interp` RUNS A BOXED `Option` ARGUMENT'S `Drop` BODY TWICE, TEMPORARY OR NAMED, WHEN IT REACHES A `Vec` THROUGH TWO FORWARDING FRAMES -- `fn f2(t: Option[S], v: mut ref Vec[Option[S]]) { ofw(t, v) }` prints `dS1 n1 dS1 end` for `f2(Option.Some(mks(1)), mut u)` against the compiled surfaces' `n1 dS1 end` | — |
+| B-2026-09-28-69 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-63: A TUPLE DESTRUCTURE OR PROJECTION OF A BY-VALUE PARAM, A TWO-STEP STRUCT DESTRUCTURE THROUGH A LOCAL, AND A `self` RECEIVER'S NESTED PART, EACH WITH A PART PUSHED INTO A CONTAINER ON ONLY SOME PATHS, LOSE THE PART'S `Drop` BODY ON THE PATH THAT KEEPS IT -- on every surface for three spellings, and only compiled for two tuple spellings | — |
 
 ### Relocated
 
@@ -3241,8 +3240,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-41 | interp+codegen | medium | A `Drop`-CARRYING VALUE STORED ON ONLY SOME PATHS LOST OR DOUBLED ITS BODIES IN THREE SPELLINGS 4982484f9 DECLINED -- FIXED for a struct with a `shar… | 789467fc9 |
 | B-2026-09-28-47 | codegen | high | REMAINDER OF B-2026-09-27-53: A BOXED `Option[S]` THAT REACHES A `Vec` THROUGH A FORWARDING FRAME OR A GENERIC KEEPER CRASHES WITH NO OUTPUT ON EVERY… | 924aa41a9 |
 | B-2026-09-28-46 | interp+codegen | high | FIXED (668ed9e89): a value handed to a GENERIC callee that stores it on only some paths lost or doubled its `Drop` bodies, and a projected shared-fie… | 668ed9e89 |
+| B-2026-09-28-50 | interp+codegen | medium | FIXED (6b8547e75): a destructured or projected part of a by-value param moved into a container on only some paths lost its `Drop` body on the not-mov… | 6b8547e75 |
 | B-2026-09-28-51 | interp | medium | FIXED (8330f0640): `--interp` never ran a `shared` field's `Drop` body when the struct holding it was a fresh temporary passed by value or discarded… | 8330f0640 |
 | B-2026-09-28-49 | codegen | high | FIXED (9855c929d): a local moved inside a branch by a builtin sink or a `let` rebind lost its `Drop` body (and its memory) on the path that did not m… | 9855c929d |
+| B-2026-09-28-63 | interp+codegen | high | REMAINDER OF B-2026-09-28-50: A NESTED-STRUCT DESTRUCTURE OF A BY-VALUE PARAM, WITH A LEAF MOVED OUT (PUSHED INTO A `mut ref` CONTAINER ON SOME OR AL… | d0e9fa1b0 |
 | B-2026-09-28-64 | codegen | high | A TUPLE, ENUM, `Option` OR `Array` BOUND OUT OF A GENERIC `shared enum`'s BOXED PAYLOAD AND HANDED ON IS FREED TWICE ON EVERY COMPILED BACKEND -- `ma… | 01aebe5ee |
 
 </details>
