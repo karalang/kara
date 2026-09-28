@@ -94,11 +94,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | run-vs-build | 534 |
 | miscompile | 529 |
-| leak | 462 |
+| leak | 463 |
 | double-free | 343 |
 | missing-feature | 211 |
 | codegen-gap | 203 |
-| other | 154 |
+| other | 155 |
 | diagnostics | 138 |
 | perf | 117 |
 | false-positive | 111 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2289 |
-| interp | 655 |
+| codegen | 2291 |
+| interp | 656 |
 | typecheck | 313 |
 | other | 112 |
 | ownership | 79 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-17-33 | 2026-09-17 | codegen+interp | medium | A NON-YIELDING EXIT LEAF THAT CONSUMES THE PARAM THROUGH A CALL LOSES THE CONSUMED VALUE'S `Drop` BODY, AND WHICH SURFACES LOSE IT DEPENDS ON THE CALL POSITION -- `fn pick(r: R, flag: bool) -> R { if flag { return r } return R { name: f"z", id: eat(r) } }` called with `flag = false` prints `k:1 dR1/z end` on all four surfaces as a FREE function (agreed loss, invisible to the A/B rule), loses it on `--interp` only as an ASSOCIATED fn (divergence), and is correct as a METHOD -- the same three-way split B-2026-09-13-13's reading leaf had on this path, which is the reason to expect one root cause rather than three; `eat` takes `x: R` by value and drops it, so the body owed is inside `eat` and `pick`'s own argument registration should not decide whether it fires | — |
 | B-2026-09-17-35 | 2026-09-17 | codegen+interp | medium | A `Drop`-BEARING ELEMENT MOVED OUT OF A BY-VALUE TUPLE PARAM RUNS ITS BODY AFTER THE ARM'S STATEMENTS ON ALL FOUR SURFACES, where design.md § 866 says it is owed at the `let` -- `fn eat(t: (R, i64)) { let x = t.0; println("mid") }` prints `mid dR5 end` everywhere against the due `dR5 mid end`, and because the four surfaces AGREE the kata A/B parity rule cannot see it. The controls show both backends already implement the rule elsewhere: an unused local drops at its `let` in a bare block and in a match arm on every surface, and a local genuinely used later drops later -- only the move-out-of-a-param shape defers it. Distinct from B-2026-09-14-7, which is the `Option`-payload spelling of the same due answer and IS a run-vs-build divergence; here both backends defer, so the mechanism is the caller-retains convention for a by-value tuple param rather than that row's arm-binding view classification | — |
 | B-2026-09-18-1 | 2026-09-18 | codegen | medium | A GENERIC ENUM'S BOXED PAYLOAD STILL LOSES ITS `Drop` BODY WHEN THE ARM *CONSUMES* ITS BINDING -- `match x { Full(r) => { let z = r; .. } }` over a three-`String` payload prints `w:4 end` on JIT/AOT against `--interp`'s `w:4 dW4 end`, while the READ-ONLY twin is correct on all four since B-2026-09-14-22, so the remaining loss is the arm moving its binding into a local and `z` acquiring no body for it | — |
 | B-2026-09-19-18 | 2026-09-19 | codegen | medium | A PLAIN STRUCT, `Vec` OR `Option` HOLDING A `shared enum` RELEASES IT AT LEXICAL SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE BINDING'S LIVE-RANGE END UNDER `--interp` -- one body either way, three spellings, and design.md :866 says the interpreter's placement is the correct one; the DIRECT binding was fixed in B-2026-09-17-19 and these are one indirection out | — |
@@ -409,6 +408,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-53 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-6: A RETURNED NEST OVER A PARAM (`fn c(x: S) -> Option[Option[S]] { Some(Some(x)) }`) DOUBLES OR EARLY-FIRES THE PAYLOAD'S `Drop` BODY ON EVERY SURFACE (`d1 d1 o end`; `d1 o d2 end` where `o d2 end d1` is due), AND FIVE NESTED-ENVELOPE SHAPES STILL LEAK COMPILED (`Some(Ok(mk(1)));` 29 B, `m.remove(1);` / `v.pop();` of an `Option[Option[S]]` 32 B, a discarded `Result[Option[S], i64]` 32 B, `E.A(Some(x))` 32 B) | — |
 | B-2026-09-28-54 | 2026-09-28 | interp+codegen | medium | A FRESH `shared` VALUE, OR A CALL-PRODUCED STRUCT WHOSE ONLY DROPPABLE PART IS A `shared` FIELD, PASSED BY VALUE RUNS NO `Drop` BODY ON ANY SURFACE AND LEAKS COMPILED -- `nn(N { v: 5 })` over `fn nn(n: N)` and `yn(mky(2))` over `fn yn(y: Y)`, `struct Y { h: N, k: i64 }`, print no `dN5` / `dN2` anywhere; the struct-LITERAL spelling `yn(Y { h: N { v: 4 }, k: 4 })` is right | — |
 | B-2026-09-28-55 | 2026-09-28 | codegen | low | A FRESH TEMP STRUCT ARGUMENT INSIDE AN `if` CONDITION RELEASES ITS `shared` FIELD AT THE FUNCTION'S END ON THE COMPILED SURFACES, WHERE `while`/`match` AND EVERY PLAIN STATEMENT RELEASE IT AT THE STATEMENT'S END -- `if zn(mkz(1)) > 0 { println("t1") } println("f1end")` prints `t1 f1end dN1` compiled and `t1 dN1 f1end` under `--interp`; one body either way | — |
+| B-2026-09-28-56 | 2026-09-28 | interp+codegen | medium | A PARAM HANDED BACK ON SOME EXITS AND PASSED TO A `ref`-PARAM FUNCTION ON ANOTHER LOSES ITS `Drop` BODY ON ALL FOUR SURFACES -- `fn p4(r: R, f: bool) -> R { if f { return r } return R { name: f"z", id: peek(r) } }` with `fn peek(x: ref R) -> i64` prints no `dR7/g` for `p4(R { name: f"g", id: 7 }, false)`; the by-value consumer twin (`eat(r)`) is correct since B-2026-09-17-33, and this one is AGREED, so the A/B rule cannot see it | — |
+| B-2026-09-28-57 | 2026-09-28 | codegen | medium | A GENERIC ENUM WHOSE VARIANT CARRIES A HEAP-BOXED PAYLOAD BESIDE A SECOND FIELD LEAKS THE BOX ON EVERY COMPILED SURFACE -- `enum X[T] { Two(T, i64), Nil }` with `let q = X.Two(mkw(77), 7);` over a three-`String` `W` loses 72 bytes in 1 block (the box) plus the three strings behind it at `-O0`, with no `match` and no call in the program; the one-field twin `One(T)` and the monomorphic `Two(W, i64)` are clean, and the `Drop` body runs once everywhere, so only a sanitizer sees it | — |
 
 ### Relocated
 
@@ -2954,6 +2955,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-17-30 | codegen | medium | THE COMPILED BACKENDS RUN NO PART'S `Drop` BODY WHEN ONE PART OF A BY-VALUE `Option`/`Result` TUPLE PAYLOAD ESCAPES THROUGH A PROJECTION -- `fn eat(o… | 37fbf43 |
 | B-2026-09-17-31 | interp | medium | THE METHOD-CALL SPELLING LOSES AN UNMOVED `Drop`-BEARING SIBLING PART, where the free-function spelling of the identical body keeps it -- `impl H { f… | 15f13bf |
 | B-2026-09-17-32 | interp+codegen | medium | B-2026-08-28-22's PER-PATH CONDITIONAL-ESCAPE FLAG COVERS AN `if`/`else` TAIL AND NOT A `match` ARM TAIL, so a by-value param that escapes on only on… | 9b4a429b5 |
+| B-2026-09-17-33 | codegen+interp | medium | A NON-YIELDING EXIT LEAF THAT CONSUMES THE PARAM THROUGH A CALL LOSES THE CONSUMED VALUE'S `Drop` BODY, AND WHICH SURFACES LOSE IT DEPENDS ON THE CAL… | 488679deb |
 | B-2026-09-17-34 | codegen | high | MOVING A HEAP-CARRYING `Drop` FIELD OUT OF A BOXED (SPILLED) `Option`/`Result` PAYLOAD STRUCT ABORTS EVERY COMPILED SURFACE WITH A DOUBLE FREE -- `fn… | 25bb7b7 |
 | B-2026-09-17-36 | codegen+interp | medium | A FRESH TEMP READ THROUGH A PROJECTION RUNS NO `Drop` BODIES AT ALL, where two are owed -- `println(f"v{mkw(7).r.id}")`, `println(f"v{mkw(7).b}")` an… | 19467ef8a |
 | B-2026-09-17-37 | codegen | medium | A NAMED-LOCAL `Option` ARGUMENT DOUBLES A CONSUMED PAYLOAD PART'S `Drop` BODY ON EVERY COMPILED SURFACE -- `let a = Some((R { id: 5 }, 9)); eat(a);`… | 4c6e669 |
