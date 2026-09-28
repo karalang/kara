@@ -6778,8 +6778,24 @@ impl<'a> super::Interpreter<'a> {
         // compiled `s4 dS4 e end`). Codegen's side is the callee's own
         // registration of a SOME-paths hand-back
         // (`mixed_path_boxed_enum_param_callee_owned`).
-        let enum_name = match self.env.get(name) {
-            Some(v @ Value::Array(_)) if self.field_value_carries_user_drop(&v) => None,
+        // B-2026-09-27-98 — and a by-value plain STRUCT whose own body (or a
+        // field's) is a user `Drop`, or a built-in `Option` / `Result` whose
+        // payload runs one: the same caller-retained shape again. A plain
+        // `consume(s)` of either runs nothing, and the forwarding frame's
+        // binding runs the body at its own scope exit (`x after dS1`), so the
+        // exit that only passed the adopted param along lost the body on every
+        // surface (`x dS0 end` against `x dS4 dS0 end`). Codegen's twin is the
+        // same arm of `flagged_array_arg_stays_with_caller`.
+        enum Shape {
+            Array,
+            /// A user type, matched by the param type's LAST path segment.
+            Named(String),
+            /// `Option` / `Result`, matched by the FIRST segment.
+            Builtin(String),
+        }
+        let mut new_shape = false;
+        let shape = match self.env.get(name) {
+            Some(v @ Value::Array(_)) if self.field_value_carries_user_drop(&v) => Shape::Array,
             Some(v @ Value::EnumVariant { .. })
                 if matches!(&v, Value::EnumVariant { enum_name, .. }
                     if enum_name != "Option"
@@ -6788,8 +6804,26 @@ impl<'a> super::Interpreter<'a> {
                     && self.field_value_carries_user_drop(&v) =>
             {
                 match v {
-                    Value::EnumVariant { enum_name, .. } => Some(enum_name),
-                    _ => None,
+                    Value::EnumVariant { enum_name, .. } => Shape::Named(enum_name),
+                    _ => return false,
+                }
+            }
+            Some(v @ Value::Struct { .. }) if self.field_value_carries_user_drop(&v) => match v {
+                Value::Struct { name, .. } => {
+                    new_shape = true;
+                    Shape::Named(name)
+                }
+                _ => return false,
+            },
+            Some(v @ Value::EnumVariant { .. })
+                if matches!(&v, Value::EnumVariant { enum_name, .. }
+                    if enum_name == "Option" || enum_name == "Result")
+                    && self.field_value_carries_user_drop(&v) =>
+            {
+                new_shape = true;
+                match v {
+                    Value::EnumVariant { enum_name, .. } => Shape::Builtin(enum_name),
+                    _ => return false,
                 }
             }
             _ => return false,
@@ -6810,20 +6844,48 @@ impl<'a> super::Interpreter<'a> {
         let Some(param) = f.params.get(i) else {
             return false;
         };
-        let is_array_param = match (&param.ty.kind, enum_name.as_deref()) {
-            (crate::ast::TypeKind::Array { .. }, None) => true,
-            (crate::ast::TypeKind::Path(p), None) => {
+        let is_array_param = match (&param.ty.kind, &shape) {
+            (crate::ast::TypeKind::Array { .. }, Shape::Array) => true,
+            (crate::ast::TypeKind::Path(p), Shape::Array) => {
                 p.segments.len() == 1 && p.segments[0] == "Array"
             }
-            (crate::ast::TypeKind::Path(p), Some(en)) => p.segments.last().is_some_and(|s| s == en),
+            (crate::ast::TypeKind::Path(p), Shape::Named(en)) => {
+                p.segments.last().is_some_and(|s| s == en)
+            }
+            (crate::ast::TypeKind::Path(p), Shape::Builtin(en)) => {
+                p.segments.len() == 1 && p.segments[0] == *en
+            }
             _ => false,
         };
+        // B-2026-09-27-98 — a consumer that rebinds or wraps its param is
+        // declined for the new shapes: the predicates below do not all follow
+        // an alias, and `let m = r; if c { return m }` in the consumer hands
+        // the value back, so keeping the flag armed there ran the body twice.
+        if new_shape && Self::consumer_param_is_aliased(self.program, f, i) {
+            return false;
+        }
         is_array_param
             && !crate::ast::fn_returns_param(f, i)
             && !crate::ast::fn_returns_param_via_call(self.program, f, i)
             && crate::ast::fn_returns_param_part_paths(f, i).is_empty()
             && !crate::ast::fn_moves_param_into_outliving_place(f, i)
             && !crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
+    }
+
+    /// B-2026-09-27-98 — does `f` rebind or wrap its param `i` in a local?
+    fn consumer_param_is_aliased(
+        program: &crate::ast::Program,
+        f: &crate::ast::Function,
+        i: usize,
+    ) -> bool {
+        let Some(crate::ast::PatternKind::Binding(pn)) = f.params.get(i).map(|p| &p.pattern.kind)
+        else {
+            return true;
+        };
+        crate::ast::param_whole_aliases(Some(program), f, pn)
+            .iter()
+            .any(|a| a != pn)
+            || !crate::ast::param_wrap_aliases(Some(program), f, pn).is_empty()
     }
 
     pub(crate) fn record_conditional_move_tail(&mut self, expr: &Expr, cleanup: &[CleanupAction]) {

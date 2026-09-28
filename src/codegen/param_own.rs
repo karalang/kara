@@ -3165,11 +3165,26 @@ impl<'ctx> super::Codegen<'ctx> {
         // owner of the body on this path; disarming it lost the body
         // (`x end` against the interpreter's `x dS4 end`). The interpreter's
         // twin is `user_drop_array_arg_stays_with_caller`'s enum arm.
+        // B-2026-09-27-98 — or a by-value plain STRUCT param that runs a user
+        // `Drop` body (its own or a field's), or a built-in `Option` /
+        // `Result` param whose payload does, passed to a by-value param of the
+        // SAME declared type. A plain `consume(s)` of either runs nothing (the
+        // forwarding frame's slot runs the body at its own scope exit, `x after
+        // dS1`), so the adopted flag is still the only owner of the body on
+        // this path; disarming it lost the body on every surface (`x dS0 end`
+        // against `x dS4 dS0 end`). The interpreter's twin is the struct and
+        // `Option`/`Result` arms of `user_drop_array_arg_stays_with_caller`.
+        let mut same_type: Option<crate::ast::TypeExpr> = None;
         let enum_name = if self.payload_vars.cond_handback_array_params.contains(name) {
             None
+        } else if let Some(en) = self.adopted_inline_user_enum_param_name(name) {
+            Some(en)
         } else {
-            match self.adopted_inline_user_enum_param_name(name) {
-                Some(en) => Some(en),
+            match self.plain_struct_or_optres_user_drop_param_te(name) {
+                Some(te) => {
+                    same_type = Some(te);
+                    None
+                }
                 None => return false,
             }
         };
@@ -3198,10 +3213,32 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(param) = f.params.get(i) else {
             return false;
         };
-        let shape_ok = match &enum_name {
-            Some(en) => matches!(&param.ty.kind, TypeKind::Path(p)
+        // A consumer that rebinds or wraps its param is declined for the
+        // struct / `Option` / `Result` shapes: the predicates below do not all
+        // follow an alias, and `let m = r; if c { return m }` in the consumer
+        // hands the value back, so keeping the flag armed there freed it twice.
+        if same_type.is_some() {
+            let Some(crate::ast::PatternKind::Binding(pn)) =
+                f.params.get(i).map(|p| &p.pattern.kind)
+            else {
+                return false;
+            };
+            if crate::ast::param_whole_aliases(Some(program), f, pn)
+                .iter()
+                .any(|a| a != pn)
+                || !crate::ast::param_wrap_aliases(Some(program), f, pn).is_empty()
+            {
+                return false;
+            }
+        }
+        let shape_ok = match (&enum_name, &same_type) {
+            (_, Some(te)) => {
+                crate::formatter::render_type_expr(&param.ty)
+                    == crate::formatter::render_type_expr(te)
+            }
+            (Some(en), None) => matches!(&param.ty.kind, TypeKind::Path(p)
                 if p.segments.len() == 1 && p.segments[0] == *en),
-            None => self
+            (None, None) => self
                 .array_elem_and_len(&param.ty)
                 .is_some_and(|(elem_te, n)| {
                     n > 0 && !self.array_param_elem_is_callee_owned(&elem_te)
@@ -3213,6 +3250,48 @@ impl<'ctx> super::Codegen<'ctx> {
             && crate::ast::fn_returns_param_part_paths(f, i).is_empty()
             && !crate::ast::fn_moves_param_into_outliving_place(f, i)
             && !crate::ast::fn_moves_param_into_outliving_place_via_call(program, f, i)
+    }
+
+    /// B-2026-09-27-98 — the declared type of `name` when it is a by-value
+    /// param of the current function (or a whole rebind of one) whose type is a
+    /// non-generic, non-shared plain struct that runs a user `Drop` body, or a
+    /// built-in `Option` / `Result` whose payload does. Only such a param can
+    /// carry a conditional-move flag the forward in
+    /// [`Self::flagged_array_arg_stays_with_caller`] must leave armed.
+    fn plain_struct_or_optres_user_drop_param_te(
+        &self,
+        name: &str,
+    ) -> Option<crate::ast::TypeExpr> {
+        let program = self.program_snapshot.as_deref()?;
+        let f =
+            crate::codegen::declarations::find_function_ast(program, &self.fn_ctx.current_fn_name)?;
+        if f.generic_params.is_some() {
+            return None;
+        }
+        // Or a whole rebind of one (`let m = s;`), whose flag is keyed by the
+        // rebind's name.
+        let p = f.params.iter().find(|p| {
+            matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(b)
+                if b == name
+                    || crate::ast::param_rebind_aliases(f, b).iter().any(|a| a == name))
+        })?;
+        let TypeKind::Path(tp) = &p.ty.kind else {
+            return None;
+        };
+        if tp.segments.len() != 1 {
+            return None;
+        }
+        let head = tp.segments[0].as_str();
+        let ok = match head {
+            "Option" | "Result" => self.optres_payload_runs_user_drop(&p.ty),
+            _ => {
+                tp.generic_args.is_none()
+                    && self.type_decls.struct_types.contains_key(head)
+                    && !self.type_decls.shared_type_decl_names.contains(head)
+                    && self.plain_struct_has_user_drop_deep(head, 0)
+            }
+        };
+        ok.then(|| p.ty.clone())
     }
 
     /// B-2026-09-27-130 — the enum name of `name` when it is a by-value
