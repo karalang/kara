@@ -4900,7 +4900,10 @@ impl<'a> super::Interpreter<'a> {
             // arm rather than the instantiation-driven table: the temp has no
             // name to resolve a declared type through, and the live value
             // already says which variant is present.
-            if Self::optres_freshtemp_scrutinee(&arg.value) {
+            // B-2026-09-28-4 — not a param VIEW, whose body is the caller's.
+            if Self::optres_freshtemp_scrutinee(&arg.value)
+                && !self.optres_temp_is_param_view(&arg.value)
+            {
                 if let Some(
                     v @ Value::EnumVariant {
                         enum_name, variant, ..

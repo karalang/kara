@@ -3128,6 +3128,14 @@ pub fn param_rebind_aliases(f: &Function, param_name: &str) -> Vec<String> {
     close_rebind_aliases(&rebind_walk(f), param_name)
 }
 
+/// B-2026-09-28-4 — is `ty` spelled as an `Option[..]` / `Result[..]`
+/// envelope? A generic parameter answers `false`, like
+/// [`type_expr_is_owned_scalar`].
+pub fn type_expr_is_optres_envelope(ty: &TypeExpr) -> bool {
+    matches!(&ty.kind, crate::ast::TypeKind::Path(p)
+        if matches!(p.segments.last().map(String::as_str), Some("Option" | "Result")))
+}
+
 /// B-2026-08-28-70 — does `f` hand parameter `arg_index` back to its caller on
 /// EVERY exit?
 ///

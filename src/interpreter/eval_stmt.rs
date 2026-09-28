@@ -4085,6 +4085,70 @@ impl<'a> super::Interpreter<'a> {
         crate::ast::fn_return_wraps_param_in_own_drop_type(self.program, f, idx)
     }
 
+    /// B-2026-09-28-4 — is a FRESH-TEMP `Option`/`Result` a param VIEW, so its
+    /// payload's `Drop` bodies are the CALLER's under caller-retains? The let
+    /// site's own questions, asked at the positions that own a temp with no
+    /// binding: the discard statement, `let _`, a by-value argument, the
+    /// `if let` / `while let` / `let … else` miss edge and an `is_*` probe.
+    /// A constructor over an owned param (`Some(x)`), a call that hands a
+    /// whole-param alias back on every exit (`mk2o(x)`), or a method on an
+    /// owned `self`. A hand-back of a param DECLARED as an `Option`/`Result`
+    /// is the envelope itself and is not admitted. Codegen twin:
+    /// `optres_temp_is_param_view` in `runtime.rs`.
+    pub(super) fn optres_temp_is_param_view(&self, e: &Expr) -> bool {
+        if self.let_call_result_param_view_source(e).is_some() {
+            return !self.optres_temp_hands_back_optres_param(e);
+        }
+        if let Some(ExprKind::Identifier(src)) =
+            crate::ast::option_result_ctor_payload(e).map(|p| &p.kind)
+        {
+            if self
+                .owned_param_names_stack
+                .last()
+                .is_some_and(|params| params.contains(src.as_str()))
+            {
+                return true;
+            }
+        }
+        matches!(
+            self.self_param_stack.last(),
+            Some(crate::ast::SelfParam::Owned)
+        ) && matches!(&e.kind, ExprKind::MethodCall { object, .. }
+            if matches!(object.kind, ExprKind::SelfValue))
+    }
+
+    /// Is `e` a call handing back an owned param declared as an
+    /// `Option`/`Result`? Codegen twin: `optres_temp_hands_back_optres_param`.
+    pub(super) fn optres_temp_hands_back_optres_param(&self, e: &Expr) -> bool {
+        let Some(src) = self.let_call_result_param_view_source(e) else {
+            return false;
+        };
+        let ExprKind::Call { callee, args } = &e.kind else {
+            return false;
+        };
+        let name = match &callee.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::Path { segments, .. } => match segments.last() {
+                Some(n) => n.as_str(),
+                None => return false,
+            },
+            _ => return false,
+        };
+        let Some(f) = self.callee_fn_for_param_ownership(name) else {
+            return false;
+        };
+        args.iter().enumerate().any(|(i, a)| {
+            matches!(&a.value.kind, ExprKind::Identifier(n) if *n == src)
+                && f.params
+                    .get(i)
+                    .is_some_and(|p| crate::ast::type_expr_is_optres_envelope(&p.ty))
+        })
+    }
+
+    fn value_is_optres(v: &Value) -> bool {
+        matches!(v, Value::EnumVariant { enum_name, .. } if enum_name == "Option" || enum_name == "Result")
+    }
+
     fn let_call_result_param_view_source(&self, value: &Expr) -> Option<String> {
         let ExprKind::Call { callee, args } = &value.kind else {
             return None;
@@ -10601,6 +10665,9 @@ impl<'a> super::Interpreter<'a> {
                 // so the body still runs exactly once.
                 if matches!(pattern.kind, crate::ast::PatternKind::Wildcard)
                     && self.discard_rhs_produces_owned_value(value, &val)
+                    // B-2026-09-28-4 — as the bare discard: a param VIEW's
+                    // body is the caller's.
+                    && !(Self::value_is_optres(&val) && self.optres_temp_is_param_view(value))
                 {
                     self.run_discarded_value_user_drops(val.clone());
                     // B-2026-08-31-35 — this site now owns the value, so the
@@ -10978,8 +11045,10 @@ impl<'a> super::Interpreter<'a> {
                     // surface while `mkerr();` ran it on every one. Fresh temps
                     // only — a named local reaching this edge still has its own
                     // walk, and firing here as well would double it.
+                    // B-2026-09-28-4 — nor a param VIEW, whose body is the caller's.
                     if Self::optres_freshtemp_scrutinee(value)
                         && self.scrutinee_expr_is_consuming(value)
+                        && !self.optres_temp_is_param_view(value)
                     {
                         self.run_optres_payload_user_drops_value(&val);
                     }
@@ -11574,6 +11643,13 @@ impl<'a> super::Interpreter<'a> {
                 // `discard_stmt_shape_expr` for the one shape a wrapper is
                 // not peeled for.
                 let shape = self.discard_stmt_shape_expr(expr);
+                // B-2026-09-28-4 — an `Option`/`Result` temp that is a param
+                // VIEW (`mk2o(x);` with `x` an owned param) carries a body the
+                // CALLER runs under caller-retains, so the discard runs none.
+                // Codegen twin: `track_discarded_optres_payload_bodies`.
+                if Self::value_is_optres(&discarded) && self.optres_temp_is_param_view(shape) {
+                    return Ok(Value::Unit);
+                }
                 match &shape.kind {
                     ExprKind::Call { callee, .. } => {
                         // Bare Path-callee CTOR discard (`Option.Some(mk());`,

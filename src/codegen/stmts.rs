@@ -26600,7 +26600,9 @@ impl<'ctx> super::Codegen<'ctx> {
         tail: &Expr,
         val: BasicValueEnum<'ctx>,
     ) {
-        if self.scrutinee_is_borrow_call(tail) {
+        // B-2026-09-28-4 — a temp that is a param VIEW (`mk2o(x);` with `x` an
+        // owned param) carries a body the CALLER runs under caller-retains.
+        if self.scrutinee_is_borrow_call(tail) || self.optres_temp_is_param_view(tail) {
             return;
         }
         let key = (tail.span.offset, tail.span.length);

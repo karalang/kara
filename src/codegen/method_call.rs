@@ -8863,8 +8863,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         // B-2026-09-23-43 — a passthrough result aliasing a live binding
                         // owns no MEMORY (the source frees it) but does owe the BODY, as
                         // the same value bound first (`let b = id(a); show(b)`) does.
-                        if self.optres_arg_is_unowned_temp(&a.value)
-                            || self.call_result_aliases_armed_binding(&a.value)
+                        if (self.optres_arg_is_unowned_temp(&a.value)
+                            || self.call_result_aliases_armed_binding(&a.value))
+                            // B-2026-09-28-4 — a param VIEW's body is the caller's.
+                            && !self.optres_temp_is_param_view(&a.value)
                         {
                             self.track_optres_arg_temp_bodies(val, &param_te, &skip_parts);
                         }

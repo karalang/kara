@@ -323,7 +323,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 || !pats.iter().any(|p| pattern_consumes_field(p))
         };
         if let Some(slot) = freshtemp_boxed_slot.filter(|_| freshtemp_walker_owes_body) {
-            if self.scrutinee_aliases_caller_box(scrutinee) {
+            // B-2026-09-28-4 — not over a param VIEW (`match mk2o(x)`), whose
+            // body the caller runs under caller-retains.
+            if self.scrutinee_aliases_caller_box(scrutinee)
+                && !self.optres_temp_is_param_view(scrutinee)
+            {
                 if let Some(walker) = self
                     .optres_scrutinee_type_expr(scrutinee)
                     .and_then(|te| self.emit_optres_payload_user_drop_bodies_fn(&te))
@@ -23436,7 +23440,8 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // A borrow accessor's `Option` payload ALIASES a container element the
         // container still owns and still walks; firing here would double it.
-        if self.scrutinee_is_borrow_call(scrutinee) {
+        // A param VIEW's body is the caller's (B-2026-09-28-4).
+        if self.scrutinee_is_borrow_call(scrutinee) || self.optres_temp_is_param_view(scrutinee) {
             return;
         }
         let BasicValueEnum::StructValue(sv) = val else {
@@ -23533,8 +23538,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // construction. An expression with no recorded instantiation (an
         // erased generic) still answers `None`, which keeps both backends
         // silent there, the safe direction.
+        // B-2026-09-28-4 — a param VIEW's payload body is the caller's.
         let payload_bodies = if enum_name != "Option" && enum_name != "Result" {
             self.emit_enum_payload_user_drop_bodies_fn(&enum_name)
+        } else if self.optres_temp_is_param_view(scrutinee) {
+            None
         } else {
             self.optres_inst_type_expr(scrutinee)
                 .and_then(|te| self.emit_optres_payload_user_drop_bodies_fn(&te))

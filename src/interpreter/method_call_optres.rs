@@ -587,27 +587,15 @@ impl<'a> super::Interpreter<'a> {
                 // uses. Codegen twin: `try_compile_option_result_method`'s
                 // `is_*` arm.
                 //
-                // Not when the temp carries a param VIEW (`mk2o(x).is_some()`
-                // with `x` an owned param): under caller-retains the CALLER
-                // runs that value's body, so firing here too doubles it. The
-                // test is a deep mention, so a receiver that only READS the
-                // view stays silent as well — the pre-fix answer, never a
-                // double.
-                // An owned `self` is the same caller-retained view.
-                let owned_self = matches!(
-                    self.self_param_stack.last(),
-                    Some(crate::ast::SelfParam::Owned)
-                );
-                let carries_view = (owned_self
-                    && crate::deque_head::expr_mentions_name_deep(object, "self"))
-                    || self.owned_param_names_stack.last().is_some_and(|views| {
-                        views
-                            .iter()
-                            .any(|n| crate::deque_head::expr_mentions_name_deep(object, n))
-                    });
+                // Not when the temp is a param VIEW (`mk2o(x).is_some()` with
+                // `x` an owned param): under caller-retains the CALLER runs
+                // that value's body (B-2026-09-28-4). Nor when it hands back a
+                // param declared `Option`/`Result` (`id(a).is_some()`), which
+                // B-2026-09-27-129 left alone and B-2026-09-28-13 tracks.
                 if Self::optres_freshtemp_scrutinee(object)
                     && self.scrutinee_expr_is_consuming(object)
-                    && !carries_view
+                    && !self.optres_temp_is_param_view(object)
+                    && !self.optres_temp_hands_back_optres_param(object)
                 {
                     self.run_optres_payload_user_drops_value(obj);
                 }

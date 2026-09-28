@@ -10059,6 +10059,73 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-28-4 — is a FRESH-TEMP `Option`/`Result` a param VIEW, so
+    /// its payload's `Drop` bodies are the CALLER's under caller-retains?
+    ///
+    /// The let site has always asked this (`let o = mk2o(x)` marks `o` a view
+    /// and gives it a memory-only drop), but the positions that own a temp
+    /// with no binding did not: the discard statement, a by-value argument,
+    /// the `if let` / `while let` / `let … else` miss edge, a `match`, and an
+    /// `is_*` probe each ran the payload's body, and the caller ran it again
+    /// (`mk2o(x);` inside `fn chk(x: S)` printed `d4 d4` on every surface).
+    /// This is the let site's own pair of predicates, so the two positions
+    /// answer alike: a constructor over a view (`Some(x)`), or a call that
+    /// hands a whole-param alias back on every exit (`mk2o(x)`). An owned
+    /// `self` receiver's method is admitted too, which the call predicate
+    /// declines for instance methods; that clause is conservative, the answer
+    /// a temp built from `self` had before. Interpreter twin:
+    /// `optres_temp_is_param_view` in `eval_stmt.rs`.
+    ///
+    /// A call that hands back a param DECLARED as an `Option`/`Result`
+    /// (`match id(a)` in `fn peek(a: Option[S])`) is not admitted: that temp
+    /// is the envelope itself, whose payload bodies this frame runs once `a`
+    /// is handed on (B-2026-09-24-12), and standing down lost them on every
+    /// compiled surface.
+    pub(super) fn optres_temp_is_param_view(&self, e: &Expr) -> bool {
+        if self.optres_ctor_payloads_are_all_param_views(e) {
+            return true;
+        }
+        if self.let_call_result_is_param_view(e) {
+            return !self.optres_temp_hands_back_optres_param(e);
+        }
+        let owned_self = self.fn_ctx.current_fn_param_names.contains("self")
+            && !self.borrow_vars.ref_params.contains_key("self");
+        owned_self
+            && matches!(&e.kind, ExprKind::MethodCall { object, .. }
+                if matches!(object.kind, ExprKind::SelfValue))
+    }
+
+    /// Is `e` a call handing back an owned param DECLARED as an
+    /// `Option`/`Result` on every exit (`id(a)` in `fn f(a: Option[S])`)?
+    /// Keyed on the callee's declaration, the one fact the interpreter's twin
+    /// can also read.
+    pub(super) fn optres_temp_hands_back_optres_param(&self, e: &Expr) -> bool {
+        let Some(src) = self.call_result_param_view_source(e) else {
+            return false;
+        };
+        let ExprKind::Call { callee, args } = &e.kind else {
+            return false;
+        };
+        let key = match &callee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::Path { segments, .. } => segments.join("."),
+            _ => return false,
+        };
+        let Some(f) = self
+            .program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, &key))
+        else {
+            return false;
+        };
+        args.iter().enumerate().any(|(i, a)| {
+            matches!(&a.value.kind, ExprKind::Identifier(n) if *n == src)
+                && f.params
+                    .get(i)
+                    .is_some_and(|p| crate::ast::type_expr_is_optres_envelope(&p.ty))
+        })
+    }
+
     /// B-2026-08-29-45 — is `value` an ARRAY / `Vec`-prefix literal EVERY
     /// element of which is a param view, so the element bodies belong to the
     /// CALLER and this binding must not arm a walker of its own?

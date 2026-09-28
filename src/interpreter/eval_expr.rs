@@ -1558,8 +1558,10 @@ impl<'a> super::Interpreter<'a> {
                     // Fresh temps only: a NAMED local reaching a miss edge has
                     // its own walk to run the body, and firing here as well
                     // would double it.
+                    // B-2026-09-28-4 — nor a param VIEW, whose body is the caller's.
                     if Self::optres_freshtemp_scrutinee(value)
                         && self.scrutinee_expr_is_consuming(value)
+                        && !self.optres_temp_is_param_view(value)
                     {
                         self.run_optres_payload_user_drops_value(&val);
                     }
@@ -1738,8 +1740,10 @@ impl<'a> super::Interpreter<'a> {
                         // Fresh temps only: a NAMED local reaching a miss edge has
                         // its own walk to run the body, and firing here as well
                         // would double it.
+                        // B-2026-09-28-4 — nor a param VIEW, whose body is the caller's.
                         if Self::optres_freshtemp_scrutinee(value)
                             && self.scrutinee_expr_is_consuming(value)
+                            && !self.optres_temp_is_param_view(value)
                         {
                             self.run_optres_payload_user_drops_value(&val);
                         }

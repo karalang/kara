@@ -3107,22 +3107,20 @@ impl<'ctx> super::Codegen<'ctx> {
             object.kind,
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
         ) || self.scrutinee_is_borrow_call(object)
+            || self.optres_temp_hands_back_optres_param(object)
         {
             return;
         }
-        // A temp carrying a param VIEW (`mk2o(x).is_some()`, `x` an owned
-        // param) is the caller's to fire under caller-retains; see the
-        // interpreter twin for why the test is a deep mention.
-        let carries_view = self
-            .fn_ctx
-            .current_fn_param_names
-            .iter()
-            .filter(|n| !self.borrow_vars.ref_params.contains_key(n.as_str()))
-            .chain(self.payload_vars.param_view_locals.iter())
-            .any(|n| crate::deque_head::expr_mentions_name_deep(object, n));
-        if carries_view {
-            return;
-        }
+        // A temp that hands back a param declared `Option`/`Result`
+        // (`id(a).is_some()` in `fn f(a: Option[S])`) is left alone, as
+        // B-2026-09-27-129 left it: its box is the caller's, and which frame
+        // runs its bodies is still split by position and backend
+        // (B-2026-09-28-13).
+        //
+        // A temp that is a param VIEW (`mk2o(x).is_some()`, `x` an owned
+        // param) keeps the memory half and loses the bodies inside
+        // `track_discarded_optres_payload_bodies` (B-2026-09-28-4), as the
+        // discard statement does.
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
         let prev = self
             .drop_rc
