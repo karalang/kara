@@ -15242,11 +15242,25 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // B-2026-09-28-49 — only a flag this frame holds for a PARAMETER (or
+        // a part, the receiver, or a param view) is a conditional-store flag.
+        // A plain LOCAL also carries one once a move nested in a branch keeps
+        // its action armed per path (`if c { xs.push(b); } else { eat(b); }`,
+        // `if k { return Some(r); } eat(r);`); for it, handing the value to a
+        // callee is not a move of the body away from this frame, so clearing
+        // the bit there lost the body on the path that kept it.
+        let param_side = |cg: &Self, n: &str| {
+            n.contains('.')
+                || n == "self"
+                || cg.fn_ctx.current_fn_param_names.contains(n)
+                || cg.payload_vars.param_view_locals.contains(n)
+        };
         let aliases = &self.drop_rc.cond_part_aliases;
         let names: Vec<String> = self
             .drop_rc
             .cond_move_drop_flags
             .keys()
+            .filter(|n| param_side(self, n))
             .filter(|n| {
                 hands_over(handed, n)
                     || aliases
@@ -15274,6 +15288,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .payload_vars
             .shadowed_gen_names
             .iter()
+            .filter(|n| param_side(self, n))
             .filter(|n| hands_over(handed, n))
             .filter(|n| !self.flagged_array_arg_stays_with_caller(handed, n))
             .filter_map(|n| {
@@ -16583,9 +16598,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Interp twin: `record_ctor_arg_moves` at the same method sites.
     pub(super) fn disarm_moved_value_arg_user_drops(&mut self, e: &Expr) {
         match &e.kind {
+            // B-2026-09-28-49 — PER PATH when the sink call is nested in a
+            // branch. `let b = E { .. }; if c { es.push(b); }` reached the
+            // all-paths removal from inside the branch and deleted `b`'s
+            // action on the path that never pushed it, so its body (and, for a
+            // struct whose memory rides the `karac_drop_<T>` wrapper, its heap)
+            // was lost there on every compiled surface while `--interp`, per
+            // path by construction, ran it. Same rule the constructor arm
+            // (B-2026-08-31-46) and the nested `return` arm already follow: the
+            // enclosing-frame guard keeps the action and stores `false` in this
+            // block; a top-level push finds the action in the innermost frame,
+            // the guard declines, and the static removal stands.
             ExprKind::Identifier(n) => {
                 let n = n.clone();
-                self.suppress_user_drop_for_var(&n);
+                if !self.guard_user_drop_for_nested_return(&n) {
+                    self.suppress_user_drop_for_var(&n);
+                }
             }
             ExprKind::SelfValue => self.suppress_user_drop_for_var("self"),
             // B-2026-09-26-35 — a field PROJECTED off a named local

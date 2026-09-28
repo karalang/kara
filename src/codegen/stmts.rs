@@ -11825,7 +11825,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // to suppress both: drop the body action, and
                                 // cap-zero the source's heap so its memory drop
                                 // no-ops while the destination becomes the owner.
-                                self.suppress_user_drop_for_var(source_name);
+                                //
+                                // B-2026-09-28-49 — the body half PER PATH when
+                                // the `let` is nested, as the `has_user_drop`
+                                // arm below is; the memory half is already per
+                                // path (cap-zeroing lives in this block).
+                                if !self.guard_user_drop_for_nested_return(source_name) {
+                                    self.suppress_user_drop_for_var(source_name);
+                                }
                                 self.suppress_source_vec_cleanup_for_arg_ex(
                                     value,
                                     shared_info.is_none(),
@@ -11850,9 +11857,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // declines, and the static removal stands. The
                                 // param-view arm below then hands the body to
                                 // `m` on the path that did rebind.
-                                let per_path =
-                                    self.drop_rc.cond_returned_body_params.contains(source_name)
-                                        && self.guard_user_drop_for_nested_return(source_name);
+                                //
+                                // B-2026-09-28-49 — for ANY source, not only a
+                                // `cond_returned_body_params` param: a local
+                                // (`let c = E { .. }; if f { let k = c; }`) lost
+                                // its body on the not-taken path the same way.
+                                let per_path = self.guard_user_drop_for_nested_return(source_name);
                                 if !per_path {
                                     self.suppress_user_drop_for_var(source_name);
                                 }
@@ -14740,9 +14750,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                             &tn,
                                             &std::collections::HashMap::new(),
                                         ) {
-                                            self.builder
-                                                .build_call(bodies, &[slot.ptr.into()], "")
-                                                .unwrap();
+                                            // B-2026-09-28-49 — GUARDED, as the
+                                            // wrapper arm above is: a value moved
+                                            // out in ONE branch (`if c { let q =
+                                            // w; }`, `if c { xs.push(w); }`) now
+                                            // keeps its action armed behind a
+                                            // per-path flag, so on the moving
+                                            // path the walk would replay the
+                                            // moved fields' bodies over the
+                                            // cap-zeroed husk.
+                                            self.emit_user_drop_call_guarded(
+                                                name.as_str(),
+                                                bodies,
+                                                slot.ptr,
+                                                "",
+                                            );
                                         }
                                     }
                                     // B-2026-09-19-42 — the COMBINED drop when the

@@ -11186,7 +11186,13 @@ impl<'a> super::Interpreter<'a> {
                                     if self.program.drop_method_keys.contains_key(tn) {
                                         let tn = tn.clone();
                                         self.run_user_drop_body_on_value(&tn, old);
-                                    } else if self.value_runs_user_drop(&old) {
+                                    } else if self.value_runs_user_drop(&old)
+                                        // B-2026-09-28-49 — nor a field walk
+                                        // over a value moved out on this path
+                                        // (`if c { let q = w; } w = ..;`),
+                                        // the gate the scope-exit walk checks.
+                                        && !self.moved_out_drop_field_bindings.contains(t.as_str())
+                                    {
                                         self.drop_user_drop_fields_of_value(&old);
                                     }
                                 }
