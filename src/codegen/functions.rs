@@ -4202,10 +4202,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         (program.as_deref(), source, &param.ty.kind)
                     {
                         if let Some(struct_name) = path.segments.first().cloned() {
-                            let parts = if source.self_param.is_some() {
-                                Vec::new()
-                            } else {
-                                crate::ast::fn_conditionally_handed_param_parts(program, source, i)
+                            // B-2026-09-28-20 — a method's lowered params
+                            // carry `self` at 0; the source's do not.
+                            let parts = match (source.self_param.is_some(), i) {
+                                (true, 0) => {
+                                    crate::ast::fn_conditionally_handed_self_parts(program, source)
+                                }
+                                (true, i) => crate::ast::fn_conditionally_handed_param_parts(
+                                    program,
+                                    source,
+                                    i - 1,
+                                ),
+                                (false, i) => crate::ast::fn_conditionally_handed_param_parts(
+                                    program, source, i,
+                                ),
                             };
                             for part in parts {
                                 let Some(skip) = self.only_path_skip_tree(&struct_name, &part)

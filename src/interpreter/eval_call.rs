@@ -3274,6 +3274,25 @@ impl<'a> super::Interpreter<'a> {
                 out.push(name.to_string());
             }
         }
+        // B-2026-09-28-20 — the part arm of `cond_returned_param_drop_names`,
+        // for a METHOD's by-value param: `f.params` excludes the receiver here,
+        // as the predicate's own indexing does.
+        for (i, p) in f.params.iter().enumerate() {
+            let Some(name) = p.name() else { continue };
+            if out.iter().any(|n| n == name) {
+                continue;
+            }
+            for path in crate::ast::fn_conditionally_handed_param_parts(self.program, f, i) {
+                let carries = self
+                    .env
+                    .get(name)
+                    .and_then(|v| crate::interpreter::value_at_param_path(&v, &path))
+                    .is_some_and(|v| self.field_value_carries_user_drop(&v));
+                if carries {
+                    out.push(crate::ast::param_part_binding_name(name, &path));
+                }
+            }
+        }
         out
     }
 

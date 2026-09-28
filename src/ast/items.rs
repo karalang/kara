@@ -5034,10 +5034,9 @@ pub fn fn_conditionally_handed_param_parts(
     f: &Function,
     arg_index: usize,
 ) -> Vec<ParamPath> {
-    // Instance methods keep the static answer: their parameters are adopted
-    // through a separate registration on both backends that this does not
-    // extend yet.
-    if f.generic_params.is_some() || f.self_param.is_some() {
+    // A method's `params` exclude the receiver, so `arg_index` counts the
+    // explicit arguments (B-2026-09-28-20); the receiver itself is not asked.
+    if f.generic_params.is_some() {
         return Vec::new();
     }
     let Some(param) = f.params.get(arg_index) else {
@@ -5174,7 +5173,31 @@ pub fn fn_escaping_self_part_paths(program: &crate::Program, f: &Function) -> Ve
     if !matches!(f.self_param, Some(SelfParam::Owned)) {
         return Vec::new();
     }
-    part_paths_from_root(f, "self", usize::MAX, Some(program))
+    let mut out = part_paths_from_root(f, "self", usize::MAX, Some(program));
+    for p in fn_conditionally_handed_self_parts(program, f) {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// B-2026-09-28-20 — [`fn_conditionally_handed_param_parts`] for an OWNED
+/// receiver: the parts of `self` handed to another owner on some paths only
+/// (`if c { let k = keep(self.r); .. }`). The caller masks them with the rest
+/// of [`fn_escaping_self_part_paths`]; the method adopts each one as `self.r`.
+pub fn fn_conditionally_handed_self_parts(
+    program: &crate::Program,
+    f: &Function,
+) -> Vec<ParamPath> {
+    if f.generic_params.is_some() || !matches!(f.self_param, Some(SelfParam::Owned)) {
+        return Vec::new();
+    }
+    let must = part_paths_from_root_mode(f, "self", usize::MAX, Some(program), false);
+    part_paths_from_root_mode(f, "self", usize::MAX, Some(program), true)
+        .into_iter()
+        .filter(|p| !must.contains(p))
+        .collect()
 }
 
 /// B-2026-09-17-2 — which aggregate a discarded METHOD result is, for the

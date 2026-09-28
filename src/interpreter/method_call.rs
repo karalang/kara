@@ -826,6 +826,24 @@ impl<'a> super::Interpreter<'a> {
                     });
                 if adopts_self_body {
                     param_drop_names.push("self".to_string());
+                } else if matches!(
+                    self.method_self_param(&type_name, method),
+                    Some(crate::ast::SelfParam::Owned)
+                ) {
+                    // B-2026-09-28-20 — a PART of an owned receiver handed over
+                    // on some paths only: the part arm of
+                    // `cond_returned_param_drop_names`, keyed `self.r`.
+                    if let Some(f) = self.find_impl_method_ast(&type_name, method) {
+                        for path in crate::ast::fn_conditionally_handed_self_parts(self.program, f)
+                        {
+                            if crate::interpreter::value_at_param_path(obj, &path)
+                                .is_some_and(|v| self.field_value_carries_user_drop(&v))
+                            {
+                                param_drop_names
+                                    .push(crate::ast::param_part_binding_name("self", &path));
+                            }
+                        }
+                    }
                 }
                 // B-2026-08-29-11, PARAM LEG — `moved_out_user_drop_bindings` is
                 // keyed by bare NAME with no frame qualifier, and the method
