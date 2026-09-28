@@ -7811,33 +7811,51 @@ impl<'ctx> super::Codegen<'ctx> {
                         // receiver-temp drain: the receiver is argument zero
                         // and dies at the call return, where the named
                         // receiver's walk runs the same bodies.
-                        // Only where the registrar DID decline: a callee whose
-                        // return cannot carry a `Drop` part (`mkw(3).getb()`
-                        // over `self.b: i64`) already has the whole walk on
-                        // this slot, and a second, masked one doubled every
-                        // body it shares with it.
-                        let slot = self
-                            .variables
-                            .get(recv_name.as_str())
-                            .copied()
-                            .filter(|slot| {
-                                !self.drop_rc.scope_cleanup_actions.iter().flatten().any(|a| {
-                                    matches!(a, super::state::CleanupAction::UserDrop { binding_name, binding_ptr, .. }
-                                        if binding_name == "__urecv_drop_tmp" && *binding_ptr == slot.ptr)
-                                })
-                            });
+                        // Where the registrar did NOT decline (a callee whose
+                        // return cannot carry a `Drop` part, `mkw(3).getb()`
+                        // over `self.b: i64`, or one that hands the part to
+                        // another owner instead, `keep(self.r)`), the whole
+                        // walk is already on this slot: MASK it in place
+                        // (B-2026-09-27-105). A second, masked walk beside it
+                        // doubled every body the two share.
+                        let slot = self.variables.get(recv_name.as_str()).copied();
                         let skip = self.escaping_field_skip_tree(&receiver_type, &parts);
                         if let (Some(slot), Some(bodies)) = (
                             slot,
                             self.field_bodies_fn_for_owned_temp_skipping(&receiver_type, &skip),
                         ) {
-                            self.track_user_drop_var_with_fn(
-                                &receiver_type,
-                                "__urecv_drop_tmp",
-                                slot.ptr,
-                                bodies,
-                                UserDropKind::StructFieldBodies,
-                            );
+                            let mut masked = false;
+                            let mut other = false;
+                            for a in self.drop_rc.scope_cleanup_actions.iter_mut().flatten() {
+                                if let super::state::CleanupAction::UserDrop {
+                                    binding_name,
+                                    binding_ptr,
+                                    drop_fn,
+                                    kind,
+                                    ..
+                                } = a
+                                {
+                                    if binding_name == "__urecv_drop_tmp"
+                                        && *binding_ptr == slot.ptr
+                                    {
+                                        if *kind == UserDropKind::StructFieldBodies {
+                                            *drop_fn = bodies;
+                                            masked = true;
+                                        } else {
+                                            other = true;
+                                        }
+                                    }
+                                }
+                            }
+                            if !masked && !other {
+                                self.track_user_drop_var_with_fn(
+                                    &receiver_type,
+                                    "__urecv_drop_tmp",
+                                    slot.ptr,
+                                    bodies,
+                                    UserDropKind::StructFieldBodies,
+                                );
+                            }
                         }
                     } else if !parts.is_empty() {
                         let recv_name = recv_name.clone();

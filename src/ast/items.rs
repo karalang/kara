@@ -5465,14 +5465,14 @@ fn part_paths_from_root(
                     // is: under an `if` the path that does not hand it over
                     // would lose the body, trading a double for a missing one.
                     //
-                    // Not off `self`: a fresh-temp RECEIVER's registrar
-                    // (`mkw(3).take()`) walks the whole value beside this
-                    // channel, so reporting the part there added a second,
-                    // masked walk rather than masking the first.
+                    // Off `self` too (B-2026-09-27-105): a fresh-temp
+                    // receiver's registrar walks the whole value beside this
+                    // channel, and the method-call site now MASKS that walk
+                    // rather than adding a second one beside it.
                     let projection = matches!(
                         &a.value.kind,
                         ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
-                    ) && !part_scan_rooted_at_self(&a.value);
+                    );
                     let admitted = matches!(&a.value.kind, ExprKind::Identifier(_))
                         || (projection && cx.top_level);
                     if !admitted {
@@ -5531,9 +5531,7 @@ fn part_paths_from_root(
                     && denote(object, aliases).is_none()
                 {
                     for a in args {
-                        if !part_scan_rooted_at_self(&a.value) {
-                            note(&a.value, out);
-                        }
+                        note(&a.value, out);
                     }
                 }
                 // B-2026-09-27-58 — the METHOD twin of the forwarding route
@@ -5717,17 +5715,6 @@ struct PartScanCx<'a> {
     /// own `let`s, parameters excluded: the containers a part pushed into is
     /// then owned, and dropped, by the callee rather than the caller.
     locals: &'a [&'a str],
-}
-
-/// B-2026-09-27-99 — whether a place expression projects off `self`; the
-/// receiver routes of the part scan leave those alone (see `taken_over`).
-fn part_scan_rooted_at_self(e: &Expr) -> bool {
-    let mut cur = e;
-    while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } = &cur.kind
-    {
-        cur = object;
-    }
-    matches!(cur.kind, ExprKind::SelfValue)
 }
 
 /// B-2026-09-27-99 — every name a `let` in `b` binds whole, at any block depth
