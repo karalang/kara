@@ -3879,6 +3879,17 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(self.resolve_generic_field_te(object, &type_name, &field_te))
     }
 
+    /// Does `te` name an enum held BY VALUE — `Option`, `Result`, or a user
+    /// enum (generic or not) that is not `shared`? The field-store
+    /// move-suppression question (B-2026-09-28-74), asked of the field's
+    /// declared type: storing a named binding of such a type into the field
+    /// hands its payload over, so the source's own drop must stand down.
+    pub(super) fn field_te_is_value_enum(&self, te: &TypeExpr) -> bool {
+        matches!(&te.kind, TypeKind::Path(p)
+            if p.segments.last().is_some_and(|n| n == "Option" || n == "Result"
+                || self.type_decls.enum_layouts.get(n.as_str()).is_some_and(|l| !l.is_shared)))
+    }
+
     /// One deref when a chain ROOT is a `shared struct` binding
     /// (B-2026-08-14-26).
     ///

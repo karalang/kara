@@ -15473,6 +15473,25 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.suppress_user_drop_for_var(rhs_name);
                         }
                     }
+                    // B-2026-09-28-74 — the value-ENUM sibling of the struct leg
+                    // above. `k = s` over a named user value enum left `s`'s
+                    // `EnumDrop` armed, so both slots freed the moved payload at
+                    // scope exit: `free(): double free` at -O0 for a `String`
+                    // payload, at -O2 as well once the payload has a `Drop` body.
+                    // The param-view RHS keeps its own leg above (its memory is
+                    // this frame's and is disarmed there), so it is excluded.
+                    if lhs_is_tracked_value_enum && !rhs_is_self_alias && !rhs_is_param_view {
+                        if let ExprKind::Identifier(rhs_name) = &value.kind {
+                            let rhs_name = rhs_name.clone();
+                            self.suppress_source_vec_cleanup_for_arg(value);
+                            // Per path when the source outlives the branch the
+                            // store sits in: a path that never moved it still
+                            // owes its body (`if c { k = s; }` over `c` false).
+                            if !self.guard_user_drop_for_nested_return(&rhs_name) {
+                                self.suppress_user_drop_for_var(&rhs_name);
+                            }
+                        }
+                    }
                     // B-2026-07-21-16 (assign leg): `x = <ownedplace>.optresfield;`
                     // — a field MOVE into an existing binding. Zero the source
                     // so the owning struct's drop skips the payload now in x's
@@ -15690,6 +15709,42 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let src = src.clone();
                                 self.suppress_source_vec_cleanup_for_arg(value);
                                 self.suppress_user_drop_for_var(&src);
+                            } else if self.field_te_is_value_enum(&field_te)
+                                && !((self.fn_ctx.current_fn_param_names.contains(src.as_str())
+                                    && !self.borrow_vars.ref_params.contains_key(src.as_str()))
+                                    || self.payload_vars.param_view_locals.contains(src.as_str()))
+                            {
+                                // B-2026-09-28-74 — the ENUM field of the leg
+                                // above: `h.e = s` moving a named value-enum
+                                // binding into a user-enum field left `s`'s
+                                // `EnumDrop` armed beside the holder's drop of
+                                // the same payload (`free(): double free` at
+                                // -O0). Same disarm as the binding target,
+                                // per path in the same way. An `Option` /
+                                // `Result` or boxed-payload source is disarmed
+                                // by the two transfer suppressors a
+                                // struct-literal field init uses; each is
+                                // self-gated on the source's registration.
+                                let src = src.clone();
+                                self.suppress_source_vec_cleanup_for_arg(value);
+                                self.suppress_inline_option_agg_binding_transfer(value);
+                                self.suppress_nested_boxed_payload_move(value);
+                                if !self.guard_user_drop_for_nested_return(&src) {
+                                    self.suppress_user_drop_for_var(&src);
+                                }
+                            } else if matches!(&field_te.kind, TypeKind::Path(p)
+                                if p.segments.last().is_some_and(|n|
+                                    self.type_decls.shared_types.contains_key(n.as_str())))
+                            {
+                                // B-2026-09-28-74 — a `shared` field: the store
+                                // copied the handle without a reference of its
+                                // own, so the source's release at its last use
+                                // freed the node the field still points at (a
+                                // use-after-free, then the holder's drop
+                                // releases it again). The shared transfer this
+                                // emits is that missing +1, as it is for a
+                                // struct-literal field or a `Vec.push`.
+                                self.suppress_source_vec_cleanup_for_arg(value);
                             }
                         }
                     }
