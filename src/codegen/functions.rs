@@ -3985,6 +3985,57 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-09-28-20 — the USER-enum conditional-STORE arm, the
+                // store sibling of the user-enum arm of the conditional-return
+                // registration above. A by-value user enum stored on SOME
+                // paths only (`fn csg(v: mut ref Vec[G], x: G, c: bool) { if c
+                // { v.push(x); } }`) had no owner for its payload bodies on the
+                // path that did not store it: the caller stands down for a
+                // conditionally stored param and the struct-only arm below
+                // registered nothing. The payload bodies are adopted here
+                // under the per-path flag `arm_conditional_store_flag` clears
+                // in the storing statement; the caller stands a projection
+                // argument down on the same predicate
+                // (`callee_adopts_projection_body_per_path`).
+                if func.generic_params.is_none()
+                    && !self.is_coroutine_compiled(&func.name)
+                    && crate::ast::fn_conditionally_stores_param(func, i)
+                    && !crate::ast::fn_matches_on_bare_param(func, &param_name)
+                {
+                    if let TypeKind::Path(p) = &param.ty.kind {
+                        let en = p.segments.first().cloned().unwrap_or_default();
+                        let user_enum = p.segments.len() == 1
+                            && en != "Option"
+                            && en != "Result"
+                            && self
+                                .type_decls
+                                .enum_layouts
+                                .get(en.as_str())
+                                .is_some_and(|l| !l.is_shared)
+                            && !self
+                                .program_snapshot
+                                .as_deref()
+                                .is_some_and(|p| p.drop_method_keys.contains_key(en.as_str()));
+                        if user_enum {
+                            if let Some(bodies) = self.emit_enum_payload_user_drop_bodies_fn(&en) {
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    &param_name,
+                                    alloca,
+                                    bodies,
+                                    crate::codegen::state::UserDropKind::ContainerElemBodies,
+                                );
+                                let _ = self.cond_move_drop_flag_for(&param_name);
+                                self.drop_rc
+                                    .cond_store_flag_params
+                                    .insert(param_name.clone());
+                                self.payload_vars
+                                    .cond_handback_optres_params
+                                    .insert(param_name.clone());
+                            }
+                        }
+                    }
+                }
                 // B-2026-08-30-28 — the STORE sibling of the conditional
                 // -return registration directly above, and the same defect one
                 // escape route over.

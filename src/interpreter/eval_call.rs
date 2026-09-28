@@ -2990,8 +2990,15 @@ impl<'a> super::Interpreter<'a> {
                 // param the body rebinds (`let y = x;`) is admitted since
                 // B-2026-09-27-131: `let_destructures_owned_param` hands the
                 // ownership on to `y`, as codegen's `pending_optres_handon` does.
+                // B-2026-09-28-20 — or STORED on some paths only (`if c {
+                // v.push(x); }`), by a non-generic callee: before this the
+                // stored arm was struct-only, so a user enum not stored on
+                // the other path ran no payload body at all.
                 Some(v @ Value::EnumVariant { .. })
-                    if cond_returned
+                    if (cond_returned
+                        || (cond_stored
+                            && f.generic_params.is_none()
+                            && !crate::ast::fn_matches_on_bare_param(f, name)))
                         && matches!(&v, Value::EnumVariant { enum_name, .. }
                             if enum_name != "Option"
                                 && enum_name != "Result"
@@ -5961,7 +5968,13 @@ impl<'a> super::Interpreter<'a> {
             crate::ast::PatternKind::Binding(n) => crate::ast::param_rebind_aliases(f, n).len() > 1,
             _ => true,
         };
-        cond_return
+        // B-2026-09-28-20 — or STORED on some paths, by a non-generic callee.
+        let cond_store = f.generic_params.is_none()
+            && crate::ast::fn_conditionally_stores_param(f, i)
+            && param
+                .name()
+                .is_some_and(|n| !crate::ast::fn_matches_on_bare_param(f, n));
+        (cond_return || cond_store)
             && !own_drop
             && !rebound
             && tn != "Option"

@@ -1764,15 +1764,31 @@ fn type_name_can_contain(
 /// payload there too, measured — so the test is the scrutinee, not the
 /// pattern's bindings.
 pub fn fn_matches_on_bare_self(f: &Function) -> bool {
-    fn is_bare_self(e: &Expr) -> bool {
-        matches!(&e.kind, ExprKind::SelfValue)
-    }
-    fn walk_expr(e: &Expr) -> bool {
+    matches_on_scrutinee(f, &|e: &Expr| matches!(&e.kind, ExprKind::SelfValue), false)
+}
+
+/// B-2026-09-28-20 — the by-value PARAMETER form of
+/// [`fn_matches_on_bare_self`]: does `f` destructure its bare param `name` in a
+/// `match` / `if let` / `while let` / `let .. else`? Such a callee hands the
+/// PAYLOAD out rather than the value, so the per-path store flag, which only
+/// the whole value's hand-over clears, must not adopt it: the arm that stores
+/// the payload would leave the flag armed and run the payload's body a second
+/// time over the moved-out slot.
+pub fn fn_matches_on_bare_param(f: &Function, name: &str) -> bool {
+    matches_on_scrutinee(
+        f,
+        &|e: &Expr| matches!(&e.kind, ExprKind::Identifier(n) if n == name),
+        true,
+    )
+}
+
+fn matches_on_scrutinee(f: &Function, is_target: &dyn Fn(&Expr) -> bool, let_else: bool) -> bool {
+    fn walk_expr(e: &Expr, t: &dyn Fn(&Expr) -> bool, le: bool) -> bool {
         match &e.kind {
             ExprKind::Match { scrutinee, arms } => {
-                is_bare_self(scrutinee)
-                    || walk_expr(scrutinee)
-                    || arms.iter().any(|a| walk_expr(&a.body))
+                t(scrutinee)
+                    || walk_expr(scrutinee, t, le)
+                    || arms.iter().any(|a| walk_expr(&a.body, t, le))
             }
             ExprKind::IfLet {
                 value,
@@ -1780,44 +1796,47 @@ pub fn fn_matches_on_bare_self(f: &Function) -> bool {
                 else_branch,
                 ..
             } => {
-                is_bare_self(value)
-                    || walk_expr(value)
-                    || walk_block(then_block)
-                    || else_branch.as_deref().is_some_and(walk_expr)
+                t(value)
+                    || walk_expr(value, t, le)
+                    || walk_block(then_block, t, le)
+                    || else_branch.as_deref().is_some_and(|x| walk_expr(x, t, le))
             }
             ExprKind::WhileLet { value, body, .. } => {
-                is_bare_self(value) || walk_expr(value) || walk_block(body)
+                t(value) || walk_expr(value, t, le) || walk_block(body, t, le)
             }
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
-            | ExprKind::Par(b) => walk_block(b),
+            | ExprKind::Par(b) => walk_block(b, t, le),
             ExprKind::If {
                 condition,
                 then_block,
                 else_branch,
             } => {
-                walk_expr(condition)
-                    || walk_block(then_block)
-                    || else_branch.as_deref().is_some_and(walk_expr)
+                walk_expr(condition, t, le)
+                    || walk_block(then_block, t, le)
+                    || else_branch.as_deref().is_some_and(|x| walk_expr(x, t, le))
             }
             ExprKind::While { body, .. }
             | ExprKind::For { body, .. }
             | ExprKind::Loop { body, .. }
-            | ExprKind::LabeledBlock { body, .. } => walk_block(body),
+            | ExprKind::LabeledBlock { body, .. } => walk_block(body, t, le),
             _ => false,
         }
     }
-    fn walk_block(b: &Block) -> bool {
+    fn walk_block(b: &Block, t: &dyn Fn(&Expr) -> bool, le: bool) -> bool {
         b.stmts.iter().any(|st| match &st.kind {
-            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => walk_expr(value),
-            StmtKind::Expr(e) => walk_expr(e),
-            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => walk_block(body),
+            StmtKind::Let { value, .. } => walk_expr(value, t, le),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => (le && (t(value) || walk_block(else_block, t, le))) || walk_expr(value, t, le),
+            StmtKind::Expr(e) => walk_expr(e, t, le),
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => walk_block(body, t, le),
             _ => false,
-        }) || b.final_expr.as_deref().is_some_and(walk_expr)
+        }) || b.final_expr.as_deref().is_some_and(|x| walk_expr(x, t, le))
     }
-    walk_block(&f.body)
+    walk_block(&f.body, is_target, let_else)
 }
 
 pub fn fn_rebinds_self_whole(f: &Function) -> bool {

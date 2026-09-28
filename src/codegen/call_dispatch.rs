@@ -12059,9 +12059,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 None
             };
         }
-        // The user-enum arm is conditional-RETURN only, and declines an enum
-        // with its own `Drop` and a param the body rebinds, as both prologues
-        // do; the mono leg also declines a leaf whose memory it takes.
+        // The user-enum arm is conditional-RETURN or -STORE (the latter for a
+        // non-generic callee, B-2026-09-28-20), and declines an enum with its
+        // own `Drop` and a param the body rebinds, as both prologues do; the
+        // mono leg also declines a leaf whose memory it takes.
         let rebound = f
             .params
             .get(arg_index)
@@ -12070,7 +12071,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => None,
             })
             .is_none_or(|n| crate::ast::param_rebind_aliases(f, n).len() > 1);
-        (cond_return
+        let cond_store = f.generic_params.is_none()
+            && crate::ast::fn_conditionally_stores_param(f, arg_index)
+            && f.params
+                .get(arg_index)
+                .and_then(|p| p.name())
+                .is_some_and(|n| !crate::ast::fn_matches_on_bare_param(f, n));
+        ((cond_return || cond_store)
             && !own_drop
             && !rebound
             && tn != "Option"

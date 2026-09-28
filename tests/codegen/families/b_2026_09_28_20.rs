@@ -57,3 +57,45 @@ fn main() {
     assert_eq!(interp_out.join(""), want, "interpreter");
     assert_eq!(run_program(src).as_deref(), Some(want), "AOT");
 }
+
+/// B-2026-09-28-20 cell (e) — a by-value USER-enum param stored on only some
+/// paths (`fn csg(v: mut ref Vec[G], x: G, c: bool) { if c { v.push(x); } }`,
+/// `enum G { A(D), B }`) ran no payload body on the path that did not store
+/// it, on all four surfaces and for every argument spelling; handed a field
+/// (`csg(mut xs, v.g, true)`), the caller's walk ran it beside the vector's
+/// drain on the storing path. The callee now adopts the payload bodies under
+/// the per-path flag the storing statement clears, and the caller stands a
+/// projection argument down, as both already did for a conditional return.
+#[test]
+fn e2e_enum_param_stored_on_one_path_runs_its_payload_once() {
+    let src = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
+fn keep(d: D) -> D { d }
+enum G { A(D), B }
+struct V { g: G, n: i64 }
+fn mkv(n: i64) -> V { V { g: G.A(mkd(n)), n: n } }
+struct U { v: V }
+fn csg(v: mut ref Vec[G], x: G, c: bool) { if c { v.push(x); } }
+fn tl(v: mut ref Vec[G], x: G, c: bool) { if c { v.push(x) } }
+fn loc(x: G, c: bool) -> i64 { let mut ys: Vec[G] = Vec.new(); if c { ys.push(x); } ys.len() }
+struct H { k: i64 }
+impl H { fn m(ref self, v: mut ref Vec[G], x: G, c: bool) { if c { v.push(x); } } }
+fn main() {
+    let mut xs: Vec[G] = Vec.new();
+    csg(mut xs, mkv(1).g, false); csg(mut xs, mkv(2).g, true); println(f"a{xs.len()}")
+    tl(mut xs, G.A(mkd(3)), false); let g4 = G.A(mkd(4)); tl(mut xs, g4, true); println(f"b{xs.len()}")
+    println(f"c{loc(G.A(mkd(5)), false)}"); let v6 = mkv(6); println(f"c{loc(v6.g, true)}")
+    let h = H { k: 0 }; let v7 = mkv(7); h.m(mut xs, v7.g, false); h.m(mut xs, G.A(mkd(8)), true); println(f"e{xs.len()}")
+    let u9 = U { v: mkv(9) }; csg(mut xs, u9.v.g, false); let u10 = U { v: mkv(10) }; csg(mut xs, u10.v.g, true); println(f"f{xs.len()}")
+    csg(mut xs, G.B, false); csg(mut xs, G.B, true); println(f"g{xs.len()}")
+    println("end")
+}"#;
+    let want = "dD1n1\na1\ndD3n3\nb2\ndD5n5\nc0\ndD6n6\nc1\ndD7n7\ne3\ndD9n9\nf4\ng5\ndD2n2\ndD4n4\ndD8n8\ndD10n10\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    assert_eq!(run_program(src).as_deref(), Some(want), "AOT");
+}
