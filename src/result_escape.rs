@@ -56,6 +56,11 @@ struct Acc<'a> {
     /// resolve. The walk stays here; the policy comes from whoever can answer
     /// it. See [`optres_payload_escaping_param_variants_with`].
     copy_read: Option<&'a dyn Fn(&Expr) -> bool>,
+    /// B-2026-09-17-23 — the MEMORY sibling of `copy_read`, consulted only by
+    /// the `payload_consumers` arms: a projection this answers `true` for is a
+    /// copy read that takes nothing out of the payload. `None` keeps the plain
+    /// syntactic walk. See [`optres_payload_consuming_param_variants_with`].
+    take_copy_read: Option<&'a dyn Fn(&Expr) -> bool>,
     counts: HashMap<&'a str, (u32, u32, u32)>,
     /// `(binding name, value-span (offset,length))` for every `Binding`-pattern
     /// `let` / `let…else` encountered — filtered against `counts` after the walk.
@@ -587,6 +592,45 @@ pub fn optres_payload_consuming_param_variants(
         .collect()
 }
 
+/// B-2026-09-17-23 — [`optres_payload_consuming_param_variants`] with a
+/// COPY-READ policy for the arm bindings, supplied by a caller that holds the
+/// instantiated payload type.
+///
+/// The plain walk calls every projection off a whole-payload binding a take,
+/// so `Some(t) => { return t.1 }` over `Option[(W, i64)]` read as consuming
+/// the payload, `compile_generic_call` left the boxed interior to a callee arm
+/// that never frees it, and `W`'s `String` leaked (2 B per call) where the
+/// concrete twin is clean. The concrete callee asks
+/// `binding_only_borrowed_with` with a scalar copy-read
+/// (`arm_binding_scalar_copy_read`, B-2026-09-10-23) before it retracts the
+/// interior; this is that same question, asked from the caller's side.
+pub fn optres_payload_consuming_param_variants_with(
+    func: &Function,
+    copy_read: &dyn Fn(&Expr) -> bool,
+) -> HashMap<String, HashSet<String>> {
+    let mut acc = Acc {
+        take_copy_read: Some(copy_read),
+        ..seeded_acc(func)
+    };
+    walk_block(&func.body, &mut acc);
+    func.params
+        .iter()
+        .filter_map(|p| {
+            let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+                return None;
+            };
+            acc.payload_consumers.get(name.as_str()).map(|vs| {
+                (
+                    name.clone(),
+                    vs.iter()
+                        .map(|v| (*v).to_string())
+                        .collect::<HashSet<String>>(),
+                )
+            })
+        })
+        .collect()
+}
+
 /// The VARIANT a `Some`/`Ok`/`Err` arm TAKES the payload of, rather than only
 /// reading it. Mirrors codegen's `boxed_tuple_payload_arm_takes_ownership`
 /// (a per-element destructure always takes; a whole-payload binding takes
@@ -598,16 +642,20 @@ fn variant_arm_takes_payload<'a>(
     pattern: &'a crate::ast::Pattern,
     guard: Option<&Expr>,
     body: &Expr,
+    copy_read: Option<&dyn Fn(&Expr) -> bool>,
 ) -> Option<&'a str> {
     let (variant, binds) = variant_payload_binds(pattern)?;
+    let borrowed = |v: &str, e: &Expr| match copy_read {
+        Some(cr) => crate::consume_class::binding_only_borrowed_with(v, e, cr),
+        None => crate::consume_class::binding_only_borrowed(v, e),
+    };
     match binds {
         // A per-element destructure (`Some((a, b))`) gives every leaf its own
         // owner unconditionally.
         None => Some(variant),
-        Some(names) => (!names.iter().all(|v| {
-            crate::consume_class::binding_only_borrowed(v, body)
-                && guard.is_none_or(|g| crate::consume_class::binding_only_borrowed(v, g))
-        }))
+        Some(names) => (!names
+            .iter()
+            .all(|v| borrowed(v, body) && guard.is_none_or(|g| borrowed(v, g))))
         .then_some(variant),
     }
 }
@@ -838,14 +886,16 @@ fn optres_variant_of_pattern(pattern: &crate::ast::Pattern) -> Option<&str> {
 fn variant_arm_takes_payload_block<'a>(
     pattern: &'a crate::ast::Pattern,
     block: Option<&Block>,
+    copy_read: Option<&dyn Fn(&Expr) -> bool>,
 ) -> Option<&'a str> {
     let (variant, binds) = variant_payload_binds(pattern)?;
     match (binds, block) {
         (None, _) => Some(variant),
         (Some(_), None) => Some(variant),
-        (Some(names), Some(b)) => (!names
-            .iter()
-            .all(|v| crate::consume_class::binding_only_borrowed_block(v, b)))
+        (Some(names), Some(b)) => (!names.iter().all(|v| match copy_read {
+            Some(cr) => crate::consume_class::binding_only_borrowed_block_with(v, b, cr),
+            None => crate::consume_class::binding_only_borrowed_block(v, b),
+        }))
         .then_some(variant),
     }
 }
@@ -995,7 +1045,9 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                 // `None` for its block.
                 if let ExprKind::Identifier(n) = &value.kind {
                     let root_n = root(acc, n.as_str());
-                    if let Some(v) = variant_arm_takes_payload_block(pattern, None) {
+                    if let Some(v) =
+                        variant_arm_takes_payload_block(pattern, None, acc.take_copy_read)
+                    {
                         acc.payload_consumers.entry(root_n).or_default().insert(v);
                     }
                     if let Some(v) = variant_arm_payload_escapes_block(pattern, None) {
@@ -1066,9 +1118,12 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                 let root_n = root(acc, n.as_str());
                 let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
                 for a in arms {
-                    if let Some(v) =
-                        variant_arm_takes_payload(&a.pattern, a.guard.as_ref(), &a.body)
-                    {
+                    if let Some(v) = variant_arm_takes_payload(
+                        &a.pattern,
+                        a.guard.as_ref(),
+                        &a.body,
+                        acc.take_copy_read,
+                    ) {
                         acc.payload_consumers.entry(root_n).or_default().insert(v);
                     }
                     if let Some(v) =
@@ -1211,7 +1266,9 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
             walk_scrutinee(acc, value);
             if let ExprKind::Identifier(n) = &value.kind {
                 let root_n = root(acc, n.as_str());
-                if let Some(v) = variant_arm_takes_payload_block(pattern, Some(then_block)) {
+                if let Some(v) =
+                    variant_arm_takes_payload_block(pattern, Some(then_block), acc.take_copy_read)
+                {
                     acc.payload_consumers.entry(root_n).or_default().insert(v);
                 }
                 if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(then_block)) {
@@ -1259,7 +1316,9 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
             walk_scrutinee(acc, value);
             if let ExprKind::Identifier(n) = &value.kind {
                 let root_n = root(acc, n.as_str());
-                if let Some(v) = variant_arm_takes_payload_block(pattern, Some(body)) {
+                if let Some(v) =
+                    variant_arm_takes_payload_block(pattern, Some(body), acc.take_copy_read)
+                {
                     acc.payload_consumers.entry(root_n).or_default().insert(v);
                 }
                 if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(body)) {

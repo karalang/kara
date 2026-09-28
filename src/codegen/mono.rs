@@ -2854,7 +2854,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     // answers are properties of the CALLEE rather than of this
                     // call — two call sites of one monomorph cannot disagree
                     // and nothing needs caching per instantiation.
+                    //
+                    // B-2026-09-17-23 — asked with the payload's SCALAR tuple
+                    // elements as copy reads, so `Some(t) => { return t.1 }`
+                    // over `Option[(W, i64)]` no longer reads as taking the
+                    // payload. It did, this site left the interior to a callee
+                    // arm that frees nothing, and `W`'s heap leaked. That is
+                    // the concrete callee's own test (`arm_binding_scalar_
+                    // copy_read`), which depends on the INSTANTIATION, so it
+                    // is not memoised per generic fn like the plain walk.
+                    let scalar_elems = Self::optres_tuple_payload_scalar_elems(&inst);
                     let taken = match &p.pattern.kind {
+                        crate::ast::PatternKind::Binding(n) if !scalar_elems.is_empty() => {
+                            let copy_read = |e: &Expr| {
+                                matches!(&e.kind, ExprKind::TupleIndex { object, index }
+                                    if matches!(object.kind, ExprKind::Identifier(_))
+                                        && scalar_elems.contains(&(*index as usize)))
+                            };
+                            crate::result_escape::optres_payload_consuming_param_variants_with(
+                                &generic_fn,
+                                &copy_read,
+                            )
+                            .get(n.as_str())
+                            .cloned()
+                            .unwrap_or_default()
+                        }
                         crate::ast::PatternKind::Binding(n) => payload_consuming_generic_params
                             .get_or_insert_with(|| {
                                 crate::result_escape::optres_payload_consuming_param_variants(
@@ -2974,7 +2998,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         if matches!(&inst.kind, TypeKind::Path(pp)
                             if pp.segments.last().is_some_and(|h| h == "Option" || h == "Result"))
                         {
-                            self.track_optres_arg_temp_bodies(val, &inst, &skip_parts);
+                            self.track_optres_arg_temp_bodies_owning(val, &inst, &skip_parts, true);
                         }
                     }
                 }
@@ -5195,6 +5219,47 @@ impl<'ctx> super::Codegen<'ctx> {
         // generics follow-on).
         self.apply_target_feature_attr(fn_val, func);
         Ok(fn_val)
+    }
+
+    /// B-2026-09-17-23 — the tuple element indices that are SCALAR in every
+    /// tuple payload an `Option`/`Result` instantiation carries (`{1}` for
+    /// `Option[(W, i64)]`). A `Result` whose two payloads are both tuples
+    /// answers their intersection, since the copy-read test it feeds sees an
+    /// expression and not the variant it came from. Empty for anything else.
+    fn optres_tuple_payload_scalar_elems(inst: &TypeExpr) -> std::collections::HashSet<usize> {
+        let TypeKind::Path(p) = &inst.kind else {
+            return Default::default();
+        };
+        if !p
+            .segments
+            .last()
+            .is_some_and(|h| h == "Option" || h == "Result")
+        {
+            return Default::default();
+        }
+        let mut out: Option<std::collections::HashSet<usize>> = None;
+        for a in p.generic_args.iter().flatten() {
+            let crate::ast::GenericArg::Type(t) = a else {
+                continue;
+            };
+            let TypeKind::Tuple(elems) = &t.kind else {
+                continue;
+            };
+            let here: std::collections::HashSet<usize> = elems
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    matches!(&e.kind, TypeKind::Path(ep) if ep.segments.len() == 1
+                        && crate::codegen::param_own::is_primitive_type_name(&ep.segments[0]))
+                })
+                .map(|(i, _)| i)
+                .collect();
+            out = Some(match out {
+                Some(prev) => prev.intersection(&here).copied().collect(),
+                None => here,
+            });
+        }
+        out.unwrap_or_default()
     }
 
     /// Compile the body of a monomorphized specialization.

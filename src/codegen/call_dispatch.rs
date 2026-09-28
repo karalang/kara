@@ -6382,6 +6382,25 @@ impl<'ctx> super::Codegen<'ctx> {
         param_te: &TypeExpr,
         skip_parts: &super::synth_drop::FieldSkipTree,
     ) {
+        self.track_optres_arg_temp_bodies_owning(val, param_te, skip_parts, false);
+    }
+
+    /// [`Self::track_optres_arg_temp_bodies`] for a call site that OWNS the
+    /// argument's box itself, which is the generic path: `compile_generic_call`
+    /// takes a boxed non-struct payload's box and interior with
+    /// `track_boxed_optres_arg_temp` before this runs, because the monomorph
+    /// prologue registers no `BoxedEnumDrop` for the param. The stand-down
+    /// below exists for the opposite owner (the non-generic callee frees the
+    /// box before returning), so it does not apply here, and declining left
+    /// the bodies with no owner at all (B-2026-09-17-23). The box drop is
+    /// registered first, so this walk drains ahead of it.
+    pub(super) fn track_optres_arg_temp_bodies_owning(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        param_te: &TypeExpr,
+        skip_parts: &super::synth_drop::FieldSkipTree,
+        caller_owns_box: bool,
+    ) {
         // B-2026-09-10-9 — stand down when the payload BOXES into a box the
         // CALLEE owns. `functions.rs`'s param-site arm registers a
         // `BoxedEnumDrop` for every boxing variant whose payload is not a user
@@ -6405,10 +6424,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // `by_value_nonescaping_param_names` — the very set the callee arm ORs
         // into its own gate, so a param that reaches here always satisfies the
         // callee's escape condition too.
-        if self
-            .boxed_enum_payload_variants(param_te)
-            .iter()
-            .any(|(_, _, inner_struct)| inner_struct.is_none())
+        if !caller_owns_box
+            && self
+                .boxed_enum_payload_variants(param_te)
+                .iter()
+                .any(|(_, _, inner_struct)| inner_struct.is_none())
         {
             return;
         }

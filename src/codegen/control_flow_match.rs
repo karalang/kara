@@ -18167,7 +18167,16 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(GenericArg::Type(TypeExpr {
                 kind: TypeKind::Tuple(elems),
                 ..
-            })) => vec![(b.clone(), elems.clone())],
+            })) => vec![(
+                b.clone(),
+                // B-2026-09-17-23 — resolved through the active monomorph
+                // substitution, so a generic callee's `Option[(T, i64)]` param
+                // names `(W, i64)` here, as its concrete twin does.
+                elems
+                    .iter()
+                    .map(|e| self.subst_monomorph_type_params(e))
+                    .collect(),
+            )],
             _ => Vec::new(),
         }
     }
