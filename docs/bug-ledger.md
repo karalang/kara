@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| run-vs-build | 525 |
+| run-vs-build | 526 |
 | miscompile | 513 |
 | leak | 453 |
 | double-free | 336 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2245 |
-| interp | 632 |
+| interp | 633 |
 | typecheck | 312 |
 | other | 111 |
 | ownership | 79 |
@@ -270,7 +270,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-27 | 2026-09-23 | codegen+interp | low | TWO SPELLINGS OF B-2026-09-23-18'S HAND-BACK THAT ITS FIX DOES NOT REACH RUN A `Drop` BODY TWICE ON ALL FOUR SURFACES, memory-clean -- a REBIND of the `let`-bound local (`let r: R = if c { a } else { mkr(8) }; let q = r; q` prints `mid d1 y1 d1`) and a GENERIC param (`fn f[T](a: T, c: bool, d: T) -> T { let r: T = if c { a } else { d }; .. r }` prints `mid d8 d1 y1 d1` at `c = true` and `mid d8 d1 y8 d8` at `c = false`) | — |
 | B-2026-09-23-34 | 2026-09-23 | codegen | medium | A `match` ARM THAT MOVES AN `Array` PAYLOAD INTO A BY-VALUE CALLEE LEAKS EVERY ELEMENT'S HEAP WHEN THE ELEMENT RUNS A USER `Drop`, while the bodies run correctly -- `let b: Option[Array[R, 2]] = Some(mka(11)); match b { Some(a) => consume(a), None => .. }` prints `c11 d11 d12` on all four surfaces and loses 60 B in 2 blocks at `-O0` | — |
 | B-2026-09-23-35 | 2026-09-23 | codegen | medium | DECLARING AN UNUSED `enum E { A(Array[R, 2]), B }` MAKES A `Result[Array[R, 2], i64]` LOCAL LEAK BOTH ELEMENTS' HEAP WHEN A `match` ONLY READS IT -- the same program without the declaration is clean, and the `Option` spelling is clean with it; 60 B in 2 blocks at `-O0`, output correct everywhere | — |
-| B-2026-09-23-36 | 2026-09-23 | codegen | high | A SHADOWED `Array` LOCAL IS STILL FREED TWICE, OR LEAKS, WHEN THE GENERATIONS ARE NOT ALL HANDED BACK TOGETHER -- the remainder of B-2026-09-23-23: an OLDER generation returned on one exit (`let x = [..]; if c { return x }; let x = [..]; return x`), the LAST generation returned on only some exits, and an inner-block shadow over a returned outer local all abort `free(): double free detected in tcache 2` on the JIT, `-O0` and `-O2`; with `String` elements the first spelling loses 58 B in 2 blocks at `-O0` instead | — |
 | B-2026-09-23-37 | 2026-09-23 | codegen+interp | medium | `let x = x;` REBINDING A LOCAL `Array` UNDER ITS OWN NAME AND RETURNING IT RUNS THE ELEMENTS' `Drop` BODIES TWICE UNDER `--interp` AND DOUBLE-FREES ON THE JIT AND AT `-O0` -- `-O2` is the only surface that prints the one body pair owed, `dies y1 d1 d2` | — |
 | B-2026-09-23-41 | 2026-09-23 | codegen | medium | A TEMPORARY `Option[R]` ARGUMENT THAT A CALLEE HANDS BACK ON SOME EXITS LEAKS ITS BOX ON THE EXIT WHERE IT DIES INSIDE -- `f(Some(mkr(1)), false)` over `fn f(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }` loses 61 B (32 direct, 29 indirect) at `-O0` in the tail, early-`return` and `let`-bound spellings, while the body now runs once on all four surfaces | — |
 | B-2026-09-23-45 | 2026-09-23 | codegen+interp | medium | AN `Option[(R, i64)]` PARAM RETURNED ON SOME EXITS RUNS NO BODY FOR THE TUPLE'S `Drop` ELEMENT ON THE EXIT WHERE IT DIES INSIDE, ON ALL FOUR SURFACES -- `if c { a } else { None }` at `c = false` prints `none` where `d1 none` is due; the `Option[R]` spelling is fixed | — |
@@ -399,6 +398,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-126 | 2026-09-27 | codegen | low | A DESTRUCTURED TUPLE PAYLOAD WHOSE `let mut` SCRUTINEE IS REASSIGNED LATER RUNS THE LEAVES' `Drop` BODIES AT THE REASSIGNMENT ON EVERY COMPILED SURFACE AND AT ARM END UNDER `--interp` -- `if let Some((a, b)) = o { .. } println("mid"); o = Some(..)` prints `i1 dR2 dR1 mid` interpreted and `i1 mid dR2 dR1` compiled; the order agrees, only the position differs | — |
 | B-2026-09-28-1 | 2026-09-28 | codegen | medium | DESTRUCTURING A NESTED TUPLE PROJECTION INTO A `let` RUNS BOTH ELEMENTS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE -- `let (p, q) = t.0;` over a local `t: ((W, W), i64)` prints `dW9 dW109 pq1099 dW109 dW9` on the JIT, `-O0` and `-O2` against `--interp`'s `pq1099 dW109 dW9`; the first pair fires AT the `let`, before `p` and `q` are read | — |
 | B-2026-09-28-2 | 2026-09-28 | codegen | medium | MOVING A NESTED TUPLE ELEMENT OUT OF AN ARM-BOUND `Option` PAYLOAD LOSES BOTH ITS `Drop` BODIES ON EVERY COMPILED SURFACE, AND READING A FIELD THROUGH IT DOES NOT LOWER -- `Some(t) => { let x = t.0; .. }` over `Option[((W, W), i64)]` prints `m3 end` compiled against `--interp`'s `dW3 dW103 m3 end`; `x.1.id` fails `karac build` with `cannot resolve field 'id'` | — |
+| B-2026-09-28-3 | 2026-09-28 | interp | medium | THE INTERPRETER LOSES A SHADOWED OUTER GENERATION'S `Drop` BODIES ON A RETURN FROM INSIDE A NESTED SHADOW, AND RUNS AN `Array` REBOUND BY `let x = x` TWICE, where every compiled build is right -- `let x: R = mkr(1); { let x: R = mkr(8); if c { return x } }; ..` with c=true prints `y8 d8` under `--interp` and `d1 y8 d8` on jit / -O0 / -O2 (the outer `x` dies at the return and its body never runs in the interpreter) | — |
 
 ### Relocated
 
@@ -3047,6 +3047,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-23-31 | codegen | high | MEASURED: a heap field copied out of a borrowed TUPLE, or out of a `ref v[i]` binding, is freed twice on every compiled surface -- `let p = ref ps[1]… | a8ad4239a |
 | B-2026-09-23-32 | codegen | medium | MEASURED: `names.iter().enumerate().map(\|q\| q.0 + q.1.1).collect()` over `Vec[(String, i64)]` frees a String twice on every compiled surface although… | a8ad4239a |
 | B-2026-09-23-33 | other | low | MEASURED: an ASAN fixture whose program has a PARSE error still passes -- `run_under_asan_opts_inner` returns `None` on parse errors and `assert_clea… | c7b9cbdbf |
+| B-2026-09-23-36 | codegen | high | A SHADOWED `Array` LOCAL IS STILL FREED TWICE, OR LEAKS, WHEN THE GENERATIONS ARE NOT ALL HANDED BACK TOGETHER -- the remainder of B-2026-09-23-23: a… | 55caa5e2a |
 | B-2026-09-23-38 | codegen | medium | MEASURED: a nested tuple member READ by index in place leaks one String clone per read on every compiled surface -- `println(v[0].1.0)`, `f"{v[0].1.0… | f571bc390 |
 | B-2026-09-23-39 | codegen | medium | MEASURED: a String bound from an enum payload nested in `Vec.get`'s `Option` reads EMPTY when moved out on every compiled surface, and `.len()` on it… | f571bc390 |
 | B-2026-09-23-40 | codegen | high | MEASURED: a heap field bound inside an enum-variant sub-pattern of a `Map.get` payload and then MOVED is freed twice on every compiled surface -- `ma… | c7b9cbdbf |
