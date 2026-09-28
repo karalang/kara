@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | run-vs-build | 535 |
-| miscompile | 531 |
+| miscompile | 532 |
 | leak | 464 |
 | double-free | 344 |
 | missing-feature | 211 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2297 |
-| interp | 658 |
+| codegen | 2298 |
+| interp | 659 |
 | typecheck | 313 |
 | other | 112 |
 | ownership | 79 |
@@ -392,7 +392,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-34 | 2026-09-28 | codegen | medium | A FRESH `Option`/`Result` TEMP HANDED TO A CALLEE THAT ONLY CALLS `o.is_some()` / `o.is_ok()` RUNS NO PAYLOAD `Drop` BODY ON ANY COMPILED SURFACE -- `fn so(o: Option[W]) -> bool { return o.is_some(); }` called as `so(Some(mk(1)))` prints `atrue` on jit / `-O0` / `-O2` against `--interp`'s `dW1/n1 atrue`, and likewise for `Result[W, i64]` and `Result[(W, i64), i64]`. Memory is clean, so only the body is lost. | — |
 | B-2026-09-28-35 | 2026-09-28 | codegen | medium | A `match` OVER A BY-VALUE `Result` PARAM HANDED BACK THROUGH AN IDENTITY CALLEE, WHOSE ARMS ONLY READ, RUNS NO PAYLOAD `Drop` BODY ON ANY COMPILED SURFACE -- `fn peek(a: Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => 0 } }` prints `k30 end` on jit / -O0 / -O2 where `--interp` prints `d1 k30 end`; memory is balanced, only the body is lost. The `Err(e) => e` spelling is right, because one escaping name keeps the match on the consuming path | — |
 | B-2026-09-28-13 | 2026-09-28 | interp+codegen | high | HANDING BACK A PARAM DECLARED `Option`/`Result` THROUGH AN IDENTITY CALL WHOSE RESULT IS DISCARDED, BOUND, PASSED ON OR MISSED DOUBLES OR LOSES ITS `Drop` BODY -- `id(a);` inside `fn f(a: Option[S])` over `fn id(a: Option[S]) -> Option[S] { a }` prints `d1 in d1` under `--interp` and double-frees compiled (no output at -O0, valgrind 4 invalid frees); `id(a).is_some()` loses the body compiled. Only `match id(a) { .. }` is right on every surface | — |
-| B-2026-09-28-37 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-4: A FRESH-TEMP SCRUTINEE WHOSE PAYLOAD IS A PARAM VIEW LEAKS ITS BOX COMPILED (`if let None = mk2o(x)`, `match mk2o(x) { .. }`, `while let`, `let .. else`: 32 B each at -O0), `--interp` RUNS AN ARM BINDING'S BODY BEFORE THE STATEMENTS AFTER THE `match` (`m4 d4 in` where the named oracle prints `m4 in d4`), AND `match Some(x) { Some(s) => .. }` STILL DOUBLES THE BODY ON EVERY SURFACE | — |
 | B-2026-09-28-38 | 2026-09-28 | interp+codegen | medium | A BY-VALUE ARGUMENT HANDED TO A METHOD CALLED ON A BORROWED RECEIVER (`self`, OR A `ref` PARAM) READS AS STORED INTO THAT RECEIVER, SO ITS `Drop` BODY RUNS NOWHERE, WHETHER OR NOT THE PARAM IS ALSO RETURNED ON SOME PATHS, ON EVERY SURFACE -- `fn only(ref self, s: S) { self.eat(s); println("o") }` over `fn eat(ref self, s: S) { println("qx") }` prints `qx o a` for `q.only(mks(1)); println("a")` and never `dS1`; the originally filed `fn pq(ref self, s: S, k: bool) -> S { if k { return s } self.eat(s); return mks(0) }` is the conditional-return spelling of the same fault | — |
 | B-2026-09-28-42 | 2026-09-28 | codegen | high | AN INLINE `Array` PAYLOAD CONSTRUCTED DIRECTLY AS A FREE-FUNCTION ARGUMENT STILL HAS TWO OWNERS -- `eatopt(Option.Some(a))` over `fn eatopt(o: Option[Array[S, 1]])` and a one-`String` `S` aborts with `free(): double free detected in tcache 2` on JIT, `-O0` and `-O2` against `--interp`'s `in daaaaaaaa0 end`; the `Result`, matching-callee, returning-callee and generic-passthrough spellings do the same. B-2026-09-19-59 fixed every other consumer of this payload and deliberately left this one alone | — |
 | B-2026-09-28-43 | 2026-09-28 | codegen | medium | FOUR SPELLINGS OF AN INLINE `Array` PAYLOAD RUN THE ELEMENT'S `Drop` BODY ON `--interp` AND NOWHERE COMPILED, WITH MEMORY CLEAN -- a named `Option[Array[S, 1]]` local handed to a by-value callee, the envelope in a struct-literal field, in a tuple element, and a fresh `Some([S { .. }])` literal matched in place; JIT, `-O0` and `-O2` all agree and valgrind reports nothing | — |
@@ -413,6 +412,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-61 | 2026-09-28 | codegen | high | A GENERIC `shared enum G[T]` OVER A `Drop`-BODIED PAYLOAD (`G[R]`) NEVER RUNS `R`'s BODY ON ANY COMPILED BACKEND and still leaks `R`'s heap: B-2026-09-19-53 frees the box envelope but arms the interior only for a payload with no `Drop` body | — |
 | B-2026-09-28-62 | 2026-09-28 | codegen | medium | A `shared enum` STRUCT-VARIANT CONSTRUCTOR PASSED STRAIGHT TO A BY-VALUE PARAMETER (`rd(H.Y { v: mkv(..) })`) IS NEVER RELEASED -- the whole RC object leaks (160 B in 4 blocks over 4 calls) while the tuple-variant spelling is clean; the generic twin leaks the same objects | — |
 | B-2026-09-28-63 | 2026-09-28 | interp+codegen | high | REMAINDER OF B-2026-09-28-50: A TUPLE OR NESTED-STRUCT DESTRUCTURE OF A BY-VALUE PARAM, WITH ONE PART PUSHED INTO A `mut ref` CONTAINER ON SOME PATHS, STILL LOSES OR DOUBLES THE PART -- `let (r, k) = t; if c { xs.push(r); }` loses `r`'s body on the not-pushed path everywhere, and `let O { w: W { r, s, b }, k } = o; if c { xs.push(r); }` prints `dD4n4` twice on the pushed path under `--interp` and aborts `free(): double free detected in tcache 2` on the compiled surfaces | — |
+| B-2026-09-28-65 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-37 (THE BODY FACES): A PARAM-VIEW FRESH-TEMP SCRUTINEE'S ARM BINDING RUNS THE BODY EARLY UNDER `--interp` (`match mk2o(x) { Some(s) => .. }` prints `m4 d4 in` where the named oracle prints `m4 in d4`) AND TWICE COMPILED UNDER `if let` (`m4 d4 in d4`), `let Some(s) = mk2o(x) else ..; keep(s)` AND `match Some(x) { Some(s) => .. }` DOUBLE IT ON EVERY SURFACE, AN ARM YIELDING THE BINDING (`Some(s) => s`) DOUBLES IT COMPILED AND LEAKS THE BOX, A USER-ENUM PARAM WRAPPED THE SAME WAY LOSES ITS BODY COMPILED AND LEAKS 40 B, AND A FRESH TEMP'S WILDCARD PAYLOAD (`match mk2(3) { None => .., _ => .. }`) RUNS NO BODY ON ANY SURFACE | — |
 
 ### Relocated
 
@@ -3233,6 +3233,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-23 | interp+codegen | medium | A BY-VALUE STRUCT PARAM WHOSE ONLY `Drop` IS A FIELD'S, RETURNED ON SOME PATHS, NEVER RUNS THAT FIELD'S BODY ON THE PATHS THAT DO NOT RETURN IT, ON E… | 93fdb03b0 |
 | B-2026-09-28-24 | codegen | medium | B-2026-09-28-10'S FORWARD STILL LOSES A TEMPORARY `Option` / `Result` ARGUMENT'S `Drop` BODY WHEN THE CONSUMER IS A METHOD OR A GENERIC FN (the paylo… | 4807d6a90 |
 | B-2026-09-28-36 | codegen | high | DESTRUCTURING A TUPLE PAYLOAD WITH ANY SUB-WORD ELEMENT FAILS MODULE VERIFICATION ON EVERY COMPILED SURFACE -- `let g = Some((3i32, 5)); if let Some(… | 0e1671b2c |
+| B-2026-09-28-37 | interp+codegen | medium | REMAINDER OF B-2026-09-28-4: A FRESH-TEMP SCRUTINEE WHOSE PAYLOAD IS A PARAM VIEW LEAKS ITS BOX COMPILED (`if let None = mk2o(x)`, `match mk2o(x) { . | 395eff03c |
 | B-2026-09-28-39 | other | medium | A FIXTURE THAT PANICS AFTER LINKING LEAVES ITS EXECUTABLE IN `/tmp`, SO A STALE `target/release/karac_jit_runner` UNDER `KARAC_REQUIRE_RUNTIME_ARCHIV… | bd3aed5db |
 | B-2026-09-28-40 | interp+codegen | medium | A STRUCT PROJECTION HANDED TO A CALLEE THAT RETURNS IT IN `Some` ON ONLY SOME PATHS RUNS ITS FIELDS' `Drop` BODIES TWICE ON THE HANDED PATH, ON EVERY… | 93fdb03b0 |
 | B-2026-09-28-41 | interp+codegen | medium | A `Drop`-CARRYING VALUE STORED ON ONLY SOME PATHS LOST OR DOUBLED ITS BODIES IN THREE SPELLINGS 4982484f9 DECLINED -- FIXED for a struct with a `shar… | 789467fc9 |
