@@ -15589,11 +15589,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // the same aliases at the same statement.
         if let StmtKind::Let { pattern, .. } = &stmt.kind {
             if let Some(place) = crate::ast::projection_binding_name(handed) {
+                let place = crate::ast::resolve_part_view(&place, &self.drop_rc.cond_view_aliases);
                 for (b, p) in crate::ast::destructure_part_aliases(pattern, &place) {
                     if self.drop_rc.cond_store_flag_params.contains(&p)
                         && self.drop_rc.cond_move_drop_flags.contains_key(&p)
                     {
                         self.drop_rc.pending_part_aliases.push((b, p));
+                    } else if crate::ast::encloses_any_part(
+                        &p,
+                        &self.drop_rc.cond_store_flag_params,
+                    ) {
+                        self.drop_rc.cond_view_aliases.insert(b, p);
                     }
                 }
             }
@@ -15612,10 +15618,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let (crate::ast::PatternKind::Binding(b), Some(p)) =
                     (&pattern.kind, crate::ast::projection_binding_name(handed))
                 {
+                    let p = crate::ast::resolve_part_view(&p, &self.drop_rc.cond_view_aliases);
                     if self.drop_rc.cond_store_flag_params.contains(&p)
                         && self.drop_rc.cond_move_drop_flags.contains_key(&p)
                     {
                         self.drop_rc.pending_part_aliases.push((b.clone(), p));
+                    } else if crate::ast::encloses_any_part(
+                        &p,
+                        &self.drop_rc.cond_store_flag_params,
+                    ) {
+                        self.drop_rc.cond_view_aliases.insert(b.clone(), p);
                     }
                 }
             }
@@ -15653,9 +15665,28 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(slot) = self.variables.get(local.as_str()).map(|v| v.ptr) else {
                 continue;
             };
-            let mut segs = part.split('.');
+            let mut segs = part.split('.').peekable();
             let Some(root) = segs.next() else { continue };
-            let Some(mut ty) = self.var_types.var_type_names.get(root).cloned() else {
+            // B-2026-09-28-69 — a TUPLE param's part (`t.0`) takes its type
+            // from the element list; the struct hops below then continue from
+            // that element.
+            let tuple_head = segs
+                .peek()
+                .and_then(|s| s.parse::<usize>().ok())
+                .and_then(|i| {
+                    self.var_types
+                        .tuple_var_elem_type_names
+                        .get(root)
+                        .and_then(|es| es.get(i).cloned().flatten())
+                });
+            let head = match tuple_head {
+                Some(t) => {
+                    segs.next();
+                    Some(t)
+                }
+                None => self.var_types.var_type_names.get(root).cloned(),
+            };
+            let Some(mut ty) = head else {
                 continue;
             };
             let mut ok = true;

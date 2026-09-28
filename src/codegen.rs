@@ -6572,6 +6572,7 @@ impl<'ctx> Codegen<'ctx> {
                 cond_store_flag_params: std::collections::HashSet::new(),
                 pending_part_aliases: Vec::new(),
                 cond_part_aliases: Vec::new(),
+                cond_view_aliases: std::collections::HashMap::new(),
                 stmt_end_arg_memory_slots: rustc_hash::FxHashSet::default(),
                 cond_returned_body_params: std::collections::HashSet::new(),
                 mono_taken_forward_params: std::collections::HashSet::new(),

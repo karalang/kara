@@ -6795,9 +6795,12 @@ impl<'a> super::Interpreter<'a> {
         // Codegen's `arm_conditional_store_flag` records the same aliases.
         if let StmtKind::Let { pattern, .. } = &stmt.kind {
             if let Some(place) = crate::ast::projection_binding_name(handed) {
+                let place = crate::ast::resolve_part_view(&place, &self.cond_store_view_aliases);
                 for (b, p) in crate::ast::destructure_part_aliases(pattern, &place) {
                     if self.cond_store_param_names.contains(&p) {
                         self.cond_store_part_aliases.insert(b, p);
+                    } else if crate::ast::encloses_any_part(&p, &self.cond_store_param_names) {
+                        self.cond_store_view_aliases.insert(b, p);
                     }
                 }
             }
@@ -6814,8 +6817,11 @@ impl<'a> super::Interpreter<'a> {
                 if let (crate::ast::PatternKind::Binding(b), Some(p)) =
                     (&pattern.kind, crate::ast::projection_binding_name(handed))
                 {
+                    let p = crate::ast::resolve_part_view(&p, &self.cond_store_view_aliases);
                     if self.cond_store_param_names.contains(&p) {
                         self.cond_store_part_aliases.insert(b.clone(), p);
+                    } else if crate::ast::encloses_any_part(&p, &self.cond_store_param_names) {
+                        self.cond_store_view_aliases.insert(b.clone(), p);
                     }
                 }
             }

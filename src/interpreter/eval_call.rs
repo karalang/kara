@@ -2404,6 +2404,7 @@ impl<'a> super::Interpreter<'a> {
                     self.pending_param_drop_bindings.iter().cloned().collect(),
                 );
                 let saved_part_aliases = std::mem::take(&mut self.cond_store_part_aliases);
+                let saved_view_aliases = std::mem::take(&mut self.cond_store_view_aliases);
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
@@ -2435,6 +2436,7 @@ impl<'a> super::Interpreter<'a> {
                 // program has found it yet.
                 self.cond_store_param_names = saved_cond_store_params;
                 self.cond_store_part_aliases = saved_part_aliases;
+                self.cond_store_view_aliases = saved_view_aliases;
                 for (n, prev) in saved_optres_tes {
                     match prev {
                         Some(te) => {

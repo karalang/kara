@@ -5504,6 +5504,30 @@ pub fn destructure_part_aliases(pattern: &Pattern, place: &str) -> Vec<(String, 
 
 /// B-2026-09-27-105 — the dotted place a projection names (`w.r`, `w.0.r`),
 /// for matching a handing statement against an adopted part's name.
+/// B-2026-09-28-69 — `place` with its root local replaced by the enclosing
+/// place it views (`w.r` -> `o.w.r` after `let O { w, k } = o;`), so both
+/// backends name a part reached through a destructured or projected local by
+/// the same full name the part scan adopts it under.
+pub fn resolve_part_view(place: &str, views: &std::collections::HashMap<String, String>) -> String {
+    let (root, rest) = match place.split_once('.') {
+        Some((r, rest)) => (r, Some(rest)),
+        None => (place, None),
+    };
+    match (views.get(root), rest) {
+        (Some(v), Some(rest)) => format!("{v}.{rest}"),
+        (Some(v), None) => v.clone(),
+        (None, _) => place.to_string(),
+    }
+}
+
+/// B-2026-09-28-69 — is `place` a strict prefix (an enclosing place) of one
+/// of the adopted part names in `parts`?
+pub fn encloses_any_part<'a>(place: &str, parts: impl IntoIterator<Item = &'a String>) -> bool {
+    parts
+        .into_iter()
+        .any(|n| n.strip_prefix(place).is_some_and(|r| r.starts_with('.')))
+}
+
 pub fn projection_binding_name(e: &Expr) -> Option<String> {
     match &e.kind {
         ExprKind::Identifier(n) => Some(n.clone()),
@@ -5777,30 +5801,46 @@ fn part_paths_from_root_mode(
     // B-2026-09-28-63 — the subset whose `let` destructures a value rooted
     // at something no `let` binds (the param itself, or a projection of it):
     // there both backends' hooks name the leaf's part in full (`o.w.r`), so
-    // a NESTED leaf may alias it. A leaf of a local (`let W { r, .. } = w;`
-    // after `let O { w, k } = o;`) is named relative to that local instead,
-    // so it keeps the one-level answer.
+    // a NESTED leaf may alias it. A leaf of a local that is itself such a view
+    // (`let W { r, .. } = w;` after `let O { w, k } = o;`) counts too since
+    // B-2026-09-28-69, whose hooks resolve the local back (`resolve_part_view`).
     let mut destr_direct: Vec<&str> = Vec::new();
     {
         let mut all_pat: Vec<&str> = Vec::new();
         let mut destr: Vec<(&str, Option<&str>)> = Vec::new();
         part_scan_let_pattern_names(&f.body, &mut all_pat, &mut destr);
+        let once = |n: &str| all_pat.iter().filter(|m| **m == n).count() == 1;
+        let destr_once: Vec<&str> = destr.iter().map(|(n, _)| *n).filter(|n| once(n)).collect();
         for (n, root) in destr {
-            if all_pat.iter().filter(|m| **m == n).count() != 1 {
+            if !once(n) {
                 continue;
             }
             destr_lets.push(n);
-            if root.is_some_and(|r| !all_pat.contains(&r)) {
+            // B-2026-09-28-69 — or a local that is itself a destructured or
+            // projected view of the param (`let W { r, .. } = w;` after `let O
+            // { w, k } = o;`): both backends now resolve `w` back to `o.w`
+            // (`resolve_part_view`), so the leaf is named in full there too.
+            if root.is_some_and(|r| {
+                !all_pat.contains(&r) || destr_once.contains(&r) || proj_lets.contains(&r)
+            }) {
                 destr_direct.push(n);
             }
         }
     }
+    // B-2026-09-28-69 — a TUPLE-typed param, whose destructured element
+    // (`let (r, k) = t;` denotes `t.0`) both backends now adopt through the
+    // tuple's element walker.
+    let root_tuple = f.params.iter().any(|p| {
+        matches!(&p.pattern.kind, PatternKind::Binding(n) if n == param_name)
+            && matches!(p.ty.kind, crate::ast::TypeKind::Tuple(_))
+    });
     let cx = PartScanCx {
         program,
         roots: &roots,
         proj_lets: &proj_lets,
         destr_lets: &destr_lets,
         destr_direct: &destr_direct,
+        root_tuple,
         top_level: true,
         root_struct: root_struct.as_deref(),
         locals: &locals,
@@ -6385,6 +6425,8 @@ struct PartScanCx<'a> {
     /// B-2026-09-28-50 — the names a destructuring `let` binds once.
     destr_lets: &'a [&'a str],
     destr_direct: &'a [&'a str],
+    /// B-2026-09-28-69 — the root is a TUPLE-typed param.
+    root_tuple: bool,
     /// B-2026-09-27-105 — asked for [`fn_conditionally_handed_param_parts`]:
     /// a projection hand-over nested in a branch is admitted too, where the
     /// adopting frame's per-path flag can be cleared (see `cond_site`).
@@ -6404,23 +6446,32 @@ impl PartScanCx<'_> {
     /// follow back to a part: a `let r = w.r;` alias or one bound by a
     /// destructuring `let` (`let W { r, .. } = w;`), each bound once.
     ///
-    /// A destructured name counts only for a DIRECT field of a concrete struct
-    /// root (`denoted` of length one): codegen adopts a part through the
-    /// root's struct walker, so a tuple root adopts nothing there, and a
-    /// nested part keeps its older static answer on both backends. Measured
-    /// both ways before narrowing: `let (r, k) = t;` split the backends and
-    /// `let O { w: W { r, .. }, k } = o;` aborted with a double free compiled.
+    /// A destructured name counts for a field path of a concrete struct root
+    /// (nested only where the `let` is `destr_direct`), or for a DIRECT
+    /// element of a tuple root (B-2026-09-28-69: codegen adopts it through the
+    /// tuple's element walker). A path mixing the two keeps its older static
+    /// answer on both backends.
     fn tracked_alias(&self, e: &Expr, denoted: Option<&ParamPath>) -> bool {
         let ExprKind::Identifier(n) = &e.kind else {
             return false;
         };
+        // B-2026-09-28-69 — a destructured DIRECT element of a tuple root
+        // (`let (r, k) = t;`), which both backends adopt through the tuple's
+        // element walker. Deeper tuple leaves keep the static answer.
+        if self.root_tuple
+            && self.destr_lets.contains(&n.as_str())
+            && denoted.is_some_and(|p| matches!(p.as_slice(), [ParamPart::TupleIndex(_)]))
+        {
+            return true;
+        }
         self.proj_lets.contains(&n.as_str())
             || (self.destr_lets.contains(&n.as_str())
                 && self.root_struct.is_some()
                 // B-2026-09-28-63 — a nested struct leaf (`O { w: W { r,
                 // .. }, k }` denotes `w.r`) adopts through the same walker
                 // the projection `let r = o.w.r` already does. A TUPLE hop
-                // stays out: codegen's root walker adopts no tuple part.
+                // under a struct root stays out: the struct walker adopts no
+                // tuple part (a tuple ROOT is handled above).
                 && denoted.is_some_and(|p| {
                     p.len() == 1
                         || (self.destr_direct.contains(&n.as_str())
@@ -6525,6 +6576,9 @@ fn part_scan_let_pattern_names<'a>(
                     fn value_root(e: &Expr) -> Option<&str> {
                         match &e.kind {
                             ExprKind::Identifier(n) => Some(n.as_str()),
+                            // B-2026-09-28-69 — an owned receiver is a root
+                            // no `let` binds, as a by-value param is.
+                            ExprKind::SelfValue => Some("self"),
                             ExprKind::FieldAccess { object, .. } => value_root(object),
                             _ => None,
                         }

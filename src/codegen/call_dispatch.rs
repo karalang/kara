@@ -9969,6 +9969,35 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(tree)
     }
 
+    /// B-2026-09-28-69 — [`Self::only_path_skip_tree`] for a TUPLE root whose
+    /// element types are `elem_tes`: every element but the path's first index
+    /// skipped, and below it the element's own only-path tree (a struct
+    /// element through the field resolver, a tuple element recursively).
+    pub(super) fn only_tuple_path_skip_tree(
+        &self,
+        elem_tes: &[TypeExpr],
+        path: &[crate::ast::ParamPart],
+    ) -> Option<super::synth_drop::FieldSkipTree> {
+        let (head, rest) = path.split_first()?;
+        let crate::ast::ParamPart::TupleIndex(idx) = head else {
+            return None;
+        };
+        let elem = elem_tes.get(*idx)?;
+        let mut tree = super::synth_drop::FieldSkipTree::default();
+        tree.here.extend((0..elem_tes.len()).filter(|&j| j != *idx));
+        if !rest.is_empty() {
+            let sub = match &elem.kind {
+                TypeKind::Path(p) if p.segments.len() == 1 => {
+                    self.only_path_skip_tree(&p.segments[0], rest)?
+                }
+                TypeKind::Tuple(inner) => self.only_tuple_path_skip_tree(inner, rest)?,
+                _ => return None,
+            };
+            tree.nested.insert(*idx, sub);
+        }
+        Some(tree)
+    }
+
     fn insert_skip_path(
         &self,
         tree: &mut super::synth_drop::FieldSkipTree,

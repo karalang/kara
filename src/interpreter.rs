@@ -979,6 +979,11 @@ pub struct Interpreter<'a> {
     /// (`let r = w.r;` → `r` ↦ `w.r`): handing the local over clears the
     /// part's per-path body, as handing the projection does.
     pub(crate) cond_store_part_aliases: std::collections::HashMap<String, String>,
+    /// B-2026-09-28-69 — `local -> place` for a local bound to an ENCLOSING
+    /// place of an adopted part (`let O { w, k } = o;` binds `w` to `o.w`
+    /// while `o.w.r` is adopted), so a later `let W { r, .. } = w;` names `r`
+    /// by the part's full name. Codegen's `cond_view_aliases` is the twin.
+    pub(crate) cond_store_view_aliases: std::collections::HashMap<String, String>,
     /// B-2026-09-26-37 — per call frame, the payload parts of a by-value
     /// `Option`/`Result` param that this run of the body actually RETURNED,
     /// through an arm binding of that param's payload. See
@@ -1414,6 +1419,7 @@ impl<'a> Interpreter<'a> {
             own_body_only_view_bindings: std::collections::HashMap::new(),
             cond_store_param_names: std::collections::HashSet::new(),
             cond_store_part_aliases: std::collections::HashMap::new(),
+            cond_store_view_aliases: std::collections::HashMap::new(),
             payload_escape_frames: Vec::new(),
             pending_call_payload_escapes: Vec::new(),
             map_val_bodies_tes: HashMap::new(),

@@ -883,6 +883,7 @@ impl<'a> super::Interpreter<'a> {
                     self.pending_param_drop_bindings.iter().cloned().collect(),
                 );
                 let saved_part_aliases = std::mem::take(&mut self.cond_store_part_aliases);
+                let saved_view_aliases = std::mem::take(&mut self.cond_store_view_aliases);
                 // B-2026-09-27-54 — hide the CALLER's same-named entries in
                 // `optres_payload_bodies_tes` for this frame. The map is keyed
                 // by bare name and not frame-isolated, so a param named like a
@@ -1073,6 +1074,7 @@ impl<'a> super::Interpreter<'a> {
                 // the caller.
                 self.cond_store_param_names = saved_cond_store_params;
                 self.cond_store_part_aliases = saved_part_aliases;
+                self.cond_store_view_aliases = saved_view_aliases;
                 // B-2026-09-27-54 — and the caller's shadowed entries.
                 for (n, prev) in saved_optres_tes {
                     match prev {

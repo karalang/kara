@@ -287,6 +287,12 @@ pub(crate) struct DropRc<'ctx> {
     /// B-2026-09-27-105 — `(local, part)` pairs already re-pointed: handing
     /// `local` over clears `part`'s flag, as handing the part itself does.
     pub(crate) cond_part_aliases: Vec<(String, String)>,
+    /// B-2026-09-28-69 — `local -> place` for a local bound to an ENCLOSING
+    /// place of an adopted part (`let O { w, k } = o;` binds `w` to `o.w`
+    /// while `o.w.r` is adopted), so a later `let W { r, .. } = w;` names `r`
+    /// by the part's full name. The interpreter's `cond_store_view_aliases`
+    /// is the twin.
+    pub(crate) cond_view_aliases: std::collections::HashMap<String, String>,
     /// B-2026-09-28-55 — fresh-temp call-argument slots (`__owned_agg_tmp`)
     /// whose MEMORY drop is due at the end of the statement that built them,
     /// not at the enclosing scope's exit. See `drain_temp_user_drops`. Never

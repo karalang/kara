@@ -1538,6 +1538,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.cond_store_flag_params.clear();
         self.drop_rc.pending_part_aliases.clear();
         self.drop_rc.cond_part_aliases.clear();
+        self.drop_rc.cond_view_aliases.clear();
         self.drop_rc.cond_returned_body_params.clear();
         self.drop_rc.cond_returned_owned_params.clear();
         self.drop_rc.mono_taken_forward_params.clear();
@@ -4352,6 +4353,55 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let _ = self.cond_move_drop_flag_for(&part_name);
                                 self.drop_rc.cond_store_flag_params.insert(part_name);
                             }
+                        }
+                    }
+                    // B-2026-09-28-69 — the same adoption for a TUPLE param
+                    // (`fn t3(.., t: (D, i64), c: bool) { let r = t.0; if c
+                    // { xs.push(r); } }`). The caller masks `t.0` on every
+                    // path, and the struct walker above cannot take a tuple,
+                    // so the path that kept `r` ran no body compiled while the
+                    // interpreter's part arm, which reads the runtime value,
+                    // ran it. The walk is the tuple's element-bodies walker
+                    // with every element OFF the part's path skipped.
+                    if let (Some(program), Some(source), TypeKind::Tuple(elem_tes)) =
+                        (program.as_deref(), source, &param.ty.kind)
+                    {
+                        let parts = if source.self_param.is_some() {
+                            match i {
+                                0 => Vec::new(),
+                                i => crate::ast::fn_conditionally_handed_param_parts(
+                                    program,
+                                    source,
+                                    i - 1,
+                                ),
+                            }
+                        } else {
+                            crate::ast::fn_conditionally_handed_param_parts(program, source, i)
+                        };
+                        let agg_ty = match self.llvm_type_for_type_expr(&param.ty) {
+                            inkwell::types::BasicTypeEnum::StructType(st) => Some(st),
+                            _ => None,
+                        };
+                        for part in parts {
+                            let Some(agg_ty) = agg_ty else { break };
+                            let Some(tree) = self.only_tuple_path_skip_tree(elem_tes, &part) else {
+                                continue;
+                            };
+                            let Some(bodies) = self
+                                .emit_tuple_elem_user_drop_bodies_fn_tree(agg_ty, elem_tes, &tree)
+                            else {
+                                continue;
+                            };
+                            let part_name = crate::ast::param_part_binding_name(&param_name, &part);
+                            self.track_user_drop_var_with_fn(
+                                "",
+                                &part_name,
+                                alloca,
+                                bodies,
+                                crate::codegen::state::UserDropKind::StructFieldBodies,
+                            );
+                            let _ = self.cond_move_drop_flag_for(&part_name);
+                            self.drop_rc.cond_store_flag_params.insert(part_name);
                         }
                     }
                 }
