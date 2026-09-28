@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 515 |
 | leak | 456 |
 | double-free | 337 |
-| missing-feature | 210 |
+| missing-feature | 211 |
 | codegen-gap | 201 |
 | other | 153 |
 | diagnostics | 137 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2255 |
+| codegen | 2256 |
 | interp | 637 |
 | typecheck | 312 |
 | other | 111 |
@@ -391,7 +391,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-1 | 2026-09-28 | codegen | medium | DESTRUCTURING A NESTED TUPLE PROJECTION INTO A `let` RUNS BOTH ELEMENTS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE -- `let (p, q) = t.0;` over a local `t: ((W, W), i64)` prints `dW9 dW109 pq1099 dW109 dW9` on the JIT, `-O0` and `-O2` against `--interp`'s `pq1099 dW109 dW9`; the first pair fires AT the `let`, before `p` and `q` are read | — |
 | B-2026-09-28-2 | 2026-09-28 | codegen | medium | MOVING A NESTED TUPLE ELEMENT OUT OF AN ARM-BOUND `Option` PAYLOAD LOSES BOTH ITS `Drop` BODIES ON EVERY COMPILED SURFACE, AND READING A FIELD THROUGH IT DOES NOT LOWER -- `Some(t) => { let x = t.0; .. }` over `Option[((W, W), i64)]` prints `m3 end` compiled against `--interp`'s `dW3 dW103 m3 end`; `x.1.id` fails `karac build` with `cannot resolve field 'id'` | — |
 | B-2026-09-28-3 | 2026-09-28 | interp | medium | THE INTERPRETER LOSES A SHADOWED OUTER GENERATION'S `Drop` BODIES ON A RETURN FROM INSIDE A NESTED SHADOW, AND RUNS AN `Array` REBOUND BY `let x = x` TWICE, where every compiled build is right -- `let x: R = mkr(1); { let x: R = mkr(8); if c { return x } }; ..` with c=true prints `y8 d8` under `--interp` and `d1 y8 d8` on jit / -O0 / -O2 (the outer `x` dies at the return and its body never runs in the interpreter) | — |
-| B-2026-09-28-8 | 2026-09-28 | codegen | high | A BOXED GENERIC-ENUM PAYLOAD FORWARDED THROUGH A GENERIC MIDDLE FUNCTION VIA A LOCAL REBOUND FROM A PASSTHROUGH CALL IS STILL FREED TWICE -- `fn gvia[T](g: G[T]) -> i64 { let h = gid(g); return glen(h) }` over `fn gid[T](g: G[T]) -> G[T] { return g }` aborts with a double free on every compiled build (5 valgrind errors at -O0 for a `Drop` payload, 7 for `Array[String, 2]`), where the same two statements in `main`, or in a CONCRETE middle `fn cvia(g: G[R])`, are clean | — |
 | B-2026-09-28-9 | 2026-09-28 | codegen | medium | A BOXED GENERIC-ENUM VALUE PASSED TO A GENERIC FUNCTION WHOSE PARAMETER IS A BARE `T` LEAKS ITS BOX AND LOSES THE PAYLOAD'S `Drop` BODY -- `gany(g)` over `fn gany[T](x: T) -> i64 { return 3 }` with `let g: G[R] = G.Y(mk(6))` prints `a6 3 end` on every compiled build (no `d6`) and leaks 32 B at -O0, where `--interp` prints `a6 3 d6 end` | — |
 | B-2026-09-28-4 | 2026-09-28 | codegen+interp | medium | A FRESH TEMP THAT CARRIES AN OWNED PARAM RUNS THE PARAM'S `Drop` BODY TWICE WHEN IT IS DISCARDED OR MISSED BY `if let`, ON EVERY SURFACE -- `mk2o(x);` inside `fn chk(x: S) -> bool` prints `d4 d4` for `chk(mk(4))`: the caller retains the argument's body and the callee's discard runs it too. The `is_some` spelling of the same temp is right on bodies but leaks the box compiled, because B-2026-09-27-129 skips any receiver that mentions an owned param | — |
 | B-2026-09-28-5 | 2026-09-28 | codegen | low | A BORROW ACCESSOR WHOSE `Option` PAYLOAD IS BOXED LEAKS THE BOX WHEN ITS RESULT IS PROBED OR DISCARDED -- `v.first().is_some()`, `v.get(1).is_some()`, `v.last();` and `m.get(1).is_some()` over a `Vec[S]` / `Map[i64, S]` each leak 32 B at -O0; the same accessor bound by `if let Some(x) = v.first()` is clean, and a one-word payload (`Vec[R]`) is clean | — |
@@ -401,6 +400,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-11 | 2026-09-28 | codegen | medium | A PLAIN REBIND OF A BOXED GENERIC ENUM PARAM THAT IS NEVER RETURNED (`fn f1(h: Ho[S]) { let m = h; println("f1") }`) NEVER RUNS ITS PAYLOAD'S `Drop` BODY ON ANY COMPILED SURFACE, WHILE `--interp` PRINTS `f1 dS1` -- the inline-enum and `Option` twins run it everywhere | — |
 | B-2026-09-28-12 | 2026-09-28 | interp+codegen | low | A BY-VALUE STRUCT PARAM REBOUND INTO A LOCAL THAT IS RETURNED WRAPPED ON SOME PATHS RUNS ITS `Drop` BODY AT DIFFERENT POINTS PER BACKEND -- `fn ps(r: S, k: bool) -> Option[S] { let m = r; if k { return Option.Some(m) } println("drop-here"); return Option.None }` prints `dS7 drop-here` under `--interp` and `drop-here dS7` compiled | — |
 | B-2026-09-28-20 | 2026-09-28 | interp+codegen | medium | A `Drop` PART HANDED OVER ON ONLY SOME PATHS STILL RUNS TWICE OR NOT AT ALL WHERE THE PARAM IS NOT A FREE FUNCTION'S OWN STRUCT PART -- `maybew(x.w, true)` and `csg(mut xs, v.g, true)` double the handed leg on all four surfaces; a METHOD's by-value param (`h.ownw3(w, true)` over `if c { keep(w.r) }`) and an owned RECEIVER (`fn take(self, c: bool) -> i64 { if c { keep(self.r) .. } 0 }`) double `w.r` on the keeping leg; a whole field-bodies struct pushed on one path (`if c { xs.push(w); }`) loses its fields' bodies on the interpreter's not-pushed leg and doubles them on the compiled pushed leg | — |
+| B-2026-09-28-21 | 2026-09-28 | codegen | medium | A CONCRETE FUNCTION THAT REBINDS ITS BOXED GENERIC-ENUM PARAM THROUGH A PASSTHROUGH CALL LOSES THE PAYLOAD'S `Drop` BODY WHERE THE LOCAL DIES INSIDE -- `fn ckeep(g: G[R]) -> i64 { let h = gid(g); println("keep"); return 0 }` prints `keep a7 0 end` on every compiled build where `--interp` prints `keep a7 0 d7 end`; memory is balanced | — |
 
 ### Relocated
 
@@ -3195,6 +3195,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-130 | codegen | high | A NON-GENERIC USER ENUM PARAM WITH AN INLINE `Drop` PAYLOAD, RETURNED ON SOME PATHS AND PASSED TO A BY-VALUE CONSUMER ON THE OTHERS, CRASHES WITH NO… | 66ff48480 |
 | B-2026-09-27-131 | interp | medium | `--interp` LOSES THE `Drop` BODY OF A BOXED GENERIC ENUM PARAM THAT THE CALLEE REBINDS (`let m = h;`), RETURNS ON SOME PATHS AND PASSES TO A BY-VALUE… | 18f314d0c |
 | B-2026-09-27-124 | codegen | medium | AN `if let` / `while let` THAT DESTRUCTURES A TUPLE PAYLOAD OUT OF A NAMED `Option` LOCAL AND ONLY READS THE LEAVES LEAKS EVERY HEAP LEAF, with no `D… | 780f957f2 |
+| B-2026-09-28-8 | codegen | high | A BOXED GENERIC-ENUM PAYLOAD FORWARDED THROUGH A GENERIC MIDDLE FUNCTION VIA A LOCAL REBOUND FROM A PASSTHROUGH CALL IS STILL FREED TWICE -- `fn gvia… | 5cc3de800 |
 
 </details>
 
