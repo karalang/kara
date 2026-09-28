@@ -5206,11 +5206,10 @@ fn e2e_generic_enum_ctor_temp_arg_runs_its_payload_drop_body() {
 /// NOT MEASURED: divergent before the fix, correct on all four surfaces after, so the
 /// gate keys on the payload rather than on the enum's arity.
 ///
-/// CELL 10 IS THE REMAINING GAP, split out as its own open row rather than buried
-/// here: an arm that CONSUMES its binding (`let z = r`) still loses the body on every
-/// compiled surface. It is pinned at the divergent value in this suite and at the
-/// correct one in the interpreter's twin, deliberately, so the split is visible in
-/// both tables rather than quietly absent from one.
+/// CELL 10 WAS THE REMAINING GAP, split out as B-2026-09-18-1: an arm that CONSUMES
+/// its binding (`let z = r`) lost the body on every compiled surface, and was pinned
+/// here at that divergent value. That row's fix hands the masked body to the binding,
+/// and the cell now asserts it.
 ///
 /// Twin in the other backend's suite under the same name, same table.
 #[test]
@@ -5276,9 +5275,9 @@ fn e2e_generic_boxed_enum_payload_body_survives_a_read_only_binding_arm() {
                 "w:4\ndW4\nend\n",
             ),
             (
-                "PINNED GAP: the arm CONSUMES its binding (`let z = r`) — body lost when compiled",
+                "the arm CONSUMES its binding (`let z = r`) — fixed by B-2026-09-18-1",
                 "consumew(Ho.Full(mkw()));",
-                "w:4\nend\n",
+                "w:4\ndW4\nend\n",
             ),
         ] {
             let src = format!("{hdr}fn main() {{\n{stmts}\nprintln(\"end\");\n}}\n");

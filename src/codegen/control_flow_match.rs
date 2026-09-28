@@ -11603,6 +11603,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !masked {
                     self.suppress_container_elem_bodies_for_var(scrut_name);
                 }
+                // B-2026-09-18-1 — the mask just took this position's body off
+                // the by-value param's walker, so the arm's binding has to carry
+                // it. It cannot as registered: `bind_pattern_values` made it a
+                // param VIEW (memory only, body "the caller's"), and for a
+                // heap-boxed generic payload the caller has none to run -- the
+                // read-only twin's body comes from this very walker, which is
+                // why -14-22 stands the mask down there. So `Full(r) => { let z
+                // = r; .. }` ran the body nowhere compiled.
+                if masked
+                    && self.scrutinee_is_owned_param_binding(scrutinee)
+                    && self.var_has_boxed_enum_drop(scrut_name)
+                    && self.arm_consumes_only_generic_payload(&enum_name, pattern)
+                {
+                    self.adopt_masked_generic_payload_view_bodies(scrut_name, &enum_name, pattern);
+                }
             }
             // B-2026-09-10-2 — the MEMORY half of the same move-out for a
             // heap-BOXED generic payload. The arm's binding owns the interior;
@@ -14869,6 +14884,74 @@ impl<'ctx> super::Codegen<'ctx> {
             slot,
             bodies,
             crate::codegen::state::UserDropKind::ContainerElemBodies,
+        );
+    }
+
+    /// B-2026-09-18-1 — hand a masked generic payload's bodies to the arm's
+    /// binding, which stops being a param VIEW.
+    ///
+    /// Called only where the bodies mask has just run over a heap-boxed
+    /// generic payload of a by-value param scrutinee. That walker was the
+    /// payload's only body channel (the caller moved the box in and runs
+    /// none), so once the mask removes the position the binding is the only
+    /// frame left that can. It keeps the memory-only drop it already has and
+    /// gains a bodies-only walk beside it, the same split a fresh temp read
+    /// through a projection uses. Leaving the view set is what lets `let z =
+    /// r` hand z the full owner the let site gives any local rebind, and a
+    /// consume on only one path be settled by the ordinary move flags.
+    ///
+    /// NARROW: a single binding of a concrete, non-generic, non-`shared`
+    /// user struct, and only while it is still a view. Anything else keeps
+    /// today's registration.
+    fn adopt_masked_generic_payload_view_bodies(
+        &mut self,
+        scrut_name: &str,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) {
+        let binds = Self::variant_arm_binds(pattern);
+        let [bind] = binds.as_slice() else {
+            return;
+        };
+        // A binding the bind site already gave a body walk (a payload struct
+        // with Drop-bearing fields and no `Drop` of its own) carries the body
+        // already; a second walk would run it twice.
+        if !self.payload_vars.param_view_locals.contains(bind.as_str())
+            || self.has_armed_own_user_drop(bind)
+        {
+            return;
+        }
+        let tes = self.arm_consumed_payload_inst_tes(scrut_name, enum_name, pattern, true);
+        let [te] = tes.as_slice() else {
+            return;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        if p.generic_args.is_some() {
+            return;
+        }
+        let Some(tn) = p.segments.last().cloned() else {
+            return;
+        };
+        if !self.type_decls.struct_types.contains_key(&tn)
+            || self.type_decls.shared_types.contains_key(&tn)
+        {
+            return;
+        }
+        let Some(slot) = self.variables.get(bind.as_str()).map(|s| s.ptr) else {
+            return;
+        };
+        let Some(bodies) = self.emit_struct_user_drop_bodies_only_fn(&tn) else {
+            return;
+        };
+        self.payload_vars.param_view_locals.remove(bind.as_str());
+        self.track_user_drop_var_with_fn(
+            &tn,
+            bind,
+            slot,
+            bodies,
+            crate::codegen::state::UserDropKind::StructFieldBodies,
         );
     }
 
