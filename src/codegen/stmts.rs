@@ -5310,6 +5310,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => None,
                 };
                 let mut shadow_old_meta = shadow_name.as_ref().map(|n| self.take_var_metadata(n));
+                // B-2026-09-20-21 — a `let` of a name that is NOT in scope can
+                // still find the per-name box facts of an earlier binding of
+                // that name: a block's exit takes the name out of `variables`
+                // but leaves those facts behind, so the shadow dance above
+                // never sees them. A fresh binding owns no facts yet, so purge
+                // them here rather than let the new box be read as the old one.
+                if shadow_name.is_none() {
+                    if let PatternKind::Binding(n) = &pattern.kind {
+                        self.forget_boxed_payload_facts(n);
+                    }
+                }
                 // Record the binding's instantiated generic-enum type
                 // (`Option[String]`, `Result[_, String]`) keyed by *variable
                 // name* so heap-payload enum `==` (`compile_enum_eq`) can
@@ -8976,7 +8987,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .then(|| self.variables.get(var_name.as_str()).copied())
                                 .flatten()
                             {
-                                for (enum_name, variant, payload_te, box_field, _multi_field) in
+                                for (enum_name, variant, payload_te, box_field, multi_field) in
                                     boxed
                                 {
                                     // B-2026-09-10-2 — the INTERIOR this site
@@ -9018,6 +9029,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                         &payload_te,
                                         box_field,
                                     );
+                                    // B-2026-09-20-21 — the `let` twin of the
+                                    // param site's multi-field marker in
+                                    // `functions.rs`. This site never set it, and
+                                    // the by-value arg move of a let-bound
+                                    // multi-field box (`fh(g)` over
+                                    // `Gh.Y(mkI(i), s)`) then zeroed the whole
+                                    // slot and leaked the heap sibling. It was
+                                    // masked whenever a callee param shared the
+                                    // local's name, because that param's marker
+                                    // survived into the caller; purging stale
+                                    // per-name box facts exposed it.
+                                    if multi_field {
+                                        self.payload_vars
+                                            .boxed_enum_multi_field_vars
+                                            .insert(var_name.to_string());
+                                    }
                                 }
                                 self.emit_let_hand_over(value, slot.ptr);
                             }

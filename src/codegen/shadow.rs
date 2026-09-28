@@ -85,6 +85,22 @@ pub(super) struct VarMetadataSnapshot<'ctx> {
     inline_option_agg_payload_vars: bool,
     inline_result_agg_payload_vars: bool,
     boxed_enum_payload_vars: bool,
+    /// B-2026-09-20-21 — the rest of a boxed-enum binding's per-name payload
+    /// facts, which used to survive a same-name rebind. They are written at
+    /// the binding's registration beside `boxed_enum_payload_vars` and are
+    /// just as much a statement about ONE binding's box, so a new `let` of
+    /// the name must start without them. Left behind, `{ let a =
+    /// Some(Q { .. }); peek(a) }` followed by `{ let a = Some((r1, r2));
+    /// ttake(a) }` made the second `a` read as a struct-payload box, whose
+    /// arg-site move check keeps the box with the caller, while the callee
+    /// took it: one box freed on both sides.
+    boxed_struct_payload_vars: bool,
+    boxed_enum_multi_field_vars: bool,
+    nested_boxed_payload_vars: bool,
+    struct_field_boxed_payload_vars: bool,
+    boxed_struct_payload_param_vars: bool,
+    boxed_enum_payload_struct: Option<String>,
+    boxed_leaf_owning_depth: Option<usize>,
     /// B-2026-08-04-2 — the boxed-payload VIEW record, snapshotted with the
     /// rest of the per-arm var environment so one arm's view cannot leak into
     /// a sibling arm (or outlive the match) and neutralize the wrong box.
@@ -145,6 +161,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 .payload_vars
                 .boxed_optres_payload_view_vars
                 .remove(name),
+            boxed_struct_payload_vars: self.payload_vars.boxed_struct_payload_vars.remove(name),
+            boxed_enum_multi_field_vars: self.payload_vars.boxed_enum_multi_field_vars.remove(name),
+            nested_boxed_payload_vars: self.payload_vars.nested_boxed_payload_vars.remove(name),
+            struct_field_boxed_payload_vars: self
+                .payload_vars
+                .struct_field_boxed_payload_vars
+                .remove(name),
+            boxed_struct_payload_param_vars: self
+                .payload_vars
+                .boxed_struct_payload_param_vars
+                .remove(name),
+            boxed_enum_payload_struct: self.payload_vars.boxed_enum_payload_struct.remove(name),
+            boxed_leaf_owning_depth: self.payload_vars.boxed_leaf_owning_depth.remove(name),
             rc_fallback_heap_types: self.drop_rc.rc_fallback_heap_types.remove(name),
         }
     }
@@ -284,9 +313,61 @@ impl<'ctx> super::Codegen<'ctx> {
                 .boxed_enum_payload_vars
                 .insert(key.clone());
         }
+        if snap.boxed_struct_payload_vars {
+            self.payload_vars
+                .boxed_struct_payload_vars
+                .insert(key.clone());
+        }
+        if snap.boxed_enum_multi_field_vars {
+            self.payload_vars
+                .boxed_enum_multi_field_vars
+                .insert(key.clone());
+        }
+        if snap.nested_boxed_payload_vars {
+            self.payload_vars
+                .nested_boxed_payload_vars
+                .insert(key.clone());
+        }
+        if snap.struct_field_boxed_payload_vars {
+            self.payload_vars
+                .struct_field_boxed_payload_vars
+                .insert(key.clone());
+        }
+        if snap.boxed_struct_payload_param_vars {
+            self.payload_vars
+                .boxed_struct_payload_param_vars
+                .insert(key.clone());
+        }
+        if let Some(v) = snap.boxed_enum_payload_struct {
+            self.payload_vars
+                .boxed_enum_payload_struct
+                .insert(key.clone(), v);
+        }
+        if let Some(v) = snap.boxed_leaf_owning_depth {
+            self.payload_vars
+                .boxed_leaf_owning_depth
+                .insert(key.clone(), v);
+        }
         if let Some(v) = snap.rc_fallback_heap_types {
             self.drop_rc.rc_fallback_heap_types.insert(key, v);
         }
+    }
+
+    /// B-2026-09-20-21 — purge only the per-name facts about a boxed-enum
+    /// binding's payload, for a `let` of a name that is no longer in scope.
+    /// Narrower than [`Self::forget_var_metadata`] on purpose: these facts are
+    /// written only when a binding registers its box, so for an unbound name
+    /// they can only be an earlier binding's leftovers.
+    pub(super) fn forget_boxed_payload_facts(&mut self, name: &str) {
+        let pv = &mut self.payload_vars;
+        pv.boxed_enum_payload_vars.remove(name);
+        pv.boxed_struct_payload_vars.remove(name);
+        pv.boxed_enum_multi_field_vars.remove(name);
+        pv.nested_boxed_payload_vars.remove(name);
+        pv.struct_field_boxed_payload_vars.remove(name);
+        pv.boxed_struct_payload_param_vars.remove(name);
+        pv.boxed_enum_payload_struct.remove(name);
+        pv.boxed_leaf_owning_depth.remove(name);
     }
 
     /// Purge every per-variable sidecar-metadata entry for `name`. Equivalent
