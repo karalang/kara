@@ -271,6 +271,14 @@ pub(crate) struct DropRc<'ctx> {
     /// ones this row's registration created, so no pre-existing retraction
     /// changes behaviour.
     pub(crate) cond_store_flag_params: std::collections::HashSet<String>,
+    /// B-2026-09-27-105 — `(local, part)` for a `let local = w.r;` of an
+    /// adopted param part, awaiting the local's slot: the statement AFTER the
+    /// `let` re-points the part's per-path walk onto it (see
+    /// `arm_conditional_store_flag`).
+    pub(crate) pending_part_aliases: Vec<(String, String)>,
+    /// B-2026-09-27-105 — `(local, part)` pairs already re-pointed: handing
+    /// `local` over clears `part`'s flag, as handing the part itself does.
+    pub(crate) cond_part_aliases: Vec<(String, String)>,
     /// B-2026-09-05-13 — the bindings that currently CARRY a conditionally-
     /// returned parameter's per-path `Drop` body: the parameter itself, as
     /// registered by the prologue (`compile_function` / `compile_mono_function`

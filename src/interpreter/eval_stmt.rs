@@ -451,6 +451,9 @@ impl<'a> super::Interpreter<'a> {
                 self.note_escaping_site(expr);
             }
         }
+        if let Some(ref expr) = block.final_expr {
+            self.disarm_cond_store_part_on_tail(expr);
+        }
         let result = if let Some(ref expr) = block.final_expr {
             if self.observed_cancellation() {
                 let cf = ControlFlow::Cancelled;
@@ -1748,6 +1751,24 @@ impl<'a> super::Interpreter<'a> {
         // Option/Result leg; codegen twin: `suppress_user_drop_for_var` at
         // the ctor arg loop).
         if self.moved_out_user_drop_bindings.contains(name) {
+            return;
+        }
+        // B-2026-09-27-105 — an adopted PART of a param (`w.r`), handed to
+        // another owner on some paths only; reaching here means this path kept
+        // it. Walk the part's value as `let _ = …` walks a discarded one.
+        if let Some((root, rest)) = name.split_once('.') {
+            if let Some(v) = self.env.get(root) {
+                let path: Vec<crate::ast::ParamPart> = rest
+                    .split('.')
+                    .map(|seg| match seg.parse::<usize>() {
+                        Ok(i) => crate::ast::ParamPart::TupleIndex(i),
+                        Err(_) => crate::ast::ParamPart::Field(seg.to_string()),
+                    })
+                    .collect();
+                if let Some(part) = crate::interpreter::value_at_param_path(&v, &path) {
+                    self.run_discarded_value_user_drops(part);
+                }
+            }
             return;
         }
         // B-2026-07-30-11 — a container binding never resolved through
@@ -6599,6 +6620,17 @@ impl<'a> super::Interpreter<'a> {
                 // frame binds it to. Codegen's `hands_over` carries the same
                 // arm, so the two backends disarm on the same statement.
                 ExprKind::SelfValue => name == "self",
+                // B-2026-09-27-105 — an adopted PART (`w.r`) is handed over
+                // by its own projection, or by a projection of a place that
+                // contains it.
+                ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                    crate::ast::projection_binding_name(e).is_some_and(|p| {
+                        name == p
+                            || name
+                                .strip_prefix(p.as_str())
+                                .is_some_and(|r| r.starts_with('.'))
+                    })
+                }
                 ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
                     args.iter().any(|a| hands_over(&a.value, name))
                 }
@@ -6620,15 +6652,103 @@ impl<'a> super::Interpreter<'a> {
             _ => None,
         };
         let Some(handed) = handed else { return };
+        // B-2026-09-27-105 — a bare projection bound or assigned is not a
+        // hand-over of an adopted part: the local is a view of the param, as
+        // every param-part `let` is. A `let` records the alias instead.
+        if matches!(
+            handed.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) && matches!(stmt.kind, StmtKind::Let { .. } | StmtKind::Assign { .. })
+        {
+            if let StmtKind::Let { pattern, .. } = &stmt.kind {
+                if let (crate::ast::PatternKind::Binding(b), Some(p)) =
+                    (&pattern.kind, crate::ast::projection_binding_name(handed))
+                {
+                    if self.cond_store_param_names.contains(&p) {
+                        self.cond_store_part_aliases.insert(b.clone(), p);
+                    }
+                }
+            }
+            return;
+        }
+        self.disarm_cond_store_names_handed_by(handed, hands_over, false);
+    }
+
+    /// B-2026-09-27-105 — the TAIL twin of the statement disarm above, for an
+    /// adopted param PART only (`if c { xs.push(w.r) }` with no `;`). Codegen's
+    /// `arm_conditional_store_flag_for_tail` reads the same two tail shapes.
+    /// Whole-param names are left to the routes that already carry them.
+    fn disarm_cond_store_part_on_tail(&mut self, expr: &Expr) {
+        if !self.cond_store_param_names.iter().any(|n| n.contains('.')) {
+            return;
+        }
+        let handed = match &expr.kind {
+            ExprKind::Return(Some(inner)) => inner.as_ref(),
+            ExprKind::MethodCall { .. } | ExprKind::Call { .. } => expr,
+            _ => return,
+        };
+        fn hands_over_part(e: &Expr, name: &str) -> bool {
+            match &e.kind {
+                ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                    crate::ast::projection_binding_name(e).is_some_and(|p| {
+                        name == p
+                            || name
+                                .strip_prefix(p.as_str())
+                                .is_some_and(|r| r.starts_with('.'))
+                    })
+                }
+                ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                    args.iter().any(|a| hands_over_part(&a.value, name))
+                }
+                ExprKind::StructLiteral { fields, .. } => {
+                    fields.iter().any(|f| hands_over_part(&f.value, name))
+                }
+                ExprKind::Tuple(elems) => elems.iter().any(|el| hands_over_part(el, name)),
+                _ => false,
+            }
+        }
+        self.disarm_cond_store_names_handed_by(handed, hands_over_part, true);
+    }
+
+    fn disarm_cond_store_names_handed_by(
+        &mut self,
+        handed: &Expr,
+        hands_over: fn(&Expr, &str) -> bool,
+        parts_only: bool,
+    ) {
         let hits: Vec<String> = self
             .cond_store_param_names
             .iter()
+            .filter(|n| !parts_only || n.contains('.'))
             .filter(|n| hands_over(handed, n))
             .filter(|n| !self.user_drop_array_arg_stays_with_caller(handed, n))
             .cloned()
             .collect();
         for n in hits {
             self.moved_out_user_drop_bindings.insert(n);
+        }
+        // B-2026-09-27-105 — through a `let` alias of an adopted part.
+        fn alias_handed(e: &Expr, a: &str) -> bool {
+            match &e.kind {
+                ExprKind::Identifier(n) => n == a,
+                ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                    args.iter().any(|x| alias_handed(&x.value, a))
+                }
+                ExprKind::StructLiteral { fields, .. } => {
+                    fields.iter().any(|f| alias_handed(&f.value, a))
+                }
+                ExprKind::Tuple(elems) => elems.iter().any(|el| alias_handed(el, a)),
+                _ => false,
+            }
+        }
+        let via_alias: Vec<String> = self
+            .cond_store_part_aliases
+            .iter()
+            .filter(|(a, _)| alias_handed(handed, a))
+            .map(|(_, p)| p.clone())
+            .collect();
+        for p in via_alias {
+            self.moved_out_user_drop_bindings.insert(p);
         }
     }
 

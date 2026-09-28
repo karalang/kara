@@ -50,3 +50,48 @@ fn main() {
     assert_eq!(interp_out.join(""), want, "interpreter");
     assert_eq!(run_program(src).as_deref(), Some(want), "AOT");
 }
+
+/// B-2026-09-27-105 conditional cells — a by-value struct param whose `Drop`
+/// field is handed to another owner on ONE path only (`if c { keep(w.r) }`,
+/// `if c { xs.push(w.r) }`, a tail push, a `let r = w.r` alias, a `match` arm,
+/// two projection hops, a forwarding caller, an associated fn). The caller
+/// masked the part on every path while the callee ran it on none, so the
+/// path that kept the part lost its body; the callee now adopts the part under
+/// a per-path flag cleared at the handing statement.
+#[test]
+fn e2e_param_field_handed_over_on_one_path_runs_once() {
+    let src = r#"struct D { id: i64, name: String }
+impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}{self.name}") } }
+fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
+struct W { r: D, s: D, b: i64 }
+fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
+struct X { w: W, t: D }
+fn mkx(n: i64) -> X { X { w: mkw(n), t: mkd(n + 300) } }
+fn keep(d: D) -> D { d }
+fn ret(w: W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 }
+fn push(w: W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r); } xs.len() }
+fn tailpush(w: W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r) } xs.len() }
+fn viaalias(w: W, c: bool) -> i64 { let r = w.r; if c { let k = keep(r); return k.id; } 0 }
+fn viaaliaspush(w: W, c: bool) -> i64 { let r = w.r; let mut xs: Vec[D] = Vec.new(); if c { xs.push(r); } xs.len() }
+fn arm(w: W, c: bool) -> i64 { match c { true => { let k = keep(w.r); k.id } false => 0 } }
+fn twohop(x: X, c: bool) -> i64 { if c { let k = keep(x.w.r); return k.id; } 0 }
+fn fwd(w: W, c: bool) -> i64 { ret(w, c) }
+impl W { fn assoc(w: W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 } }
+fn main() {
+    println(f"a{ret(mkw(1), false)}"); println(f"a{ret(mkw(2), true)}")
+    println(f"b{push(mkw(3), false)}"); println(f"b{push(mkw(4), true)}")
+    println(f"c{tailpush(mkw(5), false)}"); println(f"c{tailpush(mkw(6), true)}")
+    println(f"e{viaalias(mkw(7), false)}"); println(f"e{viaalias(mkw(8), true)}")
+    println(f"f{viaaliaspush(mkw(9), false)}"); println(f"f{viaaliaspush(mkw(10), true)}")
+    println(f"g{arm(mkw(11), false)}"); println(f"g{arm(mkw(12), true)}")
+    println(f"h{twohop(mkx(13), false)}"); println(f"h{twohop(mkx(14), true)}")
+    println(f"i{fwd(mkw(15), false)}"); println(f"i{fwd(mkw(16), true)}")
+    println(f"j{W.assoc(mkw(17), false)}"); println(f"j{W.assoc(mkw(18), true)}")
+    println("end")
+}"#;
+    let want = "d1n1\nd101n101\na0\nd2n2\nd102n102\na2\nd3n3\nd103n103\nb0\nd4n4\nd104n104\nb1\nd5n5\nd105n105\nc0\nd6n6\nd106n106\nc1\nd7n7\nd107n107\ne0\nd8n8\nd108n108\ne8\nd9n9\nd109n109\nf0\nd10n10\nd110n110\nf1\nd11n11\nd111n111\ng0\nd12n12\nd112n112\ng12\nd13n13\nd313n313\nd113n113\nh0\nd14n14\nd314n314\nd114n114\nh14\nd15n15\nd115n115\ni0\nd16n16\nd116n116\ni16\nd17n17\nd117n117\nj0\nd18n18\nd118n118\nj18\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    assert_eq!(run_program(src).as_deref(), Some(want), "AOT");
+}

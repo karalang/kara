@@ -14894,6 +14894,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// today's behaviour byte-for-byte, and the new runtime bit cannot reach
     /// any shape the new predicate did not opt in.
     pub(super) fn arm_conditional_store_flag(&mut self, stmt: &Stmt) {
+        self.repoint_pending_part_aliases();
         // Two disarming sites, not one. The STORE is what this row is about;
         // the RETURN is the other way a flagged parameter can leave on a path,
         // and leaving it armed there is a DOUBLE body — the unrecoverable
@@ -14923,6 +14924,29 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
         let Some(handed) = handed else { return };
+        // B-2026-09-27-105 — a bare projection bound or assigned is not a
+        // hand-over of an adopted param part: the local is a view of the
+        // param. A `let` makes the local an ALIAS of the part's flag instead,
+        // so handing the local over clears it. The interpreter records the same
+        // alias at the same statement.
+        if matches!(
+            handed.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) && matches!(stmt.kind, StmtKind::Let { .. } | StmtKind::Assign { .. })
+        {
+            if let StmtKind::Let { pattern, .. } = &stmt.kind {
+                if let (crate::ast::PatternKind::Binding(b), Some(p)) =
+                    (&pattern.kind, crate::ast::projection_binding_name(handed))
+                {
+                    if self.drop_rc.cond_store_flag_params.contains(&p)
+                        && self.drop_rc.cond_move_drop_flags.contains_key(&p)
+                    {
+                        self.drop_rc.pending_part_aliases.push((b.clone(), p));
+                    }
+                }
+            }
+            return;
+        }
         self.disarm_conditional_store_flags_handed_by(handed);
     }
 
@@ -14933,12 +14957,84 @@ impl<'ctx> super::Codegen<'ctx> {
     /// bodies the container was about to run too. Same shapes as the
     /// `StmtKind::Expr` arm of [`Self::arm_conditional_store_flag`].
     pub(super) fn arm_conditional_store_flag_for_tail(&mut self, expr: &Expr) {
+        self.repoint_pending_part_aliases();
         let handed = match &expr.kind {
             ExprKind::Return(Some(inner)) => inner.as_ref(),
             ExprKind::MethodCall { .. } | ExprKind::Call { .. } => expr,
             _ => return,
         };
         self.disarm_conditional_store_flags_handed_by(handed);
+    }
+
+    /// B-2026-09-27-105 — a `let r = w.r;` of an adopted param part MOVES the
+    /// part's value into `r`'s slot (the param's field is left moved-from), so
+    /// the part's per-path walk must read `r` from here on: point it at `r`'s
+    /// slot with the part type's own bodies-only walker. Deferred to the next
+    /// statement because the `let` hook runs before `r` has a slot.
+    fn repoint_pending_part_aliases(&mut self) {
+        if self.drop_rc.pending_part_aliases.is_empty() {
+            return;
+        }
+        for (local, part) in std::mem::take(&mut self.drop_rc.pending_part_aliases) {
+            let Some(slot) = self.variables.get(local.as_str()).map(|v| v.ptr) else {
+                continue;
+            };
+            let mut segs = part.split('.');
+            let Some(root) = segs.next() else { continue };
+            let Some(mut ty) = self.var_types.var_type_names.get(root).cloned() else {
+                continue;
+            };
+            let mut ok = true;
+            for seg in segs {
+                let next = self
+                    .type_decls
+                    .struct_field_names
+                    .get(ty.as_str())
+                    .and_then(|ns| ns.iter().position(|n| n == seg))
+                    .and_then(|idx| {
+                        self.type_decls
+                            .struct_field_type_exprs
+                            .get(ty.as_str())
+                            .and_then(|tes| tes.get(idx))
+                    })
+                    .and_then(|te| match &te.kind {
+                        TypeKind::Path(p) if p.segments.len() == 1 => Some(p.segments[0].clone()),
+                        _ => None,
+                    });
+                match next {
+                    Some(n) => ty = n,
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if !ok || !self.type_decls.struct_types.contains_key(ty.as_str()) {
+                continue;
+            }
+            let Some(bodies) = self.emit_struct_user_drop_bodies_only_fn(&ty) else {
+                continue;
+            };
+            // MOVE the part's walk into the local's own frame rather than
+            // re-pointing it where it stands: the local's memory is freed when
+            // ITS scope ends, so a walk left in the function frame would read
+            // the fields after that free. Registered after the local's own
+            // cleanup, so it drains first. Still keyed by the PART's name, so
+            // the part's flag keeps gating it.
+            for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+                frame.retain(|a| {
+                    !matches!(a, CleanupAction::UserDrop { binding_name, .. } if *binding_name == part)
+                });
+            }
+            self.track_user_drop_var_with_fn(
+                "",
+                &part,
+                slot,
+                bodies,
+                UserDropKind::StructFieldBodies,
+            );
+            self.drop_rc.cond_part_aliases.push((local, part));
+        }
     }
 
     fn disarm_conditional_store_flags_handed_by(&mut self, handed: &Expr) {
@@ -14955,6 +15051,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // on the rebinding path and the callee ran a body the local was
                 // already running.
                 ExprKind::SelfValue => name == "self",
+                // B-2026-09-27-105 — an adopted param PART (`w.r`) is handed
+                // over by its own projection, or by one of a place holding it.
+                // The interpreter's `hands_over` carries the same arm.
+                ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                    crate::ast::projection_binding_name(e).is_some_and(|p| {
+                        name == p
+                            || name
+                                .strip_prefix(p.as_str())
+                                .is_some_and(|r| r.starts_with('.'))
+                    })
+                }
                 ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
                     args.iter().any(|a| hands_over(&a.value, name))
                 }
@@ -14966,11 +15073,17 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        let aliases = &self.drop_rc.cond_part_aliases;
         let names: Vec<String> = self
             .drop_rc
             .cond_move_drop_flags
             .keys()
-            .filter(|n| hands_over(handed, n))
+            .filter(|n| {
+                hands_over(handed, n)
+                    || aliases
+                        .iter()
+                        .any(|(l, p)| p == *n && hands_over(handed, l))
+            })
             .filter(|n| !self.flagged_array_arg_stays_with_caller(handed, n))
             // B-2026-09-23-36 — only while the generation the bit was made for
             // is the live one. A later generation of a shadowed name handed

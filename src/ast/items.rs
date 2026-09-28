@@ -5003,7 +5003,90 @@ pub fn fn_escaping_param_part_paths(
     f: &Function,
     arg_index: usize,
 ) -> Vec<ParamPath> {
-    returned_param_part_paths_impl(f, arg_index, Some(program))
+    let mut out = returned_param_part_paths_impl(f, arg_index, Some(program));
+    for p in fn_conditionally_handed_param_parts(program, f, arg_index) {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// B-2026-09-27-105 — the parts of by-value parameter `arg_index` that `f`
+/// hands to another owner on SOME paths only: `if c { let k = keep(w.r); .. }`
+/// or `if c { xs.push(w.r); }` into a container `f` declares.
+///
+/// The part channel above is a may-analysis read by the CALLER, which masks the
+/// parts it reports; a conditional hand-over has no static answer that is right
+/// on both paths (masked, the path that keeps it loses the body; unmasked, the
+/// path that hands it over runs it twice). So these parts are masked by the
+/// caller like any other AND adopted by the callee, which runs each one's
+/// bodies at its exit under a per-path flag the handing statement clears --
+/// the conditional-store registration's shape, one part at a time. Both
+/// backends name the adopted part by [`param_part_binding_name`].
+///
+/// Admitted only where that flag can be cleared: the hand-over is a direct
+/// statement of a branch (a `let` value, a statement or tail call, a `return`
+/// operand), not inside a loop, and `f` is neither generic nor an instance
+/// method. Anything else keeps the channel's static answer.
+pub fn fn_conditionally_handed_param_parts(
+    program: &crate::Program,
+    f: &Function,
+    arg_index: usize,
+) -> Vec<ParamPath> {
+    // Instance methods keep the static answer: their parameters are adopted
+    // through a separate registration on both backends that this does not
+    // extend yet.
+    if f.generic_params.is_some() || f.self_param.is_some() {
+        return Vec::new();
+    }
+    let Some(param) = f.params.get(arg_index) else {
+        return Vec::new();
+    };
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return Vec::new();
+    }
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return Vec::new();
+    };
+    let must = part_paths_from_root_mode(f, param_name, arg_index, Some(program), false);
+    part_paths_from_root_mode(f, param_name, arg_index, Some(program), true)
+        .into_iter()
+        .filter(|p| !must.contains(p))
+        .collect()
+}
+
+/// B-2026-09-27-105 — the binding name both backends key an adopted PART of a
+/// parameter by: `w.r` for field `r`, `w.0` for element 0.
+pub fn param_part_binding_name(param: &str, path: &[ParamPart]) -> String {
+    let mut s = param.to_string();
+    for p in path {
+        s.push('.');
+        match p {
+            ParamPart::Field(f) => s.push_str(f),
+            ParamPart::TupleIndex(i) => s.push_str(&i.to_string()),
+        }
+    }
+    s
+}
+
+/// B-2026-09-27-105 — the dotted place a projection names (`w.r`, `w.0.r`),
+/// for matching a handing statement against an adopted part's name.
+pub fn projection_binding_name(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Identifier(n) => Some(n.clone()),
+        ExprKind::SelfValue => Some("self".to_string()),
+        ExprKind::FieldAccess { object, field } => {
+            Some(format!("{}.{}", projection_binding_name(object)?, field))
+        }
+        ExprKind::TupleIndex { object, index } => {
+            Some(format!("{}.{}", projection_binding_name(object)?, index))
+        }
+        _ => None,
+    }
 }
 
 /// Shared by the two part-path scanners (`returned_param_part_paths_impl`,
@@ -5163,6 +5246,16 @@ fn part_paths_from_root(
     arg_index: usize,
     program: Option<&crate::Program>,
 ) -> Vec<ParamPath> {
+    part_paths_from_root_mode(f, param_name, arg_index, program, false)
+}
+
+fn part_paths_from_root_mode(
+    f: &Function,
+    param_name: &str,
+    arg_index: usize,
+    program: Option<&crate::Program>,
+    cond_mode: bool,
+) -> Vec<ParamPath> {
     // The roots whose storage outlives the call, as
     // `fn_moves_param_into_outliving_place` computes them; only consulted on
     // the program-aware path.
@@ -5197,12 +5290,33 @@ fn part_paths_from_root(
                 .any(|p| matches!(&p.pattern.kind, PatternKind::Binding(q) if q == n))
         });
     }
+    // B-2026-09-27-105 — the names bound ONCE, by a `let` of a bare
+    // projection: the only alias spelling both backends' flag-clearing hooks
+    // follow. A pattern-bound element is B-2026-09-05-28's channel.
+    let mut all_lets: Vec<&str> = Vec::new();
+    let mut proj_lets: Vec<&str> = Vec::new();
+    // Both modes: the static query must DECLINE these for the conditional one
+    // to report them as the difference.
+    {
+        part_scan_let_names(&f.body, &mut all_lets);
+        part_scan_let_names_where(&f.body, &mut proj_lets, |v| {
+            matches!(
+                v.kind,
+                ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+            )
+        });
+        proj_lets.retain(|n| all_lets.iter().filter(|m| *m == n).count() == 1);
+    }
     let cx = PartScanCx {
         program,
         roots: &roots,
+        proj_lets: &proj_lets,
         top_level: true,
         root_struct: root_struct.as_deref(),
         locals: &locals,
+        cond_mode,
+        in_loop: false,
+        handed_site: false,
     };
     // B-2026-09-05-17 — cycle guard for the forwarding route, which asks
     // this same question of the callee: a recursive forward answers empty,
@@ -5211,7 +5325,10 @@ fn part_paths_from_root(
         static PART_PATHS_IN_FLIGHT: std::cell::RefCell<Vec<(String, usize)>> =
             const { std::cell::RefCell::new(Vec::new()) };
     }
-    let key = (f.name.clone(), arg_index);
+    let key = (
+        format!("{}{}", f.name, if cond_mode { "#cond" } else { "" }),
+        arg_index,
+    );
     if program.is_some() && PART_PATHS_IN_FLIGHT.with(|v| v.borrow().contains(&key)) {
         return Vec::new();
     }
@@ -5473,8 +5590,23 @@ fn part_paths_from_root(
                         &a.value.kind,
                         ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
                     );
-                    let admitted = matches!(&a.value.kind, ExprKind::Identifier(_))
-                        || (projection && cx.top_level);
+                    // B-2026-09-27-105 — an ALIAS of a part (`let r = w.r;` ..
+                    // `keep(r)`) handed over inside a branch, where the adopting
+                    // frame can clear a flag, belongs to the CONDITIONAL query
+                    // like the projection spelling: the static answer here lost
+                    // the part's body on the path that kept it. Both backends
+                    // clear the flag through the alias the `let` recorded.
+                    let nested_alias = matches!(&a.value.kind, ExprKind::Identifier(n) if cx.proj_lets.contains(&n.as_str()))
+                        && denote(&a.value, aliases).is_some_and(|p| !p.is_empty())
+                        && !cx.top_level
+                        && !cx.in_loop
+                        && cx.handed_site;
+                    let admitted = if nested_alias {
+                        cx.cond_mode
+                    } else {
+                        matches!(&a.value.kind, ExprKind::Identifier(_))
+                            || (projection && (cx.top_level || cx.cond_site()))
+                    };
                     if !admitted {
                         continue;
                     }
@@ -5522,7 +5654,7 @@ fn part_paths_from_root(
                 // projection spellings alike; an argument that is not a part
                 // of the root denotes nothing and is not noted. Top level only,
                 // for the projection route's reason above.
-                if cx.top_level
+                if (cx.top_level || cx.cond_site())
                     && matches!(
                         method.as_str(),
                         "push" | "push_back" | "push_front" | "insert"
@@ -5597,7 +5729,15 @@ fn part_paths_from_root(
             }
             ExprKind::MethodCall { object, args, .. } => {
                 taken_over(e, aliases, cx, out);
-                scan_expr(object, aliases, cx, out);
+                scan_expr(
+                    object,
+                    aliases,
+                    PartScanCx {
+                        handed_site: false,
+                        ..cx
+                    },
+                    out,
+                );
                 for a in args {
                     scan_expr(&a.value, aliases, cx, out);
                 }
@@ -5654,6 +5794,7 @@ fn part_paths_from_root(
                 aliases,
                 PartScanCx {
                     top_level: false,
+                    in_loop: true,
                     ..cx
                 },
                 out,
@@ -5668,16 +5809,30 @@ fn part_paths_from_root(
         cx: PartScanCx<'_>,
         out: &mut Vec<ParamPath>,
     ) {
+        // B-2026-09-27-105 — which of this block's expressions are HANDED
+        // (see `PartScanCx::handed_site`).
+        fn at<'c>(e: &Expr, cx: PartScanCx<'c>, as_let: bool) -> PartScanCx<'c> {
+            PartScanCx {
+                handed_site: as_let
+                    || matches!(
+                        &e.kind,
+                        ExprKind::Call { .. }
+                            | ExprKind::MethodCall { .. }
+                            | ExprKind::Return(Some(_))
+                    ),
+                ..cx
+            }
+        }
         for st in &b.stmts {
             match &st.kind {
-                StmtKind::Expr(e) => scan_expr(e, aliases, cx, out),
-                StmtKind::Let { value, .. } => scan_expr(value, aliases, cx, out),
+                StmtKind::Expr(e) => scan_expr(e, aliases, at(e, cx, false), out),
+                StmtKind::Let { value, .. } => scan_expr(value, aliases, at(value, cx, true), out),
                 _ => {}
             }
         }
         if let Some(fe) = b.final_expr.as_deref() {
             yielded(fe, aliases, out);
-            scan_expr(fe, aliases, cx, out);
+            scan_expr(fe, aliases, at(fe, cx, false), out);
         }
     }
 
@@ -5715,13 +5870,41 @@ struct PartScanCx<'a> {
     /// own `let`s, parameters excluded: the containers a part pushed into is
     /// then owned, and dropped, by the callee rather than the caller.
     locals: &'a [&'a str],
+    /// B-2026-09-27-105 — see `part_paths_from_root_mode`: the `let r = w.r`
+    /// aliases a nested hand-over may name.
+    proj_lets: &'a [&'a str],
+    /// B-2026-09-27-105 — asked for [`fn_conditionally_handed_param_parts`]:
+    /// a projection hand-over nested in a branch is admitted too, where the
+    /// adopting frame's per-path flag can be cleared (see `cond_site`).
+    cond_mode: bool,
+    /// Inside a loop body, where a part handed over on one iteration would be
+    /// handed again on the next.
+    in_loop: bool,
+    /// The expression being scanned is what a statement HANDS OVER in the
+    /// shapes both backends' flag-clearing hooks read: a `let` value, a
+    /// statement or tail call, a `return` operand, or an argument, field or
+    /// element reached from one of those.
+    handed_site: bool,
+}
+
+impl PartScanCx<'_> {
+    /// B-2026-09-27-105 — a nested hand-over the conditional query admits.
+    fn cond_site(&self) -> bool {
+        self.cond_mode && !self.in_loop && self.handed_site
+    }
 }
 
 /// B-2026-09-27-99 — every name a `let` in `b` binds whole, at any block depth
 /// a statement reaches. A name it misses keeps the scan's under-reporting
 /// answer, which is the direction this channel already takes.
 fn part_scan_let_names<'a>(b: &'a Block, out: &mut Vec<&'a str>) {
-    fn in_expr<'a>(e: &'a Expr, out: &mut Vec<&'a str>) {
+    part_scan_let_names_where(b, out, |_| true)
+}
+
+/// B-2026-09-27-105 — [`part_scan_let_names`] restricted to the `let`s whose
+/// value satisfies `keep`.
+fn part_scan_let_names_where<'a>(b: &'a Block, out: &mut Vec<&'a str>, keep: fn(&Expr) -> bool) {
+    fn in_expr<'a>(e: &'a Expr, out: &mut Vec<&'a str>, keep: fn(&Expr) -> bool) {
         match &e.kind {
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
@@ -5730,7 +5913,7 @@ fn part_scan_let_names<'a>(b: &'a Block, out: &mut Vec<&'a str>) {
             | ExprKind::WhileLet { body: b, .. }
             | ExprKind::For { body: b, .. }
             | ExprKind::Loop { body: b, .. }
-            | ExprKind::LabeledBlock { body: b, .. } => part_scan_let_names(b, out),
+            | ExprKind::LabeledBlock { body: b, .. } => part_scan_let_names_where(b, out, keep),
             ExprKind::If {
                 then_block,
                 else_branch,
@@ -5741,14 +5924,14 @@ fn part_scan_let_names<'a>(b: &'a Block, out: &mut Vec<&'a str>) {
                 else_branch,
                 ..
             } => {
-                part_scan_let_names(then_block, out);
+                part_scan_let_names_where(then_block, out, keep);
                 if let Some(x) = else_branch.as_deref() {
-                    in_expr(x, out);
+                    in_expr(x, out, keep);
                 }
             }
             ExprKind::Match { arms, .. } => {
                 for a in arms {
-                    in_expr(&a.body, out);
+                    in_expr(&a.body, out, keep);
                 }
             }
             _ => {}
@@ -5758,16 +5941,18 @@ fn part_scan_let_names<'a>(b: &'a Block, out: &mut Vec<&'a str>) {
         match &st.kind {
             StmtKind::Let { pattern, value, .. } => {
                 if let PatternKind::Binding(n) = &pattern.kind {
-                    out.push(n.as_str());
+                    if keep(value) {
+                        out.push(n.as_str());
+                    }
                 }
-                in_expr(value, out);
+                in_expr(value, out, keep);
             }
-            StmtKind::Expr(e) => in_expr(e, out),
+            StmtKind::Expr(e) => in_expr(e, out, keep),
             _ => {}
         }
     }
     if let Some(e) = b.final_expr.as_deref() {
-        in_expr(e, out);
+        in_expr(e, out, keep);
     }
 }
 

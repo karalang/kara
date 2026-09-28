@@ -2403,6 +2403,7 @@ impl<'a> super::Interpreter<'a> {
                     &mut self.cond_store_param_names,
                     self.pending_param_drop_bindings.iter().cloned().collect(),
                 );
+                let saved_part_aliases = std::mem::take(&mut self.cond_store_part_aliases);
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
@@ -2433,6 +2434,7 @@ impl<'a> super::Interpreter<'a> {
                 // set that outlives its frame is a hazard whether or not one
                 // program has found it yet.
                 self.cond_store_param_names = saved_cond_store_params;
+                self.cond_store_part_aliases = saved_part_aliases;
                 for (n, prev) in saved_optres_tes {
                     match prev {
                         Some(te) => {
@@ -2999,6 +3001,25 @@ impl<'a> super::Interpreter<'a> {
                     out.push(name.to_string());
                 }
                 _ => {}
+            }
+        }
+        // B-2026-09-27-105 — a PART of an owned param handed to another owner
+        // on some paths only (`if c { let k = keep(w.r); .. }`). The caller
+        // masks it on every path (`fn_escaping_param_part_paths` reports it),
+        // so this frame runs its bodies on the path that kept it, disarmed by
+        // the handing statement. Codegen's twin is the part registration in
+        // `compile_function`'s parameter loop, on the same predicate.
+        for (i, p) in f.params.iter().enumerate() {
+            let Some(name) = p.name() else { continue };
+            for path in crate::ast::fn_conditionally_handed_param_parts(self.program, f, i) {
+                let carries = self
+                    .env
+                    .get(name)
+                    .and_then(|v| crate::interpreter::value_at_param_path(&v, &path))
+                    .is_some_and(|v| self.field_value_carries_user_drop(&v));
+                if carries {
+                    out.push(crate::ast::param_part_binding_name(name, &path));
+                }
             }
         }
         out

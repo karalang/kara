@@ -1536,6 +1536,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // with the binding of that name here.
         self.drop_rc.loop_decl_rearm_anchors.clear();
         self.drop_rc.cond_store_flag_params.clear();
+        self.drop_rc.pending_part_aliases.clear();
+        self.drop_rc.cond_part_aliases.clear();
         self.drop_rc.cond_returned_body_params.clear();
         self.drop_rc.cond_returned_owned_params.clear();
         self.drop_rc.field_view_flags.clear();
@@ -4170,6 +4172,61 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .insert(param_name.clone());
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // B-2026-09-27-105 — a PART of this param handed to another
+                // owner on some paths only (`if c { let k = keep(w.r); .. }`).
+                // The caller masks it on every path, so this frame runs the
+                // part's bodies at its exit under a per-path flag the handing
+                // statement clears (`arm_conditional_store_flag`, whose
+                // `hands_over` matches the part's projection). Bodies only, as
+                // the whole-param conditional store above: the caller's memory
+                // walk is untouched. The walk is the param's own field-bodies
+                // walker with every field OFF the part's path skipped.
+                // Interpreter twin: the part arm of
+                // `cond_returned_param_drop_names`, on the same predicate.
+                //
+                // Asked of the SOURCE function: an impl method reaches here
+                // with `self` spliced in as param 0 and `self_param` cleared,
+                // which the predicate would read as a free function.
+                if !self.is_coroutine_compiled(&func.name) {
+                    let program = self.program_snapshot.clone();
+                    let source = program.as_deref().and_then(|p| {
+                        crate::codegen::declarations::find_function_ast(p, &func.name)
+                    });
+                    if let (Some(program), Some(source), TypeKind::Path(path)) =
+                        (program.as_deref(), source, &param.ty.kind)
+                    {
+                        if let Some(struct_name) = path.segments.first().cloned() {
+                            let parts = if source.self_param.is_some() {
+                                Vec::new()
+                            } else {
+                                crate::ast::fn_conditionally_handed_param_parts(program, source, i)
+                            };
+                            for part in parts {
+                                let Some(skip) = self.only_path_skip_tree(&struct_name, &part)
+                                else {
+                                    continue;
+                                };
+                                let Some(bodies) = self
+                                    .field_bodies_fn_for_owned_temp_skipping(&struct_name, &skip)
+                                else {
+                                    continue;
+                                };
+                                let part_name =
+                                    crate::ast::param_part_binding_name(&param_name, &part);
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    &part_name,
+                                    alloca,
+                                    bodies,
+                                    crate::codegen::state::UserDropKind::StructFieldBodies,
+                                );
+                                let _ = self.cond_move_drop_flag_for(&part_name);
+                                self.drop_rc.cond_store_flag_params.insert(part_name);
                             }
                         }
                     }

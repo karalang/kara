@@ -6554,6 +6554,8 @@ impl<'ctx> Codegen<'ctx> {
                 caller_retained_aggregate_memory: HashSet::new(),
                 loop_decl_rearm_anchors: HashMap::new(),
                 cond_store_flag_params: std::collections::HashSet::new(),
+                pending_part_aliases: Vec::new(),
+                cond_part_aliases: Vec::new(),
                 cond_returned_body_params: std::collections::HashSet::new(),
                 cond_returned_owned_params: std::collections::HashSet::new(),
                 aggregate_arg_escape_stores: false,

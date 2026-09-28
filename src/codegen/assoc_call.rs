@@ -3352,23 +3352,36 @@ impl<'ctx> super::Codegen<'ctx> {
                         // per-element walk could not tell that the first element
                         // carries a user `Drop`, so the body was lost with the
                         // memory still balanced — invisible to every leak gate.
-                        // The other two channels are empty here on purpose: this
-                        // leg computes no escaping-parts or payload-skip sets,
-                        // and passing empties is exactly what the arity-3 form
-                        // did.
+                        // B-2026-09-27-105 — and the escaping-parts, field-payload
+                        // and payload-skip channels, as the free and method
+                        // legs carry them. Passed empty, `W.own(mkw(2))` over
+                        // `fn own(w: W) -> i64 { let k = keep(w.r); k.id }` ran
+                        // `w.r`'s body in the callee's `k` and again in this
+                        // temp's walk, on every compiled surface against a
+                        // correct `--interp` (whose assoc leg already masks).
                         let declared_tes = self.callee_tuple_param_elem_type_exprs(&qualified, i);
+                        let escaping_parts = self.callee_returned_param_parts(&qualified, i);
+                        let field_payload_paths =
+                            self.callee_escaping_field_payload_paths(&qualified, i);
+                        let payload_skip = self.enum_arg_payload_skip(&qualified, i);
                         self.drop_rc.freshtemp_drop_projection_arg = drop_projection;
                         self.track_inline_owned_aggregate_arg_parts(
                             val,
                             &a.value,
                             escapes_frame,
-                            &[],
-                            &[],
+                            &escaping_parts,
+                            &field_payload_paths,
                             declared_tes.as_deref(),
-                            None,
+                            payload_skip,
                         );
                         self.drop_rc.freshtemp_drop_projection_arg = None;
                     }
+                    // B-2026-09-27-105 — the PLACE-argument masks the free and
+                    // method legs apply (`W.own(w)`, the named spelling of the
+                    // same double).
+                    self.disarm_escaping_place_tuple_elem_bodies(&qualified, i, &a.value);
+                    self.disarm_escaping_place_struct_field_bodies(&qualified, i, &a.value);
+                    self.disarm_escaping_place_struct_field_payload_bodies(&qualified, i, &a.value);
                     // The registrar above answers for an AGGREGATE (struct /
                     // enum / tuple temp). A bare `String` / `Vec` argument is
                     // not one — it early-returns on the `vec_struct_type`

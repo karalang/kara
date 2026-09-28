@@ -9628,6 +9628,39 @@ impl<'ctx> super::Codegen<'ctx> {
         tree
     }
 
+    /// B-2026-09-27-105 — the skip tree that walks ONLY the field at `path`
+    /// (every sibling along the way skipped), for a param part adopted by the
+    /// callee. `None` when a hop is not a struct field this can resolve, or
+    /// the leaf runs no body.
+    pub(super) fn only_path_skip_tree(
+        &self,
+        struct_name: &str,
+        path: &[crate::ast::ParamPart],
+    ) -> Option<super::synth_drop::FieldSkipTree> {
+        let (head, rest) = path.split_first()?;
+        let crate::ast::ParamPart::Field(name) = head else {
+            return None;
+        };
+        let names = self.type_decls.struct_field_names.get(struct_name)?;
+        let idx = names.iter().position(|f| f == name)?;
+        let mut tree = super::synth_drop::FieldSkipTree::default();
+        tree.here.extend((0..names.len()).filter(|&j| j != idx));
+        if !rest.is_empty() {
+            let field_ty = self
+                .type_decls
+                .struct_field_type_exprs
+                .get(struct_name)
+                .and_then(|tes| tes.get(idx))
+                .and_then(|te| match &te.kind {
+                    TypeKind::Path(p) if p.segments.len() == 1 => Some(p.segments[0].clone()),
+                    _ => None,
+                })?;
+            let sub = self.only_path_skip_tree(&field_ty, rest)?;
+            tree.nested.insert(idx, sub);
+        }
+        Some(tree)
+    }
+
     fn insert_skip_path(
         &self,
         tree: &mut super::synth_drop::FieldSkipTree,

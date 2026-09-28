@@ -975,6 +975,10 @@ pub struct Interpreter<'a> {
     /// arm.
     pub(crate) own_body_only_view_bindings: std::collections::HashMap<String, String>,
     pub(crate) cond_store_param_names: std::collections::HashSet<String>,
+    /// B-2026-09-27-105 — per frame, a local bound to an adopted param PART
+    /// (`let r = w.r;` → `r` ↦ `w.r`): handing the local over clears the
+    /// part's per-path body, as handing the projection does.
+    pub(crate) cond_store_part_aliases: std::collections::HashMap<String, String>,
     /// B-2026-09-26-37 — per call frame, the payload parts of a by-value
     /// `Option`/`Result` param that this run of the body actually RETURNED,
     /// through an arm binding of that param's payload. See
@@ -1156,6 +1160,23 @@ pub(crate) struct FreshTempReadLevel {
 /// f64 is the identity. f16 / bf16 route through the same helpers the cast
 /// path uses, so a value reaching a narrow slot by coercion and one reaching
 /// it by an explicit `as` land on the same bits.
+/// B-2026-09-27-105 — the value at `path` inside a by-value param's value:
+/// struct fields by name, tuple elements by index. `None` when the path does
+/// not resolve (a moved-out or non-aggregate intermediate).
+pub(crate) fn value_at_param_path(v: &Value, path: &[crate::ast::ParamPart]) -> Option<Value> {
+    let mut cur = v.clone();
+    for p in path {
+        cur = match (p, &cur) {
+            (crate::ast::ParamPart::Field(f), Value::Struct { fields, .. }) => {
+                fields.get(f)?.clone()
+            }
+            (crate::ast::ParamPart::TupleIndex(i), Value::Tuple(items)) => items.get(*i)?.clone(),
+            _ => return None,
+        };
+    }
+    Some(cur)
+}
+
 pub(crate) fn round_float_to_declared_size(
     v: f64,
     size: crate::typechecker::types::FloatSize,
@@ -1383,6 +1404,7 @@ impl<'a> Interpreter<'a> {
             pending_param_drop_bindings: Vec::new(),
             own_body_only_view_bindings: std::collections::HashMap::new(),
             cond_store_param_names: std::collections::HashSet::new(),
+            cond_store_part_aliases: std::collections::HashMap::new(),
             payload_escape_frames: Vec::new(),
             pending_call_payload_escapes: Vec::new(),
             map_val_bodies_tes: HashMap::new(),
