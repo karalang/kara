@@ -1051,6 +1051,7 @@ fn run_program_capturing_inner(src: &str, filename: Option<&str>) -> Option<Capt
     });
     let obj_path = format!("/tmp/karac_e2e_{}_{}_{}.o", std::process::id(), nonce, id);
     let exe_path = format!("/tmp/karac_e2e_{}_{}_{}", std::process::id(), nonce, id);
+    let _scratch = super::common::RemoveOnDrop(vec![obj_path.clone(), exe_path.clone()]);
     // Belt and braces: never inherit a file at either path. If one somehow
     // exists, executing it would run SOMEBODY ELSE'S PROGRAM and the
     // assertion would be about the wrong binary entirely — the failure mode

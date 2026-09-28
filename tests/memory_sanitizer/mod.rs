@@ -389,6 +389,7 @@ fn run_under_asan_opts_inner(
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     let obj_path = format!("/tmp/karac_asan_{}_{}.o", std::process::id(), id);
     let exe_path = format!("/tmp/karac_asan_{}_{}", std::process::id(), id);
+    let _scratch = super::common::RemoveOnDrop(vec![obj_path.clone(), exe_path.clone()]);
 
     // B-2026-08-05-35 — a CODEGEN failure is a hard FAILURE, not a skip.
     //
@@ -597,6 +598,7 @@ fn run_under_asan_with_full_pipeline(
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     let obj_path = format!("/tmp/karac_asan_cc_{}_{}.o", std::process::id(), id);
     let exe_path = format!("/tmp/karac_asan_cc_{}_{}", std::process::id(), id);
+    let _scratch = super::common::RemoveOnDrop(vec![obj_path.clone(), exe_path.clone()]);
 
     if let Err(e) = compile_to_object(
         &parsed.program,
@@ -1000,6 +1002,7 @@ fn run_under_asan_with_ownership(
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     let obj_path = format!("/tmp/karac_asan_ow_{}_{}.o", std::process::id(), id);
     let exe_path = format!("/tmp/karac_asan_ow_{}_{}", std::process::id(), id);
+    let _scratch = super::common::RemoveOnDrop(vec![obj_path.clone(), exe_path.clone()]);
 
     // B-2026-08-05-35 — a CODEGEN failure is a hard FAILURE, not a skip.
     //
@@ -1147,6 +1150,7 @@ fn run_under_asan_with_concurrency(
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     let obj_path = format!("/tmp/karac_asan_par_{}_{}.o", std::process::id(), id);
     let exe_path = format!("/tmp/karac_asan_par_{}_{}", std::process::id(), id);
+    let _scratch = super::common::RemoveOnDrop(vec![obj_path.clone(), exe_path.clone()]);
 
     if let Err(e) = compile_to_object_with_options(
         &parsed.program,

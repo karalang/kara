@@ -354,6 +354,28 @@ fn stale_runtime_artifacts() -> Option<String> {
     ))
 }
 
+/// B-2026-09-28-39 — removes a fixture's scratch `.o` and executable when
+/// the harness frame ends, a PANIC included.
+///
+/// The harnesses removed both files on their normal paths only. A panic after
+/// the link (`link_or_skip`'s stale-runtime and undefined-symbol refusals, a
+/// failed assertion) unwound past the removal, so each such fixture left its
+/// linked executable behind in `/tmp`: about 13 MB for an ASAN one. When the
+/// refusal fires once per fixture, as the stale-runtime one does under
+/// `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`, a whole ASAN leg leaves ~1,900 of them,
+/// ~25 GB, fills the session's disk allowance and dies reporting a full disk,
+/// with the refusal that explains it never read. Measured 2026-09-28 with a
+/// stale `target/release/karac_jit_runner`: both ratchet legs died that way.
+pub struct RemoveOnDrop(pub Vec<String>);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
 /// Report [`stale_runtime_artifacts`] at most once per test process.
 fn warn_or_fail_on_stale_runtime() {
     static REPORT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
