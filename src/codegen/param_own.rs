@@ -1916,9 +1916,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-09-25-12 — the same ALL-paths condition as the
             // non-generic predicate, for the same reason.
             && crate::ast::fn_always_returns_param(Some(program), f, ast_i);
-        self.optres_param_entry_copied_te(inst)
-            && crate::ast::concrete_plain_type(Some(program), inst, &mut Vec::new())
-            && !keeps_hand_back_route
+        // B-2026-09-28-7 — no `concrete_plain_type` gate. It was inherited
+        // from the non-generic ESCAPING predicate, which B-2026-09-24-20 then
+        // lifted there; this twin kept it, so a payload with a `Drop` body
+        // anywhere inside (`Result[S, i64]` over `S { r: R, s: String }`) got
+        // no copy here and no owner in the caller, and `S`'s `String` leaked
+        // once per call where `compile_call`'s twin was clean. The bodies stay
+        // the caller's either way (the body channel below the memory arm); the
+        // copy only settles who frees the memory.
+        self.optres_param_entry_copied_te(inst) && !keeps_hand_back_route
     }
 
     /// B-2026-08-12-1 — emit the entry copy for a by-value `Option`/`Result`

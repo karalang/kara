@@ -2908,6 +2908,24 @@ impl<'ctx> super::Codegen<'ctx> {
                             .collect(),
                     };
                     self.track_boxed_optres_arg_temp(val, &inst, &taken);
+                    // B-2026-09-28-7 — the variants the line above declines: a
+                    // box whose payload is a user STRUCT or ENUM. Declined there
+                    // because that interior has its own machinery, which is
+                    // `register_boxed_optres_arg_temp` in `compile_call` -- and
+                    // that one resolves the payload from the callee's DECLARED
+                    // type, which for `Option[T]` names nothing, so on this path
+                    // the box and its interior were nobody's (32 B per call for
+                    // `mh(Some(mk(2)), false)` where the non-generic twin was
+                    // clean). Same registrar, handed the instantiated type; the
+                    // two cover disjoint variants, so there is one owner.
+                    let _ = self.register_boxed_optres_arg_temp_inst(
+                        &generic_fn.name,
+                        i,
+                        &a.value,
+                        val,
+                        false,
+                        Some(&inst),
+                    );
                     // B-2026-09-12-15 — the BODY channel, the fourth and last
                     // argument loop. This path cannot use the name-keyed gate
                     // the other three share: `compile_generic_call` never

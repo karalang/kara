@@ -4239,6 +4239,24 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         flows_into_return: bool,
     ) -> Option<(PointerValue<'ctx>, inkwell::types::BasicTypeEnum<'ctx>)> {
+        self.register_boxed_optres_arg_temp_inst(name, i, arg, val, flows_into_return, None)
+    }
+
+    /// B-2026-09-28-7 — [`Self::register_boxed_optres_arg_temp`] with the
+    /// param's INSTANTIATED type supplied by the caller, for a generic callee.
+    /// The payload questions below read the callee's declared param type, and a
+    /// generic's `Option[T]` names no struct, so `compile_generic_call` passes
+    /// the type its own call resolved (`Option[S]`) and every other question —
+    /// rebinds, stores, moved fields — is still asked of the callee's AST.
+    pub(super) fn register_boxed_optres_arg_temp_inst(
+        &mut self,
+        name: &str,
+        i: usize,
+        arg: &Expr,
+        val: BasicValueEnum<'ctx>,
+        flows_into_return: bool,
+        inst: Option<&TypeExpr>,
+    ) -> Option<(PointerValue<'ctx>, inkwell::types::BasicTypeEnum<'ctx>)> {
         // B-2026-09-27-94 — a param the callee MAY hand back (`fn mf(a:
         // Option[S], c: bool) -> Option[S] { if c { a } else { None } }`). The
         // callee runs the payload's bodies on the leg that keeps it and frees
@@ -4273,7 +4291,9 @@ impl<'ctx> super::Codegen<'ctx> {
             && val.is_struct_value()
             && self.expr_yields_fresh_owned_temp(arg)
             && !self.call_result_aliases_armed_binding(arg)
-            && self.owned_boxed_option_param_struct(name, i).is_some()
+            && self
+                .owned_boxed_option_param_struct(name, i, inst)
+                .is_some()
         {
             // B-2026-09-09-10 — the interior travels for an ENUM payload
             // too. This filtered the resolved name through `struct_types`,
@@ -4295,10 +4315,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // `callee_rebinds_param_whole`: that one asks who owns the BOX
             // when the param is rebound to a mutable local, this one keeps
             // the INTERIOR home when the param reaches any other binding.
-            let inner_struct = self.owned_boxed_option_param_struct(name, i).filter(|n| {
-                self.type_decls.struct_types.contains_key(n.as_str())
-                    || self.callee_keeps_param_payload_in_frame(name, i)
-            });
+            let inner_struct = self
+                .owned_boxed_option_param_struct(name, i, inst)
+                .filter(|n| {
+                    self.type_decls.struct_types.contains_key(n.as_str())
+                        || self.callee_keeps_param_payload_in_frame(name, i)
+                });
             let cur_fn = self
                 .builder
                 .get_insert_block()
@@ -4349,7 +4371,7 @@ impl<'ctx> super::Codegen<'ctx> {
             && val.is_struct_value()
             && self.expr_yields_fresh_owned_temp(arg)
         {
-            self.owned_boxed_result_param_structs(name, i)
+            self.owned_boxed_result_param_structs(name, i, inst)
         } else {
             Vec::new()
         };
@@ -4415,7 +4437,12 @@ impl<'ctx> super::Codegen<'ctx> {
         Some((f, ast_i))
     }
 
-    pub(super) fn owned_boxed_option_param_struct(&self, name: &str, i: usize) -> Option<String> {
+    pub(super) fn owned_boxed_option_param_struct(
+        &self,
+        name: &str,
+        i: usize,
+        inst: Option<&TypeExpr>,
+    ) -> Option<String> {
         let flagged = |table: &HashMap<String, Vec<bool>>| {
             table
                 .get(name)
@@ -4426,9 +4453,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if flagged(&self.fn_sig.fn_param_ref) || flagged(&self.fn_sig.fn_param_mut_ref) {
             return None;
         }
-        let param_te = self
-            .callee_param_ast(name, i)
-            .and_then(|(f, ast_i)| f.params.get(ast_i).map(|p| p.ty.clone()))?;
+        // B-2026-09-28-7 — a generic callee's instantiated type, when given.
+        let param_te = match inst {
+            Some(te) => te.clone(),
+            None => self
+                .callee_param_ast(name, i)
+                .and_then(|(f, ast_i)| f.params.get(ast_i).map(|p| p.ty.clone()))?,
+        };
         let TypeKind::Path(p) = &param_te.kind else {
             return None;
         };
@@ -4504,6 +4535,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         name: &str,
         i: usize,
+        inst: Option<&TypeExpr>,
     ) -> Vec<(&'static str, String)> {
         let flagged = |table: &HashMap<String, Vec<bool>>| {
             table
@@ -4515,10 +4547,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if flagged(&self.fn_sig.fn_param_ref) || flagged(&self.fn_sig.fn_param_mut_ref) {
             return Vec::new();
         }
-        let Some(param_te) = self
-            .callee_param_ast(name, i)
-            .and_then(|(f, ast_i)| f.params.get(ast_i).map(|p| p.ty.clone()))
-        else {
+        // B-2026-09-28-7 — a generic callee's instantiated type, when given.
+        let Some(param_te) = inst.cloned().or_else(|| {
+            self.callee_param_ast(name, i)
+                .and_then(|(f, ast_i)| f.params.get(ast_i).map(|p| p.ty.clone()))
+        }) else {
             return Vec::new();
         };
         // B-2026-09-09-17 — the same rebind stand-down the `Option` arm makes,
