@@ -6159,7 +6159,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         // live variant carries a `Drop` payload, returned on
                         // some exits only, runs its payload BODIES under the
                         // per-path flag on the exit where it died inside. Same
-                        // exclusions (own `Drop`, a rebound param).
+                        // exclusion (own `Drop`); a rebound param is admitted
+                        // since B-2026-09-27-131, whose `let` hands the walker on.
                         let user_enum = !owns_memory
                             && !has_user_drop
                             && struct_name != "Option"
@@ -6168,8 +6169,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .type_decls
                                 .enum_layouts
                                 .get(struct_name.as_str())
-                                .is_some_and(|l| !l.is_shared)
-                            && crate::ast::param_rebind_aliases(func, &param_name).len() <= 1;
+                                .is_some_and(|l| !l.is_shared);
                         if user_enum {
                             if let Some(bodies) =
                                 self.emit_enum_payload_user_drop_bodies_fn(struct_name)

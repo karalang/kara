@@ -15944,6 +15944,28 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-27-131 — the walker of `name`'s newest live
+    /// `ContainerElemBodies` action, innermost frame first.
+    pub(super) fn live_container_elem_bodies_fn(&self, name: &str) -> Option<FunctionValue<'ctx>> {
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .rev()
+            .find_map(|frame| {
+                frame.iter().rev().find_map(|a| match a {
+                    CleanupAction::UserDrop {
+                        binding_name,
+                        drop_fn,
+                        kind,
+                        ..
+                    } if binding_name == name && *kind == UserDropKind::ContainerElemBodies => {
+                        Some(*drop_fn)
+                    }
+                    _ => None,
+                })
+            })
+    }
+
     pub(super) fn suppress_container_elem_bodies_for_var(&mut self, name: &str) {
         // B-2026-09-25-10 — the same decline `suppress_user_drop_for_var` makes
         // for a parameter whose drop a per-path flag owns: a caller-retained

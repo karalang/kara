@@ -3216,7 +3216,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// B-2026-09-27-130 — the enum name of `name` when it is a by-value
-    /// param of the current function that the conditional hand-back
+    /// param (or a whole rebind of one) of the current function that the conditional hand-back
     /// registration adopted as a non-shared USER enum (not `Option` /
     /// `Result`) whose payload is laid out INLINE here. A boxed payload is
     /// callee-owned (`mixed_path_boxed_enum_param_callee_owned`) and never
@@ -3228,9 +3228,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let program = self.program_snapshot.as_deref()?;
         let f =
             crate::codegen::declarations::find_function_ast(program, &self.fn_ctx.current_fn_name)?;
-        let p = f.params.iter().find(
-            |p| matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(b) if b == name),
-        )?;
+        // B-2026-09-27-131 — or a whole rebind of one (`let m = h;`), which
+        // took the walker over at the `let` (`pending_optres_handon`).
+        let p = f.params.iter().find(|p| {
+            matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(b)
+                if b == name
+                    || crate::ast::param_rebind_aliases(f, b).iter().any(|a| a == name))
+        })?;
         let TypeKind::Path(tp) = &p.ty.kind else {
             return None;
         };

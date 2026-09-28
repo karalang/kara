@@ -8784,7 +8784,7 @@ impl H { fn gkeep[T](ref self, x: T) -> T { x } }
 /// exits only (wrapped in `Some`, bare, in a struct, from a match arm) runs its
 /// payload's `Drop` body on the exit where it dies inside. Every spelling ran
 /// no body there on all four surfaces; the struct and `Option` twins were
-/// right. The rebound control documents the spelling this fix declines.
+/// right. The rebound spelling, declined here, was fixed by B-2026-09-27-131.
 #[test]
 fn e2e_enum_param_handed_back_on_some_paths_runs_its_payload_body_on_the_others() {
     const H: &str = r#"struct D { id: i64, name: String }
@@ -8874,9 +8874,9 @@ impl K { fn m(self, x: G, c: bool) -> Option[G] { if c { return Some(x); } None 
             "o\nend\n",
         ),
         (
-            "control: a rebound param keeps today's route (B-2026-09-27-49)",
+            "a param rebound on the returning path (B-2026-09-27-131; pinned no body on the other path until then)",
             "let o = reb(G.A(mkd(1)), false); println(\"o\"); let p = reb(G.A(mkd(2)), true); println(f\"p{p.is_some()}\");",
-            "o\nptrue\ndD2n2\nend\n",
+            "dD1n1\no\nptrue\ndD2n2\nend\n",
         ),
     ] {
         let prog = format!("{H}fn main() {{\n    {body}\n    println(\"end\")\n}}\n");

@@ -3908,9 +3908,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // body at `c = false` on every surface. BODIES ONLY under
                     // the per-path flag, as above: the payload walker frees
                     // nothing, and the memory channel is unchanged. An enum
-                    // with its own `Drop`, and a param the body rebinds (`let
-                    // y = x;`, whose hand-on this arm does not carry), are
-                    // left where they were, as the interpreter leaves them.
+                    // with its own `Drop` is left where it was, as the
+                    // interpreter leaves it. A param the body rebinds (`let
+                    // y = x;`) is admitted since B-2026-09-27-131: the `let`
+                    // hands this walker on to `y` (`pending_optres_handon`).
                     if let TypeKind::Path(p) = &param.ty.kind {
                         let en = p.segments.first().cloned().unwrap_or_default();
                         let user_enum = p.segments.len() == 1
@@ -3924,16 +3925,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             && !self
                                 .program_snapshot
                                 .as_deref()
-                                .is_some_and(|p| p.drop_method_keys.contains_key(en.as_str()))
-                            && self
-                                .program_snapshot
-                                .as_deref()
-                                .and_then(|p| {
-                                    crate::codegen::declarations::find_function_ast(p, &func.name)
-                                })
-                                .is_some_and(|ast| {
-                                    crate::ast::param_rebind_aliases(ast, &param_name).len() <= 1
-                                });
+                                .is_some_and(|p| p.drop_method_keys.contains_key(en.as_str()));
                         if user_enum {
                             if let Some(bodies) = self.emit_enum_payload_user_drop_bodies_fn(&en) {
                                 self.track_user_drop_var_with_fn(

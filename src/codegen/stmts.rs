@@ -96,6 +96,58 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_generic_enum_payload_user_drop_bodies_fn(&te)
     }
 
+    /// B-2026-09-27-131 — the payload-bodies walker a whole rebind (`let m =
+    /// h;`) of by-value param `h` must arm, when `h`'s monomorph BOXES its
+    /// payload, this frame, not the caller, owns it, and `h` is handed back
+    /// on some exits only. `None` otherwise:
+    /// a `ref` param, an inline payload (the caller's), or a param the caller
+    /// keeps across the call because it may come back (`call_arg_flows_into_
+    /// return` without B-2026-09-27-96's callee ownership or an all-paths
+    /// hand-back, whose `return` retracts the walker statically).
+    fn boxed_enum_param_rebind_bodies_walker(
+        &mut self,
+        value: &Expr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let ExprKind::Identifier(src) = &value.kind else {
+            return None;
+        };
+        if !self.fn_ctx.current_fn_param_names.contains(src.as_str())
+            || self.borrow_vars.ref_params.contains_key(src.as_str())
+        {
+            return None;
+        }
+        let fname = self.fn_ctx.current_fn_name.clone();
+        let program = self.program_snapshot.clone()?;
+        let f = super::declarations::find_function_ast(&program, &fname)?;
+        let idx = f
+            .params
+            .iter()
+            .position(|p| matches!(&p.pattern.kind, PatternKind::Binding(b) if b == src))?;
+        // The prologue records a boxed param's instantiation; a mono body
+        // does not, so fall back to the declared type under the active subst.
+        let te = match self.var_types.var_enum_inst_te.get(src.as_str()) {
+            Some(te) => te.clone(),
+            None => self.subst_monomorph_type_params(&f.params[idx].ty),
+        };
+        if self.user_enum_boxed_payload_variants(&te).is_empty() {
+            return None;
+        }
+        let callee_owns = !self.call_arg_flows_into_return(&fname, idx)
+            || self.mixed_path_boxed_enum_param_callee_owned(&fname, idx)
+            || crate::ast::fn_always_returns_param(Some(&program), f, idx);
+        // Only for the param handed back on SOME exits through the rebind,
+        // which is this row. A rebind nothing hands back (`fn f(h: Ho[S]) {
+        // let m = h; }`) loses its body too, but `--interp` runs that one at
+        // the PARAM's death, after the rest of the body, while arming `m` here
+        // runs it at `m`'s last use: an order split for a lost body. Left
+        // where it was, and filed on its own.
+        if !callee_owns || !crate::ast::fn_conditionally_returns_param_bare(Some(&program), f, idx)
+        {
+            return None;
+        }
+        self.emit_generic_enum_payload_user_drop_bodies_fn(&te)
+    }
+
     /// B-2026-09-20-13 — record which MONOMORPH an enum binding holds, from the
     /// same two sources and in the same order as the walker above.
     ///
@@ -4265,6 +4317,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 temps: Vec::new(),
             });
         let out = self.compile_stmt_tracking_assign_target(stmt);
+        // B-2026-09-27-131 — see `PayloadVars::pending_optres_handon`.
+        if let Some((dst, f)) = self.payload_vars.pending_optres_handon.take() {
+            if out.is_ok() {
+                if let Some(ptr) = self.variables.get(&dst).map(|v| v.ptr) {
+                    self.track_user_drop_var_with_fn(
+                        "",
+                        &dst,
+                        ptr,
+                        f,
+                        crate::codegen::state::UserDropKind::ContainerElemBodies,
+                    );
+                    self.payload_vars.cond_handback_optres_params.insert(dst);
+                }
+            }
+        }
         self.end_freshtemp_reads();
         if out.is_ok() {
             // B-2026-09-19-51 — drain the enum-field move-out neutralizers this
@@ -4919,8 +4986,40 @@ impl<'ctx> super::Codegen<'ctx> {
                         ExprKind::Identifier(n) => self.guard_user_drop_for_nested_return(n),
                         _ => false,
                     };
-                if !wildcard_of_local && !per_path_carrier {
+                // B-2026-09-27-131 — a whole rebind (`let m = h;`) of a
+                // by-value `Option` / `Result` / user-enum param whose payload
+                // bodies this frame owns per path (`cond_handback_optres_params`,
+                // registered by `compile_function`'s conditional-return arms).
+                // The disarm below retracts `h`'s walker, and `m` is a param
+                // VIEW, so its own let-site rule registers none: on the exit
+                // that neither returned `m` nor handed it on, the body ran
+                // nowhere, on every surface. Hand the walker on instead, the
+                // `Option` twin of the struct hand-on (B-2026-09-05-13):
+                // retract `h`'s (per path where the `let` is nested) and give
+                // `m` the same walker once its slot exists.
+                let optres_handon = match (&stmt.kind, &pattern.kind, &value.kind) {
+                    (
+                        StmtKind::Let { is_mut: false, .. },
+                        PatternKind::Binding(dst),
+                        ExprKind::Identifier(src),
+                    ) if self
+                        .payload_vars
+                        .cond_handback_optres_params
+                        .contains(src.as_str()) =>
+                    {
+                        self.live_container_elem_bodies_fn(src)
+                            .map(|f| (dst.clone(), src.clone(), f))
+                    }
+                    _ => None,
+                };
+                let handon_per_path = optres_handon
+                    .as_ref()
+                    .is_some_and(|(_, src, _)| self.guard_user_drop_for_nested_return(src));
+                if !wildcard_of_local && !per_path_carrier && !handon_per_path {
                     self.disarm_container_bodies_move_sources(value);
+                }
+                if let Some((dst, _, f)) = optres_handon {
+                    self.payload_vars.pending_optres_handon = Some((dst, f));
                 }
                 // B-2026-08-04-2 — a boxed `Option`/`Result` payload binding
                 // whole-moved by a plain `let x = r;` hands the box's interior
@@ -9706,6 +9805,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // considers a payload whose type names a
                                 // NAMED STRUCT, so an `Array[S, N]` slot is
                                 // never even visited by it.
+                            } else if let Some(bodies) =
+                                self.boxed_enum_param_rebind_bodies_walker(value)
+                            {
+                                // B-2026-09-27-131 — a whole rebind of a
+                                // by-value param whose payload the monomorph
+                                // BOXES. The view mark below is right for an
+                                // INLINE payload, whose bodies the caller runs
+                                // (B-2026-09-25-19), and wrong here: the box
+                                // moved in with the param and the caller stood
+                                // down for it, so marking `m` a view ran its
+                                // bodies nowhere (`fn f(h: Ho[S]) { let m = h; }`
+                                // freed the box and printed no body, on every
+                                // compiled surface, against `--interp`'s one).
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    var_name,
+                                    alloca,
+                                    bodies,
+                                    UserDropKind::ContainerElemBodies,
+                                );
                             } else if self.enum_ctor_payload_bodies_are_caller_owned(&name, value)
                                 || (self.expr_is_param_view(value)
                                     // B-2026-09-27-50 — see the struct arm.

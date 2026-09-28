@@ -2984,16 +2984,16 @@ impl<'a> super::Interpreter<'a> {
                 // on some exits only: the same gap as the `Option` arm above
                 // one type over. Codegen's twin is the user-enum arm of
                 // `compile_function`'s conditional-return registration; an
-                // enum with its own `Drop`, and a param the body rebinds
-                // (`let y = x;`, whose hand-on neither backend carries for an
-                // enum), are left where they were on both.
+                // enum with its own `Drop` is left where it was on both. A
+                // param the body rebinds (`let y = x;`) is admitted since
+                // B-2026-09-27-131: `let_destructures_owned_param` hands the
+                // ownership on to `y`, as codegen's `pending_optres_handon` does.
                 Some(v @ Value::EnumVariant { .. })
                     if cond_returned
                         && matches!(&v, Value::EnumVariant { enum_name, .. }
                             if enum_name != "Option"
                                 && enum_name != "Result"
                                 && !self.program.drop_method_keys.contains_key(enum_name.as_str()))
-                        && crate::ast::param_rebind_aliases(f, name).len() <= 1
                         && self.field_value_carries_user_drop(&v) =>
                 {
                     out.push(name.to_string());

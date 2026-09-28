@@ -6512,6 +6512,7 @@ impl<'ctx> Codegen<'ctx> {
                 param_payload_arm_views: std::collections::HashSet::new(),
                 cond_handback_array_params: std::collections::HashSet::new(),
                 cond_handback_optres_params: std::collections::HashSet::new(),
+                pending_optres_handon: None,
                 always_returned_locals: std::collections::HashSet::new(),
                 shadowed_top_level_locals: std::collections::HashSet::new(),
                 shadowed_always_returned_lets: std::collections::HashSet::new(),

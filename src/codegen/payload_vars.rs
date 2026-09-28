@@ -473,6 +473,12 @@ pub(crate) struct PayloadVars<'ctx> {
     /// arm naming one must not retract that slot statically, for the reason
     /// the array set above records. Cleared per function with its siblings.
     pub(crate) cond_handback_optres_params: std::collections::HashSet<String>,
+    /// B-2026-09-27-131 — a whole rebind (`let m = h;`) of one of those
+    /// params, recorded by the `let` arm before it retracts `h`'s per-path
+    /// bodies walker and applied by `compile_stmt` once `m`'s slot exists:
+    /// `m` takes the same walker and joins the set, so its own nested
+    /// `return` mints the per-path flag and a fall-through runs the body.
+    pub(crate) pending_optres_handon: Option<(String, inkwell::values::FunctionValue<'ctx>)>,
     /// B-2026-09-23-16 — locals of the function being compiled that EVERY
     /// exit hands back (bare, or as an operand of the value it returns), each
     /// bound exactly once. For these the `return` may retract the local's
