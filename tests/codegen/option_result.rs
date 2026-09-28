@@ -2009,15 +2009,14 @@ fn main() {
 /// `test_generic_by_value_optres_param_payload_body_runs`, pinned to the
 /// INTERPRETER's transcript, which differs only in `g8`'s doubled line.
 #[test]
-/// `dW108` — the unused `d` argument's body on the `Some` path — is absent
-/// from this transcript and from its interpreter twin's, and always was.
+/// `dW108` is the unused `d` argument's body on the `Some` path.
 /// `g8[T](o: Option[(T, i64)], d: T) -> T` returns `d` only on the `None`
 /// arm; this call takes `Some`, so `d` dies inside `g8` and exactly one
-/// body is owed. No surface runs it. That is B-2026-09-17-32 —
-/// B-2026-08-28-22's per-path conditional-escape flag recognises an
-/// `if`/`else` tail and not a `match` arm tail — and it is agreed on all
-/// four surfaces, so the A/B rule cannot see it. Whoever fixes it adds a
-/// `dW108` line here and to the twin.
+/// body is owed. No surface ran it until B-2026-09-17-32, which found the
+/// callee declined for `d` because its other exit `return t.0` fell to
+/// `may_mention`'s catch-all, and every arm ending in a `return` statement
+/// read as an unknown leaf. Agreed on all four surfaces, so the A/B rule
+/// could not see it; the interpreter twin carries the same line.
 fn e2e_generic_by_value_optres_param_payload_body_runs() {
     assert_eq!(
         run_program(
@@ -2070,6 +2069,7 @@ g7
 dW7
   1
 g8
+dW108
   8
 dW8
 end

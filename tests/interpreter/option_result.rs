@@ -1155,14 +1155,13 @@ fn test_optres_payload_runs_user_drop_bodies() {
 /// the second `dW8` and leave the pair holding one string. That is what
 /// happened: this expectation is now byte-identical to the twin's.
 ///
-/// `dW108` — the unused `d` argument's body on the `Some` path — is missing from
-/// BOTH sides and always was. It is not this row's and not B-2026-09-13-5's:
-/// `d` escapes only on the `None` arm, the call takes `Some`, so `d` dies in
-/// the callee and one body is owed that no surface runs. That is
-/// B-2026-09-17-32 — B-2026-08-28-22's per-path conditional-escape flag covers
-/// an `if`/`else` tail and not a `match` arm tail — and it is agreed on all
-/// four surfaces, therefore invisible to the A/B rule. Whoever fixes it adds a
-/// `dW108` line to this string and to its twin's.
+/// `dW108` is the unused `d` argument's body on the `Some` path. `d` escapes
+/// only on the `None` arm, the call takes `Some`, so `d` dies in the callee and
+/// one body is owed. No surface ran it until B-2026-09-17-32: the callee was
+/// declined for `d` because its other exit `return t.0` fell to
+/// `may_mention`'s catch-all, and every arm ending in a `return` statement read
+/// as an unknown leaf. It was agreed on all four surfaces, so the A/B rule could
+/// not see it. The codegen twin carries the same line.
 #[test]
 fn test_generic_by_value_optres_param_payload_body_runs() {
     assert_eq!(
@@ -1213,6 +1212,7 @@ g7
 dW7
   1
 g8
+dW108
   8
 dW8
 end

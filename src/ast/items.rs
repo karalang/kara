@@ -4215,6 +4215,16 @@ pub fn fn_conditionally_returns_param_bare(
             }
             ExprKind::Unary { operand, .. } => may_mention(operand, name),
             ExprKind::FieldAccess { object, .. } => may_mention(object, name),
+            // B-2026-09-17-32 — a TUPLE INDEX mentions the parameter exactly
+            // when its object does, like the field access above. Without this
+            // arm the catch-all answered `true` for the exit `return t.0`
+            // (moving one element out of ANOTHER parameter's payload), so
+            // `fn h8(o: Option[(W, i64)], d: W) -> W { match o { Some(t) =>
+            // { return t.0; } None => { return d; } } }` was declined for `d`
+            // and `d`'s body ran on no surface on the `Some` path. `d.0`
+            // still recurses to `d` and is declined by
+            // `mentions_only_as_copy_read`, which has no tuple-index arm.
+            ExprKind::TupleIndex { object, .. } => may_mention(object, name),
             // B-2026-08-30-23 — a CALL mentions the parameter exactly when its
             // callee expression or one of its arguments does. Without these two
             // arms the catch-all answered `true` for every leaf containing a
@@ -4434,6 +4444,34 @@ pub fn fn_conditionally_returns_param_bare(
                 .is_some_and(|p| yields_wrapped_named(p, name, wraps, program, f_self_name)),
         }
     }
+    /// B-2026-09-17-32 — does `b` leave the function through a `return`
+    /// STATEMENT as its last act (`{ return W { id: n }; }`)?
+    ///
+    /// Such a branch has no tail expression, so `leaf_tails` used to push the
+    /// enclosing `if` / block itself as a leaf, and `may_mention` answers
+    /// `true` for that on purpose. When EVERY branch ended that way, as in
+    /// `match o { Some(n) => { return W { id: n }; } None => { return d; } }`
+    /// or `if k { return a; } else { return d; }`, the whole function was
+    /// declined, and the param died inside the call with no body run on any
+    /// surface. The same program with the last `return` hoisted out of the
+    /// branch (`if k { return a; } return d;`) was admitted, which is why
+    /// B-2026-08-28-22's headline shape measured correct.
+    ///
+    /// A branch that ends in `return` never falls through, so it contributes
+    /// no tail leaf of its own. Its operand is still an exit leaf, because
+    /// `collect_return_leaves` walks every branch and folds each `return`
+    /// operand in, so nothing leaves the analysis. Only `return` is recognised
+    /// here: any other tail-less branch keeps the declining leaf.
+    fn ends_in_return(b: &Block) -> bool {
+        b.final_expr.is_none()
+            && matches!(
+                b.stmts.last().map(|st| &st.kind),
+                Some(StmtKind::Expr(Expr {
+                    kind: ExprKind::Return(_),
+                    ..
+                }))
+            )
+    }
     /// The leaf tails of an escaping tail position, following exactly the
     /// branch structure `note_escaping_site` pushes escaping-ness down through.
     /// A branch arm with no tail expression contributes the branch expression
@@ -4453,6 +4491,7 @@ pub fn fn_conditionally_returns_param_bare(
             } => {
                 match &then_block.final_expr {
                     Some(t) => leaf_tails(t, out),
+                    None if ends_in_return(then_block) => {}
                     None => out.push(e),
                 }
                 match else_branch {
@@ -4467,6 +4506,7 @@ pub fn fn_conditionally_returns_param_bare(
             }
             ExprKind::Block(b) => match &b.final_expr {
                 Some(t) => leaf_tails(t, out),
+                None if ends_in_return(b) => {}
                 None => out.push(e),
             },
             // B-2026-09-12-26 — a `return` reached AS A TAIL contributes its
