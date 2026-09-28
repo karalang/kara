@@ -2568,7 +2568,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     ) {
                         return false;
                     }
-                    let inst = self.callee_param_te_for_call(&p.ty, call_span);
+                    // B-2026-09-28-8 — the propagated `T`, as the taken arm
+                    // above asks: a nameless binding (`Array[String, 2]`) read
+                    // as unboxed here and the argument stayed armed.
+                    let inst = self.callee_param_te_for_call_propagated(&p.ty, call_span);
                     !self.user_enum_boxed_payload_variants(&inst).is_empty()
                 });
             if param_box_handed_back {
@@ -4165,6 +4168,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 std::mem::take(&mut self.drop_rc.cond_returned_body_params);
             let saved_cond_returned_owned_params =
                 std::mem::take(&mut self.drop_rc.cond_returned_owned_params);
+            let saved_mono_taken_forward_params =
+                std::mem::take(&mut self.drop_rc.mono_taken_forward_params);
             let saved_field_view_flags = std::mem::take(&mut self.drop_rc.field_view_flags);
             let saved_decl_anchors = std::mem::take(&mut self.drop_rc.loop_decl_rearm_anchors);
 
@@ -4199,6 +4204,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.cond_store_flag_params = saved_cond_store_params;
             self.drop_rc.cond_returned_body_params = saved_cond_returned_body_params;
             self.drop_rc.cond_returned_owned_params = saved_cond_returned_owned_params;
+            self.drop_rc.mono_taken_forward_params = saved_mono_taken_forward_params;
             self.drop_rc.field_view_flags = saved_field_view_flags;
             self.drop_rc.loop_decl_rearm_anchors = saved_decl_anchors;
             self.accel.soa_return_locals = saved_soa_return_locals;
@@ -5071,6 +5077,8 @@ impl<'ctx> super::Codegen<'ctx> {
             std::mem::take(&mut self.drop_rc.cond_returned_body_params);
         let saved_cond_returned_owned_params =
             std::mem::take(&mut self.drop_rc.cond_returned_owned_params);
+        let saved_mono_taken_forward_params =
+            std::mem::take(&mut self.drop_rc.mono_taken_forward_params);
         let saved_field_view_flags = std::mem::take(&mut self.drop_rc.field_view_flags);
         let saved_decl_anchors = std::mem::take(&mut self.drop_rc.loop_decl_rearm_anchors);
 
@@ -5085,6 +5093,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.cond_store_flag_params = saved_cond_store_params;
         self.drop_rc.cond_returned_body_params = saved_cond_returned_body_params;
         self.drop_rc.cond_returned_owned_params = saved_cond_returned_owned_params;
+        self.drop_rc.mono_taken_forward_params = saved_mono_taken_forward_params;
         self.drop_rc.field_view_flags = saved_field_view_flags;
         self.drop_rc.loop_decl_rearm_anchors = saved_decl_anchors;
         self.accel.soa_return_locals = saved_soa_return_locals;
@@ -5438,6 +5447,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.cond_part_aliases.clear();
         self.drop_rc.cond_returned_body_params.clear();
         self.drop_rc.cond_returned_owned_params.clear();
+        self.drop_rc.mono_taken_forward_params.clear();
         self.drop_rc.field_view_flags.clear();
         self.drop_rc.loop_decl_rearm_anchors.clear();
         if let Some(tail) = func.body.final_expr.as_deref() {
@@ -5454,6 +5464,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Params of THIS mono body that never escape (used only as a `match`
         // scrutinee, or unused) — gates the owned boxed-enum param drop below.
         let mut nonescaping_params = crate::result_escape::nonescaping_param_names(func);
+        let mut forward_taken_params: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         // B-2026-09-20-38 — plus a param whose only escape is a forward to a
         // generic callee that takes the box: `compile_generic_call` retracts
         // the caller's drop for it (`by_value_boxed_param_taken_names`), so
@@ -5462,11 +5474,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // that set already decided keeps its registration unchanged.
         if let Some(prog) = self.program_snapshot.as_deref() {
             let loose = crate::result_escape::by_value_nonescaping_param_names(func);
-            nonescaping_params.extend(
+            let added: Vec<String> =
                 crate::result_escape::by_value_boxed_param_taken_names(prog, func)
                     .into_iter()
-                    .filter(|n| !loose.contains(n)),
-            );
+                    .filter(|n| !loose.contains(n) && !nonescaping_params.contains(n))
+                    .collect();
+            forward_taken_params.extend(added.iter().cloned());
+            nonescaping_params.extend(added);
         }
 
         for (i, param) in func.params.iter().enumerate() {
@@ -5619,6 +5633,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 && nonescaping_params.contains(&param_name)
             {
                 let mono_ty = self.subst_monomorph_type_params(&param.ty);
+                // B-2026-09-28-8 — a forward-taken param whose box this
+                // prologue owns is not a caller VIEW (`let_call_result_is_
+                // param_view`): its bodies move on with a `let h = gid(g)`.
+                if forward_taken_params.contains(&param_name)
+                    && !self.user_enum_boxed_payload_variants(&mono_ty).is_empty()
+                {
+                    self.drop_rc
+                        .mono_taken_forward_params
+                        .insert(param_name.clone());
+                }
                 for (enum_name, variant, payload_te, box_field, _multi_field) in
                     self.user_enum_boxed_payload_variants(&mono_ty)
                 {

@@ -301,6 +301,13 @@ pub(crate) struct DropRc<'ctx> {
     /// Per function, like `cond_store_flag_params`: cleared with it and saved
     /// and restored around a closure or mono body with it.
     pub(crate) cond_returned_body_params: std::collections::HashSet<String>,
+    /// B-2026-09-28-8 — by-value params of the monomorph being compiled whose
+    /// box and payload bodies its prologue took over because their only
+    /// escape is a forward to a taker (`by_value_boxed_param_taken_names`).
+    /// Such a param is not a caller-retained VIEW: a `let h = gid(g)` rebind
+    /// hands the bodies to `h` rather than marking `h` a view, or they run
+    /// nowhere. Saved, restored and cleared with the set above.
+    pub(crate) mono_taken_forward_params: std::collections::HashSet<String>,
     /// B-2026-09-06-69 — the SUBSET of `cond_returned_body_params` whose
     /// conditional-return registration carries the MEMORY as well as the body.
     ///

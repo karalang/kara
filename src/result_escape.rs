@@ -394,6 +394,78 @@ fn taken_names(program: &crate::ast::Program, func: &Function, depth: u32) -> Ha
     let mut acc = seeded_acc(func);
     acc.lent = Some(&lent);
     walk_block(&func.body, &mut acc);
+    // B-2026-09-28-8 — a param handed to a generic PASSTHROUGH (a callee that
+    // returns that argument on every path) whose result is bound by a
+    // top-level `let` that is itself only taken: `let h = gid(g); glen(h)`.
+    // The box moves from `g` to `h` and on to `glen`, so `g` is taken exactly
+    // as a direct `glen(g)` would take it; codegen's hand-back arm disarms `g`
+    // into `h` at the `let`. The binding must be let-bound once, so a shadow
+    // cannot lend it its counts.
+    // Walked LAST statement first, so a chain (`let h = gid(g); let k =
+    // gid(h); glen(k)`) credits `k` before `h` is asked, and `h` then passes
+    // its own credit on to `g`.
+    let mut passthrough_reads: HashMap<String, u32> = HashMap::new();
+    let is_param = |n: &str| {
+        func.params
+            .iter()
+            .any(|p| matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(b) if b == n))
+    };
+    let let_once = |n: &str| acc.lets.iter().filter(|(l, _)| *l == n).count() == 1;
+    for st in func.body.stmts.iter().rev() {
+        let StmtKind::Let {
+            pattern,
+            value,
+            is_mut: false,
+            ..
+        } = &st.kind
+        else {
+            continue;
+        };
+        let crate::ast::PatternKind::Binding(h) = &pattern.kind else {
+            continue;
+        };
+        let ExprKind::Call { callee, args } = &value.kind else {
+            continue;
+        };
+        let ExprKind::Identifier(cn) = &callee.kind else {
+            continue;
+        };
+        if depth == 0 || is_param(h) || !let_once(h) {
+            continue;
+        }
+        let (ht, hs, hr) = acc.counts.get(h.as_str()).copied().unwrap_or((0, 0, 0));
+        if ht != hs + hr + passthrough_reads.get(h.as_str()).copied().unwrap_or(0) {
+            continue;
+        }
+        let Some(g) = program.items.iter().find_map(|it| match it {
+            crate::ast::Item::Function(f) if f.name == *cn => Some(f),
+            _ => None,
+        }) else {
+            continue;
+        };
+        if g.generic_params.is_none() || g.self_param.is_some() {
+            continue;
+        }
+        for (k, a) in args.iter().enumerate() {
+            let ExprKind::Identifier(pn) = &a.value.kind else {
+                continue;
+            };
+            let by_value = g.params.get(k).is_some_and(|p| {
+                !matches!(
+                    &p.ty.kind,
+                    crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+                ) && matches!(p.pattern.kind, crate::ast::PatternKind::Binding(_))
+            });
+            if a.label.is_none()
+                && !a.mut_marker
+                && (is_param(pn) || let_once(pn))
+                && by_value
+                && crate::ast::fn_always_returns_param(Some(program), g, k)
+            {
+                *passthrough_reads.entry(pn.clone()).or_insert(0) += 1;
+            }
+        }
+    }
     func.params
         .iter()
         .filter_map(|p| {
@@ -401,7 +473,8 @@ fn taken_names(program: &crate::ast::Program, func: &Function, depth: u32) -> Ha
                 return None;
             };
             let (total, scrut, ro) = acc.counts.get(name.as_str()).copied().unwrap_or((0, 0, 0));
-            (total == scrut + ro).then(|| name.clone())
+            let extra = passthrough_reads.get(name.as_str()).copied().unwrap_or(0);
+            (total == scrut + ro + extra).then(|| name.clone())
         })
         .collect()
 }

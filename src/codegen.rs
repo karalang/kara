@@ -6557,6 +6557,7 @@ impl<'ctx> Codegen<'ctx> {
                 pending_part_aliases: Vec::new(),
                 cond_part_aliases: Vec::new(),
                 cond_returned_body_params: std::collections::HashSet::new(),
+                mono_taken_forward_params: std::collections::HashSet::new(),
                 cond_returned_owned_params: std::collections::HashSet::new(),
                 aggregate_arg_escape_stores: false,
                 freshtemp_drop_projection_arg: None,

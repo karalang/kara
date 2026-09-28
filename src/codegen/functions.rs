@@ -1540,6 +1540,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.cond_part_aliases.clear();
         self.drop_rc.cond_returned_body_params.clear();
         self.drop_rc.cond_returned_owned_params.clear();
+        self.drop_rc.mono_taken_forward_params.clear();
         self.drop_rc.field_view_flags.clear();
         // B-2026-08-30-2 — same reasoning one map over: `branch_tail_owner_slots`
         // holds ALLOCAS, so an entry surviving into the next function names a

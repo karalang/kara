@@ -1239,6 +1239,8 @@ impl<'ctx> super::Codegen<'ctx> {
             std::mem::take(&mut self.drop_rc.cond_returned_body_params);
         let saved_cond_returned_owned_params =
             std::mem::take(&mut self.drop_rc.cond_returned_owned_params);
+        let saved_mono_taken_forward_params =
+            std::mem::take(&mut self.drop_rc.mono_taken_forward_params);
         let saved_field_view_flags = std::mem::take(&mut self.drop_rc.field_view_flags);
         // A closure body's tail is RETURNED, so it is an escaping site — the
         // same seed `compile_function` plants for a named function. Without it
@@ -1392,6 +1394,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.cond_store_flag_params = saved_cond_store_params;
         self.drop_rc.cond_returned_body_params = saved_cond_returned_body_params;
         self.drop_rc.cond_returned_owned_params = saved_cond_returned_owned_params;
+        self.drop_rc.mono_taken_forward_params = saved_mono_taken_forward_params;
         self.drop_rc.field_view_flags = saved_field_view_flags;
 
         // 8. Restore outer state.

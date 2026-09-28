@@ -10051,8 +10051,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// there the caller has stood down and the call site's hand-over retracts
     /// the source's action, so the result binding must keep a body of its own.
     pub(super) fn let_call_result_is_param_view(&self, e: &Expr) -> bool {
-        self.call_result_param_view_source(e)
-            .is_some_and(|src| !self.drop_rc.cond_returned_body_params.contains(&src))
+        self.call_result_param_view_source(e).is_some_and(|src| {
+            !self.drop_rc.cond_returned_body_params.contains(&src)
+                // B-2026-09-28-8 — a param this monomorph's prologue took over
+                // is no view; its bodies move on with the rebind.
+                && !self.drop_rc.mono_taken_forward_params.contains(&src)
+        })
     }
 
     /// B-2026-08-29-45 — is `value` an ARRAY / `Vec`-prefix literal EVERY
