@@ -502,7 +502,22 @@ fn has_consuming_sink(c: &Ctx<'_>, e: &Expr) -> bool {
 }
 
 fn block_has_sink(c: &Ctx<'_>, b: &crate::ast::Block) -> bool {
-    for (i, s) in b.stmts.iter().enumerate() {
+    stmts_have_sink(c, &b.stmts, b.final_expr.as_deref(), false)
+}
+
+/// B-2026-09-28-48 follow-up — [`block_has_sink`] over a statement run and its tail, so a followed rebind
+/// can ask the same question of the rest of the block under the new name —
+/// including a further rebind of that name (`let z = y; let w = z;`).
+/// `tail_moves` scores the tail VALUE as a move too: true under a rebound
+/// name, whose value the block hands out, and false for the tracked name
+/// itself, whose tail value the enclosing question answers.
+fn stmts_have_sink(
+    c: &Ctx<'_>,
+    stmts: &[Stmt],
+    final_expr: Option<&Expr>,
+    tail_moves: bool,
+) -> bool {
+    for (i, s) in stmts.iter().enumerate() {
         // B-2026-09-28-48 — see `Ctx::follow_let_rebinds`. The tracked name is
         // moved here, so it has no later use; the question passes to the new
         // name over the rest of this block, value included.
@@ -514,18 +529,13 @@ fn block_has_sink(c: &Ctx<'_>, b: &crate::ast::Block) -> bool {
                 callee_owns_arg: c.callee_owns_arg,
                 follow_let_rebinds: true,
             };
-            return b.stmts[i + 1..].iter().any(|s| stmt_has_sink(&wc, s))
-                || b.final_expr
-                    .as_deref()
-                    .is_some_and(|e| value_derived_from(&wc, e) || has_consuming_sink(&wc, e));
+            return stmts_have_sink(&wc, &stmts[i + 1..], final_expr, true);
         }
         if stmt_has_sink(c, s) {
             return true;
         }
     }
-    b.final_expr
-        .as_deref()
-        .is_some_and(|e| has_consuming_sink(c, e))
+    final_expr.is_some_and(|e| (tail_moves && value_derived_from(c, e)) || has_consuming_sink(c, e))
 }
 
 /// The name an immutable `let <w> = <tracked name>;` binds, when `c` follows

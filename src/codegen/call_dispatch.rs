@@ -6564,9 +6564,6 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             !self.elem_te_runs_user_drop(&leaf)
         };
-        if payload_owns_its_drop_body {
-            return crate::result_escape::optres_payload_escaping_param_variants_ignoring_projections(f);
-        }
         // B-2026-09-28-48 — a whole immutable rebind of the arm's binding
         // (`Some(y) => { let z = y; .. }`) is followed, not read as an escape,
         // for a NAMED STRUCT payload only: the callee lowers that rebind as a
@@ -6584,6 +6581,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     if pp.segments.last().is_some_and(|h| h == "Option" || h == "Result"))
                     || self.optres_payload_rebind_is_followed(&p.ty, None)
             });
+        // B-2026-09-28-48 follow-up — the `Drop`-declaring branch follows the
+        // rebind too. The two ends of a call reach this function with
+        // different `want_variant`s — the caller names the variant its
+        // argument constructs, the callee's frame-entry seeding names none —
+        // and `optres_payload_te` answers only a named variant, so for one
+        // payload type the caller took this branch and the callee the one
+        // below it. Following the rebind in only one of them made the callee
+        // treat `let z = r` as a view of the caller's bodies while the caller
+        // stood its walk down: `n4(Some(mkw(1)))` printed `n4 end`, the body
+        // run nowhere, where `n4 dW2 end` is due.
+        if payload_owns_its_drop_body {
+            return crate::result_escape::optres_payload_escaping_param_variants_ignoring_projections_with_rebinds(
+                f,
+                follow_rebinds,
+            );
+        }
         crate::result_escape::optres_payload_escaping_param_variants_with_rebinds(
             f,
             &leaf_is_copy_read,

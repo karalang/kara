@@ -723,7 +723,20 @@ pub fn optres_payload_escaping_param_variant_parts_with(
 pub fn optres_payload_escaping_param_variants_ignoring_projections(
     func: &Function,
 ) -> HashMap<String, HashSet<String>> {
-    let mut acc = seeded_acc(func);
+    optres_payload_escaping_param_variants_ignoring_projections_with_rebinds(func, false)
+}
+
+/// B-2026-09-28-48 follow-up — [`optres_payload_escaping_param_variants_ignoring_projections`],
+/// and with `follow_rebinds` a whole immutable rebind of an arm's payload
+/// binding is followed rather than read as an escape (see `Acc::follow_rebinds`).
+pub fn optres_payload_escaping_param_variants_ignoring_projections_with_rebinds(
+    func: &Function,
+    follow_rebinds: bool,
+) -> HashMap<String, HashSet<String>> {
+    let mut acc = Acc {
+        follow_rebinds,
+        ..seeded_acc(func)
+    };
     walk_block(&func.body, &mut acc);
     func.params
         .iter()

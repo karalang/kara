@@ -12414,7 +12414,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                     _ => call_src.as_deref().is_some_and(|s| {
                                         self.drop_rc.caller_retained_aggregate_memory.contains(s)
                                     }),
-                                };
+                                } || (has_user_drop
+                                    // B-2026-09-28-48 follow-up — a payload
+                                    // that declares its OWN `Drop`, bound out
+                                    // of a box whose bodies the caller runs.
+                                    // The caller's box drop frees the
+                                    // interior after its bodies walk, and the
+                                    // `has_user_drop` move above retracts
+                                    // rather than zeroing the box, so a rebind
+                                    // registering memory here was a second
+                                    // owner: `free(): double free` at `-O0` on
+                                    // every tree. The rebind is a view.
+                                    && matches!(&value.kind, ExprKind::Identifier(src)
+                                        if self
+                                            .payload_vars
+                                            .caller_retained_payload_arm_bindings
+                                            .contains(src.as_str())));
                                 // B-2026-09-06-59 — ...BUT ONLY IF THE REBIND
                                 // REALLY IS A VIEW. `uam_defensive_copy` (the
                                 // `let` site, ~4.5k lines up in this same

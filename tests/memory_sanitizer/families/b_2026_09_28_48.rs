@@ -104,3 +104,81 @@ fn main() {
         "asan_optres_arm_payload_rebound_into_a_local_through_a_forward_or_unboxed",
     );
 }
+
+/// B-2026-09-28-48 follow-up — a payload whose type declares its OWN `Drop`,
+/// rebound whole into a reading local (`Some(r) => { let z = r; .. }`), from a
+/// fresh temp, a `Result`, an `if let` and a named argument. The caller's and
+/// callee's escape questions reach different branches for such a payload, and
+/// following the rebind in only one lost the body; the rebind also took the
+/// memory the caller's box drop frees, a double free at `-O0` on every tree.
+#[test]
+fn asan_own_drop_optres_payload_rebound_into_a_local_runs_its_body_once() {
+    assert_clean_asan_run(
+        r#"struct W { a: String, b: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.a.len()}") } }
+fn mkw(i: i64) -> W { W { a: f"a{i}", b: f"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb{i}" } }
+fn n4(x: Option[W]) { match x { Some(r) => { let z = r; println("n4") }, None => {} } }
+fn nr(x: Result[W, i64]) { match x { Ok(r) => { let z = r; println(f"r{z.b.len()}") }, Err(e) => {} } }
+fn io(x: Option[W]) { if let Some(r) = x { let z = r; println("io") } }
+fn t1() { n4(Option.Some(mkw(1))) }
+fn t2() { nr(Ok(mkw(22))) }
+fn t3() { io(Some(mkw(333))) }
+fn t4() { let o = Some(mkw(4444)); n4(o) }
+fn main() { t1(); println("a"); t2(); println("b"); t3(); println("c"); t4(); println("end") }
+"#,
+        &[
+            "n4", "dW2", "a", "r38", "dW3", "b", "io", "dW4", "c", "n4", "dW5", "end",
+        ],
+        "asan_own_drop_optres_payload_rebound_into_a_local_runs_its_body_once",
+    );
+}
+
+/// B-2026-09-28-48 follow-up — the same own-`Drop` payload through a two-step
+/// rebind (`let z = r; let y = z;`), a clone handed out, the local returned, an
+/// associated function, a named argument and a loop.
+#[test]
+fn asan_own_drop_optres_payload_rebound_twice_returned_or_in_a_loop() {
+    assert_clean_asan_run(
+        r#"struct In { s: String }
+struct W { a: String, b: String, i: In }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.a.len()}:{self.i.s}") } }
+fn mkw(i: i64) -> W { W { a: f"a{i}", b: f"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb{i}", i: In { s: f"in{i}" } } }
+fn chain(x: Option[W]) { match x { Some(r) => { let z = r; let y = z; println(f"c{y.b.len()}") }, None => {} }; println("cpost") }
+fn gives(x: Option[W]) -> String { match x { Some(r) => { let z = r; z.b.clone() }, None => "none" } }
+fn keep(x: Option[W]) -> W { match x { Some(r) => { let z = r; z }, None => mkw(0) } }
+struct H { v: i64 }
+impl H { fn m(x: Option[W]) { match x { Some(r) => { let z = r; println("hm") }, None => {} } } }
+fn lp(n: i64) { let mut i = 0; while i < n { match Option.Some(mkw(i)) { Some(r) => { let z = r; println("lp") }, None => {} }; i = i + 1; } }
+fn t1() { chain(Some(mkw(1))) }
+fn t2() { let s = gives(Some(mkw(22))); println(s.len()) }
+fn t3() { let w = keep(Some(mkw(333))); println("kept") }
+fn t4() { H.m(Some(mkw(4444))) }
+fn t5() { let o = Some(mkw(55555)); chain(o) }
+fn main() { t1(); println("a"); t2(); println("b"); t3(); println("c"); t4(); println("d"); t5(); lp(2); println("end") }
+"#,
+        &[
+            "c37",
+            "cpost",
+            "dW2:in1",
+            "a",
+            "dW3:in22",
+            "38",
+            "b",
+            "dW4:in333",
+            "kept",
+            "c",
+            "hm",
+            "dW5:in4444",
+            "d",
+            "c41",
+            "cpost",
+            "dW6:in55555",
+            "dW2:in0",
+            "lp",
+            "dW2:in1",
+            "lp",
+            "end",
+        ],
+        "asan_own_drop_optres_payload_rebound_twice_returned_or_in_a_loop",
+    );
+}
