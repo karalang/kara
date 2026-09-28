@@ -6779,6 +6779,20 @@ impl<'a> super::Interpreter<'a> {
             _ => None,
         };
         let Some(handed) = handed else { return };
+        // B-2026-09-28-50 — a DESTRUCTURING `let` of the param or a part
+        // (`let W { r, s, b } = w;`) records each bound local as an alias of
+        // its part, as `let r = w.r;` does below, so `if c { xs.push(r); }`
+        // clears the part's flag. Before, the pushed path ran `dD9n9` twice.
+        // Codegen's `arm_conditional_store_flag` records the same aliases.
+        if let StmtKind::Let { pattern, .. } = &stmt.kind {
+            if let Some(place) = crate::ast::projection_binding_name(handed) {
+                for (b, p) in crate::ast::destructure_part_aliases(pattern, &place) {
+                    if self.cond_store_param_names.contains(&p) {
+                        self.cond_store_part_aliases.insert(b, p);
+                    }
+                }
+            }
+        }
         // B-2026-09-27-105 — a bare projection bound or assigned is not a
         // hand-over of an adopted part: the local is a view of the param, as
         // every param-part `let` is. A `let` records the alias instead.

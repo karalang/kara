@@ -15383,6 +15383,25 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
         let Some(handed) = handed else { return };
+        // B-2026-09-28-50 — a DESTRUCTURING `let` of the param or one of its
+        // parts (`let W { r, s, b } = w;`) makes each bound local an alias of
+        // its part, as `let r = w.r;` does below: the part's walk moves onto
+        // the local's slot and handing the local over clears the flag. Before,
+        // `if c { xs.push(r); }` left the flag armed, so the pushed path ran
+        // the body beside the container, and the kept path walked the param's
+        // moved-out field (`dD5` with an empty name). The interpreter records
+        // the same aliases at the same statement.
+        if let StmtKind::Let { pattern, .. } = &stmt.kind {
+            if let Some(place) = crate::ast::projection_binding_name(handed) {
+                for (b, p) in crate::ast::destructure_part_aliases(pattern, &place) {
+                    if self.drop_rc.cond_store_flag_params.contains(&p)
+                        && self.drop_rc.cond_move_drop_flags.contains_key(&p)
+                    {
+                        self.drop_rc.pending_part_aliases.push((b, p));
+                    }
+                }
+            }
+        }
         // B-2026-09-27-105 — a bare projection bound or assigned is not a
         // hand-over of an adopted param part: the local is a view of the
         // param. A `let` makes the local an ALIAS of the part's flag instead,

@@ -5361,6 +5361,39 @@ pub fn param_part_binding_name(param: &str, path: &[ParamPart]) -> String {
     s
 }
 
+/// B-2026-09-28-50 — the `(binding, part)` pairs a DESTRUCTURING `let` makes
+/// aliases of `place`'s parts: `let W { r, s, b } = w;` gives `("r", "w.r")`,
+/// `("s", "w.s")` and `("b", "w.b")`, and a nested struct or tuple pattern
+/// extends the part (`let (W { r, .. }, k) = t;` gives `("r", "t.0.r")`). Both
+/// backends' flag-clearing hooks read it, so a local bound this way clears an
+/// adopted part's per-path flag exactly as the `let r = w.r;` spelling's alias
+/// does. Only BINDING leaves; a wildcard, rest or literal binds nothing.
+pub fn destructure_part_aliases(pattern: &Pattern, place: &str) -> Vec<(String, String)> {
+    fn walk(p: &Pattern, place: &str, top: bool, out: &mut Vec<(String, String)>) {
+        match &p.kind {
+            PatternKind::Binding(b) if !top => out.push((b.clone(), place.to_string())),
+            PatternKind::Struct { fields, .. } => {
+                for f in fields {
+                    let sub = format!("{place}.{}", f.name);
+                    match &f.pattern {
+                        Some(fp) => walk(fp, &sub, false, out),
+                        None => out.push((f.name.clone(), sub)),
+                    }
+                }
+            }
+            PatternKind::Tuple(elems) => {
+                for (i, e) in elems.iter().enumerate() {
+                    walk(e, &format!("{place}.{i}"), false, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(pattern, place, true, &mut out);
+    out
+}
+
 /// B-2026-09-27-105 — the dotted place a projection names (`w.r`, `w.0.r`),
 /// for matching a handing statement against an adopted part's name.
 pub fn projection_binding_name(e: &Expr) -> Option<String> {
@@ -5619,10 +5652,21 @@ fn part_paths_from_root_mode(
         });
         proj_lets.retain(|n| all_lets.iter().filter(|m| *m == n).count() == 1);
     }
+    // B-2026-09-28-50 — the names a DESTRUCTURING `let` binds once
+    // (`let W { r, s, b } = w;`), the second alias spelling both backends'
+    // hooks follow (`destructure_part_aliases`). Bound once across every
+    // `let` pattern, for the same reason `proj_lets` is.
+    let mut destr_lets: Vec<&str> = Vec::new();
+    {
+        let mut all_pat: Vec<&str> = Vec::new();
+        part_scan_let_pattern_names(&f.body, &mut all_pat, &mut destr_lets);
+        destr_lets.retain(|n| all_pat.iter().filter(|m| *m == n).count() == 1);
+    }
     let cx = PartScanCx {
         program,
         roots: &roots,
         proj_lets: &proj_lets,
+        destr_lets: &destr_lets,
         top_level: true,
         root_struct: root_struct.as_deref(),
         locals: &locals,
@@ -5908,7 +5952,8 @@ fn part_paths_from_root_mode(
                     // like the projection spelling: the static answer here lost
                     // the part's body on the path that kept it. Both backends
                     // clear the flag through the alias the `let` recorded.
-                    let nested_alias = matches!(&a.value.kind, ExprKind::Identifier(n) if cx.proj_lets.contains(&n.as_str()))
+                    let nested_alias = cx
+                        .tracked_alias(&a.value, denote(&a.value, aliases).as_ref())
                         && denote(&a.value, aliases).is_some_and(|p| !p.is_empty())
                         && !cx.top_level
                         && !cx.in_loop
@@ -5954,7 +5999,25 @@ fn part_paths_from_root_mode(
                 let Some(program) = cx.program else { return };
                 if outliving_store::place_root_outlives(object, cx.roots) {
                     for a in args {
-                        if matches!(&a.value.kind, ExprKind::Identifier(_)) {
+                        if !matches!(&a.value.kind, ExprKind::Identifier(_)) {
+                            continue;
+                        }
+                        // B-2026-09-28-50 — an ALIAS of a part pushed under an
+                        // outliving root inside a branch (`let W { r, .. } = w;
+                        // if c { xs.push(r); }` with `xs: mut ref Vec[D]`)
+                        // belongs to the CONDITIONAL query, exactly as the
+                        // free-function route's `nested_alias` does: reported
+                        // statically, the caller masked it on every path and
+                        // the path that kept it lost the body on all four
+                        // surfaces. A spelling the hooks cannot follow keeps
+                        // the static answer.
+                        let nested_alias = cx
+                            .tracked_alias(&a.value, denote(&a.value, aliases).as_ref())
+                            && denote(&a.value, aliases).is_some_and(|p| !p.is_empty())
+                            && !cx.top_level
+                            && !cx.in_loop
+                            && cx.handed_site;
+                        if !nested_alias || cx.cond_mode {
                             note(&a.value, out);
                         }
                     }
@@ -6185,6 +6248,8 @@ struct PartScanCx<'a> {
     /// B-2026-09-27-105 — see `part_paths_from_root_mode`: the `let r = w.r`
     /// aliases a nested hand-over may name.
     proj_lets: &'a [&'a str],
+    /// B-2026-09-28-50 — the names a destructuring `let` binds once.
+    destr_lets: &'a [&'a str],
     /// B-2026-09-27-105 — asked for [`fn_conditionally_handed_param_parts`]:
     /// a projection hand-over nested in a branch is admitted too, where the
     /// adopting frame's per-path flag can be cleared (see `cond_site`).
@@ -6200,6 +6265,26 @@ struct PartScanCx<'a> {
 }
 
 impl PartScanCx<'_> {
+    /// B-2026-09-28-50 — is `e` a local both backends' flag-clearing hooks
+    /// follow back to a part: a `let r = w.r;` alias or one bound by a
+    /// destructuring `let` (`let W { r, .. } = w;`), each bound once.
+    ///
+    /// A destructured name counts only for a DIRECT field of a concrete struct
+    /// root (`denoted` of length one): codegen adopts a part through the
+    /// root's struct walker, so a tuple root adopts nothing there, and a
+    /// nested part keeps its older static answer on both backends. Measured
+    /// both ways before narrowing: `let (r, k) = t;` split the backends and
+    /// `let O { w: W { r, .. }, k } = o;` aborted with a double free compiled.
+    fn tracked_alias(&self, e: &Expr, denoted: Option<&ParamPath>) -> bool {
+        let ExprKind::Identifier(n) = &e.kind else {
+            return false;
+        };
+        self.proj_lets.contains(&n.as_str())
+            || (self.destr_lets.contains(&n.as_str())
+                && self.root_struct.is_some()
+                && denoted.is_some_and(|p| p.len() == 1))
+    }
+
     /// B-2026-09-27-105 — a nested hand-over the conditional query admits.
     fn cond_site(&self) -> bool {
         self.cond_mode && !self.in_loop && self.handed_site
@@ -6215,6 +6300,87 @@ fn part_scan_let_names<'a>(b: &'a Block, out: &mut Vec<&'a str>) {
 
 /// B-2026-09-27-105 — [`part_scan_let_names`] restricted to the `let`s whose
 /// value satisfies `keep`.
+/// B-2026-09-28-50 — every name a `let` pattern in `b` binds (`all`, at any
+/// block depth a statement reaches), and the subset bound by a DESTRUCTURING
+/// struct or tuple pattern (`destr`).
+fn part_scan_let_pattern_names<'a>(b: &'a Block, all: &mut Vec<&'a str>, destr: &mut Vec<&'a str>) {
+    fn leaves<'a>(p: &'a Pattern, out: &mut Vec<&'a str>) {
+        match &p.kind {
+            PatternKind::Binding(n) => out.push(n.as_str()),
+            PatternKind::AtBinding { name, pattern, .. } => {
+                out.push(name.as_str());
+                leaves(pattern, out);
+            }
+            PatternKind::Struct { fields, .. } => {
+                for f in fields {
+                    match &f.pattern {
+                        Some(fp) => leaves(fp, out),
+                        None => out.push(f.name.as_str()),
+                    }
+                }
+            }
+            PatternKind::Tuple(ps) | PatternKind::TupleVariant { patterns: ps, .. } => {
+                for q in ps {
+                    leaves(q, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn in_expr<'a>(e: &'a Expr, all: &mut Vec<&'a str>, destr: &mut Vec<&'a str>) {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Seq(b)
+            | ExprKind::While { body: b, .. }
+            | ExprKind::WhileLet { body: b, .. }
+            | ExprKind::For { body: b, .. }
+            | ExprKind::Loop { body: b, .. }
+            | ExprKind::LabeledBlock { body: b, .. } => part_scan_let_pattern_names(b, all, destr),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                part_scan_let_pattern_names(then_block, all, destr);
+                if let Some(x) = else_branch.as_deref() {
+                    in_expr(x, all, destr);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    in_expr(&a.body, all, destr);
+                }
+            }
+            _ => {}
+        }
+    }
+    for st in &b.stmts {
+        match &st.kind {
+            StmtKind::Let { pattern, value, .. } => {
+                leaves(pattern, all);
+                if matches!(
+                    pattern.kind,
+                    PatternKind::Struct { .. } | PatternKind::Tuple(_)
+                ) {
+                    leaves(pattern, destr);
+                }
+                in_expr(value, all, destr);
+            }
+            StmtKind::Expr(e) => in_expr(e, all, destr),
+            _ => {}
+        }
+    }
+    if let Some(e) = b.final_expr.as_deref() {
+        in_expr(e, all, destr);
+    }
+}
+
 fn part_scan_let_names_where<'a>(b: &'a Block, out: &mut Vec<&'a str>, keep: fn(&Expr) -> bool) {
     fn in_expr<'a>(e: &'a Expr, out: &mut Vec<&'a str>, keep: fn(&Expr) -> bool) {
         match &e.kind {
