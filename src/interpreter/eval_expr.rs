@@ -1615,6 +1615,7 @@ impl<'a> super::Interpreter<'a> {
                         .push(crate::interpreter::FreshTempReadLevel {
                             simple: true,
                             temps: Vec::new(),
+                            shared_holders: Vec::new(),
                         });
                     let cond = self.eval_expr_inner(condition);
                     self.end_freshtemp_reads();

@@ -1140,6 +1140,12 @@ pub(crate) struct ConsoleSeg {
 pub(crate) struct FreshTempReadLevel {
     pub(crate) simple: bool,
     pub(crate) temps: Vec<(Value, (usize, usize))>,
+    /// B-2026-09-28-51 — fresh-temp call arguments whose `shared` fields owe a
+    /// body at the last reference. Released when the statement ends, not when
+    /// the call returns, because that is where codegen releases a temp
+    /// argument: `h.m(mkz(1))` prints `m1` before `dN1` on every compiled
+    /// surface.
+    pub(crate) shared_holders: Vec<Value>,
 }
 
 /// JSON-string escape with surrounding quotes. Used by the `dbg()`

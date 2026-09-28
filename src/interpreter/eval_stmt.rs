@@ -278,6 +278,7 @@ impl<'a> super::Interpreter<'a> {
                 .push(crate::interpreter::FreshTempReadLevel {
                     simple: crate::ast::stmt_ends_freshtemp_reads(stmt),
                     temps: Vec::new(),
+                    shared_holders: Vec::new(),
                 });
             let stmt_result = self.eval_stmt_cf(stmt);
             self.end_freshtemp_reads();
@@ -565,6 +566,7 @@ impl<'a> super::Interpreter<'a> {
                     .push(crate::interpreter::FreshTempReadLevel {
                         simple,
                         temps: Vec::new(),
+                        shared_holders: Vec::new(),
                     });
             }
             let v = self.eval_expr_inner(expr);
@@ -2065,6 +2067,36 @@ impl<'a> super::Interpreter<'a> {
             self.run_user_drop_body_on_value(&type_name, value);
         }
         true
+    }
+
+    /// B-2026-09-28-51 — [`Self::run_field_held_shared_user_drops`] for a
+    /// VALUE with no binding: a fresh temporary handed to a by-value callee
+    /// (`zn(Z { d: .., h: N { .. } })`, `zn(mkz(1))`). Once the callee's frame
+    /// is gone the caller's argument vector holds the only reference, so the
+    /// same count test fires the shared field's body exactly where codegen's
+    /// temp drop releases it; a field the callee handed back or stored is held
+    /// elsewhere too and is left alone. The caller must not hold a clone of
+    /// `value` while asking, or the count is inflated by the read.
+    pub(crate) fn run_value_held_shared_user_drops(&mut self, value: &Value) {
+        let mut occurrences = Vec::new();
+        self.collect_field_held_shared(value, &mut occurrences, 0);
+        if occurrences.is_empty() {
+            return;
+        }
+        let firing: std::collections::HashSet<usize> = occurrences
+            .iter()
+            .map(|(_, ptr, count)| (*ptr, *count))
+            .filter(|(ptr, count)| {
+                *count == occurrences.iter().filter(|(_, p, _)| p == ptr).count()
+            })
+            .map(|(ptr, _)| ptr)
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut to_fire = Vec::new();
+        self.collect_field_held_shared_values(value, &firing, &mut seen, &mut to_fire, 0);
+        for (type_name, v) in to_fire {
+            self.run_user_drop_body_on_value(&type_name, v);
+        }
     }
 
     /// B-2026-09-04-32 — would [`Self::run_field_held_shared_user_drops`]
@@ -3794,6 +3826,9 @@ impl<'a> super::Interpreter<'a> {
         };
         for (v, _) in level.temps.into_iter().rev() {
             self.run_discarded_value_user_drops(v);
+        }
+        for h in level.shared_holders.into_iter().rev() {
+            self.run_value_held_shared_user_drops(&h);
         }
     }
 
@@ -8596,10 +8631,15 @@ impl<'a> super::Interpreter<'a> {
             Value::Struct { ref name, .. } => {
                 if self.program.drop_method_keys.contains_key(name) {
                     let tn = name.clone();
-                    self.run_user_drop_body_on_value(&tn, val);
+                    self.run_user_drop_body_on_value(&tn, val.clone());
                 } else if self.value_runs_user_drop(&val) {
                     self.drop_user_drop_fields_of_value(&val);
                 }
+                // B-2026-09-28-51 — and a `shared` field's own body, at the last
+                // reference: `let _ = mkz(7);` printed `dD7n7` and no `dN7` on
+                // this backend alone. A caller that handed in a clone of a live
+                // value inflates the count, so this declines there.
+                self.run_value_held_shared_user_drops(&val);
             }
             Value::Tuple(items) => {
                 for e in items {
@@ -10815,6 +10855,13 @@ impl<'a> super::Interpreter<'a> {
                     // reference; one that came off a still-live binding
                     // (`let _ = a;`) does not, and keeps its own path.
                     self.run_discarded_shared_user_drop(&val);
+                    // B-2026-09-28-51 — the same question one level down, for a
+                    // `shared` FIELD of a discarded struct (`let _ = mkz(7);`):
+                    // the walk above was handed a clone, so its count read
+                    // declined.
+                    if matches!(val, Value::Struct { .. }) {
+                        self.run_value_held_shared_user_drops(&val);
+                    }
                     // B-2026-09-02-13 — …or a METHOD producer returning an
                     // owned enum by declared return. The static gate has no
                     // `MethodCall` arm and cannot grow one usefully: deciding it
@@ -11867,6 +11914,18 @@ impl<'a> super::Interpreter<'a> {
                                 // which body is owed. See the helper.
                                 let tn =
                                     self.discard_return_type_from_value(fn_name, tn, &discarded);
+                                // B-2026-09-28-51 — a `shared` field's own body at
+                                // the last reference, which no arm below reaches
+                                // (`mkz(10);` printed `dD10n10` and no `dN10` on
+                                // this backend alone). Deferred to the statement's
+                                // end like the call-argument twin, which is also
+                                // where `discarded` is gone and the count reads
+                                // true.
+                                if matches!(&discarded, Value::Struct { .. }) {
+                                    if let Some(level) = self.freshtemp_read_levels.last_mut() {
+                                        level.shared_holders.push(discarded.clone());
+                                    }
+                                }
                                 if self.program.drop_method_keys.contains_key(&tn) {
                                     // B-2026-09-02-13 — the OWN body and, for an
                                     // enum, the live variant's PAYLOAD bodies.

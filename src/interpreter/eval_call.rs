@@ -5180,6 +5180,38 @@ impl<'a> super::Interpreter<'a> {
                     &masked, &payloads,
                 ));
             }
+            // B-2026-09-28-51 — a `shared` field's own body, at the last
+            // reference. Both walks above leave it to its refcount, and a
+            // temporary has no binding whose death releases it
+            // (`run_field_held_shared_user_drops` is keyed by name), so it never
+            // ran on this backend: `zn(mkz(1))` printed no `dN1` where every
+            // compiled surface did.
+            //
+            // WHEN is codegen's, measured per shape. A struct with its own
+            // `Drop` releases the field with its body, inside the call
+            // (`wn(mkw(1))` prints `dW1 dN1 a1`), so it fires here. One that
+            // only carries Drop-bearing fields releases it where the caller's
+            // temp dies, at the end of the statement (`h.m(mkz(1))` prints
+            // `m1` before `dN1`), so it is deferred to the read level. A struct
+            // whose ONLY droppable part is shared fields is released there too
+            // when it is a struct LITERAL (`yn(Y { h: N { v: 4 }, k: 4 })`),
+            // but when a CALL produced it (`yn(mky(2))`) the body runs on NO
+            // surface today (B-2026-09-28-54); `value_runs_user_drop` answers
+            // false for exactly that shape, and firing it here alone would
+            // trade an agreed loss for a divergence.
+            if matches!(v, super::value::Value::Struct { .. })
+                && (self.value_runs_user_drop(v)
+                    || matches!(arg.value.kind, ExprKind::StructLiteral { .. }))
+            {
+                if self.program.drop_method_keys.contains_key(&tn) {
+                    self.run_value_held_shared_user_drops(v);
+                } else {
+                    match self.freshtemp_read_levels.last_mut() {
+                        Some(level) => level.shared_holders.push(v.clone()),
+                        None => self.run_value_held_shared_user_drops(v),
+                    }
+                }
+            }
         }
     }
 
