@@ -848,8 +848,11 @@ fn main() {
 /// `c_straight` is the un-promoted control that was correct throughout.
 #[test]
 fn e2e_rc_promoted_deep_chain_field_move_out_in_loop() {
-    let Some(out) = run_program(
-        "struct Rs { id: i64, name: String }\n\
+    // B-2026-09-27-15 retired `c_deep`, `c_deep3` and `c_flat`: a field moved
+    // out inside a loop RC-boxes its base, and the base runs a `Drop` body
+    // through that field, which `karac check` now rejects (E0514).
+    // `c_straight` is the control and still runs.
+    const PRELUDE: &str = "struct Rs { id: i64, name: String }\n\
              impl Drop for Rs {\n\
              \x20   fn drop(mut ref self) {\n\
              \x20       println(f\"dS{self.id}\")\n\
@@ -858,37 +861,42 @@ fn e2e_rc_promoted_deep_chain_field_move_out_in_loop() {
              fn mks(i: i64) -> Rs { return Rs { id: i, name: f\"h{i}\" }; }\n\
              struct In { mut r: Rs, mut q: Rs }\n\
              struct Ou { mut h: In, mut k: i64 }\n\
-             struct Bs { mut one: Rs, mut two: Rs }\n\
-             fn c_deep() {\n\
-             \x20   let mut o = Ou { h: In { r: mks(1), q: mks(2) }, k: 5 };\n\
+             struct Bs { mut one: Rs, mut two: Rs }\n";
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
+        &format!(
+            "{PRELUDE}\
+             fn c_deep() {{\n\
+             \x20   let mut o = Ou {{ h: In {{ r: mks(1), q: mks(2) }}, k: 5 }};\n\
              \x20   let mut i = 0;\n\
-             \x20   while i < 1 { let x = o.h.r; println(f\"t{x.id}\"); i = i + 1; }\n\
-             }\n\
-             fn c_deep3() {\n\
-             \x20   let mut o = Ou { h: In { r: mks(3), q: mks(4) }, k: 5 };\n\
+             \x20   while i < 1 {{ let x = o.h.r; println(f\"t{{x.id}}\"); i = i + 1; }}\n\
+             }}\n\
+             fn c_deep3() {{\n\
+             \x20   let mut o = Ou {{ h: In {{ r: mks(3), q: mks(4) }}, k: 5 }};\n\
              \x20   let mut i = 0;\n\
-             \x20   while i < 3 { let x = o.h.r; i = i + 1; }\n\
+             \x20   while i < 3 {{ let x = o.h.r; i = i + 1; }}\n\
              \x20   println(\"u\");\n\
-             }\n\
-             fn c_flat() {\n\
-             \x20   let mut g = Bs { one: mks(5), two: mks(6) };\n\
+             }}\n\
+             fn c_flat() {{\n\
+             \x20   let mut g = Bs {{ one: mks(5), two: mks(6) }};\n\
              \x20   let mut i = 0;\n\
-             \x20   while i < 1 { let y = g.one; println(f\"v{y.id}\"); i = i + 1; }\n\
-             }\n\
-             fn c_straight() {\n\
-             \x20   let mut o = Ou { h: In { r: mks(7), q: mks(8) }, k: 5 };\n\
+             \x20   while i < 1 {{ let y = g.one; println(f\"v{{y.id}}\"); i = i + 1; }}\n\
+             }}\n\
+             fn main() {{ c_deep(); c_deep3(); c_flat(); println(\"end\"); }}\n"
+        ),
+        &["o", "o", "g"],
+    );
+    let Some(out) = run_program(&format!(
+        "{PRELUDE}\
+             fn c_straight() {{\n\
+             \x20   let mut o = Ou {{ h: In {{ r: mks(7), q: mks(8) }}, k: 5 }};\n\
              \x20   let x = o.h.r;\n\
-             \x20   println(f\"w{x.id}\");\n\
-             }\n\
-             fn main() { c_deep(); c_deep3(); c_flat(); c_straight(); println(\"end\"); }\n",
-    ) else {
+             \x20   println(f\"w{{x.id}}\");\n\
+             }}\n\
+             fn main() {{ c_straight(); println(\"end\"); }}\n"
+    )) else {
         return;
     };
-    assert_eq!(
-        out,
-        "t1\ndS1\ndS2\ndS1\ndS3\ndS3\ndS3\nu\ndS4\ndS3\nv5\ndS5\ndS6\ndS5\n\
-             dS8\nw7\ndS7\nend\n"
-    );
+    assert_eq!(out, "dS8\nw7\ndS7\nend\n");
 }
 
 /// B-2026-09-08-6 — a field move-out inside a `while` that iterates ONCE
@@ -912,8 +920,10 @@ fn e2e_rc_promoted_deep_chain_field_move_out_in_loop() {
 /// exactly the STRUCT-shaped field their self-gate turns away.
 #[test]
 fn e2e_rc_promoted_base_field_move_out_in_loop() {
-    let Some(out) = run_program(
-        "struct Rs { id: i64, name: String }\n\
+    // B-2026-09-27-15 retired `c1`: `g.one` moved out inside a loop RC-boxes
+    // `g`, whose fields run a `Drop` body, which `karac check` now rejects
+    // (E0514). `c2` and `c3` are the controls and still run.
+    const PRELUDE: &str = "struct Rs { id: i64, name: String }\n\
              impl Drop for Rs {\n\
              \x20   fn drop(mut ref self) {\n\
              \x20       println(f\"dS{self.id}\")\n\
@@ -921,29 +931,35 @@ fn e2e_rc_promoted_base_field_move_out_in_loop() {
              }\n\
              fn mks(i: i64) -> Rs { return Rs { id: i, name: f\"h{i}\" }; }\n\
              struct Bs { mut one: Rs, mut two: Rs }\n\
-             struct Ps { mut a: String, mut b: i64 }\n\
-             fn main() {\n\
-             \x20   println(\"c1\");\n\
-             \x20   let mut g = Bs { one: mks(1), two: mks(2) };\n\
+             struct Ps { mut a: String, mut b: i64 }\n";
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
+        &format!(
+            "{PRELUDE}\
+             fn main() {{\n\
+             \x20   let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
              \x20   let mut i = 0;\n\
-             \x20   while i < 1 { let taken = g.one; println(f\"t{taken.id}\"); i = i + 1; }\n\
+             \x20   while i < 1 {{ let taken = g.one; println(f\"t{{taken.id}}\"); i = i + 1; }}\n\
+             }}\n"
+        ),
+        &["g"],
+    );
+    let Some(out) = run_program(&format!(
+        "{PRELUDE}\
+             fn main() {{\n\
              \x20   println(\"c2\");\n\
-             \x20   let mut h = Bs { one: mks(3), two: mks(4) };\n\
+             \x20   let mut h = Bs {{ one: mks(3), two: mks(4) }};\n\
              \x20   let straight = h.one;\n\
-             \x20   println(f\"t{straight.id}\");\n\
+             \x20   println(f\"t{{straight.id}}\");\n\
              \x20   println(\"c3\");\n\
-             \x20   let mut p = Ps { a: \"payload\", b: 1 };\n\
+             \x20   let mut p = Ps {{ a: \"payload\", b: 1 }};\n\
              \x20   let mut j = 0;\n\
-             \x20   while j < 2 { let s = p.a; println(f\"L{s.len()}\"); j = j + 1; }\n\
+             \x20   while j < 2 {{ let s = p.a; println(f\"L{{s.len()}}\"); j = j + 1; }}\n\
              \x20   println(\"end\");\n\
-             }\n",
-    ) else {
+             }}\n"
+    )) else {
         return;
     };
-    assert_eq!(
-        out,
-        "c1\nt1\ndS1\nc2\ndS4\nt3\ndS3\nc3\nL7\nL7\nend\ndS2\ndS1\n"
-    );
+    assert_eq!(out, "c2\ndS4\nt3\ndS3\nc3\nL7\nL7\nend\n");
 }
 
 /// B-2026-09-06-62 — the RECEIVER spelling of B-2026-09-06-52. `impl R { fn
@@ -1187,7 +1203,7 @@ fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
 fn takep(p: P) -> i64 { return p.b; }
 "#;
     // (source tail, expected stdout, cell name)
-    let cells: [(&str, &str, &str); 8] = [
+    let cells: [(&str, &str, &str); 7] = [
         // 1 — the row's own spelling: three trips, three extra frees.
         (
             r#"fn go() -> i64 { let t = mkp(9); let mut i = 0i64; let mut n = 0i64;
@@ -1251,22 +1267,6 @@ fn main() { println(go()); }
             "0",
             "control_never_entered",
         ),
-        // 7 — CONTROL, and the cell that pinned the fix's shape: the same
-        // program with an `impl Drop for P`. A type reaching a user `Drop`
-        // was already transfer-INELIGIBLE, so this was clean on the parent
-        // — the entry-copy path handling the shape correctly while the
-        // transfer path did not. The body fires ONCE, from the box, not
-        // once per trip.
-        (
-            r#"impl Drop for P { fn drop(mut ref self) { println(f"dP{self.b}"); } }
-fn go() -> i64 { let t = mkp(9); let mut i = 0i64; let mut n = 0i64;
-  while i < 3i64 { n = n + takep(t); i = i + 1; }
-  return n; }
-fn main() { println(go()); }
-"#,
-            "dP9\n27",
-            "control_user_drop_fires_once",
-        ),
         // 8 — the promoted binding in the SECOND parameter slot, beside a
         // fresh temp that disqualifies the first on its own. The gate is
         // keyed by `(callee, index)`.
@@ -1281,6 +1281,21 @@ fn main() { println(go()); }
             "second_param_slot",
         ),
     ];
+    // B-2026-09-27-15 retired cell 7, the `impl Drop for P` control: `t`
+    // consumed inside a loop is RC fallback of a type that runs a `Drop` body,
+    // which `karac check` now rejects (E0514).
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
+        &format!(
+            "{PRE}{}",
+            r#"impl Drop for P { fn drop(mut ref self) { println(f"dP{self.b}"); } }
+fn go() -> i64 { let t = mkp(9); let mut i = 0i64; let mut n = 0i64;
+  while i < 3i64 { n = n + takep(t); i = i + 1; }
+  return n; }
+fn main() { println(go()); }
+"#
+        ),
+        &["t"],
+    );
     for (tail, want, name) in cells {
         let Some(cap) = run_program_capturing(&format!("{PRE}{tail}")) else {
             return;

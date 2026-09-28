@@ -125,6 +125,165 @@ impl<'a> super::OwnershipChecker<'a> {
         self.notes.extend(notes);
     }
 
+    /// E0514 (B-2026-09-27-15) — reject RC fallback for a value whose type runs
+    /// a user `Drop` body, and take the binding out of `rc_values` so it is
+    /// reported once, as this error, rather than also as a performance note.
+    ///
+    /// RC fallback shares one value between the owners the dominance test
+    /// found, and a `Drop` body has no shared meaning. Measured before the
+    /// rejection, on `let q = mk(5); while i < 1 { let p = q; .. }` and on
+    /// `if c { let p = q; .. } q.id`: every compiled surface freed the value
+    /// twice (`let p = q` copies the payload out of the box and both owners
+    /// free it), the call spellings (`let p = idr(q)`) ran the body once per
+    /// owner, and the interpreter, which has no RC at all, ran the body at the
+    /// first owner's death and then read the destroyed value through `q`.
+    /// Values with no user `Drop` anywhere inside them keep RC fallback: their
+    /// drop is memory only, which the box already balances on both backends.
+    ///
+    /// The type is read off the typechecker at the witness's two spans, since
+    /// `binding_type_names` holds params only at this point. Either span
+    /// suffices: the consume of `w.r` answers for a `Drop` field of `w` just as
+    /// the whole binding would.
+    pub(crate) fn emit_rc_fallback_drop_type_errors(&mut self) {
+        let mut rejected: Vec<(String, String)> = Vec::new();
+        let mut errors = Vec::new();
+        let mut sites: Vec<(&String, &String, &crate::ownership::RcEntry)> = Vec::new();
+        for (fn_key, rc_map) in &self.rc_values {
+            for (binding, entry) in rc_map {
+                sites.push((fn_key, binding, entry));
+            }
+        }
+        // Same order as `emit_rc_fallback_notes`, for the same reason: the
+        // maps are hash-ordered and the errors reach `--output=json`.
+        sites.sort_by(|(ak, ab, ae), (bk, bb, be)| {
+            ae.other_use_span
+                .offset
+                .cmp(&be.other_use_span.offset)
+                .then_with(|| ak.cmp(bk))
+                .then_with(|| ab.cmp(bb))
+        });
+        for (fn_key, binding, entry) in sites {
+            let drop_type = [&entry.consume_span, &entry.other_use_span]
+                .iter()
+                .find_map(|sp| {
+                    let ty = self
+                        .typecheck_result
+                        .expr_types
+                        .get(&crate::resolver::SpanKey::from_span(sp))?;
+                    self.type_runs_user_drop(ty, &mut Vec::new())
+                        .then(|| match ty {
+                            crate::typechecker::Type::Named { name, .. } => name.clone(),
+                            other => crate::typechecker::type_display(other),
+                        })
+                });
+            let Some(ty_text) = drop_type else {
+                continue;
+            };
+            // A witness whose two sites coincide is a move inside a loop, whose
+            // other use is the same site on the next iteration.
+            let reuse = if entry.consume_span.offset == entry.other_use_span.offset {
+                format!(
+                    "'{}' is moved at line {}:{} inside a loop, so the next iteration would \
+                     move it again",
+                    entry.binding, entry.consume_span.line, entry.consume_span.column,
+                )
+            } else {
+                format!(
+                    "'{}' is moved at line {}:{} and used again at line {}:{} on a path the \
+                     move does not cover",
+                    entry.binding,
+                    entry.consume_span.line,
+                    entry.consume_span.column,
+                    entry.other_use_span.line,
+                    entry.other_use_span.column,
+                )
+            };
+            errors.push(OwnershipError {
+                message: format!(
+                    "{reuse}; its type `{ty_text}` runs a user `Drop` body, so it cannot be \
+                     shared by RC fallback"
+                ),
+                span: entry.other_use_span,
+                kind: OwnershipErrorKind::RcFallbackOfDropType,
+                suggestion: Some(format!(
+                    "restructure so '{}' is moved on one path only: move it out of the loop, \
+                     pass it by `ref` where the callee only reads it, or reassign it before \
+                     the next use",
+                    entry.binding
+                )),
+                replacement: None,
+                consume_span: Some(entry.consume_span),
+            });
+            rejected.push((fn_key.clone(), binding.clone()));
+        }
+        for (fn_key, binding) in rejected {
+            if let Some(map) = self.rc_values.get_mut(&fn_key) {
+                map.remove(&binding);
+                if map.is_empty() {
+                    self.rc_values.remove(&fn_key);
+                }
+            }
+            if let Some(set) = self.arc_values.get_mut(&fn_key) {
+                set.remove(&binding);
+            }
+        }
+        self.errors.extend(errors);
+    }
+
+    /// Does a value of `ty` run a user `Drop` body when it dies: its own, or
+    /// one reachable inside it BY VALUE? The typechecker's
+    /// `type_runs_user_drop`, over the tables it exports: a `shared` type is
+    /// not descended into, since sharing its handle retains rather than
+    /// duplicates, and `seen` breaks recursive declarations.
+    fn type_runs_user_drop(&self, ty: &crate::typechecker::Type, seen: &mut Vec<String>) -> bool {
+        use crate::typechecker::{Type, VariantTypeInfo};
+        let tc = self.typecheck_result;
+        match ty {
+            Type::Named { name, args } => {
+                let shared = tc
+                    .struct_info
+                    .get(name)
+                    .map(|i| i.is_shared || i.is_par)
+                    .or_else(|| tc.enum_info.get(name).map(|i| i.is_shared || i.is_par))
+                    .unwrap_or(false);
+                if shared {
+                    return false;
+                }
+                if args.iter().any(|a| self.type_runs_user_drop(a, seen)) {
+                    return true;
+                }
+                if tc.drop_method_keys.contains_key(name) {
+                    return true;
+                }
+                if seen.iter().any(|s| s == name) {
+                    return false;
+                }
+                seen.push(name.clone());
+                if let Some(info) = tc.struct_info.get(name) {
+                    return info
+                        .fields
+                        .iter()
+                        .any(|(_, t, _)| self.type_runs_user_drop(t, seen));
+                }
+                if let Some(info) = tc.enum_info.get(name) {
+                    return info.variants.iter().any(|(_, v)| match v {
+                        VariantTypeInfo::Unit => false,
+                        VariantTypeInfo::Tuple(ts) => {
+                            ts.iter().any(|t| self.type_runs_user_drop(t, seen))
+                        }
+                        VariantTypeInfo::Struct(fs) => {
+                            fs.iter().any(|(_, t)| self.type_runs_user_drop(t, seen))
+                        }
+                    });
+                }
+                false
+            }
+            Type::Tuple(elems) => elems.iter().any(|e| self.type_runs_user_drop(e, seen)),
+            Type::Array { element, .. } => self.type_runs_user_drop(element, seen),
+            _ => false,
+        }
+    }
+
     /// `E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE` (phase-8-stdlib-floor
     /// item 6). Under `panic_on_alloc_failure = false`, every recorded RC
     /// fallback site (`rc_values`) becomes a hard error: the compiler would emit

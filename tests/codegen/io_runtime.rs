@@ -1386,6 +1386,33 @@ fn test_e2e_conditional_param_view_assign_keeps_target_body_per_path() {
     // `false` silenced the fresh value's body — `dR5` lost. The flag is now
     // re-armed on any assignment whose RHS is not a param view. Nothing in
     // the suite covered this shape, which is why the first cut shipped.
+    // B-2026-09-27-15 retired `e`: `b`'s payload moved out inside a loop is RC
+    // fallback of a type that runs a `Drop` body, which `karac check` now
+    // rejects (E0514). The other six shapes still run.
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
+        r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+
+#[allow(partial_move_of_drop_enum)]
+fn looped(b: E) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 2 {
+        let mut out: R = R { id: 90 + i, tag: f"t" };
+        match b { E.A(r) => { out = r; } E.B => { } }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+
+fn main() { println(f"e{looped(E.B)}"); }
+"#,
+        &["b"],
+    );
     let out = run_program(
         r#"
 struct R { id: i64, tag: String }
@@ -1414,19 +1441,6 @@ fn uncond(p: R) -> i64 {
 }
 
 #[allow(partial_move_of_drop_enum)]
-fn looped(b: E) -> i64 {
-    let mut i: i64 = 0;
-    let mut acc: i64 = 0;
-    while i < 2 {
-        let mut out: R = R { id: 90 + i, tag: f"t" };
-        match b { E.A(r) => { out = r; } E.B => { } }
-        acc = acc + out.id;
-        i = i + 1;
-    }
-    return acc
-}
-
-#[allow(partial_move_of_drop_enum)]
 fn refreshed(b: E) -> i64 {
     let mut out: R = R { id: 0, tag: f"t0" };
     match b { E.A(r) => { out = r; } E.B => { } }
@@ -1445,8 +1459,6 @@ fn main() {
     println("-");
     println(f"d{uncond(R { id: 9, tag: f"t9" })}");
     println("-");
-    println(f"e{looped(E.B)}");
-    println("-");
     println(f"f{refreshed(E.A(R { id: 8, tag: f"t8" }))}");
 }
 "#,
@@ -1454,7 +1466,7 @@ fn main() {
     if let Some(out) = out {
         assert_eq!(
                 out.trim(),
-                "mid\ndR0\ndE\na0\n-\ndR0\nmid\ndE\ndR5\nb5\n-\ndR1\ndE\nc1\n-\ndR2\ndR9\nd9\n-\ndR90\ndR91\ndE\ne181\n-\ndR0\nm1\nm2\ndR5\ndE\ndR8\nf5"
+                "mid\ndR0\ndE\na0\n-\ndR0\nmid\ndE\ndR5\nb5\n-\ndR1\ndE\nc1\n-\ndR2\ndR9\nd9\n-\ndR0\nm1\nm2\ndR5\ndE\ndR8\nf5"
             );
     }
 }

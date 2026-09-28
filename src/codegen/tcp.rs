@@ -1474,7 +1474,7 @@ impl<'ctx> super::Codegen<'ctx> {
     // dedicated `wrap_ws_io_result` helper that distinguishes
     // EOF (0) from byte-count-zero (also 0 — they overlap in v1).
 
-    /// Lower `WebSocket.accept(listener: TcpListener) -> WebSocket`
+    /// Lower `WebSocket.accept(listener: ref TcpListener) -> WebSocket`
     /// — extract `listener.fd`, park on read-readiness, call the
     /// runtime FFI `karac_runtime_ws_accept` which performs the
     /// blocking accept(2) + HTTP-upgrade exchange, pack the

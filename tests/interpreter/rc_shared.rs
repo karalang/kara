@@ -998,29 +998,34 @@ fn rc_promoted_base_still_destroys_its_retained_field() {
          impl Drop for Rs { fn drop(mut ref self) { println(f\"dS{self.id}\") } }\n\
          fn mks(i: i64) -> Rs { return Rs { id: i, name: f\"h{i}\" }; }\n\
          struct Bs { mut one: Rs, mut two: Rs }\n";
-    // N=1 — one copy taken, so `dS1` twice: the copy's and the retained
-    // original's, plus `dS2` for the untouched sibling.
-    let (out1, _) = run_program_with_drops(&format!(
-        "{PRE}fn main() {{\n\
-         \x20 let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
-         \x20 let mut i = 0;\n\
-         \x20 while i < 1 {{ let taken = g.one; println(f\"t{{taken.id}}\"); i = i + 1; }}\n\
-         \x20 println(\"m3\");\n}}\n"
-    ));
-    assert_eq!(out1, vec!["t1\n", "dS1\n", "dS2\n", "dS1\n", "m3\n"]);
-    // N=3 — the count scales with the trip count and the original still dies
-    // exactly once.
-    let (out3, _) = run_program_with_drops(&format!(
-        "{PRE}fn main() {{\n\
-         \x20 let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
-         \x20 let mut i = 0;\n\
-         \x20 while i < 3 {{ let taken = g.one; println(f\"t{{taken.id}}\"); i = i + 1; }}\n\
-         \x20 println(\"m3\");\n}}\n"
-    ));
-    assert_eq!(
-        out3,
-        vec!["t1\n", "dS1\n", "t1\n", "dS1\n", "t1\n", "dS1\n", "dS2\n", "dS1\n", "m3\n"]
-    );
+    // B-2026-09-27-15 retired the N=1 and N=3 cells: `g.one` moved out inside
+    // a loop RC-boxes `g`, whose fields run a `Drop` body, and `karac check`
+    // now rejects that (E0514), so the interpreter never sees the program.
+    for n in [1, 3] {
+        let src = format!(
+            "{PRE}fn main() {{\n\
+             \x20 let mut g = Bs {{ one: mks(1), two: mks(2) }};\n\
+             \x20 let mut i = 0;\n\
+             \x20 while i < {n} {{ let taken = g.one; println(f\"t{{taken.id}}\"); i = i + 1; }}\n\
+             \x20 println(\"m3\");\n}}\n"
+        );
+        let mut parsed = karac::parse(&src);
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let own = karac::ownershipcheck(&parsed.program, &typed);
+        let hits: Vec<&str> = own
+            .errors
+            .iter()
+            .filter(|e| e.kind == karac::ownership::OwnershipErrorKind::RcFallbackOfDropType)
+            .map(|e| e.message.as_str())
+            .collect();
+        assert!(
+            hits.len() == 1 && hits[0].contains("'g'"),
+            "N={n}: expected one E0514 on 'g', got {hits:?}"
+        );
+    }
     // CONTROL — a genuine MOVE: `g` is never re-used, so the ownership pass
     // does not promote it and the mask must still apply. `g`'s walk runs `dS2`
     // only, and this cell is byte-identical on `--interp` and the JIT.

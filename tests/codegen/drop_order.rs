@@ -7909,6 +7909,7 @@ fn main() {
     }
 }
 
+/// B-2026-09-27-15 retired every cell here: each moves the param `p` inside a loop, which is RC fallback of a type that runs a `Drop` body, and `karac check` now rejects that (E0514). The program is kept as the rejection pin.
 #[test]
 fn test_e2e_in_loop_decl_rearms_cond_move_drop_flag_each_iteration() {
     // B-2026-09-02-6 — a `cond_move_drop_flags` flag is allocated and set
@@ -7948,7 +7949,7 @@ fn test_e2e_in_loop_decl_rearms_cond_move_drop_flag_each_iteration() {
     // `d` is the nested spelling, where the inner `let` must re-arm per
     // INNER iteration: the disarm lands on one of four passes and the two
     // passes of the second outer iteration both lost their bodies before.
-    let out = run_program(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         r#"
 struct R { id: i64, tag: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
@@ -8013,18 +8014,8 @@ fn main() {
     println(f"d{nested(R { id: 8, tag: f"q" })}");
 }
 "#,
+        &["p", "p", "p", "p"],
     );
-    if let Some(out) = out {
-        assert_eq!(
-            out.trim(),
-            concat!(
-                "w0\ndR90\nw1\ndR91\nw2\ndR92\ndR5\na188\n-",
-                "\nm0\ndR60\nm1\ndR61\nm2\ndR62\ndR6\nb128\n-",
-                "\no0\no1\ndR70\no2\ndR7\nc7\n-",
-                "\nn00\ndR0\nn01\ndR1\nn10\ndR10\nn11\ndR11\ndR8\nd29",
-            )
-        );
-    }
 }
 
 /// Returning a heap field of an owned by-value struct param must zero that
@@ -8300,10 +8291,12 @@ fn e2e_discarded_shared_literal_runs_its_drop_body() {
 /// is the free-function spelling and `c6` a promoted param whose type has
 /// no `Drop` of its own but does own heap, so the box's value-drop has to
 /// free it without running a body.
+/// B-2026-09-27-15 retired `c1` and `c5`: `r` moved into the `Vec` on one
+/// path and read after it is RC fallback of a type that runs a `Drop` body,
+/// which `karac check` now rejects (E0514). The controls still run.
 #[test]
 fn e2e_rc_promoted_param_keeps_its_drop_body_and_heap() {
-    let Some(out) = run_program(
-            "shared struct Inner { v: i64 }\n\
+    const PRELUDE: &str = "shared struct Inner { v: i64 }\n\
              struct R { id: i64, name: String, inner: Inner }\n\
              impl Drop for R {\n\
              \x20   fn drop(mut ref self) { println(f\"dR{self.id}\") }\n\
@@ -8311,40 +8304,43 @@ fn e2e_rc_promoted_param_keeps_its_drop_body_and_heap() {
              fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\", inner: Inner { v: i } }; }\n\
              struct P { id: i64, name: String }\n\
              fn mkp(i: i64) -> P { return P { id: i, name: f\"p{i}\" }; }\n\
-             struct Box2 { mut xs: Vec[R] }\n\
-             impl Box2 {\n\
-             \x20   fn after(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } println(f\"s{r.inner.v}\"); }\n\
-             \x20   fn before(mut ref self, r: R, k: bool) { println(f\"s{r.inner.v}\"); if k { self.xs.push(r); } }\n\
-             \x20   fn trailing(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } println(\"x\"); }\n\
-             \x20   fn bare(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } }\n\
-             }\n\
-             fn ff(v: mut ref Vec[R], r: R, k: bool) { if k { v.push(r); } println(f\"s{r.inner.v}\"); }\n\
-             fn pf(v: mut ref Vec[P], p: P, k: bool) { if k { v.push(p); } println(f\"s{p.id}\"); }\n\
-             fn main() {\n\
-             \x20   let mut b = Box2 { xs: Vec.new() };\n\
-             \x20   println(\"c1\");\n\
-             \x20   b.after(mk(1), false);\n\
+             struct Box2 { mut xs: Vec[R] }\n";
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
+        &format!(
+            "{PRELUDE}\
+             impl Box2 {{\n\
+             \x20   fn after(mut ref self, r: R, k: bool) {{ if k {{ self.xs.push(r); }} println(f\"s{{r.inner.v}}\"); }}\n\
+             }}\n\
+             fn ff(v: mut ref Vec[R], r: R, k: bool) {{ if k {{ v.push(r); }} println(f\"s{{r.inner.v}}\"); }}\n\
+             fn main() {{ }}\n"
+        ),
+        &["r", "r"],
+    );
+    let Some(out) = run_program(&format!(
+        "{PRELUDE}\
+             impl Box2 {{\n\
+             \x20   fn before(mut ref self, r: R, k: bool) {{ println(f\"s{{r.inner.v}}\"); if k {{ self.xs.push(r); }} }}\n\
+             \x20   fn trailing(mut ref self, r: R, k: bool) {{ if k {{ self.xs.push(r); }} println(\"x\"); }}\n\
+             \x20   fn bare(mut ref self, r: R, k: bool) {{ if k {{ self.xs.push(r); }} }}\n\
+             }}\n\
+             fn pf(v: mut ref Vec[P], p: P, k: bool) {{ if k {{ v.push(p); }} println(f\"s{{p.id}}\"); }}\n\
+             fn main() {{\n\
+             \x20   let mut b = Box2 {{ xs: Vec.new() }};\n\
              \x20   println(\"c2\");\n\
              \x20   b.before(mk(2), false);\n\
              \x20   println(\"c3\");\n\
              \x20   b.trailing(mk(3), false);\n\
              \x20   println(\"c4\");\n\
              \x20   b.bare(mk(4), false);\n\
-             \x20   println(\"c5\");\n\
-             \x20   let mut v: Vec[R] = Vec.new();\n\
-             \x20   ff(mut v, mk(5), false);\n\
              \x20   println(\"c6\");\n\
              \x20   let mut w: Vec[P] = Vec.new();\n\
              \x20   pf(mut w, mkp(6), false);\n\
              \x20   println(\"end\");\n\
-             }\n",
-        ) else {
-            return;
-        };
-    assert_eq!(
-        out,
-        "c1\ns1\ndR1\nc2\ns2\ndR2\nc3\nx\ndR3\nc4\ndR4\nc5\ns5\ndR5\nc6\ns6\nend\n"
-    );
+             }}\n"
+    )) else {
+        return;
+    };
+    assert_eq!(out, "c2\ns2\ndR2\nc3\nx\ndR3\nc4\ndR4\nc6\ns6\nend\n");
 }
 
 /// B-2026-09-08-13 — a LET-BOUND LOCAL of a SELF-REFERENTIAL struct passed

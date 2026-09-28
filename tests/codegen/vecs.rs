@@ -10080,7 +10080,12 @@ fn main() {
 /// the body in the callee.
 #[test]
 fn e2e_generic_enum_loop_view_passed_by_value_runs_its_body_once() {
-    let Some(out) = run_program(
+    // B-2026-09-27-15 — the `two` cell used to hand an OWNED `g` declared
+    // before the loop to every iteration: RC fallback of a type that runs a
+    // `Drop` body, which `karac check` now rejects (E0514). That spelling is
+    // pinned here, and the run passes a fresh owned argument per iteration,
+    // which keeps the view-beside-an-owned-argument shape.
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         r#"struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 enum Ho[T] { Full(T), Empty }
@@ -10101,6 +10106,33 @@ fn main() {
     println("a");
     let g = Ho.Full(mks(4));
     for h in w { two(h, g) }
+    println("b");
+    shows(Ho.Full(mks(5)));
+    println("end")
+}
+"#,
+        &["g"],
+    );
+    let Some(out) = run_program(
+        r#"struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+enum Ho[T] { Full(T), Empty }
+fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
+fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
+fn outer(h: Ho[S]) { println("o"); shows(h) }
+fn two(a: Ho[S], b: Ho[S]) { shows(a); println("m"); shows(b) }
+fn main() {
+    let mut v: Vec[Ho[S]] = Vec.new();
+    v.push(Ho.Full(mks(1)));
+    v.push(Ho.Empty);
+    v.push(Ho.Full(mks(2)));
+    for h in v { shows(h) }
+    println(f"n{v.len()}");
+    let mut w: Vec[Ho[S]] = Vec.new();
+    w.push(Ho.Full(mks(3)));
+    for h in w { outer(h) }
+    println("a");
+    for h in w { two(h, Ho.Full(mks(4))) }
     println("b");
     shows(Ho.Full(mks(5)));
     println("end")

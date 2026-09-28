@@ -180,6 +180,24 @@ fn ir_probe_from_env() {
 /// `h27/h27` would read empty if the decline had been spelled as a
 /// cap-zeroing.
 fn test_e2e_declined_copy_param_rebind_keeps_the_callers_ownership() {
+    // B-2026-09-27-15 retired the `loop` cell: `r` moved inside a loop is RC
+    // fallback of a type that runs a `Drop` body, which `karac check` now
+    // rejects (E0514).
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
+        r#"
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
+fn loopreb(r: R, n: i64) -> i64 {
+    let mut t = 0;
+    for i in 0..n { if i == 0 { let m = r; t = t + m.inner.v; } }
+    return t;
+}
+fn main() { println(f"loop={loopreb(mk(28), 3)}"); }
+"#,
+        &["r"],
+    );
     let out = run_program(
         r#"
 shared struct Inner { v: i64 }
@@ -211,11 +229,6 @@ fn keeps(x: R) -> R { return x; }
 fn call(r: R) -> i64 { let w = keeps(r); return w.inner.v; }
 fn pair(a: R, b: R) -> i64 { let m = b; return m.inner.v + a.id; }
 fn rdmove(r: R) -> String { let m = r; return f"{m.name}/{r.name}"; }
-fn loopreb(r: R, n: i64) -> i64 {
-    let mut t = 0;
-    for i in 0..n { if i == 0 { let m = r; t = t + m.inner.v; } }
-    return t;
-}
 fn deep(s: S) -> i64 { let m = s; return m.mid.d.v; }
 fn nodrop(n: N) -> i64 { let m = n; return m.inner.v; }
 fn selfref(nd: Node) -> i64 { let m = nd; return m.id; }
@@ -229,7 +242,6 @@ fn main() {
     println(f"call={call(mk(25))}");
     println(f"pair={pair(mk(1), mk(26))}");
     println(f"rd={rdmove(mk(27))}");
-    println(f"loop={loopreb(mk(28), 3)}");
     println(f"deep={deep(mks(29))}");
     println(f"nod={nodrop(mkn(30))}");
     println(f"self={selfref(mknode(31))}");
@@ -240,7 +252,7 @@ fn main() {
     );
     if let Some(out) = out {
         assert_eq!(
-                out, "dR21\ntop=21\ndR22\nbrT=22\ndR23\nbrF=0\ndR24\ntwo=24\ndR25\ncall=25\ndR26\ndR1\npair=27\ndR27\nrd=h27/h27\ndR28\nloop=28\ndS29\ndeep=29\nnod=30\ndNd31\nself=31\ndP32\nctl=32\nend\n",
+                out, "dR21\ntop=21\ndR22\nbrT=22\ndR23\nbrF=0\ndR24\ntwo=24\ndR25\ncall=25\ndR26\ndR1\npair=27\ndR27\nrd=h27/h27\ndS29\ndeep=29\nnod=30\ndNd31\nself=31\ndP32\nctl=32\nend\n",
                 "a param the prologue declined to own is a VIEW: the rebind runs \
                  one body and frees nothing the caller still owns; got {out:?}"
             );

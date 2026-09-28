@@ -186,7 +186,10 @@ fn main() {
 /// own but does own a `String`, so it never had a body to lose and leaked
 /// anyway. A body-only check would have called it clean.
 fn asan_rc_promoted_param_owns_its_body_and_heap() {
-    assert_clean_asan_run_min_allocs(
+    // B-2026-09-27-15 retired `after` and `ff`: `r` moved into the `Vec` on one
+    // path and read after it is RC fallback of a type that runs a `Drop` body,
+    // which `karac check` now rejects (E0514). The controls still run.
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         r#"
 shared struct Inner { v: i64 }
 struct R { id: i64, name: String, inner: Inner }
@@ -204,21 +207,39 @@ impl Box2 {
 fn ff(v: mut ref Vec[R], r: R, k: bool) { if k { v.push(r); } println(f"s{r.inner.v}"); }
 fn pf(v: mut ref Vec[P], p: P, k: bool) { if k { v.push(p); } println(f"s{p.id}"); }
 
+fn main() { }
+"#,
+        &["r", "r"],
+    );
+    assert_clean_asan_run_min_allocs(
+        r#"
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
+struct P { id: i64, name: String }
+fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
+struct Box2 { mut xs: Vec[R] }
+
+impl Box2 {
+    fn before(mut ref self, r: R, k: bool) { println(f"s{r.inner.v}"); if k { self.xs.push(r); } }
+    fn bare(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } }
+}
+fn pf(v: mut ref Vec[P], p: P, k: bool) { if k { v.push(p); } println(f"s{p.id}"); }
+
 fn main() {
     let mut b = Box2 { xs: Vec.new() };
-    b.after(mk(1), false);
     b.before(mk(2), false);
     b.bare(mk(4), false);
     let mut v: Vec[R] = Vec.new();
-    ff(mut v, mk(5), false);
     let mut w: Vec[P] = Vec.new();
     pf(mut w, mkp(6), false);
     println("end");
 }
 "#,
-        &["s1", "dR1", "s2", "dR2", "dR4", "s5", "dR5", "s6", "end"],
+        &["s2", "dR2", "dR4", "s6", "end"],
         "b0907-50-rc-promoted-param-ownership",
-        18,
+        10,
     );
 }
 
@@ -433,7 +454,11 @@ fn main() {
 /// lost. With the wild store gone the copy is correct at any depth and the
 /// gate is lifted, which is why `c_deep3` (three trips) balances here.
 fn asan_rc_promoted_deep_chain_field_move_out_in_loop() {
-    assert_clean_asan_run_min_allocs(
+    // B-2026-09-27-15 retired `c_deep`, `c_deep3` and `c_flat`: a field moved out
+    // inside a loop RC-boxes its base, which runs a `Drop` body through that
+    // field, and `karac check` now rejects that (E0514). `c_straight` is the
+    // control and still runs.
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         r#"
 struct S { id: i64, name: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
@@ -464,14 +489,31 @@ fn c_straight() {
     let x = o.h.r;
     println(f"w{x.id}");
 }
-fn main() { c_deep(); c_deep3(); c_flat(); c_straight(); println("end"); }
+fn main() { }
 "#,
-        &[
-            "t1", "dS1", "dS2", "dS1", "dS3", "dS3", "dS3", "u", "dS4", "dS3", "v5", "dS5", "dS6",
-            "dS5", "dS8", "w7", "dS7", "end",
-        ],
+        &["o", "o", "g"],
+    );
+    assert_clean_asan_run_min_allocs(
+        r#"
+struct S { id: i64, name: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, name: f"s{i}" }; }
+
+struct In { mut r: S, mut q: S }
+struct Ou { mut h: In, mut k: i64 }
+struct Bs { mut one: S, mut two: S }
+
+fn c_straight() {
+    let mut o = Ou { h: In { r: mks(7), q: mks(8) }, k: 5 };
+    let x = o.h.r;
+    println(f"w{x.id}");
+}
+fn main() { c_straight(); println("end"); }
+"#,
+        &["dS8", "w7", "dS7", "end"],
         "b0908-9-rc-promoted-deep-chain-move-out",
-        18,
+        // 3, measured: `c_straight` alone (B-2026-09-27-15 retired the rest).
+        3,
     );
 }
 
@@ -508,7 +550,10 @@ fn main() { c_deep(); c_deep3(); c_flat(); c_straight(); println("end"); }
 /// separately rather than folded in here, which would make this fixture
 /// assert a defect it does not close.
 fn asan_rc_promoted_base_field_move_out_in_loop() {
-    assert_clean_asan_run_min_allocs(
+    // B-2026-09-27-15 retired `c_loop`, `c_trips` and `c_both`: a field moved out inside
+    // a loop RC-boxes its base, whose fields run a `Drop` body, and `karac check`
+    // now rejects that (E0514). `c_str` and `c_flat` are the controls and still run.
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         r#"
 struct S { id: i64, name: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
@@ -544,17 +589,38 @@ fn c_flat() {
     println(f"x{straight.id}");
 }
 
+fn main() { }
+"#,
+        &["g", "g", "g"],
+    );
+    assert_clean_asan_run_min_allocs(
+        r#"
+struct S { id: i64, name: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, name: f"s{i}" }; }
+
+struct Bs { mut one: S, mut two: S }
+struct Ps { mut a: String, mut b: i64 }
+
+fn c_str() {
+    let mut p = Ps { a: "payload", b: 1 };
+    let mut j = 0;
+    while j < 2 { let s = p.a; println(f"L{s.len()}"); j = j + 1; }
+}
+fn c_flat() {
+    let mut h = Bs { one: mks(9), two: mks(10) };
+    let straight = h.one;
+    println(f"x{straight.id}");
+}
+
 fn main() {
-    c_loop(); c_trips(); c_both(); c_str(); c_flat();
+    c_str(); c_flat();
     println("end");
 }
 "#,
-        &[
-            "t1", "dS1", "dS2", "dS1", "dS3", "dS3", "dS3", "u", "dS4", "dS3", "v56", "dS6", "dS5",
-            "dS6", "dS5", "L7", "L7", "dS10", "x9", "dS9", "end",
-        ],
+        &["L7", "L7", "dS10", "x9", "dS9", "end"],
         "b0908-6-rc-promoted-field-move-out-in-loop",
-        20,
+        5,
     );
 }
 
@@ -3668,22 +3734,17 @@ fn asan_whole_consume_in_a_running_loop_keeps_the_rc_box_the_only_owner() {
         "rc_promoted_whole_consume_control_never_entered",
         10,
     );
-    // 8 — CONTROL, and the cell that pinned the fix's shape: the same
-    // program with an `impl Drop for P`. Transfer eligibility already
-    // declines a type that reaches a user `Drop`, so this was clean on the
-    // parent at every trip count — the entry-copy path handling the shape
-    // correctly while the transfer path did not. The body fires ONCE, from
-    // the box, not once per trip.
-    assert_clean_asan_run_min_allocs(
+    // 8 — RETIRED by B-2026-09-27-15. This was the `impl Drop for P` control:
+    // `t` consumed inside a loop is RC fallback of a type that runs a `Drop`
+    // body, which `karac check` now rejects (E0514).
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{OWN}impl Drop for P {{ fn drop(mut ref self) {{ println(f\"dP{{self.b}}\"); }} }}\n\
                  fn esc() -> String {{ let t = mkp(9); let mut i = 0i64; let mut r = payload();\n\
                  \x20 while i < 3i64 {{ takep(t); i = i + 1; }}\n\
                  \x20 return r; }}\n"
         ),
-        &["dP9", "payload-1-aaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-        "rc_promoted_whole_consume_control_user_drop",
-        10,
+        &["t"],
     );
     // 9 — CONTROL for the PER-FUNCTION keying. The promotion set is read by
     // the ownership pass's own fn key, so a promoted `t` in one frame must

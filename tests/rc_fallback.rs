@@ -371,6 +371,149 @@ fn sequential_consume_then_use_still_errors() {
     );
 }
 
+// ── B-2026-09-27-15: a type that runs a user `Drop` body is not RC-shared ──
+
+/// The `R` of B-2026-09-27-15's cells: a heap field and a printing `Drop`.
+const DROP_R: &str = "struct R { id: i64, tag: String }\n\
+                      impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                      fn mk(n: i64) -> R { R { id: n, tag: f\"t{n}\" } }\n\
+                      fn idr(r: R) -> R { r }\n\
+                      fn eat(r: R) -> i64 { r.id }\n";
+
+/// Every E0514 in `result`, and a check that the rejected binding reached
+/// neither `rc_values` nor the RC notes: it is reported once, as the error.
+fn drop_type_rejections(result: &OwnershipCheckResult, fn_name: &str) -> Vec<String> {
+    let hits: Vec<String> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind == OwnershipErrorKind::RcFallbackOfDropType)
+        .map(|e| e.message.clone())
+        .collect();
+    assert!(
+        result.rc_values.get(fn_name).is_none_or(|m| m.is_empty()),
+        "a rejected binding must not also be RC-boxed: {:?}",
+        result.rc_values.get(fn_name)
+    );
+    assert!(
+        !result
+            .notes
+            .iter()
+            .any(|n| n.kind == OwnershipErrorKind::RcFallbackNote),
+        "a rejected binding must not also get the RC note: {:?}",
+        result.notes
+    );
+    hits
+}
+
+#[test]
+fn rc_fallback_of_drop_type_is_rejected_for_every_consume_spelling() {
+    // The loop-body spellings of B-2026-09-27-15 (a rebind, a keeping call, a
+    // consuming call, a zero-trip loop) and the branch spelling that reads the
+    // binding after the move: all were compiled with the RC note and all ran
+    // the body early, twice, or over freed memory.
+    let loop_bodies = [
+        "let p = q; println(f\"p={p.id}\");",
+        "let p = idr(q); println(f\"p={p.id}\");",
+        "let n = eat(q); println(f\"n={n}\");",
+    ];
+    for (i, body) in loop_bodies.iter().enumerate() {
+        for bound in ["1", "0"] {
+            let src = format!(
+                "{DROP_R}fn main() {{\n\
+                     let q = mk(5);\n\
+                     let mut i = 0;\n\
+                     while i < {bound} {{ {body} i = i + 1; }}\n\
+                     println(\"end\");\n\
+                 }}"
+            );
+            let hits = drop_type_rejections(&run(&src), "main");
+            assert_eq!(hits.len(), 1, "cell {i} bound {bound}: {hits:?}");
+            assert!(
+                hits[0].contains("'q'")
+                    && hits[0].contains("inside a loop")
+                    && hits[0].contains("`R`"),
+                "cell {i} bound {bound}: {}",
+                hits[0]
+            );
+        }
+    }
+    let src = format!(
+        "{DROP_R}fn run(c: bool) {{\n\
+             let q = mk(5);\n\
+             if c {{ let p = q; println(f\"p={{p.id}}\"); }}\n\
+             println(f\"q={{q.id}}\");\n\
+         }}"
+    );
+    let hits = drop_type_rejections(&run(&src), "run");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].contains("used again at line 9"), "{}", hits[0]);
+}
+
+#[test]
+fn rc_fallback_of_drop_type_is_rejected_through_a_field_and_a_type_argument() {
+    // B-2026-09-27-100: the FIELD twin. `W` has no `Drop` of its own; its `r`
+    // does, and moving `w.r` inside a loop RC-boxed `w`.
+    let field = "struct D { id: i64 }\n\
+                 impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.id}\") } }\n\
+                 fn keep(d: D) -> D { d }\n\
+                 struct W { r: D, s: D }\n\
+                 fn run(c: bool) {\n\
+                     let w = W { r: D { id: 1 }, s: D { id: 2 } };\n\
+                     let mut n = 0;\n\
+                     while n < 2 { if c and n == 0 { let k = keep(w.r); println(f\"k{k.id}\"); } n = n + 1; }\n\
+                 }";
+    let hits = drop_type_rejections(&run(field), "run");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(
+        hits[0].contains("'w'") && hits[0].contains("`W`"),
+        "{}",
+        hits[0]
+    );
+    // A `Drop` type reached only as a generic argument.
+    let generic = format!(
+        "{DROP_R}struct Bx[T] {{ v: T }}\n\
+         fn take(b: Bx[R]) {{ }}\n\
+         fn main() {{\n\
+             let b = Bx {{ v: mk(1) }};\n\
+             let mut i = 0;\n\
+             while i < 1 {{ take(b); i = i + 1; }}\n\
+         }}"
+    );
+    assert_eq!(drop_type_rejections(&run(&generic), "main").len(), 1);
+}
+
+#[test]
+fn rc_fallback_without_a_drop_body_is_still_inserted() {
+    // The rejection is for user `Drop` bodies only. The same loop over a type
+    // whose drop is memory alone keeps the RC, and so does a generic wrapper
+    // instantiated at a plain type: the box balances both on both backends.
+    for (ty, init) in [
+        ("R", "R { id: 5, tag: f\"t5\" }"),
+        ("Bx[i64]", "Bx { v: 5 }"),
+    ] {
+        let src = format!(
+            "struct R {{ id: i64, tag: String }}\n\
+             struct Bx[T] {{ v: T }}\n\
+             fn take(r: {ty}) {{ }}\n\
+             fn main() {{\n\
+                 let q: {ty} = {init};\n\
+                 let mut i = 0;\n\
+                 while i < 1 {{ take(q); i = i + 1; }}\n\
+             }}"
+        );
+        let result = run(&src);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| e.kind == OwnershipErrorKind::RcFallbackOfDropType),
+            "{ty}: {:?}",
+            result.errors
+        );
+        rc_entry(&result, "main", "q");
+    }
+}
+
 // ── @no_rc on struct ───────────────────────────────────────────
 
 #[test]

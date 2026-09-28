@@ -664,6 +664,24 @@ fn asan_named_local_argument_to_a_passthrough_callee() {
 /// makes these cells a ratchet; `cargo test --features llvm` alone does
 /// not.
 fn asan_declined_copy_param_rebind_keeps_the_callers_ownership() {
+    // B-2026-09-27-15 retired the `loop` cell: `r` moved inside a loop is RC
+    // fallback of a type that runs a `Drop` body, which `karac check` now
+    // rejects (E0514).
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
+        r#"
+shared struct Inner { v: i64 }
+struct R { id: i64, name: String, inner: Inner }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
+fn loopreb(r: R, n: i64) -> i64 {
+    let mut t = 0;
+    for i in 0..n { if i == 0 { let m = r; t = t + m.inner.v; } }
+    return t;
+}
+fn main() { println(f"loop={loopreb(mk(28), 3)}"); }
+"#,
+        &["r"],
+    );
     assert_clean_asan_run_min_allocs(
         r#"
 shared struct Inner { v: i64 }
@@ -694,11 +712,6 @@ fn two(r: R) -> i64 { let m = r; let n = m; return n.inner.v; }
 fn keeps(x: R) -> R { return x; }
 fn call(r: R) -> i64 { let w = keeps(r); return w.inner.v; }
 fn pair(a: R, b: R) -> i64 { let m = b; return m.inner.v + a.id; }
-fn loopreb(r: R, n: i64) -> i64 {
-    let mut t = 0;
-    for i in 0..n { if i == 0 { let m = r; t = t + m.inner.v; } }
-    return t;
-}
 fn deep(s: S) -> i64 { let m = s; return m.mid.d.v; }
 fn nodrop(n: N) -> i64 { let m = n; return m.inner.v; }
 fn selfref(nd: Node) -> i64 { let m = nd; return m.id; }
@@ -716,7 +729,6 @@ fn main() {
     println(f"two={two(mk(24))}");
     println(f"call={call(mk(25))}");
     println(f"pair={pair(mk(1), mk(26))}");
-    println(f"loop={loopreb(mk(28), 3)}");
     println(f"deep={deep(mks(29))}");
     println(f"nod={nodrop(mkn(30))}");
     println(f"self={selfref(mknode(31))}");
@@ -731,9 +743,9 @@ fn main() {
 "#,
         &[
             "dR21", "top=21", "dR22", "brT=22", "dR23", "brF=0", "dR24", "two=24", "dR25",
-            "call=25", "dR26", "dR1", "pair=27", "dR28", "loop=28", "dS29", "deep=29", "nod=30",
-            "dNd31", "self=31", "dP32", "ctl=32", "dR33", "rd=h33", "dR34", "rdi=34", "dR35",
-            "rdb=70", "dR36", "rdc=h36", "dR37", "rds=h37", "end",
+            "call=25", "dR26", "dR1", "pair=27", "dS29", "deep=29", "nod=30", "dNd31", "self=31",
+            "dP32", "ctl=32", "dR33", "rd=h33", "dR34", "rdi=34", "dR35", "rdb=70", "dR36",
+            "rdc=h36", "dR37", "rds=h37", "end",
         ],
         "b0906-52-declined-copy-param-rebind",
         50,

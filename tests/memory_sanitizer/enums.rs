@@ -4962,29 +4962,24 @@ fn asan_rc_fallback_boxed_enum_local_drops_through_its_box() {
     // As in the struct fixture, the promotion fires on the CONSUME's
     // presence rather than the trip count, so the never-entered loop is the
     // sharpest cell.
-    assert_clean_asan_run_min_allocs(
+    // B-2026-09-27-15 retired every cell whose boxed enum runs a `Drop` body:
+    // `karac check` now rejects RC fallback of such a type (E0514). The
+    // memory-only cell and the unpromoted control still run.
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{OWN}fn go() -> i64 {{ let t = mke(); let mut i = 0i64;\n\
                  \x20 while i < 0i64 {{ take(t); i = i + 1; }}\n\
                  \x20 return 1; }}\n"
         ),
-        &["drop E", "1"],
-        "rc_fb_enum_own_drop_loop_never_entered",
-        // 8, measured on both hosts; the 9 was an estimate. See
-        // B-2026-09-07-26 and [`asan_alloc_floor`].
-        8,
+        &["t"],
     );
-    assert_clean_asan_run_min_allocs(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{OWN}fn go() -> i64 {{ let t = mke(); let mut i = 0i64;\n\
                  \x20 while i < 3i64 {{ let k = take(t); i = i + k - k + 1; }}\n\
                  \x20 return 1; }}\n"
         ),
-        &["drop E", "1"],
-        "rc_fb_enum_own_drop_loop_entered",
-        // 8, measured on both hosts; the 9 was an estimate. See
-        // B-2026-09-07-26 and [`asan_alloc_floor`].
-        8,
+        &["t"],
     );
     // A `Drop`-bearing STRUCT PAYLOAD under an enum that declares no `Drop`
     // of its own: the payload-bodies walker is the piece that carries it,
@@ -4997,29 +4992,18 @@ fn asan_rc_fallback_boxed_enum_local_drops_through_its_box() {
              fn mke() -> E { return E.A(R { s: payload() }); }\n\
              fn take(e: E) -> i64 { return 1; }\n\
              fn main() { println(go()); }\n";
-    assert_clean_asan_run_min_allocs(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{PAYLOAD}fn go() -> i64 {{ let t = mke(); let mut i = 0i64;\n\
                  \x20 while i < 0i64 {{ take(t); i = i + 1; }}\n\
                  \x20 return 1; }}\n"
         ),
-        &["drop R 38", "1"],
-        "rc_fb_enum_payload_drop_body",
-        // AUDITED, per cell (B-2026-09-07-26). Every floor in this family is
-        // now the count `KARAC_ASAN_ALLOC_AUDIT=1` reports for that exact
-        // cell, not a family-wide estimate: most sit at 8, the `Drop`-body
-        // cells at 10, `rc_boxed_proj_mutated_destination` at 15 and
-        // `rc_fb_twin_shape_both_boxed` at 183. Until the predicate became
-        // floor-relative none of them could be checked — the comparison was
-        // against ASAN's raw process-wide count, whose host start-up floor
-        // (10 arm64 Linux, 199 macOS) exceeds most of these numbers on its
-        // own. See [`asan_alloc_floor`].
-        10,
+        &["t"],
     );
     // BOTH — the enum's own body first, then the payload's, which is the
     // interpreter's order and the one the straight-line call sequence in
     // `register_rc_fallback_box_drop` has to reproduce.
-    assert_clean_asan_run_min_allocs(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         "struct R { s: String }\n\
              impl Drop for R { fn drop(mut ref self) { println(f\"drop R {self.s.len()}\"); } }\n\
              enum E { A(R), B }\n\
@@ -5032,18 +5016,7 @@ fn asan_rc_fallback_boxed_enum_local_drops_through_its_box() {
              \x20 while i < 0i64 { take(t); i = i + 1; }\n\
              \x20 return 1; }\n\
              fn main() { println(go()); }\n",
-        &["drop E", "drop R 38", "1"],
-        "rc_fb_enum_own_and_payload_drop",
-        // AUDITED, per cell (B-2026-09-07-26). Every floor in this family is
-        // now the count `KARAC_ASAN_ALLOC_AUDIT=1` reports for that exact
-        // cell, not a family-wide estimate: most sit at 8, the `Drop`-body
-        // cells at 10, `rc_boxed_proj_mutated_destination` at 15 and
-        // `rc_fb_twin_shape_both_boxed` at 183. Until the predicate became
-        // floor-relative none of them could be checked — the comparison was
-        // against ASAN's raw process-wide count, whose host start-up floor
-        // (10 arm64 Linux, 199 macOS) exceeds most of these numbers on its
-        // own. See [`asan_alloc_floor`].
-        10,
+        &["t"],
     );
     // The second axis on its own: NO user `Drop` anywhere in the program,
     // so nothing here is about a body. The RC-boxed enum still leaked its

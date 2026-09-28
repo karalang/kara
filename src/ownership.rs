@@ -569,6 +569,14 @@ pub enum OwnershipErrorKind {
     /// stored never runs its own. See `crate::moved_field_refill` for the
     /// mechanism and for why the fix is a rejection rather than a repair.
     MovedFieldRefilledAcrossCall,
+    /// B-2026-09-27-15 — a value whose type runs a user `Drop` body (its own,
+    /// or one reachable inside it by value) would need RC fallback: it is
+    /// moved and then used again on a path the move does not dominate (a move
+    /// inside a loop that runs again, or on one branch before a later use).
+    /// BLOCKING. RC fallback shares the value, and a `Drop` body has no shared
+    /// meaning: whichever owner runs it leaves the others holding a destroyed
+    /// value, and both backends ran it early, twice or over freed memory.
+    RcFallbackOfDropType,
     OwnershipCycle,
     /// A value of a `@no_rc` type or inside a `#[no_rc]` function
     /// would require RC fallback.
@@ -773,6 +781,9 @@ pub(crate) fn class_for_ownership_error_kind(
         // (as a call receiver) after one of its fields was moved out — so it
         // shares `UseAfterMove`'s class rather than going unclassified.
         OwnershipErrorKind::MovedFieldRefilledAcrossCall => Some(DC::OwnershipMoveAfterUse),
+        // A move followed by a use the move does not dominate: the same
+        // move-after-use substance, rejected rather than RC-boxed.
+        OwnershipErrorKind::RcFallbackOfDropType => Some(DC::OwnershipMoveAfterUse),
 
         OwnershipErrorKind::OwnershipCycle
         | OwnershipErrorKind::NoRcViolation
@@ -1740,6 +1751,9 @@ impl<'a> OwnershipChecker<'a> {
         self.check_cycles();
         self.check_items();
         self.promote_rc_to_arc();
+        // B-2026-09-27-15 — before the notes, so a rejected binding is reported
+        // once, as the error, and not also as an RC it will never get.
+        self.emit_rc_fallback_drop_type_errors();
         self.emit_rc_fallback_notes();
         // Fallible-allocation: under `panic_on_alloc_failure = false`, every
         // RC-fallback site becomes a hard error (phase-8-stdlib-floor item 6).

@@ -8516,6 +8516,8 @@ When the compiler detects that a value must be simultaneously available through 
    }
    ```
 
+**Types with a user `Drop` body are never RC-shared (E0514).** When the value that would need RC fallback has a type that runs a user `Drop` body — its own, or one reachable inside it by value, through a field or a type argument — the program is rejected instead: `error[ownership]` E0514 at the other use, naming the consume. RC fallback makes one value reachable from several owners, and a destructor has no shared meaning: whichever owner ran it would leave the others holding a destroyed value, and deferring it to the last owner would make its timing depend on which paths ran. The fix is the restructuring the RC note already asks for — move the value on one path only (out of the loop, or reassigned before the next use), or pass it by `ref` where the callee only reads it. A type whose drop is memory only (`String`, `Vec`, a plain struct of them) keeps RC fallback, and a `shared` type is already reference-counted and is not affected.
+
 **Note policy:** every RC insertion, regardless of which trigger caused it, emits a compiler note identifying the trigger and the value. This is `warn_above_0` behavior — the note fires by default and names the specific trigger so the programmer knows exactly how to restructure to eliminate it.
 
 #### RC Dataflow Specification

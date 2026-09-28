@@ -1554,25 +1554,24 @@ fn asan_rc_fallback_boxed_local_drops_through_its_box() {
              fn main() { println(go()); }\n";
     // The loop-of-consume promotion fires on the CONSUME's presence, not on
     // the trip count, so the never-entered loop is the sharpest cell.
-    assert_clean_asan_run_min_allocs(
+    // B-2026-09-27-15 retired cells 1-4: every box here holds a type that runs a
+    // `Drop` body, and `karac check` now rejects RC fallback of such a type
+    // (E0514). The no-`Drop` control (cell 5) still runs.
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{OWN}fn go() -> i64 {{ let t = mkp(9); let mut i = 0i64;\n\
                  \x20 while i < 0i64 {{ takep(t); i = i + 1; }}\n\
                  \x20 return 1; }}\n"
         ),
-        &["drop P 38", "1"],
-        "rc_fb_own_drop_loop_never_entered",
-        10,
+        &["t"],
     );
-    assert_clean_asan_run_min_allocs(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{OWN}fn go() -> i64 {{ let t = mkp(9); let mut i = 0i64;\n\
                  \x20 while i < 3i64 {{ let k = takep(t); i = i + k - k + 1; }}\n\
                  \x20 return 1; }}\n"
         ),
-        &["drop P 38", "1"],
-        "rc_fb_own_drop_loop_entered",
-        10,
+        &["t"],
     );
     // A struct with NO `Drop` of its own but a Drop-BEARING FIELD: the
     // bodies-only walk is registered on the same slot and had the same
@@ -1586,27 +1585,23 @@ fn asan_rc_fallback_boxed_local_drops_through_its_box() {
              fn takep(p: P) -> i64 { return p.b; }\n\
              fn takes(s: S) -> i64 { return s.v.len(); }\n\
              fn main() { println(go()); }\n";
-    assert_clean_asan_run_min_allocs(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{FIELD}fn go() -> i64 {{ let t = mkp(9); let mut i = 0i64;\n\
                  \x20 while i < 0i64 {{ takep(t); i = i + 1; }}\n\
                  \x20 return 1; }}\n"
         ),
-        &["drop S 38", "1"],
-        "rc_fb_field_drop_whole_consume",
-        10,
+        &["t"],
     );
     // The FIELD-projection consume. On the parent this printed NOTHING at
     // all on the compiled backends — the body was lost, not merely misread.
-    assert_clean_asan_run_min_allocs(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{FIELD}fn go() -> i64 {{ let t = mkp(9); let mut i = 0i64;\n\
                  \x20 while i < 0i64 {{ let s = t.a; i = i + s.v.len(); }}\n\
                  \x20 return 1; }}\n"
         ),
-        &["drop S 38", "1"],
-        "rc_fb_field_drop_projection_consume",
-        10,
+        &["t"],
     );
     // CONTROL — no `Drop` anywhere, so the box's own heap-field walk is
     // still the whole answer and nothing may change for it.
@@ -1664,34 +1659,29 @@ fn asan_rc_fallback_boxed_tuple_local_drops_through_its_box() {
              fn main() { println(go()); }\n";
     // As in the struct and enum fixtures, the promotion fires on the
     // CONSUME's presence rather than the trip count.
-    assert_clean_asan_run_min_allocs(
+    // B-2026-09-27-15 retired every cell whose boxed tuple carries a `Drop` body:
+    // `karac check` now rejects RC fallback of such a type (E0514). The
+    // memory-only cells and the controls still run.
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{OWN}fn go() -> i64 {{ let t = mkt(); let mut i = 0i64;\n\
                  \x20 while i < 0i64 {{ take(t); i = i + 1; }}\n\
                  \x20 return 1; }}\n"
         ),
-        &["drop S", "1"],
-        "rc_fb_tuple_elem_drop_loop_never_entered",
-        // 8, measured on both hosts; the 9 was an estimate. See
-        // B-2026-09-07-26 and [`asan_alloc_floor`].
-        8,
+        &["t"],
     );
-    assert_clean_asan_run_min_allocs(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{OWN}fn go() -> i64 {{ let t = mkt(); let mut i = 0i64;\n\
                  \x20 while i < 3i64 {{ let k = take(t); i = i + k - k + 1; }}\n\
                  \x20 return 1; }}\n"
         ),
-        &["drop S", "1"],
-        "rc_fb_tuple_elem_drop_loop_entered",
-        // 8, measured on both hosts; the 9 was an estimate. See
-        // B-2026-09-07-26 and [`asan_alloc_floor`].
-        8,
+        &["t"],
     );
     // The NESTED spelling the row flagged as untested: the element is a
     // struct that CARRIES a `Drop`-bearing field rather than declaring
     // `Drop` itself, so the body is reached one level down.
-    assert_clean_asan_run_min_allocs(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         "struct R { s: String }\n\
              impl Drop for R { fn drop(mut ref self) { println(f\"drop R {self.s.len()}\"); } }\n\
              struct W { r: R, n: i64 }\n\
@@ -1703,22 +1693,11 @@ fn asan_rc_fallback_boxed_tuple_local_drops_through_its_box() {
              \x20 while i < 0i64 { take(t); i = i + 1; }\n\
              \x20 return 1; }\n\
              fn main() { println(go()); }\n",
-        &["drop R 38", "1"],
-        "rc_fb_tuple_nested_field_drop_body",
-        // AUDITED, per cell (B-2026-09-07-26). Every floor in this family is
-        // now the count `KARAC_ASAN_ALLOC_AUDIT=1` reports for that exact
-        // cell, not a family-wide estimate: most sit at 8, the `Drop`-body
-        // cells at 10, `rc_boxed_proj_mutated_destination` at 15 and
-        // `rc_fb_twin_shape_both_boxed` at 183. Until the predicate became
-        // floor-relative none of them could be checked — the comparison was
-        // against ASAN's raw process-wide count, whose host start-up floor
-        // (10 arm64 Linux, 199 macOS) exceeds most of these numbers on its
-        // own. See [`asan_alloc_floor`].
-        10,
+        &["t"],
     );
     // An ENUM element with a `Drop` of its own — body through the tuple
     // walk, and the payload memory the aggregate walk could not reach.
-    assert_clean_asan_run_min_allocs(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         "enum E { A(String), B }\n\
              impl Drop for E { fn drop(mut ref self) { println(\"drop E\"); } }\n\
              fn seed() -> i64 { env.args().len() }\n\
@@ -1729,18 +1708,7 @@ fn asan_rc_fallback_boxed_tuple_local_drops_through_its_box() {
              \x20 while i < 0i64 { take(t); i = i + 1; }\n\
              \x20 return 1; }\n\
              fn main() { println(go()); }\n",
-        &["drop E", "1"],
-        "rc_fb_tuple_enum_elem_own_drop",
-        // AUDITED, per cell (B-2026-09-07-26). Every floor in this family is
-        // now the count `KARAC_ASAN_ALLOC_AUDIT=1` reports for that exact
-        // cell, not a family-wide estimate: most sit at 8, the `Drop`-body
-        // cells at 10, `rc_boxed_proj_mutated_destination` at 15 and
-        // `rc_fb_twin_shape_both_boxed` at 183. Until the predicate became
-        // floor-relative none of them could be checked — the comparison was
-        // against ASAN's raw process-wide count, whose host start-up floor
-        // (10 arm64 Linux, 199 macOS) exceeds most of these numbers on its
-        // own. See [`asan_alloc_floor`].
-        8,
+        &["t"],
     );
     // MEMORY ONLY, no user `Drop` anywhere in either program: the enum
     // element and the `Option` element each leaked their payload to the
@@ -1860,24 +1828,19 @@ fn asan_rc_fallback_box_runs_its_own_types_drop_not_a_twins() {
              fn mkq() -> Q { return Q { s: payload(), n: 2i64 }; }\n\
              fn takep(p: P) -> i64 { return p.n; }\n\
              fn takeq(q: Q) -> i64 { return q.n; }\n";
-    assert_clean_asan_run_min_allocs(
+    // B-2026-09-27-15 retired both cells: every box here holds a type that
+    // runs a `Drop` body, and RC fallback of such a type is now rejected by
+    // `karac check` (E0514), so no box of either twin can be built.
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{TWINS}fn go() -> i64 {{ let t = mkp(); let mut i = 0i64;\n\
                  \x20 while i < 0i64 {{ takep(t); i = i + 1; }}\n\
                  \x20 return 1; }}\n\
                  fn main() {{ println(go()); }}\n"
         ),
-        &["drop P 38", "1"],
-        "rc_fb_twin_shape_single_box",
-        10,
+        &["t"],
     );
-    // BOTH twins promoted in one module. The box heap type is
-    // `{i64, <value>}`, and it is interned structurally too, so the two
-    // boxes are ONE LLVM type — which is what the per-box-type memo in
-    // `register_rc_fallback_box_drop` is keyed on. Naming the value
-    // correctly is necessary but not sufficient if the memo then hands the
-    // second box the first one's fn.
-    assert_clean_asan_run_min_allocs(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         &format!(
             "{TWINS}fn gop() -> i64 {{ let t = mkp(); let mut i = 0i64;\n\
                  \x20 while i < 0i64 {{ takep(t); i = i + 1; }}\n\
@@ -1887,29 +1850,7 @@ fn asan_rc_fallback_box_runs_its_own_types_drop_not_a_twins() {
                  \x20 return 2; }}\n\
                  fn main() {{ println(gop()); println(goq()); }}\n"
         ),
-        &["drop P 38", "1", "drop Q 38", "2"],
-        "rc_fb_twin_shape_both_boxed",
-        // Measured: 183 on macOS 26.6 / M5, 75 on arm64 Linux, 64-72 on
-        // x86_64 Linux. The old note here called that HOST-dependence and
-        // guessed at a per-`println` cost on macOS. It is not the host: the
-        // count moves ON ONE HOST with CPU CONTENTION (B-2026-09-09-4).
-        // Measured on this box, affinity held constant, only load varying:
-        //
-        //     quiet    72        8 CPU hogs   62        taskset -c 0   54
-        //
-        // and it returns to 72 when the load goes away. `par` work
-        // DISTRIBUTION is the variable — a saturated box spreads less work
-        // across workers and so allocates fewer per-worker blocks — which
-        // is why re-running the test alone always "fixes" it and why a
-        // full-suite run is where it fails. A 60 floor is inside that
-        // range, so the cell failed the suite on a green tree.
-        //
-        // Floored at lowest-observed minus twice the observed swing
-        // (64 - 2*7), rounded down. A folded-away payload still trips it:
-        // the sibling `single_box` cell pins the same mechanism at a
-        // contention-INSENSITIVE 10 (bit-identical across three sweeps), so
-        // a collapse here lands far below 40.
-        40,
+        &["t", "u"],
     );
 }
 
@@ -2460,6 +2401,7 @@ fn main() {
     );
 }
 
+/// B-2026-09-27-15 retired every cell here: each moves the param `p` inside a loop, which is RC fallback of a type that runs a `Drop` body, and `karac check` now rejects that (E0514). The program is kept as the rejection pin.
 #[test]
 fn asan_in_loop_rearmed_drop_flag_frees_each_iteration_exactly_once() {
     // B-2026-09-02-6 — the heap half of the in-loop drop-flag re-arm.
@@ -2489,7 +2431,7 @@ fn asan_in_loop_rearmed_drop_flag_frees_each_iteration_exactly_once() {
     //
     // Measured 0 definitely/indirectly lost under valgrind, and
     // byte-identical on all four surfaces.
-    assert_clean_asan_run(
+    crate::common::assert_rc_fallback_of_drop_type_rejected(
         r#"
 struct R { id: i64, xs: Vec[String] }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}-{self.xs.len()}") } }
@@ -2546,14 +2488,7 @@ fn main() {
     println("done");
 }
 "#,
-        &[
-            "dR90-8", "dR91-8", "dR92-8", "dR5-8", "a188", "dR60-8", "dR61-8", "dR62-8", "dR6-8",
-            "b128", "dR70-8", "dR7-8", "c7", "dR90-8", "dR91-8", "dR92-8", "dR5-8", "a188",
-            "dR60-8", "dR61-8", "dR62-8", "dR6-8", "b128", "dR70-8", "dR7-8", "c7", "dR90-8",
-            "dR91-8", "dR92-8", "dR5-8", "a188", "dR60-8", "dR61-8", "dR62-8", "dR6-8", "b128",
-            "dR70-8", "dR7-8", "c7", "done",
-        ],
-        "b6-in-loop-drop-flag-rearm",
+        &["p", "p", "p"],
     );
 }
 
@@ -2758,21 +2693,12 @@ fn main() {
 /// the owner, and its body must still run (`s100 dR100 n0 end`).
 #[test]
 fn asan_cond_stored_rc_promoted_param_stays_readable_and_drops_once() {
-    if !asan_available() {
-        eprintln!("[asan_cond_stored_rc_param] ASAN unavailable — skipping");
-        return;
-    }
-    for (read, want_s, label) in [
-        ("{r.id}", "s100", "scalar"),
-        ("{r.name}", "sh100", "string"),
-        ("{r.inner.v}", "s100", "shared"),
-    ] {
-        for (k, want) in [
-            ("true", format!("{want_s}\nn1\ndR100\nend\n")),
-            ("false", format!("{want_s}\ndR100\nn0\nend\n")),
-        ] {
-            let src = format!(
-                r#"
+    // B-2026-09-27-15 retired every cell here: `r` stored on one path and read
+    // after it is RC fallback of a type that runs a `Drop` body, which
+    // `karac check` now rejects (E0514). The program is kept as the pin.
+    for read in ["{r.id}", "{r.name}", "{r.inner.v}"] {
+        let src = format!(
+            r#"
 shared struct Inner {{ v: i64 }}
 struct R {{ id: i64, name: String, inner: Inner }}
 impl Drop for R {{ fn drop(mut ref self) {{ println(f"dR{{self.id}}") }} }}
@@ -2783,32 +2709,13 @@ impl Box2 {{
 }}
 fn main() {{
   let mut b = Box2 {{ xs: Vec.new() }};
-  b.m(mk(100), {k});
+  b.m(mk(100), true);
   println(f"n{{b.xs.len()}}");
   println("end");
 }}
 "#
-            );
-            let Some((stdout, status)) =
-                run_under_asan(&src, &format!("asan_cond_stored_rc_param_{label}_{k}"))
-            else {
-                eprintln!("[asan_cond_stored_rc_param] setup failed — skipping");
-                return;
-            };
-            assert!(
-                status.success(),
-                "[asan_cond_stored_rc_param/{label}/k={k}] ASAN reported an error \
-                     (exit {:?}). A SIGSEGV means the store nulled a `shared` field the \
-                     read still needs; a double free means the box's value-drop fired on \
-                     the path that handed the value away.\nstdout:\n{stdout}",
-                status.code()
-            );
-            assert_eq!(
-                stdout, want,
-                "[asan_cond_stored_rc_param/{label}/k={k}] output diverges from the \
-                     interpreter"
-            );
-        }
+        );
+        crate::common::assert_rc_fallback_of_drop_type_rejected(&src, &["r"]);
     }
 }
 

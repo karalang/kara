@@ -766,3 +766,54 @@ pub fn assert_check_clean(
     msg.push_str(src);
     panic!("{msg}");
 }
+
+/// B-2026-09-27-15 — RC fallback may not share a value whose type runs a user
+/// `Drop` body; `karac check` rejects it with E0514 instead. Runs the same
+/// front end the E2E harnesses run and asserts `src` draws exactly one E0514
+/// per name in `bindings`, each naming its binding. The fixtures that used to
+/// pin how such a box ran its body keep their programs through this, so what
+/// they measured stays on record next to the rule that retired it.
+pub fn assert_rc_fallback_of_drop_type_rejected(src: &str, bindings: &[&str]) {
+    let mut parsed = karac::parse(src);
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors
+    );
+    karac::prepare_for_resolve(&mut parsed.program);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    assert_check_clean(&resolved, &typed, src);
+    karac::lower(&mut parsed.program, &typed);
+    let ownership = karac::ownershipcheck(&parsed.program, &typed);
+    let hits: Vec<&str> = ownership
+        .errors
+        .iter()
+        .filter(|e| e.kind == karac::ownership::OwnershipErrorKind::RcFallbackOfDropType)
+        .map(|e| e.message.as_str())
+        .collect();
+    assert_eq!(
+        hits.len(),
+        bindings.len(),
+        "expected one E0514 per binding {bindings:?}, got {hits:#?}"
+    );
+    for b in bindings {
+        let quoted = format!("'{b}'");
+        assert!(
+            hits.iter().any(|m| m.contains(&quoted)),
+            "no E0514 names {quoted}: {hits:#?}"
+        );
+    }
+    let other: Vec<&karac::ownership::OwnershipError> = ownership
+        .errors
+        .iter()
+        .filter(|e| {
+            e.kind != karac::ownership::OwnershipErrorKind::RcFallbackOfDropType
+                && ownership_kind_blocks_production(&e.kind)
+        })
+        .collect();
+    assert!(
+        other.is_empty(),
+        "other blocking ownership errors: {other:#?}"
+    );
+}

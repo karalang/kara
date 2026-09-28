@@ -92,27 +92,29 @@ impl WebSocket {
     // first read returns. v2 may re-park between request-read and
     // response-write for high-concurrency robustness.
     //
-    // **By-value listener argument.** The codegen lowering
+    // **Borrowed listener argument.** The codegen lowering
     // extracts `listener.fd` via the existing
     // `extract_fd_from_tcp_struct` helper (same shape as
-    // `TcpListener.accept` consuming `ref self`), so the listener
-    // is not consumed at the kara value-model level — the
-    // listener's close-on-drop fires at the caller's scope exit
-    // independently of this call.
+    // `TcpListener.accept` taking `ref self`), and the listener is
+    // not consumed — its close-on-drop fires at the caller's scope
+    // exit. It is `ref` rather than by value (B-2026-09-27-15): an
+    // accept loop passing an owned listener each iteration moved it
+    // inside the loop, which RC fallback may not share for a type
+    // that runs a user `Drop` body (E0514).
     //
     // **v1 limitations** (deferred to 9e.3): no request
     // validation beyond Sec-WebSocket-Key presence (no
     // Upgrade / Connection / Version header checks); no
     // subprotocol / extension negotiation; no handshake-timeout.
     #[compiler_builtin]
-    fn accept(listener: TcpListener) -> Result[WebSocket, TcpError]
+    fn accept(listener: ref TcpListener) -> Result[WebSocket, TcpError]
         with sends(Network) receives(Network)
     {
         Result.Err(TcpError.Other(-1))
     }
 
     // Phase 6 line 236 slice 3 — WebSocket-over-TLS entry point.
-    // Same shape as `accept(listener: TcpListener)` but the
+    // Same shape as `accept(listener: ref TcpListener)` but the
     // underlying connection is TLS-wrapped per `TlsListener`'s
     // configured cert/key. Composes:
     //   1. Park on listener-readability
@@ -144,7 +146,7 @@ impl WebSocket {
     // collapse into the single `-1`-payload Err; a richer error split is
     // additive when a real consumer needs it.
     #[compiler_builtin]
-    fn accept_tls(listener: TlsListener) -> Result[WebSocket, TcpError]
+    fn accept_tls(listener: ref TlsListener) -> Result[WebSocket, TcpError]
         with sends(Network) receives(Network)
     {
         Result.Err(TcpError.Other(-1))

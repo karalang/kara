@@ -4812,67 +4812,26 @@ fn test_rc_promoted_param_move_suppression_is_sound_at_o0_and_on_the_jit() {
                }\n";
     write(&tmp.join("rc.kara"), src);
 
-    // The interpreter is the oracle: it has no slot layout to corrupt.
-    let want = {
-        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
-            .current_dir(&tmp)
-            .args(["run", "--interp", "rc.kara"])
-            .output()
-            .expect("spawn karac run --interp");
-        assert!(
-            out.status.success(),
-            "interpreter run failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    };
-    assert_eq!(
-        want, "dR90\ndR91\ndR5\na96\ndR40\ndR41\ndR42\ndR7\nb89\n",
-        "oracle drifted — the fixture, not the compiler, needs re-measuring"
-    );
-
-    // `karac run` — the LLJIT lane, which runs at OptimizationLevel::None.
-    // Pre-fix this exited 139 (SIGSEGV) partway through `f`, so the status
-    // assertion is as load-bearing as the output one.
+    // B-2026-09-27-15 retired this program: moving `p` and `q` inside a loop is RC
+    // fallback of a type that runs a `Drop` body, which `karac check` now
+    // rejects (E0514) and `karac build` / `karac run` refuse with it. What it
+    // measured on the JIT and at -O0 is no longer reachable.
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["run", "rc.kara"])
+        .args(["check", "rc.kara"])
         .output()
-        .expect("spawn karac run");
-    assert!(
-        out.status.success(),
-        "karac run (JIT) died: status {:?}, stderr {}",
-        out.status.code(),
+        .expect("spawn karac check");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    assert!(!out.status.success(), "karac check accepted it:\n{text}");
     assert_eq!(
-        String::from_utf8_lossy(&out.stdout),
-        want,
-        "JIT lane must match the interpreter"
+        text.matches("cannot be shared by RC fallback").count(),
+        2,
+        "expected 2 E0514 error(s):\n{text}"
     );
-
-    // `KARAC_OPT_LEVEL=0 karac build` — the same unoptimized surface reached
-    // through AOT, which is where the wrong VALUE (`a91`) showed up. Skips
-    // gracefully when the runtime archive is absent and the link fails.
-    let built = Command::new(env!("CARGO_BIN_EXE_karac"))
-        .current_dir(&tmp)
-        .env("KARAC_OPT_LEVEL", "0")
-        .args(["build", "rc.kara"])
-        .output();
-    let exe = tmp.join("rc");
-    if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
-        let out = Command::new(&exe).output().expect("run -O0 binary");
-        assert!(
-            out.status.success(),
-            "-O0 binary died: status {:?}",
-            out.status.code()
-        );
-        assert_eq!(
-            String::from_utf8_lossy(&out.stdout),
-            want,
-            "KARAC_OPT_LEVEL=0 build must match the interpreter"
-        );
-    }
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -4933,61 +4892,26 @@ fn test_rc_promoted_param_reached_through_a_let_rebind_frees_once() {
                fn main() { println(f\"a{f(mk(5))}\") }\n";
     write(&tmp.join("rc.kara"), src);
 
-    // The interpreter is the oracle: it has no slot layout to corrupt.
-    let want = {
-        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
-            .current_dir(&tmp)
-            .args(["run", "--interp", "rc.kara"])
-            .output()
-            .expect("spawn karac run --interp");
-        assert!(
-            out.status.success(),
-            "interpreter run failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    };
-    assert_eq!(
-        want, "dR90\ndR91\ndR5\na96\n",
-        "oracle drifted — the fixture, not the compiler, needs re-measuring"
-    );
-
+    // B-2026-09-27-15 retired this program: moving `p` inside a loop is RC
+    // fallback of a type that runs a `Drop` body, which `karac check` now
+    // rejects (E0514) and `karac build` / `karac run` refuse with it. What it
+    // measured on the JIT and at -O0 is no longer reachable.
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["run", "rc.kara"])
+        .args(["check", "rc.kara"])
         .output()
-        .expect("spawn karac run");
-    assert!(
-        out.status.success(),
-        "karac run (JIT) died: status {:?}, stderr {}",
-        out.status.code(),
+        .expect("spawn karac check");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    assert!(!out.status.success(), "karac check accepted it:\n{text}");
     assert_eq!(
-        String::from_utf8_lossy(&out.stdout),
-        want,
-        "JIT lane must match the interpreter"
+        text.matches("cannot be shared by RC fallback").count(),
+        1,
+        "expected 1 E0514 error(s):\n{text}"
     );
-
-    let built = Command::new(env!("CARGO_BIN_EXE_karac"))
-        .current_dir(&tmp)
-        .env("KARAC_OPT_LEVEL", "0")
-        .args(["build", "rc.kara"])
-        .output();
-    let exe = tmp.join("rc");
-    if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
-        let out = Command::new(&exe).output().expect("run -O0 binary");
-        assert!(
-            out.status.success(),
-            "-O0 binary died: status {:?}",
-            out.status.code()
-        );
-        assert_eq!(
-            String::from_utf8_lossy(&out.stdout),
-            want,
-            "KARAC_OPT_LEVEL=0 build must match the interpreter"
-        );
-    }
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

@@ -1766,7 +1766,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let fd_val = self.compile_expr(&_args[0].value)?;
             return self.lower_websocket_from_fd(fd_val);
         }
-        // Phase 6 line 17 slice 9e.2 — `WebSocket.accept(listener: TcpListener) -> WebSocket`.
+        // Phase 6 line 17 slice 9e.2 — `WebSocket.accept(listener: ref TcpListener) -> WebSocket`.
         // Parks on listener-readability then runs accept(2) + HTTP
         // upgrade handshake via the runtime FFI. Routes through
         // `lower_websocket_accept` in `src/codegen/tcp.rs`.
