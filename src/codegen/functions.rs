@@ -1496,6 +1496,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.conc.coro_park_counter = 0;
         self.variables.clear();
         self.var_types.var_type_names.clear();
+        // B-2026-09-27-130 — the instantiation record is name-keyed too, and
+        // was never cleared, so a param or local sharing a name with one in an
+        // EARLIER function read that function's type: `fn shows(h: Ho[S])`
+        // compiled first made `pk(h: Hc, ..)`'s inline `h` look like a boxed
+        // `Ho[S]` to every argument-site copy and disarm, which crashed at the
+        // first forward. Each function records its own params
+        // (`compile_function`'s param loop) and locals (`record_var_enum_inst_te`).
+        self.var_types.var_enum_inst_te.clear();
         // Per-binding layout carrier (slice 5): function-scoped like
         // `variables`, so a `layout`-named local in one function can't bleed
         // its SoA-ness into a same-named binding in the next.

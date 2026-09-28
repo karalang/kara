@@ -3157,9 +3157,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// returns the param (bare, through a call, or as part of its result) or
     /// moves it into a place that outlives the call.
     pub(super) fn flagged_array_arg_stays_with_caller(&self, handed: &Expr, name: &str) -> bool {
-        if !self.payload_vars.cond_handback_array_params.contains(name) {
-            return false;
-        }
+        // B-2026-09-27-130 — or a user-enum param adopted by the conditional
+        // hand-back registration (`cond_handback_optres_params`), passed to a
+        // by-value param of that same enum. An INLINE user-enum payload's
+        // bodies are the caller's at every argument site (B-2026-09-25-19), so
+        // `eat(h)` runs none of them and the adopted slot is still the only
+        // owner of the body on this path; disarming it lost the body
+        // (`x end` against the interpreter's `x dS4 end`). The interpreter's
+        // twin is `user_drop_array_arg_stays_with_caller`'s enum arm.
+        let enum_name = if self.payload_vars.cond_handback_array_params.contains(name) {
+            None
+        } else {
+            match self.adopted_inline_user_enum_param_name(name) {
+                Some(en) => Some(en),
+                None => return false,
+            }
+        };
         let ExprKind::Call { callee, args } = &handed.kind else {
             return false;
         };
@@ -3185,16 +3198,53 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(param) = f.params.get(i) else {
             return false;
         };
-        let Some((elem_te, n)) = self.array_elem_and_len(&param.ty) else {
-            return false;
+        let shape_ok = match &enum_name {
+            Some(en) => matches!(&param.ty.kind, TypeKind::Path(p)
+                if p.segments.len() == 1 && p.segments[0] == *en),
+            None => self
+                .array_elem_and_len(&param.ty)
+                .is_some_and(|(elem_te, n)| {
+                    n > 0 && !self.array_param_elem_is_callee_owned(&elem_te)
+                }),
         };
-        n > 0
-            && !self.array_param_elem_is_callee_owned(&elem_te)
+        shape_ok
             && !crate::ast::fn_returns_param(f, i)
             && !crate::ast::fn_returns_param_via_call(program, f, i)
             && crate::ast::fn_returns_param_part_paths(f, i).is_empty()
             && !crate::ast::fn_moves_param_into_outliving_place(f, i)
             && !crate::ast::fn_moves_param_into_outliving_place_via_call(program, f, i)
+    }
+
+    /// B-2026-09-27-130 — the enum name of `name` when it is a by-value
+    /// param of the current function that the conditional hand-back
+    /// registration adopted as a non-shared USER enum (not `Option` /
+    /// `Result`) whose payload is laid out INLINE here. A boxed payload is
+    /// callee-owned (`mixed_path_boxed_enum_param_callee_owned`) and never
+    /// reaches the flag.
+    fn adopted_inline_user_enum_param_name(&self, name: &str) -> Option<String> {
+        if !self.payload_vars.cond_handback_optres_params.contains(name) {
+            return None;
+        }
+        let program = self.program_snapshot.as_deref()?;
+        let f =
+            crate::codegen::declarations::find_function_ast(program, &self.fn_ctx.current_fn_name)?;
+        let p = f.params.iter().find(
+            |p| matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(b) if b == name),
+        )?;
+        let TypeKind::Path(tp) = &p.ty.kind else {
+            return None;
+        };
+        if tp.segments.len() != 1 || tp.segments[0] == "Option" || tp.segments[0] == "Result" {
+            return None;
+        }
+        let en = tp.segments[0].clone();
+        (self.user_enum_boxed_payload_variants(&p.ty).is_empty()
+            && self
+                .type_decls
+                .enum_layouts
+                .get(en.as_str())
+                .is_some_and(|l| !l.is_shared))
+        .then_some(en)
     }
 
     /// B-2026-09-23-25 — the CALLEE-OWNED sibling of
