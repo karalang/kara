@@ -909,13 +909,17 @@ impl<'a> super::Interpreter<'a> {
                                 let optres = matches!(&p.ty.kind, crate::ast::TypeKind::Path(tp)
                                     if tp.segments.len() == 1
                                         && matches!(tp.segments[0].as_str(), "Option" | "Result"));
+                                // B-2026-09-28-67 — or STORED on some paths only
+                                // (`if c { self.xs.push(t) }`), which the frame
+                                // adopts the same way; without the seed the
+                                // path that did not store ran no payload body.
                                 let adopt = optres
                                     && self.pending_param_drop_bindings.contains(&n)
-                                    && crate::ast::fn_conditionally_returns_param_bare(
+                                    && (crate::ast::fn_conditionally_returns_param_bare(
                                         Some(self.program),
                                         f,
                                         i,
-                                    );
+                                    ) || crate::ast::fn_conditionally_stores_param(f, i));
                                 // B-2026-09-27-128 — a generic method's `Option[T]`
                                 // resolved to the bound value's type, as the
                                 // free-fn frame does.

@@ -7058,6 +7058,50 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// The payload `TypeExpr` of an `Option[T]` type expr, else `None`.
+    /// B-2026-09-28-67 — the WHOLE drop of a by-value `Option` / `Result`
+    /// param value (payload bodies, interior and heap box), for the
+    /// conditional-whole-store registration in `compile_function`'s parameter
+    /// loop: the same tag-guarded drop a container's drain runs for the element
+    /// on the path that stores it.
+    pub(super) fn emit_optres_param_whole_drop_fn(
+        &mut self,
+        te: &TypeExpr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let memory = if let Some(payload) = Self::option_payload_te(te) {
+            self.emit_option_drop_fn(&payload)?
+        } else {
+            let (ok, err) = Self::result_payload_tes(te)?;
+            self.emit_result_drop_fn(&ok, &err)?
+        };
+        // The memory drop frees the payload's fields and the box but runs no
+        // user `Drop` body; the bodies walk runs them first, reading the
+        // payload through the box before it is freed.
+        let bodies = self.emit_optres_payload_user_drop_bodies_fn(te)?;
+        let fn_name = format!(
+            "__karac_optres_param_whole_drop_{}",
+            Self::display_mangle_te(te)
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let f = self
+            .module
+            .add_function(&fn_name, fn_ty, Some(inkwell::module::Linkage::Internal));
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        let slot = f.get_nth_param(0).unwrap().into_pointer_value();
+        self.builder.build_call(bodies, &[slot.into()], "").unwrap();
+        self.builder.build_call(memory, &[slot.into()], "").unwrap();
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(f)
+    }
+
     pub(super) fn option_payload_te(opt_te: &TypeExpr) -> Option<TypeExpr> {
         let TypeKind::Path(p) = &opt_te.kind else {
             return None;

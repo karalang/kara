@@ -4069,6 +4069,77 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-09-28-67 — the `Option` / `Result` conditional-STORE
+                // arm, the store sibling of the `Option` / `Result` arm of the
+                // conditional-return registration above and the neighbour of
+                // the user-enum store arm just before this. A by-value
+                // `Option[R]` stored on SOME paths only (`if c { v.push(t) }`)
+                // had no owner for its payload's body on the path that did not
+                // store it: the caller stands down for a conditionally stored
+                // param, and nothing here registered anything, so
+                // `cp(Some(R { id: 1 }), mut w, false)` printed no `dR1` on any
+                // surface. BODIES ONLY for an inline payload, under the per-path
+                // flag the storing statement clears: the caller keeps the
+                // memory, as it does for the conditional hand-back.
+                if func.generic_params.is_none()
+                    && !self.is_coroutine_compiled(&func.name)
+                    && crate::ast::fn_conditionally_stores_param(func, i)
+                    && !crate::ast::fn_matches_on_bare_param(func, &param_name)
+                    && matches!(&param.ty.kind, TypeKind::Path(p)
+                        if p.segments.len() == 1
+                            && matches!(p.segments[0].as_str(), "Option" | "Result"))
+                    && self.optres_payload_runs_user_drop(&param.ty)
+                    && self.boxed_enum_payload_variants(&param.ty).is_empty()
+                {
+                    if let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(&param.ty) {
+                        self.track_user_drop_var_with_fn(
+                            "",
+                            &param_name,
+                            alloca,
+                            bodies,
+                            crate::codegen::state::UserDropKind::ContainerElemBodies,
+                        );
+                        let _ = self.cond_move_drop_flag_for(&param_name);
+                        self.drop_rc
+                            .cond_store_flag_params
+                            .insert(param_name.clone());
+                        self.payload_vars
+                            .cond_handback_optres_params
+                            .insert(param_name.clone());
+                    }
+                }
+                // B-2026-09-28-67 — the BOXED half. A payload wider than the
+                // inline area lives in a heap box the caller cannot keep: on
+                // the path that stores, the container's drop frees it. So a
+                // param stored WHOLE from inside a branch (on some paths, or
+                // through different arms) takes the whole drop here (bodies,
+                // interior, box) under the same per-path flag,
+                // and the caller hands the box over exactly as it does for an
+                // unconditional store (`callee_stores_param_whole`, which asks
+                // the same predicate). Before, the caller kept the box beside
+                // the container and the storing path freed it twice.
+                if func.generic_params.is_none()
+                    && !self.is_coroutine_compiled(&func.name)
+                    && crate::ast::fn_branch_stores_param_whole(func, i)
+                    && !self.boxed_enum_payload_variants(&param.ty).is_empty()
+                {
+                    if let Some(whole) = self.emit_optres_param_whole_drop_fn(&param.ty) {
+                        self.track_user_drop_var_with_fn(
+                            "",
+                            &param_name,
+                            alloca,
+                            whole,
+                            crate::codegen::state::UserDropKind::ContainerElemBodies,
+                        );
+                        let _ = self.cond_move_drop_flag_for(&param_name);
+                        self.drop_rc
+                            .cond_store_flag_params
+                            .insert(param_name.clone());
+                        self.payload_vars
+                            .cond_handback_optres_params
+                            .insert(param_name.clone());
+                    }
+                }
                 // B-2026-08-30-28 — the STORE sibling of the conditional
                 // -return registration directly above, and the same defect one
                 // escape route over.

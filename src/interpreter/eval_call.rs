@@ -2985,8 +2985,15 @@ impl<'a> super::Interpreter<'a> {
                 // and the exit where it died inside ran no body. Codegen's twin
                 // is the `Option` / `Result` arm of `compile_function`'s
                 // conditional-return registration.
+                // B-2026-09-28-67 — or STORED on some paths only (`if c {
+                // v.push(t) }`), with the same gates as the user-enum store
+                // arm below: before this, the path that did not store ran no
+                // payload body on any surface.
                 Some(v @ Value::EnumVariant { .. })
-                    if cond_returned
+                    if (cond_returned
+                        || (cond_stored
+                            && f.generic_params.is_none()
+                            && !crate::ast::fn_matches_on_bare_param(f, name)))
                         && matches!(&p.ty.kind, crate::ast::TypeKind::Path(tp)
                             if tp.segments.len() == 1
                                 && matches!(tp.segments[0].as_str(), "Option" | "Result"))

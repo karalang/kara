@@ -10428,6 +10428,152 @@ pub fn fn_conditionally_stores_param(f: &Function, arg_index: usize) -> bool {
         || fn_conditionally_moves_param_into_local_container(f, arg_index)
 }
 
+/// B-2026-09-28-67 — the BRANCHING sibling of
+/// [`fn_stores_param_whole_into_container`]: does `f` store by-value parameter
+/// `arg_index` WHOLE into a container (`push` / `push_back` / `push_front` /
+/// `insert` into a local's container or one the caller holds) from inside a
+/// branch — on some paths, or on every path through different arms — with
+/// every mention of the parameter being such a store?
+///
+/// `fn cp(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t) } }`
+/// hands a boxed payload's box to `v` on the path that pushes and lets it die
+/// in `cp` on the other. The MUST predicate answers `false`, so the caller kept
+/// the box beside the container and the pushing path freed it twice. Codegen
+/// gives the whole value (bodies, interior, box) to the callee under the
+/// per-path conditional-store flag, which the storing statement clears, and
+/// the caller hands the box over exactly as it does for an unconditional
+/// store.
+///
+/// `if c { v.push(t) } else { w.push(t) }` stores on every path, but through
+/// two arms the straight-line MUST predicate does not follow, so it is the same
+/// case: the flag is cleared by whichever store runs.
+///
+/// Strict on purpose: any other mention of the parameter — a rebind, a
+/// `match` on it, a read, a store nested inside another expression — answers
+/// `false` and keeps today's arrangement.
+pub fn fn_branch_stores_param_whole(f: &Function, arg_index: usize) -> bool {
+    if fn_stores_param_whole_into_container(f, arg_index) {
+        return false;
+    }
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    let PatternKind::Binding(name) = &param.pattern.kind else {
+        return false;
+    };
+    let mut roots: Vec<&str> = Vec::new();
+    if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
+        roots.push("self");
+    }
+    for p in &f.params {
+        if matches!(
+            p.ty.kind,
+            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+        ) {
+            if let PatternKind::Binding(n) = &p.pattern.kind {
+                roots.push(n.as_str());
+            }
+        }
+    }
+    struct W<'a> {
+        name: &'a str,
+        roots: Vec<&'a str>,
+        stores: usize,
+        other: bool,
+    }
+    fn mentions(e: &Expr, name: &str) -> bool {
+        crate::deque_head::expr_mentions_name_deep(e, name)
+    }
+    fn is_whole_store(e: &Expr, w: &W<'_>) -> bool {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &e.kind
+        else {
+            return false;
+        };
+        matches!(
+            method.as_str(),
+            "push" | "push_back" | "push_front" | "insert"
+        ) && outliving_store::place_root_outlives(object, &w.roots)
+            && !mentions(object, w.name)
+            && args
+                .iter()
+                .any(|a| outliving_store::is_bare(&a.value, w.name))
+            && args
+                .iter()
+                .all(|a| outliving_store::is_bare(&a.value, w.name) || !mentions(&a.value, w.name))
+            && args
+                .iter()
+                .filter(|a| outliving_store::is_bare(&a.value, w.name))
+                .count()
+                == 1
+    }
+    fn classify<'a>(e: &'a Expr, w: &mut W<'a>) {
+        if is_whole_store(e, w) {
+            w.stores += 1;
+            return;
+        }
+        match &e.kind {
+            ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Seq(b) => walk(b, w),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                w.other |= mentions(condition, w.name);
+                walk(then_block, w);
+                if let Some(x) = else_branch.as_deref() {
+                    classify(x, w);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                w.other |= mentions(scrutinee, w.name);
+                for a in arms {
+                    w.other |= a.guard.as_ref().is_some_and(|g| mentions(g, w.name));
+                    classify(&a.body, w);
+                }
+            }
+            _ => w.other |= mentions(e, w.name),
+        }
+    }
+    fn walk<'a>(b: &'a Block, w: &mut W<'a>) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Let { pattern, value, .. } => {
+                    w.other |= mentions(value, w.name);
+                    if let PatternKind::Binding(n) = &pattern.kind {
+                        if n == w.name {
+                            w.other = true;
+                        }
+                        w.roots.push(n.as_str());
+                    }
+                }
+                StmtKind::Expr(e) => classify(e, w),
+                StmtKind::LetUninit { .. } => {}
+                StmtKind::Assign { target, value }
+                | StmtKind::CompoundAssign { target, value, .. } => {
+                    w.other |= mentions(target, w.name) || mentions(value, w.name);
+                }
+                _ => w.other = true,
+            }
+        }
+        if let Some(fe) = b.final_expr.as_deref() {
+            classify(fe, w);
+        }
+    }
+    let mut w = W {
+        name: name.as_str(),
+        roots,
+        stores: 0,
+        other: false,
+    };
+    walk(&f.body, &mut w);
+    w.stores > 0 && !w.other
+}
+
 /// B-2026-09-25-10 — the caller's side of the local-container handover: the
 /// callee takes the value over on every path (the MUST predicate) or per path
 /// under the conditional-store flag.

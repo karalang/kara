@@ -4239,6 +4239,17 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return true;
         }
+        // B-2026-09-28-67 — or stores it whole from inside a branch: the callee
+        // then takes the whole value (box included) under its per-path
+        // conditional-store flag, on exactly this predicate and these gates
+        // (`compile_function`'s boxed conditional-store arm), so the box is
+        // the callee's on every path.
+        if f.generic_params.is_none()
+            && !self.is_coroutine_compiled(&f.name)
+            && crate::ast::fn_branch_stores_param_whole(f, ast_i)
+        {
+            return true;
+        }
         if depth == 0 {
             return false;
         }
