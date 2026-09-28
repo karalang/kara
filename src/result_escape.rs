@@ -323,6 +323,16 @@ pub fn nonescaping_let_value_spans(func: &Function) -> HashSet<(usize, usize)> {
     out
 }
 
+/// B-2026-09-19-22 — the raw `(total, scrutinee, read-only)` use tallies of
+/// `name` over `func`'s body, the unseeded walk [`nonescaping_param_names`]
+/// compares. For a caller that needs to account for the non-read uses itself
+/// (codegen's generic hand-back check counts the returns).
+pub fn param_use_counts(func: &Function, name: &str) -> (u32, u32, u32) {
+    let mut acc = Acc::default();
+    walk_block(&func.body, &mut acc);
+    acc.counts.get(name).copied().unwrap_or((0, 0, 0))
+}
+
 /// Names of `func`'s PARAMETERS that never escape the body — used only as a
 /// direct `match` scrutinee, or unused (same rule as [`nonescaping_let_value_spans`]).
 /// An OWNED `Result[shared]` param that is consumed in place owns the caller's

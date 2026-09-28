@@ -18243,6 +18243,190 @@ impl<'ctx> super::Codegen<'ctx> {
         self.zero_boxed_slot_if_call_returned_its_box(slot.ptr, slot.ty, ret);
     }
 
+    /// B-2026-09-19-22 — queue a by-value NAMED boxed-enum argument's payload
+    /// bodies to run in the caller at the end of a generic call, for the
+    /// argument loop's retraction arm (see it in `compile_generic_call`).
+    ///
+    /// Declines, leaving today's behaviour, unless the argument is exactly
+    /// the population whose bodies that arm retracted and nobody else runs:
+    /// a plain by-value binding param the callee RETURNS (`fn_returns_param`)
+    /// and keeps nowhere else, of an instantiation whose payload is boxed,
+    /// passed from a binding that owns a box. `true` in the queued entry means
+    /// "only when the call did not return this box"; a discarded call queues
+    /// `false`, because its result goes to nobody.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn queue_post_call_arg_bodies_run(
+        &mut self,
+        generic_fn: &crate::ast::Function,
+        i: usize,
+        var_name: &str,
+        call_span: &crate::token::Span,
+        arg_offset: usize,
+        out: &mut Vec<(
+            inkwell::values::PointerValue<'ctx>,
+            inkwell::types::BasicTypeEnum<'ctx>,
+            inkwell::values::FunctionValue<'ctx>,
+            bool,
+        )>,
+    ) {
+        let Some(p) = generic_fn.params.get(i) else {
+            return;
+        };
+        if matches!(p.ty.kind, TypeKind::Ref { .. } | TypeKind::MutRef { .. })
+            || !matches!(p.pattern.kind, PatternKind::Binding(_))
+        {
+            return;
+        }
+        if !crate::ast::fn_returns_param(generic_fn, i)
+            || !Self::generic_param_only_returned_or_dies(generic_fn, i)
+        {
+            return;
+        }
+        let owner = self.moved_arg_owner_name(var_name);
+        if !self
+            .payload_vars
+            .boxed_enum_payload_vars
+            .contains(owner.as_str())
+        {
+            return;
+        }
+        let inst = self.callee_param_te_for_call_propagated(&p.ty, call_span);
+        if self.user_enum_boxed_payload_variants(&inst).is_empty() {
+            return;
+        }
+        let Some(slot) = self.variables.get(owner.as_str()).copied() else {
+            return;
+        };
+        let Some(walker) = self.emit_generic_enum_payload_user_drop_bodies_fn(&inst) else {
+            return;
+        };
+        out.push((
+            slot.ptr,
+            slot.ty,
+            walker,
+            !self.in_discarded_stmt_value(arg_offset),
+        ));
+    }
+
+    /// B-2026-09-19-22 — does by-value param `i` of `f` either go back out
+    /// through a return or die in the frame UNTOUCHED, so that on a leg that
+    /// does not return it nothing in the callee has run or taken its payload?
+    ///
+    /// The caller-side bodies run after a generic call rests on exactly that.
+    /// A callee that forwards the param by value (`eat(g)`), matches or
+    /// destructures it, rebinds it, or moves it into an aggregate or a
+    /// container has handed the payload to another owner on that leg, and a
+    /// second run in the caller would be a second body (measured: `eat dR1
+    /// dR1` for `if c { return g } eat(g); return G1.N`). Those shapes keep
+    /// today's behaviour.
+    ///
+    /// Asked as an ACCOUNT rather than a list of shapes to refuse: every use
+    /// that is not a read must be one of the returned leaves that hands the
+    /// param out (bare, or as a field of a returned struct literal), and none
+    /// may be a `match` scrutinee. Anything the account does not recognise
+    /// declines, which keeps today's behaviour.
+    pub(super) fn generic_param_only_returned_or_dies(f: &crate::ast::Function, i: usize) -> bool {
+        let Some(p) = f.params.get(i) else {
+            return false;
+        };
+        let PatternKind::Binding(name) = &p.pattern.kind else {
+            return false;
+        };
+        let (total, scrut, ro) = crate::result_escape::param_use_counts(f, name);
+        if scrut != 0 {
+            return false;
+        }
+        let mut leaves: Vec<&Expr> = Vec::new();
+        Self::collect_return_exprs(&f.body, &mut leaves);
+        let is_bare = |e: &Expr| matches!(&e.kind, ExprKind::Identifier(n) if n == name);
+        let handbacks: u32 = leaves
+            .iter()
+            .map(|e| match &e.kind {
+                _ if is_bare(e) => 1,
+                ExprKind::StructLiteral {
+                    fields,
+                    spread: None,
+                    ..
+                } => fields.iter().filter(|fi| is_bare(&fi.value)).count() as u32,
+                _ => 0,
+            })
+            .sum();
+        handbacks > 0 && total.saturating_sub(ro) == handbacks
+    }
+
+    /// B-2026-09-19-22 — run `walker` over the argument slot at `slot_ptr`
+    /// right after the call, when the slot still holds a live box and, if
+    /// `ret` is given, the call did not return that box (the compare
+    /// [`Self::zero_boxed_slot_if_call_returned_its_box`] makes, asked before
+    /// it zeroes the slot). A branch rather than a `select`, because the walker
+    /// is a call with side effects; the builder is left at the join block.
+    pub(super) fn run_arg_bodies_unless_handed_back(
+        &mut self,
+        slot_ptr: inkwell::values::PointerValue<'ctx>,
+        slot_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        walker: inkwell::values::FunctionValue<'ctx>,
+        ret: Option<inkwell::values::BasicValueEnum<'ctx>>,
+    ) {
+        let inkwell::types::BasicTypeEnum::StructType(st) = slot_ty else {
+            return;
+        };
+        if st.count_fields() < 2 {
+            return;
+        }
+        let i64t = self.context.i64_type();
+        if st.get_field_type_at_index(1) != Some(i64t.into()) {
+            return;
+        }
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return;
+        };
+        let mut ret_words: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
+        if let Some(r) = ret {
+            self.collect_handback_box_words(r, slot_ty, 0, &mut ret_words);
+        }
+        let Ok(cur) = self.builder.build_load(st, slot_ptr, "argbodies.cur") else {
+            return;
+        };
+        let Ok(w0) = self
+            .builder
+            .build_extract_value(cur.into_struct_value(), 1, "argbodies.w0")
+        else {
+            return;
+        };
+        let w0 = w0.into_int_value();
+        let Ok(mut run) = self.builder.build_int_compare(
+            inkwell::IntPredicate::NE,
+            w0,
+            i64t.const_zero(),
+            "argbodies.live",
+        ) else {
+            return;
+        };
+        for w in ret_words {
+            let Ok(ne) =
+                self.builder
+                    .build_int_compare(inkwell::IntPredicate::NE, w, w0, "argbodies.kept")
+            else {
+                return;
+            };
+            run = match self.builder.build_and(run, ne, "argbodies.run") {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+        }
+        let run_bb = self.context.append_basic_block(cur_fn, "argbodies.run");
+        let join_bb = self.context.append_basic_block(cur_fn, "argbodies.join");
+        let _ = self.builder.build_conditional_branch(run, run_bb, join_bb);
+        self.builder.position_at_end(run_bb);
+        let _ = self.builder.build_call(walker, &[slot_ptr.into()], "");
+        let _ = self.builder.build_unconditional_branch(join_bb);
+        self.builder.position_at_end(join_bb);
+    }
+
     /// B-2026-09-27-94 — [`Self::zero_boxed_binding_if_call_returned_its_box`]
     /// over a slot rather than a named binding, so a FRESH TEMP's box
     /// registration (`register_boxed_optres_arg_temp`) can be disarmed by the

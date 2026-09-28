@@ -2317,6 +2317,16 @@ impl<'ctx> super::Codegen<'ctx> {
             inkwell::values::PointerValue<'ctx>,
             inkwell::types::BasicTypeEnum<'ctx>,
         )> = Vec::new();
+        // B-2026-09-19-22 — by-value boxed-enum arguments whose payload bodies
+        // run in THIS frame at the end of the call, unless the callee handed
+        // the box back (`true` = compare first, `false` = discarded call, run
+        // on every leg). See the retraction arm in the loop below.
+        let mut post_call_body_runs: Vec<(
+            inkwell::values::PointerValue<'ctx>,
+            inkwell::types::BasicTypeEnum<'ctx>,
+            inkwell::values::FunctionValue<'ctx>,
+            bool,
+        )> = Vec::new();
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
             // B-2026-07-14-12: a fresh-heap `String` TEMP arg to a generic fn
@@ -2660,10 +2670,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 });
             if let Some(ai) = ast_i.filter(|_| !self.borrowed_arg_skip(name, i)) {
                 let payload_escape = self.callee_enum_arg_payload_escape(name, ai);
-                let whole_escape = self.call_arg_flows_into_return(name, ai)
-                    || self.callee_hands_arg_off(name, ai)
-                    || self.call_arg_moves_into_outliving_place(name, ai, false)
-                    || self.callee_always_hands_arg_back_via_call(name, ai);
+                let flows_into_return = self.call_arg_flows_into_return(name, ai);
+                let hands_off = self.callee_hands_arg_off(name, ai);
+                let outliving = self.call_arg_moves_into_outliving_place(name, ai, false);
+                let back_via_call = self.callee_always_hands_arg_back_via_call(name, ai);
+                let whole_escape = flows_into_return || hands_off || outliving || back_via_call;
                 if whole_escape || payload_escape.is_some() {
                     if let ExprKind::Identifier(var_name) = &a.value.kind {
                         let var_name = var_name.clone();
@@ -2672,7 +2683,54 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let skip = self.enum_payload_skip_for_variants(en, vs);
                                 self.mask_enum_payload_bodies_for_var(&var_name, en, &skip);
                             }
-                            _ => self.suppress_container_elem_bodies_for_var(&var_name),
+                            _ => {
+                                self.suppress_container_elem_bodies_for_var(&var_name);
+                                // B-2026-09-19-22 — the retraction above is right
+                                // on the leg that hands the box back (the RESULT
+                                // runs the bodies) and wrong on the leg where the
+                                // param dies inside: nobody ran them there, so
+                                // `let back = mid(g, false)` over `fn mid[T](g:
+                                // G1[T], c: bool) -> G1[T] { if c { return g }
+                                // return G1.N }` lost `R`'s body on every compiled
+                                // surface. The non-generic twin is right because
+                                // its callee owns the param on that leg
+                                // (B-2026-09-27-96), which a monomorph's prologue
+                                // does not do.
+                                //
+                                // So the caller runs them, at the END OF THE CALL
+                                // -- design.md's drop-order rule 3 for a by-value
+                                // parameter, and the interpreter's timing -- when
+                                // the returned box is not this one. A statically
+                                // handed-back argument (`param_box_handed_back`)
+                                // is left alone: its result owns the bodies on
+                                // every leg. A DISCARDED call hands the result to
+                                // nobody, so its bodies run on every leg.
+                                //
+                                // `hands_off` is not asked: its conditional-bare
+                                // half means "the CALLEE owns it on the other
+                                // leg", which is true of a concrete callee and
+                                // false of a monomorph (see above). Nor is
+                                // `back_via_call` at a discarded call, whose
+                                // result -- however it was produced -- goes to
+                                // nobody.
+                                if flows_into_return
+                                    && !outliving
+                                    && (!back_via_call
+                                        || self.in_discarded_stmt_value(a.value.span.offset))
+                                    && payload_escape.is_none()
+                                    && !param_box_handed_back
+                                    && !(recv_offset && i == 0)
+                                {
+                                    self.queue_post_call_arg_bodies_run(
+                                        &generic_fn,
+                                        i,
+                                        &var_name,
+                                        call_span,
+                                        a.value.span.offset,
+                                        &mut post_call_body_runs,
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -2916,6 +2974,76 @@ impl<'ctx> super::Codegen<'ctx> {
                             );
                         }
                         maybe_handed_back_slots.push((slot, val.get_type()));
+                    }
+                }
+            }
+            // B-2026-09-19-23 — the USER-enum sibling of the arm above. A fresh
+            // temp `G1.Y(f"..")` handed to a by-value `G1[T]` param the callee
+            // returns (`fn mid[T](g: G1[T], c: bool) -> G1[T] { if c { return
+            // g } return G1.N }`) had no owner for its box: the callee
+            // registers no drop for a param it may hand back (the caller
+            // settles that by the post-call compare), and a temp has no
+            // binding to carry the caller's. So the box and its interior
+            // leaked on the dies-inside leg, and on EVERY leg of a discarded
+            // call, which hands the box to nobody -- 34 B per call at
+            // `T = String`, where the named spelling is clean.
+            //
+            // The temp now gets what a named binding has: the box drop with its
+            // interior, the payload's bodies at the end of the call when the box
+            // did not come back (B-2026-09-19-22's post-call run), and -- only
+            // where some destination takes the result over -- the post-call
+            // compare that stands the slot down when it did. A discarded call
+            // gets no compare for the reason the named arm records: its result
+            // goes to nobody, so the slot stays the owner and the bodies run
+            // on every leg.
+            if !param_nonescaping
+                && val.is_struct_value()
+                && self.expr_yields_fresh_owned_temp(&a.value)
+                && !self.call_result_aliases_armed_binding(&a.value)
+                && generic_fn.params.get(i).is_some_and(|p| {
+                    !matches!(p.ty.kind, TypeKind::Ref { .. } | TypeKind::MutRef { .. })
+                        && matches!(p.pattern.kind, PatternKind::Binding(_))
+                })
+                && crate::ast::fn_returns_param(&generic_fn, i)
+                && Self::generic_param_only_returned_or_dies(&generic_fn, i)
+            {
+                if let Some(p) = generic_fn.params.get(i) {
+                    let inst = self.callee_param_te_for_call_propagated(&p.ty, call_span);
+                    let boxed = self.user_enum_boxed_payload_variants(&inst);
+                    if !boxed.is_empty() {
+                        let bodies = self.emit_generic_enum_payload_user_drop_bodies_fn(&inst);
+                        let cur_fn = self
+                            .builder
+                            .get_insert_block()
+                            .and_then(|bb| bb.get_parent())
+                            .expect("compile_generic_call inside a function context");
+                        let slot = self.create_entry_alloca(
+                            cur_fn,
+                            &format!("ubox_garg_tmp{i}"),
+                            val.get_type(),
+                        );
+                        self.builder.build_store(slot, val).unwrap();
+                        // Memory first: the frame drains LIFO, so the bodies
+                        // pushed below fire before the box is freed.
+                        for (en, variant, payload_te, box_field, _multi) in boxed {
+                            let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
+                            self.track_boxed_enum_var_with_inner_drop_for_payload(
+                                &format!("__ubox_garg_tmp{i}"),
+                                slot,
+                                &en,
+                                &variant,
+                                inner,
+                                &payload_te,
+                                box_field,
+                            );
+                        }
+                        let discarded = self.in_discarded_stmt_value(a.value.span.offset);
+                        if let Some(w) = bodies {
+                            post_call_body_runs.push((slot, val.get_type(), w, !discarded));
+                        }
+                        if !discarded {
+                            maybe_handed_back_slots.push((slot, val.get_type()));
+                        }
                     }
                 }
             }
@@ -4766,6 +4894,16 @@ impl<'ctx> super::Codegen<'ctx> {
             Ok(self.context.i64_type().const_int(0, false).into())
         } else {
             let v = basic_val.unwrap_basic();
+            // B-2026-09-19-22 — BEFORE the compares below, which zero the
+            // slots these runs read.
+            for (ptr, ty, walker, conditional) in &post_call_body_runs {
+                self.run_arg_bodies_unless_handed_back(
+                    *ptr,
+                    *ty,
+                    *walker,
+                    conditional.then_some(v),
+                );
+            }
             // B-2026-09-17-7 — see the mixed-path arm in the argument loop.
             for src in &maybe_handed_back_args {
                 self.zero_boxed_binding_if_call_returned_its_box(src, v);
