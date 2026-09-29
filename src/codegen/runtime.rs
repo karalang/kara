@@ -9286,6 +9286,17 @@ impl<'ctx> super::Codegen<'ctx> {
         arg_expr: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
+        // B-2026-09-29-100 — an immutable local bound straight from a
+        // caller-retained param's nested struct field (`let x = q.u;`) is a
+        // VIEW of the caller's argument, so it leaves as a clone at every
+        // owning sink this hook serves (`Some(x)`, `v.push(x)`, `(x, 1)`,
+        // `K { s: x }`), exactly as it does at a return. The direct `q.u`
+        // spelling is the -85 root admitted further down.
+        if matches!(&arg_expr.kind, ExprKind::Identifier(n)
+            if self.borrow_vars.caller_retained_struct_field_views.contains_key(n.as_str()))
+        {
+            return self.clone_caller_retained_struct_field_for_return(arg_expr, val);
+        }
         // B-2026-09-14-27 — the FIXED-ARRAY arm, and it belongs HERE rather
         // than in `uam_defensive_copy`.
         //
