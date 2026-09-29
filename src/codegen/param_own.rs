@@ -3075,6 +3075,109 @@ impl<'ctx> super::Codegen<'ctx> {
             && !self.struct_is_self_referential(struct_name)
     }
 
+    /// B-2026-09-20-4 — retract a NAMED struct receiver's cleanup when it is
+    /// moved into an owned-`self` method whose prologue takes it by TRANSFER.
+    ///
+    /// The receiver twin of [`Self::move_declined_copy_struct_arg_for`], and
+    /// deliberately narrower: it asks exactly the callee's question,
+    /// [`Self::struct_param_owned_by_transfer`], because `self` goes through
+    /// the same prologue arm (`make_aggregate_param_callee_owned_transfer`) as
+    /// any by-value param. Where that arm entry-copies (copy-supported) or
+    /// declines (a `shared` field, a self-referential struct) the caller is
+    /// still an owner and keeps its drop; only where it took the original
+    /// buffers does the caller stand down.
+    ///
+    /// Generic structs are left alone. A generic impl dispatches through the
+    /// monomorphizer, not this path, and a concrete impl over a generic head
+    /// has its own open rows (B-2026-09-27-116); neither was measured here.
+    pub(super) fn move_owned_self_struct_receiver(&mut self, object: &Expr) {
+        let var = match &object.kind {
+            ExprKind::Identifier(v) => v.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return,
+        };
+        let Some(type_name) = self.var_types.var_type_names.get(var.as_str()).cloned() else {
+            return;
+        };
+        if self
+            .type_decls
+            .struct_generic_params
+            .get(type_name.as_str())
+            .is_some_and(|g| !g.is_empty())
+        {
+            return;
+        }
+        if !self.struct_param_owned_by_transfer(&type_name, false) {
+            // Entry-copied rather than taken: the caller keeps its drop, and
+            // only the fields the copy cannot duplicate have to leave it.
+            self.zero_uncopied_enum_fields_of_struct_arg(object);
+            return;
+        }
+        self.suppress_struct_cleanup_for_tail_identifier(&var);
+        self.suppress_user_drop_for_var(&var);
+    }
+
+    /// B-2026-09-20-4 — a WHOLE struct handed on by value to a callee that
+    /// ENTRY-COPIES it still shares every enum field the copy cannot
+    /// duplicate: a heap-boxed payload, or one owned by transfer
+    /// (`enum_param_owned_by_transfer`). The copy leaves that field's box in
+    /// both frames and each frame's struct drop frees it.
+    ///
+    /// Measured on `struct Hb { g: Eb }` over `enum Eb { A(Array[String, 2]),
+    /// B }`: `h.give()` with `impl Hb { fn give(self) {..} }` aborted `free():
+    /// double free detected in tcache 2`, and so did `give(h)` over a by-value
+    /// param wherever the transfer prepass declined (a second call site
+    /// passing a fresh temp is enough).
+    ///
+    /// Each such field takes the same caller-side stand-down a single field
+    /// hand-off (`eat(h.g)`) takes, through the one helper that decides it,
+    /// so the gates cannot drift: the zero is queued and drained after the
+    /// statement, when the argument has already been read.
+    pub(super) fn zero_uncopied_enum_fields_of_struct_arg(&mut self, arg: &Expr) {
+        let var = match &arg.kind {
+            ExprKind::Identifier(v) => v.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return,
+        };
+        let Some(type_name) = self.var_types.var_type_names.get(var).cloned() else {
+            return;
+        };
+        if !self
+            .type_decls
+            .struct_types
+            .contains_key(type_name.as_str())
+            || self
+                .type_decls
+                .shared_types
+                .contains_key(type_name.as_str())
+            || self
+                .type_decls
+                .struct_generic_params
+                .get(type_name.as_str())
+                .is_some_and(|g| !g.is_empty())
+        {
+            return;
+        }
+        let Some(fields) = self
+            .type_decls
+            .struct_field_names
+            .get(type_name.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        for field in fields {
+            let fa = Expr {
+                kind: ExprKind::FieldAccess {
+                    object: Box::new(arg.clone()),
+                    field,
+                },
+                span: arg.span,
+            };
+            self.zero_transfer_owned_enum_field_arg(&fa);
+        }
+    }
+
     /// B-2026-09-07-16 — does the entry copy DECLINE this enum payload field,
     /// leaving the callee's slot aliasing the caller's buffers?
     ///

@@ -7625,6 +7625,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some((crate::ast::SelfParam::Owned, _))
                 ) {
                     self.move_declined_copy_enum_arg(object);
+                    // B-2026-09-20-4 — the STRUCT leg of the same hand-off.
+                    // A named struct receiver moved into an owned `self` kept
+                    // its `StructDrop`, while the callee's prologue took the
+                    // same value by TRANSFER (no entry copy) and dropped it
+                    // too: `h.give()` over `struct Hb { g: Array[String, 2] }`
+                    // and `impl Hb { fn give(self) {..} }` aborted `free():
+                    // double free detected in tcache 2` at -O0, where
+                    // `give(h)` over a by-value param was clean. An argument
+                    // reaches `move_declined_copy_struct_arg_for`; a receiver
+                    // is not an argument, so it never did.
+                    self.move_owned_self_struct_receiver(object);
                 }
                 if let ExprKind::Identifier(recv_name) = &object.kind {
                     if matches!(

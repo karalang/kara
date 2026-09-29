@@ -16151,8 +16151,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // now). Hooked at this same choke point so every call-arg site is
         // covered by one call.
         self.zero_transfer_owned_enum_field_arg(arg);
-        let ExprKind::Identifier(var) = &arg.kind else {
-            return;
+        // B-2026-09-20-4 — `self` too: `fn fwd(self) { eat(self) }` hands
+        // the receiver on exactly as a named binding would.
+        let var = match &arg.kind {
+            ExprKind::Identifier(v) => v.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return,
         };
         let Some(type_name) = self.var_types.var_type_names.get(var.as_str()).cloned() else {
             return;
@@ -16169,6 +16173,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         if self.aggregate_param_copy_supported_struct(&type_name, &mut Vec::new()) {
+            // B-2026-09-20-4 — entry-copied, so the caller keeps its drop; only
+            // the enum fields the copy cannot duplicate leave it.
+            self.zero_uncopied_enum_fields_of_struct_arg(arg);
             return;
         }
         // B-2026-08-05-32 — a struct with a DIRECT `shared` field must KEEP its
@@ -16350,21 +16357,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // stock tree, and both remain this row's double free in those
         // spellings.
         //
-        // `self` — `impl Hb { fn give(self) { eatb(self.g) } }` reports 14
-        // errors / 8 invalid accesses (11 allocs / 17 frees) on stock `main`
-        // and the same with this fix: unchanged, not regressed. It is WORSE
-        // than the named-binding spelling's 7 because an owned by-value struct
-        // receiver entry-copies, and that copy has no arm for a boxed enum
-        // payload, so it duplicates nothing and the receiver's copy and the
-        // caller's binding hold the SAME box — three owners rather than two.
-        //
-        // Worth recording for whoever takes it: an earlier placement of this
-        // neutralizer, emitted inline at the by-value materialization site
-        // instead of queued, took that cell from 14 to 7 — a real improvement,
-        // not a fix. The queued form loses it because `eatb(self.g)` is the
-        // whole body of `give`, so the statement-end drain finds the block
-        // already terminated and skips. Recovering it needs the placement
-        // question settled, not just the `SelfValue` arm added back.
+        // `self` (B-2026-09-20-4) — `impl Hb { fn give(self) { eatb(self.g)
+        // } }` needed TWO stand-downs, one per frame: the caller's binding
+        // shares the box with the receiver's entry copy, which has no arm for
+        // a boxed payload (`zero_uncopied_enum_fields_of_struct_arg`, at the
+        // call), and the receiver shares it with `eatb` (the `SelfValue` arm
+        // below). The placement worry recorded here before — a tail call is
+        // the whole body, so a statement-end drain found the block terminated
+        // — is answered by the block TAIL's own drain (`stmts.rs`), which runs
+        // after the value and before the scope-exit drops.
         //
         // A CHAINED place (`k.h.g`) WAS excluded here because this resolved
         // one hop only, and that exclusion was measured unchanged for
@@ -16409,8 +16410,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // declines exactly the shapes this row did not measure.
         let mut root_var: Option<String> = None;
         let (held, base_ptr, sname) = match &object.kind {
-            ExprKind::Identifier(s) => {
-                let s = s.as_str();
+            // B-2026-09-20-4 — `self` is a root like any named binding: an
+            // owned struct receiver lives INLINE in a slot registered under
+            // "self", so the same inline-slot test below proves it owned (a
+            // `ref self` receiver's slot is a pointer and returns).
+            ExprKind::Identifier(_) | ExprKind::SelfValue => {
+                let s = match &object.kind {
+                    ExprKind::Identifier(s) => s.as_str(),
+                    _ => "self",
+                };
                 let Some(slot) = self.variables.get(s).copied() else {
                     return;
                 };
