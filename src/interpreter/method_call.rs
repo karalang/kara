@@ -829,7 +829,35 @@ impl<'a> super::Interpreter<'a> {
                                     &self.program.items,
                                 ))
                     });
-                if adopts_self_body {
+                // B-2026-09-29-77 — an ENUM receiver whose method matches on
+                // bare `self` on some paths only. The caller masked the payload
+                // walk for the whole call (the arm channel owns it), so on a
+                // path that never reaches the `match` no one ran the payload's
+                // body. This frame adopts the PAYLOAD alone — the caller keeps
+                // the shell — and the `match` over `self` disarms it
+                // (`disarm_self_match_adoption`). Codegen's twin is the
+                // matching registration in `compile_function`.
+                let adopts_self_match_payload = !adopts_self_body
+                    && matches!(
+                        self.method_self_param(&type_name, method),
+                        Some(crate::ast::SelfParam::Owned)
+                    )
+                    && matches!(obj, Value::EnumVariant { enum_name, .. }
+                        if !self.enum_is_shared(enum_name))
+                    && self
+                        .find_impl_method_ast(&type_name, method)
+                        .is_some_and(|f| {
+                            f.generic_params.is_none()
+                                && !crate::ast::fn_rebinds_self_whole(f)
+                                && !crate::ast::fn_conditionally_rebinds_self(f)
+                                && crate::ast::fn_conditionally_matches_on_bare_self(f)
+                                && !(self.owned_enum_receiver_arms_bind_views(&type_name)
+                                    && crate::ast::fn_bare_self_arms_bind_views(
+                                        f,
+                                        &self.program.items,
+                                    ))
+                        });
+                if adopts_self_body || adopts_self_match_payload {
                     param_drop_names.push("self".to_string());
                 } else if matches!(
                     self.method_self_param(&type_name, method),
@@ -886,6 +914,10 @@ impl<'a> super::Interpreter<'a> {
                 let saved_cond_store_params = std::mem::replace(
                     &mut self.cond_store_param_names,
                     self.pending_param_drop_bindings.iter().cloned().collect(),
+                );
+                let saved_self_match_payload_adopted = std::mem::replace(
+                    &mut self.self_match_payload_adopted,
+                    adopts_self_match_payload,
                 );
                 let saved_part_aliases = std::mem::take(&mut self.cond_store_part_aliases);
                 let saved_view_aliases = std::mem::take(&mut self.cond_store_view_aliases);
@@ -1093,6 +1125,7 @@ impl<'a> super::Interpreter<'a> {
                 // frame that registered it and disarm a same-named binding in
                 // the caller.
                 self.cond_store_param_names = saved_cond_store_params;
+                self.self_match_payload_adopted = saved_self_match_payload_adopted;
                 self.cond_store_part_aliases = saved_part_aliases;
                 self.cond_store_view_aliases = saved_view_aliases;
                 // B-2026-09-27-54 — and the caller's shadowed entries.

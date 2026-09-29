@@ -1767,6 +1767,102 @@ pub fn fn_matches_on_bare_self(f: &Function) -> bool {
     matches_on_scrutinee(f, &|e: &Expr| matches!(&e.kind, ExprKind::SelfValue), false)
 }
 
+/// B-2026-09-29-77 — does `f` match on bare `self` somewhere, but NOT as its
+/// FIRST top-level statement (or, with no statements, its tail)?
+///
+/// [`fn_matches_on_bare_self`] makes every caller stand the receiver's payload
+/// walk down for the whole call, handing the payload to the arm channel. On a
+/// path that never reaches the `match` there is no arm, so the payload's body
+/// ran nowhere: `if c { match self { .. } } else { 0 }` at `c` false, an early
+/// `return 0` ahead of a top-level `match self`, and every spelling in
+/// between. Both backends adopt the payload in the callee frame for such a
+/// method and disarm it where the `match` evaluates its scrutinee.
+///
+/// Only for a body whose EVERY mention of bare `self` is such a scrutinee;
+/// see `only_scrutinee` below for why the other routes are left alone.
+///
+/// DELIBERATELY AN OVER-APPROXIMATION. Only a first-statement match is known
+/// to run on every path; anything else answers true, including shapes that do
+/// reach the match on every path (`let k = 1; match self { .. }`). That
+/// direction is safe: the adoption is disarmed by the match itself, so on a
+/// path that reaches it the adopted walk never fires. Answering false for a
+/// shape that can skip the match is the lost body this exists to fix.
+pub fn fn_conditionally_matches_on_bare_self(f: &Function) -> bool {
+    fn direct_self_match(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Match { scrutinee, .. } => matches!(scrutinee.kind, ExprKind::SelfValue),
+            ExprKind::IfLet { value, .. } | ExprKind::WhileLet { value, .. } => {
+                matches!(value.kind, ExprKind::SelfValue)
+            }
+            ExprKind::Return(Some(inner)) => direct_self_match(inner),
+            _ => false,
+        }
+    }
+    // Every other mention of bare `self` is a route this adoption does not
+    // model: `eat(self)`, `self.m()`, `W { e: self }` each hand the receiver
+    // (or a view of it) somewhere with its own ownership story, and disarming
+    // or keeping the adopted walk there has to agree with that story. Measured
+    // on `if c { return self.m() }; match self { .. }`: adopting doubled the
+    // body on the `self.m()` path. Such a method keeps today's behaviour.
+    fn only_scrutinee(e: &Expr, bad: &mut bool) {
+        if *bad {
+            return;
+        }
+        let is_self = |x: &Expr| matches!(x.kind, ExprKind::SelfValue);
+        match &e.kind {
+            ExprKind::SelfValue => *bad = true,
+            ExprKind::Match { scrutinee, arms } if is_self(scrutinee) => {
+                for a in arms {
+                    if let Some(g) = &a.guard {
+                        only_scrutinee(g, bad);
+                    }
+                    only_scrutinee(&a.body, bad);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } if is_self(value) => {
+                only_scrutinee_block(then_block, bad);
+                if let Some(x) = else_branch {
+                    only_scrutinee(x, bad);
+                }
+            }
+            ExprKind::WhileLet { value, body, .. } if is_self(value) => {
+                only_scrutinee_block(body, bad);
+            }
+            other => crate::rc_elide::walk_children_pub(other, &mut |c| only_scrutinee(c, bad)),
+        }
+    }
+    fn only_scrutinee_block(b: &Block, bad: &mut bool) {
+        for st in &b.stmts {
+            crate::rc_elide::walk_stmt_children_pub(st, &mut |c| only_scrutinee(c, bad));
+        }
+        if let Some(x) = &b.final_expr {
+            only_scrutinee(x, bad);
+        }
+    }
+    if !fn_matches_on_bare_self(f) {
+        return false;
+    }
+    let mut other_use = false;
+    only_scrutinee_block(&f.body, &mut other_use);
+    if other_use {
+        return false;
+    }
+    let first_is_direct = match f.body.stmts.first() {
+        Some(st) => match &st.kind {
+            StmtKind::Let { value, .. } => direct_self_match(value),
+            StmtKind::Expr(e) => direct_self_match(e),
+            _ => false,
+        },
+        None => f.body.final_expr.as_deref().is_some_and(direct_self_match),
+    };
+    !first_is_direct
+}
+
 /// B-2026-09-28-20 — the by-value PARAMETER form of
 /// [`fn_matches_on_bare_self`]: does `f` destructure its bare param `name` in a
 /// `match` / `if let` / `while let` / `let .. else`? Such a callee hands the

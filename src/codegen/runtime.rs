@@ -15838,6 +15838,31 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(join_bb);
     }
 
+    /// B-2026-09-29-77 — a `match` / `if let` / `while let` over bare `self` in
+    /// a frame that adopted the receiver's payload bodies for the paths that
+    /// never reach one: its arm channel takes the payload on THIS path, so the
+    /// adopted walk stands down here. Emitted where the scrutinee is
+    /// evaluated, before any arm can leave the frame. A no-op anywhere else.
+    pub(super) fn disarm_self_match_adoption(&mut self, scrutinee: &Expr) {
+        if !self.drop_rc.self_match_adopted
+            || !matches!(scrutinee.kind, ExprKind::SelfValue)
+            || !self.drop_rc.cond_store_flag_params.contains("self")
+        {
+            return;
+        }
+        let Some(flag) = self.drop_rc.cond_move_drop_flags.get("self").copied() else {
+            return;
+        };
+        if self
+            .builder
+            .get_insert_block()
+            .is_some_and(|bb| bb.get_terminator().is_none())
+        {
+            let bool_t = self.context.bool_type();
+            let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
+        }
+    }
+
     pub(super) fn arm_conditional_store_flag_for_tail(&mut self, expr: &Expr) {
         self.repoint_pending_part_aliases();
         let handed = match &expr.kind {

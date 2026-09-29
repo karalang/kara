@@ -6572,6 +6572,7 @@ impl<'ctx> Codegen<'ctx> {
                 caller_retained_aggregate_memory: HashSet::new(),
                 loop_decl_rearm_anchors: HashMap::new(),
                 cond_store_flag_params: std::collections::HashSet::new(),
+                self_match_adopted: false,
                 cond_take_box_params: std::collections::HashSet::new(),
                 pending_take_box_frees: Vec::new(),
                 pending_part_aliases: Vec::new(),

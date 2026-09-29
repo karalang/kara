@@ -279,6 +279,13 @@ pub(crate) struct DropRc<'ctx> {
     /// ones this row's registration created, so no pre-existing retraction
     /// changes behaviour.
     pub(crate) cond_store_flag_params: std::collections::HashSet<String>,
+    /// B-2026-09-29-77 — this frame adopted its owned ENUM `self`'s payload
+    /// bodies because the method matches on `self` on some paths only
+    /// (`fn_conditionally_matches_on_bare_self`). The per-path flag is the one
+    /// `cond_move_drop_flag_for("self")` owns, and the `match` / `if let` /
+    /// `while let` over bare `self` disarms it (`disarm_self_match_adoption`),
+    /// because its arm channel takes the payload on that path.
+    pub(crate) self_match_adopted: bool,
     /// B-2026-09-29-27 — the subset of `cond_store_flag_params` stored whole on some
     /// paths and payload-taken on others (`fn_branch_stores_and_takes_param`)
     /// with a heap-boxed `Option` payload. The frame owns the box on every

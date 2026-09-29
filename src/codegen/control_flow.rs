@@ -55,6 +55,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // NOT a tail return), then re-arm it for each branch's final expr so
         // a bare-arg `Option[shared]` leaf gets its per-branch inc.
         let tail = self.fn_ctx.tail_ret_inner.take();
+        self.disarm_self_match_adoption(value);
         // Keyed on the scrutinee's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(value);
         let saved_stack_box = self.begin_stack_boxed_scrutinee(value);
@@ -1053,6 +1054,7 @@ impl<'ctx> super::Codegen<'ctx> {
         value: &Expr,
         body: &Block,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.disarm_self_match_adoption(value);
         let fn_val = self.current_fn.unwrap();
         let cond_bb = self.context.append_basic_block(fn_val, "whilelet.cond");
         let body_bb = self.context.append_basic_block(fn_val, "whilelet.body");

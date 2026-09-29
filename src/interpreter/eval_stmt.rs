@@ -1819,6 +1819,16 @@ impl<'a> super::Interpreter<'a> {
         if self.moved_out_user_drop_bindings.contains(name) {
             return;
         }
+        // B-2026-09-29-77 — a receiver adopted for the paths that never reach
+        // a `match self`: its PAYLOAD bodies only, since the caller still runs
+        // the shell. Codegen registers the payload walker alone for the same
+        // frame.
+        if name == "self" && self.self_match_payload_adopted {
+            if let Some(v) = self.env.get("self") {
+                self.run_enum_payload_user_drops_value_for(&v, Some("self"));
+            }
+            return;
+        }
         // B-2026-09-27-105 — an adopted PART of a param (`w.r`), handed to
         // another owner on some paths only; reaching here means this path kept
         // it. Walk the part's value as `let _ = …` walks a discarded one.
@@ -6906,6 +6916,17 @@ impl<'a> super::Interpreter<'a> {
     ///
     /// Restricted to `cond_store_param_names`, so it can only touch a parameter
     /// a call actually registered a per-path drop for.
+    /// B-2026-09-29-77 — a `match` / `if let` / `while let` over bare `self`
+    /// in a frame that adopted the receiver's payload for the paths that never
+    /// reach one: its arm channel takes the payload on this path, so the
+    /// adopted slot stands down. Codegen's twin stores `false` into the flag
+    /// at the same scrutinee.
+    pub(super) fn disarm_self_match_adoption(&mut self, scrutinee: &Expr) {
+        if self.self_match_payload_adopted && matches!(scrutinee.kind, ExprKind::SelfValue) {
+            self.moved_out_user_drop_bindings.insert("self".to_string());
+        }
+    }
+
     fn disarm_cond_store_param_on_handover(&mut self, stmt: &Stmt) {
         if self.cond_store_param_names.is_empty() {
             return;

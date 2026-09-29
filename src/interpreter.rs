@@ -991,6 +991,12 @@ pub struct Interpreter<'a> {
     /// arm.
     pub(crate) own_body_only_view_bindings: std::collections::HashMap<String, String>,
     pub(crate) cond_store_param_names: std::collections::HashSet<String>,
+    /// B-2026-09-29-77 — this method frame adopted its owned ENUM `self`'s
+    /// PAYLOAD bodies (not the shell, which the caller keeps) because the
+    /// method matches on `self` on some paths only. A `match` / `if let` /
+    /// `while let` over bare `self` disarms it; codegen's twin is
+    /// `DropRc::self_match_adopted`.
+    pub(crate) self_match_payload_adopted: bool,
     /// B-2026-09-27-105 — per frame, a local bound to an adopted param PART
     /// (`let r = w.r;` → `r` ↦ `w.r`): handing the local over clears the
     /// part's per-path body, as handing the projection does.
@@ -1435,6 +1441,7 @@ impl<'a> Interpreter<'a> {
             pending_param_drop_bindings: Vec::new(),
             own_body_only_view_bindings: std::collections::HashMap::new(),
             cond_store_param_names: std::collections::HashSet::new(),
+            self_match_payload_adopted: false,
             cond_store_part_aliases: std::collections::HashMap::new(),
             cond_store_view_aliases: std::collections::HashMap::new(),
             payload_escape_frames: Vec::new(),

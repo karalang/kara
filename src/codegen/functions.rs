@@ -1536,6 +1536,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // with the binding of that name here.
         self.drop_rc.loop_decl_rearm_anchors.clear();
         self.drop_rc.cond_store_flag_params.clear();
+        self.drop_rc.self_match_adopted = false;
         self.drop_rc.cond_take_box_params.clear();
         self.drop_rc.pending_part_aliases.clear();
         self.drop_rc.pending_view_repoints.clear();
@@ -4750,6 +4751,61 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.drop_rc
                                         .cond_store_flag_params
                                         .insert(param_name.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                // B-2026-09-29-77 — an ENUM receiver whose method matches on
+                // bare `self` on some paths only. Every caller stands its
+                // payload walk down for the whole call (the arm channel owns
+                // the payload), so on a path that never reaches the `match`
+                // nobody ran the payload's body: `if c { match self { .. } }
+                // else { 0 }` at `c` false printed nothing. This frame adopts
+                // the payload bodies alone (the caller keeps the shell) under
+                // the per-path flag, and the `match` over `self` disarms it
+                // where its arms take over (`disarm_self_match_adoption`).
+                // Frames the conditional-rebind or returnable-receiver legs
+                // above already adopted keep theirs, as does a receiver whose
+                // arms bind views (the caller stays the payload's owner there).
+                if i == 0
+                    && param_name == "self"
+                    && func.generic_params.is_none()
+                    && !self.is_coroutine_compiled(&func.name)
+                    && !adopts_returnable_enum_self
+                    && !crate::ast::fn_rebinds_self_whole(func)
+                    && !crate::ast::fn_conditionally_rebinds_self(func)
+                    && crate::ast::fn_conditionally_matches_on_bare_self(func)
+                {
+                    if let TypeKind::Path(path) = &param.ty.kind {
+                        if let Some(type_name) = path.segments.first().cloned() {
+                            let arms_are_views = self
+                                .owned_enum_receiver_arms_bind_views(&type_name)
+                                && self.program_snapshot.as_deref().is_some_and(|p| {
+                                    crate::ast::fn_bare_self_arms_bind_views(func, &p.items)
+                                });
+                            if self.type_decls.enum_layouts.contains_key(&type_name)
+                                && !self
+                                    .type_decls
+                                    .shared_types
+                                    .contains_key(type_name.as_str())
+                                && !arms_are_views
+                            {
+                                if let Some(bodies) =
+                                    self.emit_enum_payload_user_drop_bodies_fn(&type_name)
+                                {
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        &param_name,
+                                        alloca,
+                                        bodies,
+                                        crate::codegen::state::UserDropKind::StructFieldBodies,
+                                    );
+                                    let _ = self.cond_move_drop_flag_for(&param_name);
+                                    self.drop_rc
+                                        .cond_store_flag_params
+                                        .insert(param_name.clone());
+                                    self.drop_rc.self_match_adopted = true;
                                 }
                             }
                         }

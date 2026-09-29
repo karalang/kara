@@ -55,6 +55,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // return), re-applied per arm body below so a bare-arg `Option[shared]`
         // arm leaf gets its per-branch inc.
         let tail = self.fn_ctx.tail_ret_inner.take();
+        self.disarm_self_match_adoption(scrutinee);
         // Keyed on the scrutinee's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(scrutinee);
         // B-2026-08-30-2 — the block that dominates every arm and re-executes

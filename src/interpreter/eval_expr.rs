@@ -1229,6 +1229,7 @@ impl<'a> super::Interpreter<'a> {
                 then_block,
                 else_branch,
             } => {
+                self.disarm_self_match_adoption(value);
                 let val = self.eval_expr_inner(value);
                 // B-2026-07-11-26: run a fresh-temp enum scrutinee's user `Drop`
                 // (both edges), mirroring codegen. Snapshot the value before it
@@ -1582,6 +1583,7 @@ impl<'a> super::Interpreter<'a> {
 
             // Match
             ExprKind::Match { scrutinee, arms } => {
+                self.disarm_self_match_adoption(scrutinee);
                 let val = self.eval_expr_inner(scrutinee);
                 // A faulted scrutinee (index OOB, div-by-zero, an in-scrutinee
                 // trap like `char.to_digit(bad_radix)`, …) sets `pending_cf` and
@@ -1665,6 +1667,7 @@ impl<'a> super::Interpreter<'a> {
                 label,
                 ..
             } => {
+                self.disarm_self_match_adoption(value);
                 loop {
                     let val = self.eval_expr_inner(value);
                     // A control-flow signal raised while evaluating the
