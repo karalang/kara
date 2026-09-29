@@ -3040,6 +3040,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         let slot = self.materialize_rvalue_for_ref_arg(val, i);
                         if track_tensor_temp {
                             self.track_tensor_var(slot.into_pointer_value());
+                        } else if val.get_type().is_struct_type()
+                            && !self.llvm_ty_is_vec_struct(val.get_type())
+                        {
+                            // B-2026-09-29-45 — a fresh aggregate temp lent to
+                            // a `ref` param of an ASSOCIATED fn
+                            // (`H.peek(mk(4))`, `H.peek(Some(mk(5)))`) had no
+                            // owner: its `Drop` body ran on no compiled surface
+                            // and a boxed payload leaked. The free-fn and
+                            // method paths route the same temp through
+                            // `queue_ref_rvalue_arg_cleanup`; so does this one
+                            // now. A `Vec`-shaped temp is excluded because
+                            // `materialize_rvalue_for_ref_arg` already tracks
+                            // it, and a second registration would free it twice.
+                            let ref_optres_te = self.ref_param_optres_te(&qualified, i);
+                            self.queue_ref_rvalue_arg_cleanup(
+                                slot.into_pointer_value(),
+                                val,
+                                &a.value,
+                                ref_optres_te.as_ref(),
+                            );
                         }
                         slot.into()
                     }

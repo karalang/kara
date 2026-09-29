@@ -8299,7 +8299,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             val.get_type(),
                         );
                         self.builder.build_store(temp, val).unwrap();
-                        let ref_optres_te = self.ref_param_inline_optres_te(&qualified, pidx);
+                        let ref_optres_te = self.ref_param_optres_te(&qualified, pidx);
                         self.queue_ref_rvalue_arg_cleanup(
                             temp,
                             val,

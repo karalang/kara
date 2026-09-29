@@ -13263,8 +13263,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`__freshtemp_enum_scrut`) are deliberately left to the statement drain:
     /// each has its OWN row in the position table with a different end, and
     /// neither is an argument.
-    pub(super) fn drain_call_arg_temp_user_drops(&mut self, mark: (usize, usize)) {
-        let (depth, len) = mark;
+    pub(super) fn drain_call_arg_temp_user_drops(&mut self, mark: (usize, usize, usize)) {
+        let (depth, len, pending) = mark;
+        self.discard_pending_ref_optres_args(pending);
         // The length half of the mark is an index into ONE PARTICULAR frame --
         // whichever was last when it was taken. An argument containing a
         // control-flow construct (`f(if c { .. } else { .. })`) pushes and pops
@@ -13287,14 +13288,49 @@ impl<'ctx> super::Codegen<'ctx> {
     /// window spans exactly this call's own argument temporaries. The depth
     /// travels with the length because the length alone is meaningless against
     /// a different frame; see the drain for what that would do.
-    pub(super) fn call_arg_temp_mark(&self) -> (usize, usize) {
+    pub(super) fn call_arg_temp_mark(&self) -> (usize, usize, usize) {
         (
             self.drop_rc.scope_cleanup_actions.len(),
             self.drop_rc
                 .scope_cleanup_actions
                 .last()
                 .map_or(0, |f| f.len()),
+            self.drop_rc.pending_ref_optres_arg_discards.len(),
         )
+    }
+
+    /// B-2026-09-29-45 — retire the borrowed `Option`/`Result` argument temps
+    /// this call queued (`queue_ref_rvalue_arg_cleanup`): reload each slot and
+    /// run the discard statement's battery over it on a one-shot frame, as
+    /// `drop_probed_optres_freshtemp` does for a probed receiver. Right to left,
+    /// the order the other argument temps drain in.
+    fn discard_pending_ref_optres_args(&mut self, mark: usize) {
+        if self.drop_rc.pending_ref_optres_arg_discards.len() <= mark {
+            return;
+        }
+        let due = self.drop_rc.pending_ref_optres_arg_discards.split_off(mark);
+        if self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_terminator())
+            .is_some()
+        {
+            return;
+        }
+        for (slot, ty, arg) in due.into_iter().rev() {
+            let Ok(val) = self.builder.build_load(ty, slot, "refarg.optres.reload") else {
+                continue;
+            };
+            self.drop_rc.scope_cleanup_actions.push(Vec::new());
+            let prev = self
+                .drop_rc
+                .discard_frame
+                .replace(self.drop_rc.scope_cleanup_actions.len() - 1);
+            self.track_discarded_temp_cleanup(&arg, val);
+            self.track_discarded_optres_payload_bodies(&arg, val);
+            self.drop_rc.discard_frame = prev;
+            self.drain_discard_frame_args_first(0);
+        }
     }
 
     fn drain_temp_user_drops(&mut self, mark: usize, call_return_only: bool) {

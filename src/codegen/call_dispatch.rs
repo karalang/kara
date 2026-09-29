@@ -2075,7 +2075,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if param_tensor.is_some() && self.expr_yields_fresh_owned_temp(&a.value) {
                     self.track_tensor_var(temp);
                 } else {
-                    let ref_optres_te = self.ref_param_inline_optres_te(&name, i);
+                    let ref_optres_te = self.ref_param_optres_te(&name, i);
                     self.queue_ref_rvalue_arg_cleanup(temp, val, &a.value, ref_optres_te.as_ref());
                 }
                 compiled_args.push(temp.into());
@@ -7477,7 +7477,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `ref`-ness is carried in the param's `TypeExpr` as `TypeKind::Ref`, not
     /// in a mode flag, so the unwrap is what distinguishes this from the
     /// by-value lookup above.
-    pub(super) fn ref_param_inline_optres_te(
+    /// B-2026-09-29-45 — the declared `Option`/`Result` type behind the `ref` /
+    /// `mut ref` param `arg_index` of `callee_name`, whatever its payload's
+    /// layout. `queue_ref_rvalue_arg_cleanup` narrows it to the inline
+    /// (entry-copied) layouts itself.
+    pub(super) fn ref_param_optres_te(
         &self,
         callee_name: &str,
         arg_index: usize,
@@ -7490,8 +7494,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
                 _ => return None,
             };
-            self.optres_param_entry_copied_te(inner)
-                .then(|| inner.clone())
+            let TypeKind::Path(tp) = &inner.kind else {
+                return None;
+            };
+            matches!(
+                tp.segments.first().map(String::as_str),
+                Some("Option" | "Result")
+            )
+            .then(|| inner.clone())
         };
         program.items.iter().find_map(|item| match item {
             crate::ast::Item::Function(f) if f.name == callee_name => check(f, arg_index),
@@ -17821,25 +17831,38 @@ impl<'ctx> super::Codegen<'ctx> {
         slot: PointerValue<'ctx>,
         val: BasicValueEnum<'ctx>,
         arg_expr: &Expr,
-        optres_param_te: Option<&TypeExpr>,
+        ref_optres_te: Option<&TypeExpr>,
     ) {
         // B-2026-09-01-29 (the `ref` half) — a fresh `Option`/`Result` temp
         // handed to a `ref` param. `Option`'s layout is type-erased, so the
         // enum arm below finds no droppable payload on it and registers
         // nothing; the concrete payload cleanups are keyed on the declared
-        // type instead, which is what `optres_param_te` carries in.
+        // type instead.
         //
         // Gated on `optres_arg_is_unowned_temp`, the same predicate the
         // BY-VALUE path uses to decide the caller owns a temp. A named binding
         // (`let o = Some(vs); show(o)`) answers false there and is already
         // clean — it has an owner, and a second registration here would be the
         // double free rather than the leak.
-        if let Some(param_te) = optres_param_te {
-            if self.optres_arg_is_unowned_temp(arg_expr) {
-                self.track_inline_option_payload_var("__refarg_optres_tmp", slot, param_te);
-                self.track_inline_result_payload_var("__refarg_optres_tmp", slot, param_te);
-                return;
-            }
+        //
+        // B-2026-09-29-45 — and the payload's `Drop` BODIES, on every layout.
+        // This registered the inline layouts' MEMORY alone
+        // (`track_inline_option_payload_var`) and nothing at all for a boxed
+        // payload (`g(Some(mk(6)))`, `R` wider than the seeded area), so the
+        // body ran on no compiled surface and the box leaked, while `--interp`
+        // ran the body as the call returned. The temp is borrowed exactly as a
+        // probed receiver is (`mk().is_some()`), so it takes that receiver's
+        // cleanup — the discard statement's own battery, memory and bodies —
+        // once the call has returned (`drain_call_arg_temp_user_drops`),
+        // reloading the slot so a `mut ref` callee's store is what gets
+        // dropped.
+        if ref_optres_te.is_some() && self.optres_arg_is_unowned_temp(arg_expr) {
+            self.drop_rc.pending_ref_optres_arg_discards.push((
+                slot,
+                val.get_type(),
+                arg_expr.clone(),
+            ));
+            return;
         }
         // B-2026-09-28-54 — a fresh `shared` handle (`rq(N { v: 3 })`,
         // `rq(mkn(4))`) lent to a `ref` param: the callee borrows it, so the

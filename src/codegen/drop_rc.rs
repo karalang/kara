@@ -314,6 +314,17 @@ pub(crate) struct DropRc<'ctx> {
     /// cleared: a slot is one alloca, unique for the module's life, and a
     /// monomorph compiled NESTED inside its caller must not wipe the caller's.
     pub(crate) stmt_end_arg_memory_slots: rustc_hash::FxHashSet<PointerValue<'ctx>>,
+    /// B-2026-09-29-45 — fresh `Option`/`Result` temps lent to a `ref` param
+    /// whose payload is NOT laid inline (a boxed or otherwise non-entry-copied
+    /// payload): `(slot, value type, argument expr)`. The call only borrows
+    /// them, so each is owned by nobody once the call returns; the call-return
+    /// drain reloads the slot and gives it the discard statement's cleanup.
+    /// A stack indexed by `call_arg_temp_mark`'s third element.
+    pub(crate) pending_ref_optres_arg_discards: Vec<(
+        PointerValue<'ctx>,
+        inkwell::types::BasicTypeEnum<'ctx>,
+        crate::ast::Expr,
+    )>,
     /// B-2026-09-05-13 — the bindings that currently CARRY a conditionally-
     /// returned parameter's per-path `Drop` body: the parameter itself, as
     /// registered by the prologue (`compile_function` / `compile_mono_function`
