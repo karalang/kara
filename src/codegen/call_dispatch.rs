@@ -5011,9 +5011,29 @@ impl<'ctx> super::Codegen<'ctx> {
         // match below reads calls only), which left the box unreleased: `N`'s
         // `Drop` body ran on no surface and the box leaked.
         if let ExprKind::StructLiteral { path, .. } = &expr.kind {
-            return path
+            if let Some(i) = path
                 .last()
                 .and_then(|n| self.type_decls.shared_types.get(n.as_str()))
+            {
+                return Some(i.heap_type);
+            }
+            // B-2026-09-28-62 — a `shared enum` STRUCT-variant constructor
+            // (`rd(H.Y { v: mkv(1) })`) is the same fresh box, named by its
+            // enum rather than by its last segment, so it was answered `None`
+            // and the whole RC object leaked per call while the tuple-variant
+            // spelling (`H.Y(..)`, a `Call`) was released.
+            if path.len() < 2 {
+                return None;
+            }
+            return self
+                .enum_name_of_expr(expr)
+                .filter(|en| {
+                    self.type_decls
+                        .enum_layouts
+                        .get(en)
+                        .is_some_and(|l| l.is_shared)
+                })
+                .and_then(|en| self.type_decls.shared_types.get(&en))
                 .map(|i| i.heap_type);
         }
         // B-2026-09-19-38 — a `shared enum`'s UNIT variant (`take(U.A)`,
