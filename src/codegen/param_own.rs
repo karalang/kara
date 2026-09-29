@@ -1156,6 +1156,25 @@ impl<'ctx> super::Codegen<'ctx> {
             .as_deref()
             .is_some_and(|p| p.drop_method_keys.contains_key(type_name));
         if !target_has_own_drop_impl {
+            // B-2026-09-29-11 — the induction step still applies to a
+            // bodies-only carrier: its live `StructDrop` is the memory owner
+            // now, because the source's field was cap-zeroed by the move-out.
+            // Without the mark, a further projection out of it (`let w = o.w;
+            // let r = w.r;`) found no callee-owned source, registered no free
+            // for `r`, and `w`'s own drop skipped the cap-zeroed field: 2 B
+            // lost per call at -O0 where `let r = o.w.r;` was clean.
+            if self.source_carries_callee_owned_param_memory(source_name)
+                && self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+                    frame.iter().any(|a| {
+                        matches!(a, crate::codegen::state::CleanupAction::StructDrop { struct_alloca, .. }
+                            if *struct_alloca == slot)
+                    })
+                })
+            {
+                self.drop_rc
+                    .param_view_callee_owned
+                    .insert(binding_name.to_string());
+            }
             return;
         }
         // The source must carry callee-owned memory — otherwise the cap-zero did

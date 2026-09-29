@@ -17961,6 +17961,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ),
                             }
                             leaf_cleanup_registered = true;
+                            // B-2026-09-29-11 — a struct leaf of a source
+                            // carrying the param's callee-owned memory takes
+                            // that memory here, so a further projection out of
+                            // it (`let O { w, k } = o; let r = w.r;`) is the
+                            // sole owner of the moved field. Unmarked, that
+                            // projection registered no free and the leaf's own
+                            // drop skipped the cap-zeroed field: 2 B lost per
+                            // call at -O0. The tuple leaf has carried the same
+                            // mark since B-2026-09-06-8.
+                            let leaf_is_struct = matches!(&field_te.kind,
+                                TypeKind::Path(p) if p.segments.last().is_some_and(|s|
+                                    self.type_decls.struct_types.contains_key(s.as_str())
+                                        && !self.type_decls.shared_types.contains_key(s.as_str())));
+                            let root = match &value.kind {
+                                ExprKind::SelfValue => Some("self"),
+                                _ => Self::place_root_ident(value),
+                            };
+                            if leaf_is_struct
+                                && root.is_some_and(|r| {
+                                    self.source_carries_callee_owned_param_memory(r)
+                                })
+                            {
+                                self.drop_rc.param_view_callee_owned.insert(name.clone());
+                            }
                         }
                         // B-2026-09-06-51 — the cap-zero is a MOVE's disarm: it
                         // tells the source's `StructDrop` "this field went to
