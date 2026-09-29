@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 574 |
-| run-vs-build | 541 |
-| leak | 487 |
+| miscompile | 575 |
+| run-vs-build | 543 |
+| leak | 488 |
 | double-free | 367 |
-| missing-feature | 214 |
+| missing-feature | 215 |
 | codegen-gap | 203 |
-| other | 158 |
+| other | 159 |
 | diagnostics | 138 |
 | perf | 117 |
 | false-positive | 115 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2397 |
-| interp | 708 |
-| typecheck | 317 |
+| codegen | 2402 |
+| interp | 709 |
+| typecheck | 318 |
 | other | 112 |
 | ownership | 79 |
 | cli | 73 |
@@ -130,11 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-19-27 | 2026-09-19 | parser | low | THE SELF-HOSTED PARSER DOES NOT MODEL `IntegerOutOfRange` EITHER, so the token the port lexer can now produce has no consumer -- the seed folds it in six places across `exprs.rs` and `patterns.rs` (the unary-minus `i64::MIN` fold, the unsigned-suffix wrap that buys a precise range diagnostic, and both again for literal and range patterns) and `selfhost/src/parser.kara` has no arm for it at all | — |
-| B-2026-09-19-28 | 2026-09-19 | lexer | low | THE `(u64::MAX, i128::MAX]` BAND IS THE ONE THE PORT LEXER STILL CANNOT REACH -- `100000000000000000000i128` is a plain `Integer` in the seed and an `Error` in the port, because `Token.Integer` carries an i64; B-2026-09-19-26 ported the other three bands and named this one in its own close without a tracker | — |
-| B-2026-09-19-29 | 2026-09-19 | interp | medium | TWO HOLDERS BUILT FROM ONE `shared enum` BINDING RUN ITS PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED BACKEND -- `struct Hs { m: SMono }` built twice from one `s` prints `A d2:9 d2:9 ok` against `A ok d2:9`, in every one of the five holder positions, because an alias of a shared enum is a deep VALUE CLONE in this backend and there is no refcount to consult | — |
-| B-2026-09-19-31 | 2026-09-19 | codegen+interp | medium | A CONDITIONALLY HANDED-BACK PART OF AN OWNED `Option` PAYLOAD LOSES THE PART THAT DIED, ON ALL FOUR SURFACES -- `fn eat(o: Option[(R, R)], k: bool) -> R { match o { Some((a, b)) => { if k { return a; } return b; } .. } }` called with `k = false` prints `got:6 dR6 end` against the due `dR5 got:6 dR6 end` everywhere, so the A/B parity rule sees nothing; the UNCONDITIONAL spelling of the same arm is correct since B-2026-09-14-18, which is what leaves this shape behind as the family's last all-surface loss | — |
-| B-2026-09-19-32 | 2026-09-19 | codegen | low | THE ESCAPING DEBOX LEAKS ITS MOVED-OUT PAYLOAD WHEN THE ENUM HAS NO `impl Drop` -- `fn take(o: Ve) -> String { if let Ve.A(s) = o { s } else { .. } }` loses 310 B over 20 calls at -O0, identically on the `match` spelling, and adding a Drop impl to the same enum makes both clean | — |
 | B-2026-09-20-5 | 2026-09-20 | codegen+interp | medium | ONE-HOP HALF FIXED BY 6adfc4cfc (B-2026-09-14-6); WHAT REMAINS IS THE TWO-HOP PROJECTION -- a NAMED LOCAL handed to a callee that returns `t.0.1` of its `Option` tuple payload (`let a = Some(((R,R), i64)); let g = m2(a)`) prints `got:22 dR22` under `--interp`, LOSING element 0.0's body, and `dR21 dR22 got:22 dR22` on every compiled surface, DOUBLING the escapee, against the due `dR21 got:22 dR22`; `remask_named_tuple_payload_arg` declines any path deeper than one hop, and the interpreter's named-local walk loses the sibling instead | — |
 | B-2026-09-20-6 | 2026-09-20 | codegen | medium | A STRUCT-ROOTED PROJECTION OUT OF A BY-VALUE `Option` PAYLOAD IS WRONG IN BOTH DIRECTIONS AND THE PAYLOAD'S WIDTH PICKS WHICH -- `w.p.1` over an INLINE `struct W { p: (R, R), n: i64 }` runs the escaping element's body TWICE on every compiled surface, the same path over a BOXED 4-word twin LOSES the sibling's body entirely, and the boxed field-then-field cell loses it too although the inline field-then-field cell is correct -- so boxing breaks a case the inline channel gets right; `--interp` correct throughout | — |
 | B-2026-09-20-7 | 2026-09-20 | interp | low | THE INTERPRETER RUNS BOTH INNER ELEMENTS' `Drop` BODIES TWICE WHEN AN ARM RETURNS EVERY SIBLING OF A NESTED `Option` TUPLE PAYLOAD -- `Some(t) => return (t.0.0, t.0.1)` prints `dR81 dR82 got:81,82 dR81 dR82` against the compiled backends' correct `got:81,82 dR81 dR82`, the reverse direction from every other cell of this family; and the compiled side is right here BY ACCIDENT -- it used to decline the whole mask for a two-hop path, which happens to be correct exactly when every part escapes | — |
@@ -305,7 +300,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-61 | 2026-09-27 | codegen | medium | AN ENUM RECEIVER'S ARM PASSING ITS PAYLOAD AND A BY-VALUE PARAM TO THE SAME CALL DEFERS THE PARAM'S `Drop` BODY TO THE CALLER'S STATEMENT END ON COMPILED BACKENDS -- `fn both(self, o: R) -> i64 { match self { E.A(r) => { return two(r, o); } .. } }` prints `dR6 dR60 x66 dE` under `--interp` and `dR6 x66 dR60 dE` on `karac build`; `one(o)` alone, `two(mk(7), o)`, and a struct receiver's `two(mk(6), o)` all agree, so it is the pairing of the moved-out PAYLOAD with the param in one arg list that moves `o`'s body | — |
 | B-2026-09-27-62 | 2026-09-27 | codegen | low | A USER FUNCTION NAMED LIKE A C SYMBOL THE RUNTIME DECLARES (`free`, `malloc`, `exit`, `strlen`) FAILS `karac build` WHILE `--interp` RUNS IT -- `fn free(x: i64) -> i64 { return x + 1; }` reports `Binary op Add: left operand has non-comparable type PointerType` or `Global is external, but doesn't have external or weak linkage! ptr @free.1`; `memcpy` and `puts` happen to build. User fn symbols share the LLVM module's namespace with the runtime's C externs and are not mangled | — |
 | B-2026-09-27-63 | 2026-09-27 | ownership | low | REUSING A `shared enum` AFTER PASSING IT BY VALUE WARNS `value 's' moved here, used again here`, WHERE THE SAME REUSE OF A `shared struct` IS SILENT -- `rd(e); rd(e)` over `fn rd(s: Sh) -> i64`, `e.read(); e.read()` over an owned-`self` method, and `match s {..}` twice all warn for `shared enum Sh`, while `let b = a; a.id`, `c.get(); c.get()` and `sg(d); sg(d)` on a `shared struct` do not; both kinds are reference-counted handles (design.md § Guaranteed, `shared struct` / `shared enum`: reference semantics), and every backend runs these programs correctly | — |
-| B-2026-09-27-64 | 2026-09-27 | codegen+interp | medium | A FRESH `shared enum` TEMP PASSED BY VALUE RUNS ITS PAYLOAD'S `Drop` BODY BEFORE THE ENCLOSING STATEMENT USES THE RESULT UNDER `--interp`, AND AFTER IT ON EVERY COMPILED BACKEND -- `println(f"x{rd(Sh.A(mk(28)))}")` over `fn rd(s: Sh) -> i64` prints `dR28 x28` interpreted and `x28 dR28` on jit / `-O0` / `-O2` / auto-par=0; the owned-`self` receiver spellings (`Sh.A(mk(29)).read()`, and `.none()` on a callee that never matches) split the same way. A NAMED local agrees on all five surfaces, and so does a plain (non-shared) struct temp arg, which reads `dR x` everywhere | — |
 | B-2026-09-27-74 | 2026-09-27 | codegen | high | A BY-VALUE `Option` / `Result` PARAM WITH A BOXED USER-ENUM PAYLOAD, MATCHED BY A NESTED ARM WHOSE VALUE READS THE PAYLOAD, SKIPS THE PAYLOAD'S DROP BODIES AND RUNS ONE ON A ZEROED VALUE -- `fn rb(a: Option[K]) -> i64 { match a { Some(K.A(w)) => w.r.id, Some(K.B) => 30, None => 40 } }` over `enum K { A(W), B }` prints `k1 d0 k2 end` at -O0 and -O2 where `--interp` prints `k1 d1 d2 k2 end`, and valgrind finds the two heap `String`s of each `W` definitely lost; no rebind is involved | — |
 | B-2026-09-27-75 | 2026-09-27 | codegen | high | A WHOLE-PAYLOAD ARM `Some(k) => match k { .. }` ON A BY-VALUE `Option[K]` PARAM WITH A BOXED USER-ENUM PAYLOAD RUNS AN EXTRA `Drop` BODY ON A ZEROED VALUE, AND DOUBLE-FREES WHEN THE PARAM IS FIRST REBOUND -- `fn rb(a: Option[K]) -> i64 { match a { Some(k) => match k { K.A(w) => println(f"m{w.r.id}"), K.B => println("b") }, None => println("n") } 5 }` prints `m1 d1 d0 k5 m2 d2 d0 end` at -O0 and -O2 where `--interp` prints `m1 d1 k5 m2 d2 end`; with `let c = a; match c { .. }` it aborts `free(): double free` on both | — |
 | B-2026-09-27-67 | 2026-09-27 | interp+codegen | medium | A PART OF A NAMED RECEIVER OR ARGUMENT HANDED BACK ON ONLY SOME PATHS LOSES ITS `Drop` BODY ON THE PATH THAT DOES NOT HAND IT BACK, ON ALL FOUR SURFACES -- `impl Ws { fn pick(self, c: bool) -> Option[R] { if c { return Option.Some(self.r) } return None } }` with `w.pick(false)` prints `got` where `dR17 got` is due; `return self.r` and a free fn `pkf(w, false)` lose it the same way | — |
@@ -445,6 +439,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-103 | 2026-09-29 | typecheck | medium | `let` destructuring a CONCRETE instantiation of a generic struct types the leaf as the bare parameter, so `fn f(g: G[String]) -> i64 { let G { v, n } = g; v.len() }` is rejected with `no method 'len' on type parameter 'T'`; the `match` spelling of the same destructure typechecks | — |
 | B-2026-09-29-104 | 2026-09-29 | typecheck | low | A NESTED struct pattern over a generic struct in a `let` is rejected as refutable -- `let G { v: G { v, n }, n: m } = g` over `g: G[G[String]]` reports `refutable pattern in \`let\` binding`, while the same nested pattern over a non-generic struct (`let A { b: B { x }, y } = a`) is accepted | — |
 | B-2026-09-29-105 | 2026-09-29 | codegen | high | A `match` over a by-value struct param with a `shared` field that binds a nested struct field which ITSELF owns a `shared` field (`match q { Q { hs, .. } => hs.t.len() }`, `hs: Hs { sh: ShIn, t: String }`) double-frees at -O0 and -O2; the `let` spelling and `q.hs` returned are clean -- the remainder of B-2026-09-29-89 | — |
+| B-2026-09-29-98 | 2026-09-29 | typecheck | low | `i128.parse` / `u128.parse` DO NOT EXIST -- `i128.parse(s)` is rejected with "no associated function 'parse' on type 'i128'", and so is `i128.from_str_radix`, while `i32.parse`, `i64.parse` and `u64.parse` type-check and run | — |
+| B-2026-09-29-99 | 2026-09-29 | codegen | medium | A `shared enum` HELD BY A GENERIC `G[T]` PAYLOAD, BY A TUPLE ARGUMENT, OR BY A DISCARDED HOLDER RUNS NO PAYLOAD `Drop` BODY ON ANY COMPILED SURFACE AND LEAKS THE PAYLOAD -- `{ let g = G.X(SMono.P(mkr(1))); println("x") }`, `let _ = shArg((S(mk(1)), 7))` and `let _ = Hs { m: s }` print no body compiled while `--interp` prints one, and valgrind at -O0 reports 224 B in 3 blocks definitely lost for the three together | — |
+| B-2026-09-29-117 | 2026-09-29 | codegen+interp | medium | THE HEAP-BOXED SPELLING OF B-2026-09-19-31 STILL LOSES THE ELEMENT LEFT BEHIND ON ALL FOUR SURFACES -- `fn eatH(o: Option[(H, H)], k: bool) -> H { match o { Some((a, b)) => { if k { return a; } return b; } .. } }` with `struct H { id: i64, s: String }` prints `got:2 dH2` against the due `dH1 got:2 dH2`, and `got:3 dH3` against `dH4 got:3 dH3` | — |
+| B-2026-09-29-118 | 2026-09-29 | codegen | medium | A LOCAL HEAP-BOXED `Option` TUPLE WHOSE ARM HANDS AN ELEMENT BACK ON ONE PATH RUNS THE RETURNED ELEMENT'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `let o = Some((H{..}, H{..})); match o { Some((a, b)) => { if k { return a; } return b; } .. }` prints `dH1 dH2 got:2 dH2` on jit / -O0 / -O2 against `--interp`'s correct `dH1 got:2 dH2` | — |
+| B-2026-09-29-119 | 2026-09-29 | codegen | medium | A CONDITIONAL READ-ONLY ARM OVER A BY-VALUE `Option` PARAM'S DESTRUCTURED TUPLE PAYLOAD LOSES BOTH ELEMENTS' `Drop` BODIES FOR A FRESH TEMP ON EVERY COMPILED SURFACE -- `fn rd(o: Option[(R, R)], k: bool) -> i64 { match o { Some((a, b)) => { if k { return a.id; } return b.id; } .. } }` prints `got:1` on jit / -O0 / -O2 against `--interp`'s `dR1 dR2 got:1` | — |
 
 ### Relocated
 
@@ -3023,7 +3022,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-19-24 | codegen | medium | THE `Option`/`Result` HEAD OF B-2026-09-17-7 DOUBLE-FREED -- `fn midopt[T](g: Option[T], c: bool) -> Option[T] { if c { return g } return Option.None… | 71692550b |
 | B-2026-09-19-25 | codegen | medium | AUDIT THE REST OF THE ONE-WAY-CLEAR POPULATION THAT B-2026-09-17-8 FIXED BY CONSTRUCTION -- nine payload-ownership registries were wiped for the rema… | 71692550b |
 | B-2026-09-19-26 | lexer | low | THE SELF-HOSTED LEXER DOES NOT MODEL `IntegerOutOfRange`, so a 19+ digit literal is an Error token in the port and a real token in the seed -- `18446… | 01a3dad |
+| B-2026-09-19-27 | parser | low | THE SELF-HOSTED PARSER DOES NOT MODEL `IntegerOutOfRange` EITHER, so the token the port lexer can now produce has no consumer -- the seed folds it in… | 33cac6635 |
+| B-2026-09-19-28 | lexer | low | THE `(u64::MAX, i128::MAX]` BAND IS THE ONE THE PORT LEXER STILL CANNOT REACH -- `100000000000000000000i128` is a plain `Integer` in the seed and an… | 33cac6635 |
+| B-2026-09-19-29 | interp | medium | TWO HOLDERS BUILT FROM ONE `shared enum` BINDING RUN ITS PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED BACKEND -- `struct H… | b3b2c91df |
 | B-2026-09-19-30 | codegen | high | A WILDCARD LEAF IN A DESTRUCTURED **BOXED** PAYLOAD MADE ITS NAMED SIBLINGS READ FROM THE WRONG OFFSET ON EVERY COMPILED BACKEND -- `fn wildOut(o: Op… | ea5228a |
+| B-2026-09-19-31 | codegen+interp | medium | A CONDITIONALLY HANDED-BACK PART OF AN OWNED `Option` PAYLOAD LOSES THE PART THAT DIED, ON ALL FOUR SURFACES -- `fn eat(o: Option[(R, R)], k: bool) -… | 6c3af94 |
+| B-2026-09-19-32 | codegen | low | THE ESCAPING DEBOX LEAKS ITS MOVED-OUT PAYLOAD WHEN THE ENUM HAS NO `impl Drop` -- `fn take(o: Ve) -> String { if let Ve.A(s) = o { s } else { . | 388a4fb |
 | B-2026-09-19-33 | codegen | medium | A NESTED PROJECTION OUT OF A BY-VALUE `Option` TUPLE PAYLOAD STILL SILENCES ITS INNER SIBLING ON EVERY COMPILED BACKEND -- `fn eat(o: Option[((R, R),… | 6d0c4f7 |
 | B-2026-09-19-34 | codegen | medium | A PROJECTION OUT OF A **BOXED** `Option` TUPLE PAYLOAD RUNS THE ESCAPING PART'S `Drop` BODY TWICE ON EVERY COMPILED BACKEND -- `fn eat(o: Option[(H,… | 52602ba |
 | B-2026-09-19-35 | codegen | low | A CALL RESULT BINDING ARMS NO BOX DROP FOR A GENERIC ENUM A FIELD DEEP, so the payload leaks once B-2026-09-19-21's fix stops a wrong free from stand… | ea5e8f9 |
@@ -3255,6 +3259,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-58 | interp+codegen | medium | AN OWNED STRUCT PARAMETER USED AS THE NAMED RECEIVER OF AN OWNED-`self` METHOD THAT HANDS A FIELD BACK RUNS THAT FIELD'S BODY TWICE ON ALL FOUR SURFA… | a086d98bd |
 | B-2026-09-27-59 | codegen | medium | A GENERIC STRUCT'S `Drop`-BEARING FIELD HANDED BACK BY VALUE RUNS ITS BODY TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT, for the method,… | 2fbd214e8 |
 | B-2026-09-27-60 | codegen | medium | A `for` LOOP BINDING OVER A `Vec` OF A BOXED GENERIC ENUM, PASSED BY VALUE TO A CALLEE THAT MATCHES IT, RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY… | b3ab2eb44 |
+| B-2026-09-27-64 | codegen+interp | medium | A FRESH `shared enum` TEMP PASSED BY VALUE RUNS ITS PAYLOAD'S `Drop` BODY BEFORE THE ENCLOSING STATEMENT USES THE RESULT UNDER `--interp`, AND AFTER… | b3b2c91df |
 | B-2026-09-27-65 | codegen | medium | THE METHOD AND FIELD-SOURCE SPELLINGS OF B-2026-09-27-60 STILL RUN A BOXED GENERIC ENUM LOOP VIEW'S `Drop` BODY IN THE CALLEE -- `for h in v { k.take… | 08f2f01f9 |
 | B-2026-09-27-66 | codegen | high | A `for` LOOP VIEW OF A BOXED GENERIC ENUM THAT ESCAPES A BY-VALUE CALLEE, OR IS CONSUMED TWICE, CRASHES ON EVERY COMPILED SURFACE -- `for h in v { w.… | e7b06b0a4 |
 | B-2026-09-27-69 | typecheck | low | THE `borrow_projection_copy` LINT (W0299) IS SILENT WHEN A BARE `for` LOOP'S ELEMENT IS MATERIALIZED -- `for g in v { let o = f(g); }` over a keeping… | 1d152cc9e |
@@ -3352,6 +3357,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-100 | codegen | high | REMAINDER OF B-2026-09-29-79: A LOCAL BOUND STRAIGHT FROM A NESTED STRUCT FIELD OF A BY-VALUE PARAM THAT HOLDS A `shared` VALUE STILL ALIASES THE CAL… | dbf3f7187 |
 | B-2026-09-29-85 | codegen | high | A by-value struct PARAM with a `shared` field (which the prologue neither entry-copies nor takes by transfer) double-frees an owned `String` field it… | d48b3fcef |
 | B-2026-09-29-89 | codegen | high | A `match` over a by-value struct param with a `shared` field that binds a nested STRUCT field (`match q { Q { h, . | c09cc8a89 |
+| B-2026-09-29-97 | codegen | high | A STRUCT WITH AN `i128` / `u128` FIELD LOSES THE FIELD'S HIGH WORD AS AN ENUM PAYLOAD, AND SHIFTS EVERY LATER FIELD DOWN ONE SLOT -- `E.Int(Lit { val… | 5d95ab44b |
 
 </details>
 
