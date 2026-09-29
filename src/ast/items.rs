@@ -1822,6 +1822,11 @@ fn matches_on_scrutinee(f: &Function, is_target: &dyn Fn(&Expr) -> bool, let_els
             | ExprKind::For { body, .. }
             | ExprKind::Loop { body, .. }
             | ExprKind::LabeledBlock { body, .. } => walk_block(body, t, le),
+            // B-2026-09-29-64 — `return match self { .. }` destructures the
+            // receiver exactly as the tail `match self { .. }` does. Without
+            // this arm the caller kept its receiver walk armed beside the arm
+            // that owns the payload, and the payload's body ran twice.
+            ExprKind::Return(Some(inner)) => walk_expr(inner, t, le),
             _ => false,
         }
     }
