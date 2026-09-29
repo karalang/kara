@@ -9273,7 +9273,21 @@ fn pattern_leaf_may_carry_body(program: &crate::Program, pattern: &Pattern, name
                 .iter()
                 .position(|p| matches!(&p.kind, PatternKind::Binding(b) if b == name))
             else {
-                return true;
+                // B-2026-09-29-43 — a FIELD of a struct payload destructured in
+                // place (`Some(S { r, n }) => n`, `n: i64`) is answered from the
+                // struct's declaration, exactly as the bare `S { r, n }`
+                // pattern is. Answering "may carry" for it stood the caller's
+                // whole walk down over a returned scalar, and the destructured
+                // `r` had no other owner: its body ran on no backend.
+                return match patterns
+                    .iter()
+                    .find(|p| p.binding_names().iter().any(|b| b == name))
+                {
+                    Some(sub) if matches!(sub.kind, PatternKind::Struct { .. }) => {
+                        pattern_leaf_may_carry_body(program, sub, name)
+                    }
+                    _ => true,
+                };
             };
             program.items.iter().find_map(|it| match it {
                 Item::EnumDef(e) => {

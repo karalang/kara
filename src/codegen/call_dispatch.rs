@@ -6514,6 +6514,17 @@ impl<'ctx> super::Codegen<'ctx> {
             extend_with_whole_rebinds(&f.body, &mut field_roots);
         }
         let leaf_is_copy_read = |e: &Expr| -> bool {
+            // B-2026-09-29-43 — a FIELD binding used bare (`Some(ShP { i, n })
+            // => n`) is a copy read when the field is a bit-copyable scalar:
+            // it takes nothing from the payload. Scored as an escape, both
+            // ends read "the callee takes it", and nobody owned the sibling
+            // fields: a `Drop` field's body ran nowhere and a `shared` one
+            // leaked its block.
+            if let ExprKind::Identifier(n) = &e.kind {
+                return field_roots
+                    .get(n.as_str())
+                    .is_some_and(|te| !self.elem_te_runs_user_drop(te));
+            }
             let base_root = projection_base_ident(e).and_then(|b| field_roots.get(b));
             self.projection_leaf_te_through_index(base_root.unwrap_or(&root), e)
                 .is_some_and(|leaf| !self.elem_te_runs_user_drop(&leaf))
