@@ -19022,6 +19022,8 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let mut took_bodies: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let source_owns_memory =
+            Self::place_root_ident(value).is_some_and(|root| self.root_has_aggregate_drop(root));
         // B-2026-09-06-30 — the elements of a LOCAL tuple source that a mixed
         // literal recorded as the caller's (`param_view_tuple_elems`); their
         // leaves are views, per element. Empty for a param source (every leaf
@@ -19044,6 +19046,7 @@ impl<'ctx> super::Codegen<'ctx> {
             mark_views,
             &view_elems,
             &mut took_bodies,
+            source_owns_memory,
         );
         // B-2026-09-02-43 — when the LEAVES took the bodies, the source must
         // stop running them. `owner_runs_bodies` already says the source is not
@@ -19098,6 +19101,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // consults it; the nested recursion passes an empty set.
         view_elems: &std::collections::HashSet<u32>,
         took_bodies: &mut std::collections::HashSet<u32>,
+        // B-2026-09-26-53 — whether the destructured place's ROOT owns its
+        // memory through a registered aggregate drop (a tuple / struct LOCAL).
+        // A `for` element or a closure's destructured parameter is a VIEW of a
+        // container's element: its `String`/`Vec` leaves must stay aliases,
+        // because cap-zeroing the view's slot cannot stop the container
+        // freeing the same buffer.
+        source_owns_memory: bool,
     ) {
         for (idx, pat) in pats.iter().enumerate() {
             let Some(te) = elems.get(idx).cloned() else {
@@ -19142,6 +19152,27 @@ impl<'ctx> super::Codegen<'ctx> {
                                         self.builder.build_call(bodies, &[ptr.into()], "").unwrap();
                                         took_bodies.insert(idx as u32);
                                     }
+                                }
+                                continue;
+                            }
+                            // B-2026-09-26-53 — a discarded `Vec[T]` element
+                            // (`let (a, _) = t;`). The helper below resolves a
+                            // struct / enum / Option / Result head and declines
+                            // a `Vec`, so the elements' bodies ran on no compiled
+                            // surface. Bodies only, run in place against the
+                            // source's slot, as the array arm above does: the
+                            // aggregate keeps the memory.
+                            let is_vec_head = matches!(&te.kind, TypeKind::Path(vp)
+                                if vp.segments.first().map(String::as_str) == Some("Vec"));
+                            if is_vec_head
+                                && source_owns_memory
+                                && lty == self.vec_struct_type().into()
+                            {
+                                if let Some((_, bodies)) = super::helpers::vec_inner_type_expr(&te)
+                                    .and_then(|ite| self.vec_elem_bodies_walker_for_te(&ite))
+                                {
+                                    self.builder.build_call(bodies, &[ptr.into()], "").unwrap();
+                                    took_bodies.insert(idx as u32);
                                 }
                                 continue;
                             }
@@ -19227,6 +19258,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     mark_views,
                     &std::collections::HashSet::new(),
                     &mut inner_took,
+                    source_owns_memory,
                 );
                 // B-2026-09-03-14 — the recursion cap-zeroes the inner leaves it
                 // takes, but the OUTER element was never recorded (this call site
@@ -19460,6 +19492,40 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 continue;
+            }
+            // B-2026-09-26-53 — a `String` / `Vec[T]` leaf off a PLACE source
+            // (`let t = (s, 7); let (a, j) = t;`). It used to keep the
+            // source-owns behaviour: registered nothing and left the source's
+            // element live, so the leaf was an untracked ALIAS of a buffer the
+            // source still freed. A whole move of the leaf (`let b = a;`) then
+            // gave the buffer a second owner — a double free on the JIT and
+            // under valgrind at -O0 — and a `Vec[D]` leaf ran none of its
+            // elements' bodies on any compiled surface.
+            //
+            // Now the leaf takes the element, the same way the enum / struct /
+            // array arms take theirs: memory and bodies registered on the leaf,
+            // the body index recorded for the caller's mask, and the source's
+            // element cap-zeroed so its own drop stands down. Gated on
+            // `!owner_runs_bodies` like the array arm: a by-value tuple PARAM
+            // source keeps its caller-side owner.
+            if !owner_runs_bodies && source_owns_memory {
+                if let TypeKind::Path(vp) = &te.kind {
+                    let head = vp.segments.last().map(String::as_str);
+                    if matches!(head, Some("Vec") | Some("String") | Some("str")) {
+                        let vec_ty = self.vec_struct_type();
+                        let slot = self.variables.get(name.as_str()).copied();
+                        let elem = self.var_types.vec_elem_types.get(name.as_str()).copied();
+                        if let (Some(slot), Some(elem)) = (slot, elem) {
+                            if matches!(slot.ty, BasicTypeEnum::StructType(st) if st == vec_ty) {
+                                if self.track_vec_destructure_leaf(name, slot.ptr, elem, true) {
+                                    took_bodies.insert(idx as u32);
+                                }
+                                self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, idx as u32, &te);
+                            }
+                        }
+                        continue;
+                    }
+                }
             }
             // Only ENUM / nested-STRUCT leaves are newly freed by `NestedTuple`;
             // Vec/String leaves keep the existing source-owns behavior.
@@ -19973,8 +20039,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.indexed_elem_counter += 1;
                         let alloca = self.create_entry_alloca(fn_val, &synth, elem.get_type());
                         self.builder.build_store(alloca, elem).unwrap();
-                        let i8t = self.context.i8_type().into();
-                        self.track_vec_var(alloca, Some(i8t));
+                        // B-2026-09-26-53 — a discarded `Vec[T]` element runs
+                        // its elements' bodies HERE (it is dead at once, where
+                        // `--interp` runs them) and frees through the
+                        // element-aware owner. `track_vec_var` with an `i8`
+                        // element freed the outer buffer only, so each
+                        // element's own heap leaked and no body ran.
+                        let vec_inner = elem_tes
+                            .and_then(|tes| tes.get(idx))
+                            .filter(|te| {
+                                matches!(&te.kind, TypeKind::Path(vp)
+                                if vp.segments.first().map(String::as_str) == Some("Vec"))
+                            })
+                            .and_then(super::helpers::vec_inner_type_expr);
+                        if let Some(ite) = vec_inner {
+                            if let Some((_, bodies)) = self.vec_elem_bodies_walker_for_te(&ite) {
+                                self.builder
+                                    .build_call(bodies, &[alloca.into()], "")
+                                    .unwrap();
+                            }
+                            let elem_llvm = self.llvm_type_for_type_expr(&ite);
+                            self.track_vec_owner_memory(alloca, elem_llvm, Some(&ite));
+                        } else {
+                            let i8t = self.context.i8_type().into();
+                            self.track_vec_var(alloca, Some(i8t));
+                        }
                         true
                     } else {
                         false
@@ -20515,6 +20604,142 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
+    /// B-2026-09-26-53 — a `String` / `Vec[T]` destructure leaf as an OWNER,
+    /// registered the way a `let`-bound `Vec` local is: the element-aware
+    /// memory drop, then (when `register_user_bodies`) the elements' user
+    /// `Drop` bodies on the `ContainerElemBodies` channel. Returns whether a
+    /// bodies walker was registered, so a place-source caller can mask the
+    /// element out of the source's own walk.
+    ///
+    /// The leaf used to get `track_vec_var` alone: memory with no element
+    /// bodies, so `let (a, j) = mk()` with `a: Vec[D]` freed every `D` and ran
+    /// none of their bodies on any compiled surface, where `--interp` ran
+    /// them at the leaf's death. The memory half now picks the same
+    /// element-aware drop the `let`-site picks (`Vec[<struct/enum>]` runs each
+    /// element's drop fn; the inline recursion reaches only direct
+    /// `Vec`/`String` fields), because on a place source this leaf becomes the
+    /// ONLY owner once the source's element is cap-zeroed.
+    /// B-2026-09-26-53 — does the local `root` own its value through a
+    /// registered aggregate drop (`StructDrop` on its own slot) in any live
+    /// frame? True for a tuple or struct LOCAL; false for a `for` element or a
+    /// closure's destructured parameter, which view a container's element.
+    fn root_has_aggregate_drop(&self, root: &str) -> bool {
+        let Some(slot) = self.variables.get(root).map(|v| v.ptr) else {
+            return false;
+        };
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|a| {
+                matches!(a, crate::codegen::state::CleanupAction::StructDrop { struct_alloca, .. }
+                    if *struct_alloca == slot)
+            })
+        })
+    }
+
+    fn track_vec_destructure_leaf(
+        &mut self,
+        name: &str,
+        alloca: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        register_user_bodies: bool,
+    ) -> bool {
+        let elem_te = self
+            .var_types
+            .var_elem_type_exprs
+            .get(name)
+            .cloned()
+            .filter(|_| !self.var_types.string_vars.contains(name));
+        self.track_vec_owner_memory(alloca, elem, elem_te.as_ref());
+        if !register_user_bodies {
+            return false;
+        }
+        // MEMORY FIRST (above), then bodies — the frame drains LIFO, so the
+        // bodies read live elements.
+        let Some((label, bodies)) = elem_te
+            .as_ref()
+            .and_then(|te| self.vec_elem_bodies_walker_for_te(te))
+        else {
+            return false;
+        };
+        self.track_user_drop_var_with_fn(
+            &label,
+            name,
+            alloca,
+            bodies,
+            UserDropKind::ContainerElemBodies,
+        );
+        true
+    }
+
+    /// B-2026-09-26-53 — the element-aware MEMORY owner for a `Vec` slot,
+    /// picked the way the `let`-bound `Vec` local picks it: `Vec[Map]` frees
+    /// each handle, `Vec[<struct/enum/array>]` runs each element's drop fn,
+    /// anything else takes the inline recursion (which reaches only direct
+    /// `Vec`/`String` fields). `elem_te` is `None` for a `String`.
+    fn track_vec_owner_memory(
+        &mut self,
+        alloca: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        elem_te: Option<&TypeExpr>,
+    ) {
+        let map_elem_drop = elem_te.and_then(|te| self.vec_elem_map_drop_for_type_expr(te));
+        let agg_elem_drop = elem_te.and_then(|te| {
+            self.vec_elem_boxed_enum_drop_for_te(te)
+                .or_else(|| self.vec_elem_agg_drop_for_type_expr(te))
+                .or_else(|| self.vec_elem_array_drop_for_type_expr(te))
+        });
+        if let Some(map_drop) = map_elem_drop {
+            self.track_vec_of_maps_var(alloca, map_drop);
+        } else if let Some(agg_drop) = agg_elem_drop {
+            self.track_vec_of_aggs_var(alloca, elem, agg_drop);
+        } else {
+            self.track_vec_var(alloca, Some(elem));
+        }
+    }
+
+    /// B-2026-09-26-53 — the elements' user `Drop` bodies walker over a `Vec`
+    /// header whose ELEMENT type is `te`, with the label the `let`-site gives
+    /// it. Same selector as that site: a named struct / user value enum takes
+    /// the per-name walker, anything else the te-driven recursive one.
+    fn vec_elem_bodies_walker_for_te(
+        &mut self,
+        te: &TypeExpr,
+    ) -> Option<(String, inkwell::values::FunctionValue<'ctx>)> {
+        let named = match &te.kind {
+            TypeKind::Path(p) => p
+                .segments
+                .first()
+                .filter(|n| {
+                    let n = n.as_str();
+                    self.type_decls.struct_types.contains_key(n)
+                        || (n != "Option"
+                            && n != "Result"
+                            && self
+                                .type_decls
+                                .enum_layouts
+                                .get(n)
+                                .is_some_and(|l| !l.is_shared))
+                })
+                .cloned(),
+            _ => None,
+        };
+        if let Some(en) = named {
+            let elem = self.llvm_type_for_type_expr(te);
+            let subst = self.user_drop_subst_from_inst(&en, te);
+            let b = self.emit_vec_elem_user_drop_bodies_fn_mono(&en, elem, &subst)?;
+            return Some((en, b));
+        }
+        let label = match &te.kind {
+            TypeKind::Path(p) => p
+                .segments
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "Vec".to_string()),
+            _ => "Vec".to_string(),
+        };
+        let b = self.emit_nested_vec_elem_bodies_fn(te)?;
+        Some((label, b))
+    }
+
     fn track_destructure_leaf_cleanup(
         &mut self,
         name: &str,
@@ -20523,7 +20748,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         // String + Vec both register `vec_elem_types` (the buffer shape).
         if let Some(&elem) = self.var_types.vec_elem_types.get(name) {
-            self.track_vec_var(alloca, Some(elem));
+            self.track_vec_destructure_leaf(name, alloca, elem, register_user_bodies);
             return;
         }
         if self.mapset.map_key_types.contains_key(name)
