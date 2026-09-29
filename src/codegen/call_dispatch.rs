@@ -12914,9 +12914,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// through every arm and register nothing at all.
     pub(super) fn tuple_arg_elem_type_exprs(&self, arg: &Expr) -> Option<Vec<TypeExpr>> {
         match &arg.kind {
-            ExprKind::Tuple(elems) => {
-                Some(elems.iter().map(|e| self.infer_arg_elem_te(e)).collect())
-            }
+            // B-2026-09-26-54 — a NAMED `Array` element is named in full:
+            // `compile_tuple` hands its drop to whoever owns the tuple, so the
+            // entry-copy gate and this registrar must see the array to arm
+            // the temp's drop. `infer_arg_elem_te` reads it as a bare head.
+            ExprKind::Tuple(elems) => Some(
+                elems
+                    .iter()
+                    .map(|e| {
+                        self.named_array_elem_te(e)
+                            .unwrap_or_else(|| self.infer_arg_elem_te(e))
+                    })
+                    .collect(),
+            ),
             ExprKind::Call { callee, .. } => {
                 let ExprKind::Identifier(fn_name) = &callee.kind else {
                     return None;

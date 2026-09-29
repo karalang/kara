@@ -1597,6 +1597,7 @@ impl<'a> super::Interpreter<'a> {
     /// The element list is cloned out before the walk so a body that touches
     /// the same container cannot deadlock against a held read guard.
     fn run_array_element_user_drops(&mut self, name: &str) -> bool {
+        let binding_is_tuple = matches!(self.env.get(name), Some(Value::Tuple(_)));
         let elems: Vec<Value> = match self.env.get(name) {
             Some(Value::Array(cell)) => match cell.read() {
                 Ok(g) => g.clone(),
@@ -1697,7 +1698,11 @@ impl<'a> super::Interpreter<'a> {
             // divergence in the silent direction on this side.
             if let Value::Tuple(items) = &e {
                 let items = items.clone();
-                self.run_tuple_item_user_drops(items);
+                if binding_is_tuple {
+                    self.run_tuple_binding_nested_items(items);
+                } else {
+                    self.run_tuple_item_user_drops(items);
+                }
                 continue;
             }
             // B-2026-08-03-1 — an `Option[P]` / `Result[O, E]` ELEMENT
@@ -6621,6 +6626,30 @@ impl<'a> super::Interpreter<'a> {
             if let Value::Tuple(inner) = &it {
                 let inner = inner.clone();
                 self.run_tuple_item_user_drops(inner);
+            }
+        }
+    }
+
+    /// B-2026-09-26-54 — the items of a tuple nested inside a tuple BINDING
+    /// (`let t = ((a, 7), 8);`): [`Self::run_tuple_item_user_drops`] plus the
+    /// `Array` item it skips, which the binding's own top-level loop in
+    /// `run_array_element_user_drops` already walks for a direct element. The
+    /// compiled tuple walker runs those elements' bodies at the binding's
+    /// death; this side was silent.
+    ///
+    /// Tuple bindings only. A `Vec` binding's tuple elements keep the
+    /// array-blind walk: after a consuming `for` over it the elements' inner
+    /// `Vec`s are already owned elsewhere, and walking them here too ran every
+    /// body twice.
+    fn run_tuple_binding_nested_items(&mut self, items: Vec<Value>) {
+        for it in items {
+            match &it {
+                Value::Array(_) => self.run_nested_array_struct_elem_bodies(&it),
+                Value::Tuple(inner) => {
+                    let inner = inner.clone();
+                    self.run_tuple_binding_nested_items(inner);
+                }
+                _ => self.run_tuple_item_user_drops(vec![it]),
             }
         }
     }

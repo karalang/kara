@@ -21073,6 +21073,43 @@ impl<'ctx> super::Codegen<'ctx> {
         out
     }
 
+    /// B-2026-09-26-54 — the full `Array[T, N]` type of a tuple-literal
+    /// element that names an owned array local or by-value param, in the
+    /// `Path(["Array"], [Type(T), Const(N)])` spelling an annotation parses
+    /// to (the one every tuple admit gate matches).
+    ///
+    /// `compile_tuple` hands such an element's `StructDrop` to whoever owns
+    /// the tuple, so that owner has to know the element is an array to walk
+    /// it. Without the name `let t = (a, 7)` registered no walk at all and the
+    /// elements' `Drop` bodies never ran. The hand-over removes the name from
+    /// `owned_array_params`, and a `let` names its element types only after
+    /// the literal is compiled, so the record `compile_tuple` leaves in
+    /// `tuple_elem_array_tes` is read first.
+    pub(super) fn named_array_elem_te(&self, e: &Expr) -> Option<TypeExpr> {
+        let ExprKind::Identifier(n) = &e.kind else {
+            return None;
+        };
+        let (elem, len) = self
+            .span_tables
+            .tuple_elem_array_tes
+            .get(&(e.span.offset, e.span.length))
+            .or_else(|| self.borrow_vars.owned_array_params.get(n.as_str()))?;
+        Some(TypeExpr {
+            kind: TypeKind::Path(crate::ast::PathExpr {
+                segments: vec!["Array".to_string()],
+                generic_args: Some(vec![
+                    crate::ast::GenericArg::Type(elem.clone()),
+                    crate::ast::GenericArg::Const(Expr {
+                        kind: ExprKind::Integer(i128::from(*len), None),
+                        span: e.span,
+                    }),
+                ]),
+                span: e.span,
+            }),
+            span: e.span,
+        })
+    }
+
     pub(super) fn refined_tuple_literal_elem_te(&self, e: &Expr) -> Option<TypeExpr> {
         match &e.kind {
             // A collection BINDING: rebuild `<head>[<elem>]` from the two
@@ -21200,6 +21237,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             span: e.span,
                         });
                     }
+                }
+                // B-2026-09-26-54 — a NAMED `Array[T, N]` local or by-value
+                // param; see `named_array_elem_te`.
+                if let Some(te) = self.named_array_elem_te(e) {
+                    return Some(te);
                 }
                 let head = self.var_types.var_type_names.get(n.as_str())?;
                 if head != "Vec" && head != "VecDeque" {

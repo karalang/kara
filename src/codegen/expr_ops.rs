@@ -19,6 +19,22 @@ use inkwell::AddressSpace;
 use inkwell::{FloatPredicate, IntPredicate};
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// B-2026-09-26-54 — a `match` / `if let` / `while let` scrutinee
+    /// LITERAL's named `Array` element stays its source's. The pattern
+    /// bindings over a fresh tuple scrutinee take no array over (the
+    /// fresh-temp spelling, `match mk(3) { (x, n) => .. }`, runs no bodies and
+    /// leaks on every surface), so handing the source's drop to the literal in
+    /// `compile_tuple` would leave the elements with no owner.
+    pub(super) fn decline_tuple_array_handover(&mut self, scrutinee: &Expr) {
+        if let ExprKind::Tuple(elems) = &scrutinee.kind {
+            for el in elems {
+                self.span_tables
+                    .tuple_array_handover_declined
+                    .insert((el.span.offset, el.span.length));
+            }
+        }
+    }
+
     pub(super) fn compile_tuple(&mut self, elems: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
         // B-2026-09-19-59 — a tuple element keeps its inline `Array` payload
         // source armed; see `seeded_inline_array_payload_claimed`.
@@ -135,10 +151,11 @@ impl<'ctx> super::Codegen<'ctx> {
             //     v.push((i, x)) }` over `Vec[String]` trapped, exit 133). No-op
             //     for a fresh temp / plain owned local (not in the retaining
             //     sets), whose move-out is handled by the suppression below.
-            // B-2026-09-14-27 — …but NOT its fixed-`Array` leg. A tuple's
-            // drop walker has no `Array` arm, so the tuple never frees an
-            // array element and the source stays its sole owner; handing the
-            // tuple an independent copy here leaks it. See
+            // B-2026-09-14-27 — …but NOT its fixed-`Array` leg, which stays
+            // declined. It was declined because the tuple never walked an
+            // array element; since B-2026-09-26-54 a named array element is
+            // HANDED OVER below instead (the source's drop is retracted and
+            // the tuple's owner walks the array), as `W { a: a }` does. See
             // `uam_array_copy_declined`.
             // B-2026-09-23-32 — a `for` loop's aggregate element placed
             // WHOLE in the tuple (`(i, p)`, which is also what `enumerate()`'s
@@ -175,6 +192,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     && self.tuple_elem_is_movable_drop_struct_place(elem_expr))
             {
                 self.suppress_source_vec_cleanup_for_arg(elem_expr);
+            }
+            // B-2026-09-26-54 — a NAMED `Array[T, N]` moved whole into the
+            // literal hands its element drop over to the tuple, as
+            // `W { a: a }` does through the same helper. Every owner of a
+            // tuple with an `Array` element walks it -- a `let` (annotated,
+            // or named through `refined_tuple_literal_elem_te`'s array arm),
+            // a struct field's drop, a by-value tuple param, a container
+            // element -- so the source kept its `StructDrop` as a second
+            // owner and both freed the elements. A DISCARDED literal takes
+            // nothing over, so its source keeps its owner, and so does a
+            // scrutinee literal (`decline_tuple_array_handover`).
+            if !self.in_discarded_aggregate_tail(elem_expr)
+                && !self
+                    .span_tables
+                    .tuple_array_handover_declined
+                    .contains(&(elem_expr.span.offset, elem_expr.span.length))
+            {
+                if let ExprKind::Identifier(n) = &elem_expr.kind {
+                    if let Some(rec) = self.borrow_vars.owned_array_params.get(n.as_str()) {
+                        let rec = rec.clone();
+                        self.span_tables
+                            .tuple_elem_array_tes
+                            .insert((elem_expr.span.offset, elem_expr.span.length), rec);
+                    }
+                }
+                self.suppress_array_binding_move_into_aggregate(elem_expr);
             }
             // B-2026-09-13-27 — the FIELD-ACCESS peer of the line above, and
             // the tuple sibling of the `disarm_struct_field_move_bodies` call

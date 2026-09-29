@@ -120,6 +120,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 None
             };
         let saved_stack_box = self.begin_stack_boxed_scrutinee(scrutinee);
+        self.decline_tuple_array_handover(scrutinee);
         let scrut = self.compile_expr(scrutinee)?;
         self.end_stack_boxed_scrutinee(saved_stack_box);
         // #39 — resolve the scrutinee's enum type so unqualified variant

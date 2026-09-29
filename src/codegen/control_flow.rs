@@ -59,6 +59,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Keyed on the scrutinee's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(value);
         let saved_stack_box = self.begin_stack_boxed_scrutinee(value);
+        self.decline_tuple_array_handover(value);
         let val = self.compile_expr(value)?;
         self.end_stack_boxed_scrutinee(saved_stack_box);
         // B-2026-09-02-15 — `if let E.A(r) = v[i] { … }` over a heap-element
@@ -1081,6 +1082,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `compile_if_let`).
         self.builder.position_at_end(cond_bb);
         let saved_stack_box = self.begin_stack_boxed_scrutinee(value);
+        self.decline_tuple_array_handover(value);
         let val = self.compile_expr(value)?;
         self.end_stack_boxed_scrutinee(saved_stack_box);
         // B-2026-09-02-15 — `if let E.A(r) = v[i] { … }` over a heap-element

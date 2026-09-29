@@ -331,4 +331,15 @@ pub(crate) struct SpanTables {
     /// tuple-literal element: consumers that do not (or do not yet) take the
     /// payload over. See `seeded_inline_array_payload_claimed`.
     pub(crate) inline_array_ctor_disarm_declined: std::collections::HashSet<(usize, usize)>,
+    /// B-2026-09-26-54 — tuple-literal elements that named an owned `Array`
+    /// local, with its element type and length, recorded before
+    /// `compile_tuple` hands the array over. The hand-over removes the name
+    /// from `owned_array_params`, and the `let` that binds the tuple names its
+    /// element types only AFTER the literal is compiled, so it reads the type
+    /// back from here. See `refined_tuple_literal_elem_te`.
+    pub(crate) tuple_elem_array_tes: HashMap<(usize, usize), (TypeExpr, u32)>,
+    /// B-2026-09-26-54 — tuple-literal elements whose named `Array` source
+    /// keeps its own drop: the elements of a `match` / `if let` / `while let`
+    /// scrutinee literal. See `decline_tuple_array_handover`.
+    pub(crate) tuple_array_handover_declined: HashSet<(usize, usize)>,
 }

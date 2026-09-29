@@ -7110,6 +7110,8 @@ impl<'ctx> Codegen<'ctx> {
                 uam_consume_sites: std::collections::HashSet::new(),
                 uam_copied_sites: std::collections::HashSet::new(),
                 inline_array_ctor_disarm_declined: std::collections::HashSet::new(),
+                tuple_elem_array_tes: std::collections::HashMap::new(),
+                tuple_array_handover_declined: std::collections::HashSet::new(),
             },
             iter_let_bindings: HashMap::new(),
             ref_return_inner_types: HashMap::new(),
@@ -10239,6 +10241,10 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_uam_copied_sites = std::collections::HashSet::new();
         // B-2026-09-19-59 — written during lowering, like the two above.
         let mut t_inline_array_ctor_disarm_declined = std::collections::HashSet::new();
+        // B-2026-09-26-54 — written by `compile_tuple` and the scrutinee
+        // compilers, like the one above.
+        let mut t_tuple_elem_array_tes = std::collections::HashMap::new();
+        let mut t_tuple_array_handover_declined = std::collections::HashSet::new();
         let mut t_vec_index_cloned_sites = FxHashSet::default();
         macro_rules! swap_all {
             () => {{
@@ -10257,6 +10263,14 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.span_tables.inline_array_ctor_disarm_declined,
                     &mut t_inline_array_ctor_disarm_declined,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.tuple_elem_array_tes,
+                    &mut t_tuple_elem_array_tes,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.tuple_array_handover_declined,
+                    &mut t_tuple_array_handover_declined,
                 );
                 std::mem::swap(
                     &mut self.span_tables.vec_index_cloned_sites,
