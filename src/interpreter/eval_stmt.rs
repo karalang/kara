@@ -6881,6 +6881,24 @@ impl<'a> super::Interpreter<'a> {
             _ => None,
         };
         let Some(handed) = handed else { return };
+        // B-2026-09-29-29 — a `let` that takes an adopted param's payload out
+        // of a `match` / `if let` on it hands the payload over, as codegen's
+        // disarm does (`is_param_payload_take`). Recorded as a move so a take
+        // that rebinds the param's own name (`let t = match t { .. }`) gives
+        // the record back to the param when the new binding's block ends:
+        // the fresh binding clears the name's other move-out marks, and the
+        // param's per-path body then ran a second time.
+        if matches!(stmt.kind, StmtKind::Let { .. }) {
+            let takes: Vec<String> = self
+                .cond_store_param_names
+                .iter()
+                .filter(|n| !n.contains('.') && crate::ast::is_param_payload_take(handed, n))
+                .cloned()
+                .collect();
+            for n in takes {
+                self.moved_out_user_drop_bindings.insert(n);
+            }
+        }
         // B-2026-09-28-50 — a DESTRUCTURING `let` of the param or a part
         // (`let W { r, s, b } = w;`) records each bound local as an alias of
         // its part, as `let r = w.r;` does below, so `if c { xs.push(r); }`

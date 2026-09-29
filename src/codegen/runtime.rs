@@ -14522,6 +14522,29 @@ impl<'ctx> super::Codegen<'ctx> {
     /// registered the drop action was compiled long before the branch that
     /// reveals the binding is conditionally moved, and an entry-block init is
     /// correct no matter how late it is emitted.
+    /// B-2026-09-29-29 — [`Self::cond_move_drop_flag_for`] for a by-value
+    /// param whose payload the body takes on some path, with the flag pinned
+    /// to the PARAM's generation when the body takes it (or stores and takes
+    /// it) at all. A take may rebind the param's own name (`let t = match t {
+    /// .. }`), and the new binding's scope-end drop asks the flag by NAME:
+    /// unpinned, the take's `false` skipped the new binding's body too.
+    pub(super) fn take_param_cond_flag(
+        &mut self,
+        func: &crate::ast::Function,
+        i: usize,
+        name: &str,
+        alloca: PointerValue<'ctx>,
+    ) {
+        let _ = self.cond_move_drop_flag_for(name);
+        if crate::ast::fn_branch_takes_param_payload(func, i)
+            || crate::ast::fn_branch_stores_and_takes_param(func, i)
+        {
+            self.drop_rc
+                .cond_move_drop_flag_slots
+                .insert(name.to_string(), Some(alloca));
+        }
+    }
+
     pub(super) fn cond_move_drop_flag_for(&mut self, name: &str) -> Option<PointerValue<'ctx>> {
         // B-2026-09-23-23 — which generation of `name` this move site sees;
         // see `DropRc::cond_move_drop_flag_slots`. Only for a name the body
@@ -14539,12 +14562,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // keeps one bit PER GENERATION: a second generation asking gets its
         // own, where the shared bit used to widen to the whole name and its
         // disarm took the other generation's drop with it.
-        if let Some(g) = self
-            .variables
-            .get(name)
-            .map(|v| v.ptr)
-            .filter(|_| self.payload_vars.shadowed_gen_names.contains(name))
-        {
+        if let Some(g) = self.variables.get(name).map(|v| v.ptr).filter(|_| {
+            self.payload_vars.shadowed_gen_names.contains(name)
+                    // B-2026-09-29-29 — or a local that rebinds the name of a
+                    // param whose flag `take_param_cond_flag` pinned to the
+                    // param's slot: the local's own moves get their own bit.
+                    || (self.drop_rc.cond_store_flag_params.contains(name)
+                        && self.fn_ctx.current_fn_param_names.contains(name))
+        }) {
             let first = self.drop_rc.cond_move_drop_flag_slots.get(name).copied();
             if matches!(first, Some(Some(s)) if s != g) {
                 let key = Self::generation_flag_key(name, g);
@@ -14573,8 +14598,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .filter(|_| self.payload_vars.shadowed_gen_names.contains(name))
         });
         if let Some(p) = self.drop_rc.cond_move_drop_flags.get(name).copied() {
+            // B-2026-09-29-29 — a slot pinned to the generation that is live
+            // right now (`take_param_cond_flag`) is the one being asked about.
+            let live = self.variables.get(name).map(|v| v.ptr);
             if let Some(slot) = self.drop_rc.cond_move_drop_flag_slots.get_mut(name) {
-                if *slot != generation {
+                if *slot != generation && !(slot.is_some() && *slot == live) {
                     *slot = None;
                 }
             }

@@ -10906,6 +10906,13 @@ fn branch_handover_tally(
                     if is_param_payload_take(value, w.name) {
                         w.t.payload_takes += 1;
                         w.t.nested |= w.depth > 0;
+                        // B-2026-09-29-29 — a take that rebinds the param's
+                        // own name (`let t = match t { .. }`) ends the param
+                        // here: every later mention in this block names the
+                        // new binding, so there is nothing left to tally.
+                        if matches!(&pattern.kind, PatternKind::Binding(n) if n == w.name) {
+                            return;
+                        }
                     } else {
                         w.t.other |= mentions(value, w.name);
                     }

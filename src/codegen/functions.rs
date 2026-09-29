@@ -4115,7 +4115,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             bodies,
                             crate::codegen::state::UserDropKind::ContainerElemBodies,
                         );
-                        let _ = self.cond_move_drop_flag_for(&param_name);
+                        self.take_param_cond_flag(func, i, &param_name, alloca);
                         self.drop_rc
                             .cond_store_flag_params
                             .insert(param_name.clone());
@@ -4156,7 +4156,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             whole,
                             crate::codegen::state::UserDropKind::ContainerElemBodies,
                         );
-                        let _ = self.cond_move_drop_flag_for(&param_name);
+                        self.take_param_cond_flag(func, i, &param_name, alloca);
                         self.drop_rc
                             .cond_store_flag_params
                             .insert(param_name.clone());
@@ -4191,7 +4191,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             bodies,
                             crate::codegen::state::UserDropKind::ContainerElemBodies,
                         );
-                        let _ = self.cond_move_drop_flag_for(&param_name);
+                        self.take_param_cond_flag(func, i, &param_name, alloca);
                         self.drop_rc
                             .cond_store_flag_params
                             .insert(param_name.clone());
