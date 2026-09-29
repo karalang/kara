@@ -71,6 +71,12 @@ pub(super) struct VarMetadataSnapshot<'ctx> {
     map_val_types: Option<BasicTypeEnum<'ctx>>,
     map_key_type_names: Option<String>,
     var_elem_type_exprs: Option<TypeExpr>,
+    /// B-2026-09-29-13 — the `println` / f-string Display records of an
+    /// `Option` / `Result` binding. A rebind of the name at another type (`let
+    /// t = 3` over `t: Option[i64]`) must not inherit them, or the new scalar
+    /// renders through the old binding's `Some(..)`/`None` synthesizer.
+    var_option_payload_te: Option<TypeExpr>,
+    var_result_payload_te: Option<(TypeExpr, TypeExpr)>,
     map_key_type_exprs: Option<TypeExpr>,
     map_hashers: Option<crate::hasher_kind::HasherKind>,
     set_elem_types: Option<BasicTypeEnum<'ctx>>,
@@ -134,6 +140,8 @@ impl<'ctx> super::Codegen<'ctx> {
             map_val_types: self.mapset.map_val_types.remove(name),
             map_key_type_names: self.mapset.map_key_type_names.remove(name),
             var_elem_type_exprs: self.var_types.var_elem_type_exprs.remove(name),
+            var_option_payload_te: self.var_types.var_option_payload_te.remove(name),
+            var_result_payload_te: self.var_types.var_result_payload_te.remove(name),
             map_key_type_exprs: self.mapset.map_key_type_exprs.remove(name),
             map_hashers: self.mapset.map_hashers.remove(name),
             set_elem_types: self.mapset.set_elem_types.remove(name),
@@ -251,6 +259,12 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let Some(v) = snap.var_elem_type_exprs {
             self.var_types.var_elem_type_exprs.insert(key.clone(), v);
+        }
+        if let Some(v) = snap.var_option_payload_te {
+            self.var_types.var_option_payload_te.insert(key.clone(), v);
+        }
+        if let Some(v) = snap.var_result_payload_te {
+            self.var_types.var_result_payload_te.insert(key.clone(), v);
         }
         if let Some(v) = snap.map_key_type_exprs {
             self.mapset.map_key_type_exprs.insert(key.clone(), v);
@@ -394,6 +408,17 @@ impl<'ctx> super::Codegen<'ctx> {
             self.forget_var_metadata(name);
         }
     }
+
+    /// B-2026-09-29-13 — a PATTERN binding (`match` / `if let` / `let .. else`
+    /// arm) that shadows an `Option` / `Result` name must not render through
+    /// that name's Display record: `match t { Some(t) => println(f"{t}") }`
+    /// printed the `i64` payload as `None`. The payload binding registers its
+    /// own record after this if it is itself an `Option` / `Result`, and the
+    /// arm / `if let` scope snapshot restores the outer name's after.
+    pub(super) fn forget_shadowed_display_records(&mut self, name: &str) {
+        self.var_types.var_option_payload_te.remove(name);
+        self.var_types.var_result_payload_te.remove(name);
+    }
 }
 
 /// A whole-environment snapshot of every name-keyed variable map (the primary
@@ -448,6 +473,8 @@ pub(super) struct VarEnvSnapshot<'ctx> {
     map_val_types: HashMap<String, BasicTypeEnum<'ctx>>,
     map_key_type_names: HashMap<String, String>,
     var_elem_type_exprs: HashMap<String, TypeExpr>,
+    var_option_payload_te: HashMap<String, TypeExpr>,
+    var_result_payload_te: HashMap<String, (TypeExpr, TypeExpr)>,
     map_key_type_exprs: HashMap<String, TypeExpr>,
     map_hashers: HashMap<String, crate::hasher_kind::HasherKind>,
     set_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
@@ -495,6 +522,8 @@ impl<'ctx> super::Codegen<'ctx> {
             map_val_types: self.mapset.map_val_types.clone(),
             map_key_type_names: self.mapset.map_key_type_names.clone(),
             var_elem_type_exprs: self.var_types.var_elem_type_exprs.clone(),
+            var_option_payload_te: self.var_types.var_option_payload_te.clone(),
+            var_result_payload_te: self.var_types.var_result_payload_te.clone(),
             map_key_type_exprs: self.mapset.map_key_type_exprs.clone(),
             map_hashers: self.mapset.map_hashers.clone(),
             set_elem_types: self.mapset.set_elem_types.clone(),
@@ -581,6 +610,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.map_val_types = snap.map_val_types;
         self.mapset.map_key_type_names = snap.map_key_type_names;
         self.var_types.var_elem_type_exprs = snap.var_elem_type_exprs;
+        self.var_types.var_option_payload_te = snap.var_option_payload_te;
+        self.var_types.var_result_payload_te = snap.var_result_payload_te;
         self.mapset.map_key_type_exprs = snap.map_key_type_exprs;
         self.mapset.map_hashers = snap.map_hashers;
         self.mapset.set_elem_types = snap.set_elem_types;

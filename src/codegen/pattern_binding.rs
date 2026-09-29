@@ -232,6 +232,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(());
                 }
                 self.forget_shadowed_borrow_metadata(name);
+                self.forget_shadowed_display_records(name);
                 let fn_val = self.current_fn.unwrap();
                 // B-2026-09-17-5 — a whole-payload binding out of a by-value
                 // concrete USER-enum param the caller retains is a view of
@@ -2699,6 +2700,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(Some(()));
                 }
                 self.forget_shadowed_borrow_metadata(name);
+                self.forget_shadowed_display_records(name);
                 // The scrutinee pointer IS the data we want to alias.
                 // Inner type is the full pointee struct.
                 self.emit_ref_leaf_binding_at_ptr(
