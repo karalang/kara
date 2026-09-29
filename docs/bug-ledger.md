@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
+| miscompile | 537 |
 | run-vs-build | 537 |
-| miscompile | 536 |
 | leak | 466 |
 | double-free | 353 |
 | missing-feature | 213 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2315 |
-| interp | 670 |
+| codegen | 2316 |
+| interp | 671 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -132,7 +132,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 |---|---|---|---|---|---|
 | B-2026-09-19-22 | 2026-09-19 | interp | medium | THE INTERPRETER LOSES A BY-VALUE GENERIC ENUM PARAMETER'S `Drop` BODY ON THE DIES-INSIDE LEG -- `let back = mid(g, false)` over `fn mid[T](g: G1[T], c: bool) -> G1[T]` at `T = R` prints `mx done` alone under `--interp` where every compiled surface prints `dR9` first; the hand-back leg of the same callee runs the body on both backends | — |
 | B-2026-09-19-23 | 2026-09-19 | codegen | medium | A TEMP GENERIC ENUM ARGUMENT WHOSE RESULT IS DISCARDED LEAKS ITS PAYLOAD BOX -- `mid(G1.Y(f"aaaaaaaa-1"), true);` loses 34 bytes (24 direct, 10 indirect) where the NAMED spelling of the same call is clean, so B-2026-09-16-16's discarded-statement window does not cover the one argument that has no binding to keep a drop | — |
-| B-2026-09-19-24 | 2026-09-19 | codegen | medium | THE `Option`/`Result` HEAD OF B-2026-09-17-7 IS UNFIXED -- `fn midopt[T](g: Option[T], c: bool) -> Option[T] { if c { return g } return Option.None }` at `T = Array[String, 2]` dies with 10 `Invalid read of size 8` against a correct `--interp`; the runtime compare that fixed the user-enum head is gated on `user_enum_boxed_payload_variants`, which returns nothing for the seeded heads by design | — |
 | B-2026-09-19-25 | 2026-09-19 | codegen | medium | AUDIT THE REST OF THE ONE-WAY-CLEAR POPULATION THAT B-2026-09-17-8 FIXED BY CONSTRUCTION -- nine payload-ownership registries were wiped for the remainder of ANY caller that made a generic call, so every caller that used an `Option`/`Result`/boxed-payload binding after a generic call was exposed, and only the eleven shapes in that row's fixture have actually been measured | — |
 | B-2026-09-19-27 | 2026-09-19 | parser | low | THE SELF-HOSTED PARSER DOES NOT MODEL `IntegerOutOfRange` EITHER, so the token the port lexer can now produce has no consumer -- the seed folds it in six places across `exprs.rs` and `patterns.rs` (the unary-minus `i64::MIN` fold, the unsigned-suffix wrap that buys a precise range diagnostic, and both again for literal and range patterns) and `selfhost/src/parser.kara` has no arm for it at all | — |
 | B-2026-09-19-28 | 2026-09-19 | lexer | low | THE `(u64::MAX, i128::MAX]` BAND IS THE ONE THE PORT LEXER STILL CANNOT REACH -- `100000000000000000000i128` is a plain `Integer` in the seed and an `Error` in the port, because `Token.Integer` carries an i64; B-2026-09-19-26 ported the other three bands and named this one in its own close without a tracker | — |
@@ -417,6 +416,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-2 | 2026-09-29 | codegen | high | A BY-VALUE `Option[S]` PARAM WHOSE `Some` PAYLOAD IS DESTRUCTURED INTO ITS FIELDS (`Some(S { r, s })`) LOSES A FRESH-TEMP ARGUMENT'S `Drop` BODY ON EVERY COMPILED SURFACE, IN `match`, `if let` AND `let .. else` ALIKE -- `fn f(a: Option[S]) -> i64 { match a { Some(S { r, s }) => r.id, None => 0 } }` called as `f(Some(mks(1)))` then with a named `a` prints `k1 d2 j2 end` at `-O0` / `-O2` against `--interp`'s `d1 k1 d2 j2 end`; memory clean | — |
 | B-2026-09-29-3 | 2026-09-29 | codegen | high | AN `Option` PAYLOAD BINDING MOVED ON INSIDE THE CALLEE (`let y = x`, `eat(Some(x))`) RUNS A NAMED ARGUMENT'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, IN `match`, `if let` AND `let .. else` ALIKE -- `fn f(a: Option[S]) -> i64 { if let Some(x) = a { let y = x; y.r.id } else { 0 } }` with a named `a` prints `d2 d2 j2` at `-O0` / `-O2` against `--interp`'s `d2 j2`; memory clean | — |
 | B-2026-09-29-4 | 2026-09-29 | interp+codegen | high | AN `Option` PARAM'S PAYLOAD THAT LEAVES THE CALLEE AGAIN (RETURNED THROUGH A SECOND CALLEE, OR REBUILT FROM ITS DESTRUCTURED FIELDS AND PASSED ON) RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, THE INTERPRETER INCLUDED -- `fn f(a: Option[S]) -> i64 { let t = g(a); t.r.id }` over `fn g(a: Option[S]) -> S { let Some(x) = a else { return mks(9) }; x }` prints `d1 d1 k1 d2 d2 j2` on `--interp` and `d1 k1 d2 d2 j2` compiled, against the expected `d1 k1 d2 j2`; memory clean | — |
+| B-2026-09-29-5 | 2026-09-29 | codegen+interp | medium | AN `Option[Array[R, N]]` / `Result[Array[R, N], E]` PARAM THAT THE CALLEE RETURNS ON SOME PATHS RUNS NO ELEMENT `Drop` BODY ON THE LEG WHERE IT DIES INSIDE, ON ALL FOUR SURFACES -- `let b = midc(a, false)` over `fn midc(g: Option[Array[R, 2]], c: bool) -> Option[Array[R, 2]] { if c { return g } return Option.None }` prints nothing for the two elements under `--interp`, -O0 and -O2 alike (valgrind clean), generic and concrete callee alike, while `Option[R]` in the same position is right | — |
 
 ### Relocated
 
@@ -2990,6 +2990,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-19-19 | interp | medium | A `Vec` HOLDING A `shared enum` RELEASED IT AT LEXICAL SCOPE EXIT ON THE COMPILED BACKENDS AFTER THE VEC'S LAST USE -- the row was filed as the inter… | fff1bbf87 |
 | B-2026-09-19-20 | codegen | low | AN INDEXED-RECEIVER METHOD WHOSE CONTAINER IS A CALL IS REFUSED BY CODEGEN -- `mk(n)[0].len()` says `indexed-receiver method 'len' requires the index… | 28132fd |
 | B-2026-09-19-21 | codegen | medium | AN AGGREGATE-LITERAL RETURN THAT WRAPS A GENERIC ENUM PARAMETER DOUBLE FREES -- `fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } r… | c0c50ee |
+| B-2026-09-19-24 | codegen | medium | THE `Option`/`Result` HEAD OF B-2026-09-17-7 DOUBLE-FREED -- `fn midopt[T](g: Option[T], c: bool) -> Option[T] { if c { return g } return Option.None… | 71692550b |
 | B-2026-09-19-26 | lexer | low | THE SELF-HOSTED LEXER DOES NOT MODEL `IntegerOutOfRange`, so a 19+ digit literal is an Error token in the port and a real token in the seed -- `18446… | 01a3dad |
 | B-2026-09-19-30 | codegen | high | A WILDCARD LEAF IN A DESTRUCTURED **BOXED** PAYLOAD MADE ITS NAMED SIBLINGS READ FROM THE WRONG OFFSET ON EVERY COMPILED BACKEND -- `fn wildOut(o: Op… | ea5228a |
 | B-2026-09-19-33 | codegen | medium | A NESTED PROJECTION OUT OF A BY-VALUE `Option` TUPLE PAYLOAD STILL SILENCES ITS INNER SIBLING ON EVERY COMPILED BACKEND -- `fn eat(o: Option[((R, R),… | 6d0c4f7 |
