@@ -2643,10 +2643,10 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// B-2026-09-29-85 — the copy a heap leaf bound out of a caller-retained
-    /// struct VIEW needs before it registers its own free. `String` and a
-    /// `Vec` whose elements own no heap are copied whole, the classes
-    /// `clone_on_extract_view_field` copies for the `let` spelling; any other
-    /// field is returned as it was.
+    /// struct VIEW needs before it registers its own free. A `String` or a
+    /// `Vec` is copied (deep-cloned when its elements own heap), and so is a
+    /// nested plain struct that owns no `shared` field (B-2026-09-29-89); any
+    /// other field is returned as it was.
     fn copy_caller_retained_view_leaf(
         &mut self,
         struct_name: &str,
@@ -2662,8 +2662,40 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return val;
         };
-        if !val.is_struct_value() || val.get_type() != self.vec_struct_type().into() {
+        if !val.is_struct_value() {
             return val;
+        }
+        // B-2026-09-29-89 — a nested plain STRUCT leaf (`Q { h, .. }` with
+        // `h: H { t: String }`) aliases the caller's buffers exactly as a
+        // `String` leaf does, and registers its own free the same way. Clone
+        // it whole, as the return-position cloner already does for the same
+        // field handed out as `q.h`.
+        if val.get_type() != self.vec_struct_type().into() {
+            let is_plain_struct = matches!(&field_te.kind, TypeKind::Path(p)
+            if p.segments.last().is_some_and(|n| {
+                self.type_decls.struct_types.contains_key(n.as_str())
+                    && !self.type_decls.shared_types.contains_key(n.as_str())
+                    && self
+                        .type_decls
+                        .struct_generic_params
+                        .get(n.as_str())
+                        .is_none_or(|g| g.is_empty())
+            }));
+            // A nested struct that itself owns a `shared` field is left
+            // alone: its clone helper allocates a fresh box for that field
+            // rather than sharing it, and a field moved out of the copy
+            // (`Q { hs, .. } => { let sh = hs.sh; .. }`) then leaked the copy.
+            let owns_shared = match &field_te.kind {
+                TypeKind::Path(p) => p
+                    .segments
+                    .last()
+                    .is_some_and(|n| self.struct_owns_shared_field(n, &mut Vec::new())),
+                _ => true,
+            };
+            if !is_plain_struct || owns_shared || !self.te_owns_heap_below_buffer(&field_te) {
+                return val;
+            }
+            return self.clone_caller_retained_view_leaf(&field_te, val);
         }
         if self.is_string_type_expr(&field_te) {
             let i8t = self.context.i8_type().into();
@@ -2691,14 +2723,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.shared_heap_type_for_type_expr(&e).is_some()
                     || self.option_inner_shared_type_for_type_expr(&e).is_some()
             });
-        let Some(fn_val) = self.current_fn else {
-            return val;
-        };
         if elem_is_shared || !self.te_owns_heap_below_buffer(&field_te) {
             return val;
         }
+        self.clone_caller_retained_view_leaf(&field_te, val)
+    }
+
+    /// Deep-clone `val` (of declared type `field_te`) through its
+    /// `emit_clone_fn_for_type_expr` helper, for
+    /// [`Self::copy_caller_retained_view_leaf`].
+    fn clone_caller_retained_view_leaf(
+        &mut self,
+        field_te: &TypeExpr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let Some(fn_val) = self.current_fn else {
+            return val;
+        };
         let val_ty = val.get_type();
-        let clone_fn = self.emit_clone_fn_for_type_expr(&field_te);
+        let clone_fn = self.emit_clone_fn_for_type_expr(field_te);
         let cur = self.builder.get_insert_block();
         let src = self.create_entry_alloca(fn_val, "crview.clone.src", val_ty);
         let dst = self.create_entry_alloca(fn_val, "crview.clone.dst", val_ty);
