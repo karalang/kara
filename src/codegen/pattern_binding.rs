@@ -2562,6 +2562,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             .builder
                             .build_extract_value(sv, idx as u32, "field")
                             .unwrap();
+                        // B-2026-09-29-85 — the scrutinee is a caller-retained
+                        // struct VIEW (a by-value param owning a `shared` field,
+                        // which the prologue neither copies nor takes), so this
+                        // field's buffer is the CALLER's, freed by the caller's
+                        // walk over its argument. The leaf below registers its
+                        // own free as if it had moved the field out, so hand it
+                        // a copy — what `let t = q.s` already does
+                        // (`deep_copy_owned_struct_param_field_move`).
+                        let field_val = if self
+                            .pattern_state
+                            .pattern_binding_scrutinee_is_caller_retained_struct_view
+                            && field_pat
+                                .pattern
+                                .as_ref()
+                                .is_none_or(|p| matches!(p.kind, PatternKind::Binding(_)))
+                        {
+                            self.copy_caller_retained_view_leaf(&struct_name, idx, field_val)
+                        } else {
+                            field_val
+                        };
                         if let Some(sub_pat) = &field_pat.pattern {
                             self.bind_pattern_values(sub_pat, field_val)?;
                         } else {
@@ -2620,6 +2640,78 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => Ok(()),
         }
+    }
+
+    /// B-2026-09-29-85 — the copy a heap leaf bound out of a caller-retained
+    /// struct VIEW needs before it registers its own free. `String` and a
+    /// `Vec` whose elements own no heap are copied whole, the classes
+    /// `clone_on_extract_view_field` copies for the `let` spelling; any other
+    /// field is returned as it was.
+    fn copy_caller_retained_view_leaf(
+        &mut self,
+        struct_name: &str,
+        idx: usize,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let Some(field_te) = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name)
+            .and_then(|tes| tes.get(idx))
+            .cloned()
+        else {
+            return val;
+        };
+        if !val.is_struct_value() || val.get_type() != self.vec_struct_type().into() {
+            return val;
+        }
+        if self.is_string_type_expr(&field_te) {
+            let i8t = self.context.i8_type().into();
+            return self.emit_vecstr_defensive_copy(val, i8t, None);
+        }
+        let Some(elem_ty) = self.extract_vec_elem_type(&field_te) else {
+            return val;
+        };
+        let elem_has_own_heap = crate::codegen::helpers::vec_inner_type_expr(&field_te)
+            .map(|e| {
+                self.type_expr_has_drop_heap(&e)
+                    || self.te_owns_option_heap_payload(&e)
+                    || self.shared_heap_type_for_type_expr(&e).is_some()
+            })
+            .unwrap_or(true);
+        if !elem_has_own_heap {
+            return self.emit_vecstr_defensive_copy(val, elem_ty, None);
+        }
+        // A `Vec` whose elements own heap (`Vec[String]`): the deep clone the
+        // return-position cloner uses for the same field handed out as
+        // `q.w` (`maybe_defensive_copy_param_arg`). A `shared` element is left
+        // alone — that clone does not rc-inc it.
+        let elem_is_shared =
+            crate::codegen::helpers::vec_inner_type_expr(&field_te).is_none_or(|e| {
+                self.shared_heap_type_for_type_expr(&e).is_some()
+                    || self.option_inner_shared_type_for_type_expr(&e).is_some()
+            });
+        let Some(fn_val) = self.current_fn else {
+            return val;
+        };
+        if elem_is_shared || !self.te_owns_heap_below_buffer(&field_te) {
+            return val;
+        }
+        let val_ty = val.get_type();
+        let clone_fn = self.emit_clone_fn_for_type_expr(&field_te);
+        let cur = self.builder.get_insert_block();
+        let src = self.create_entry_alloca(fn_val, "crview.clone.src", val_ty);
+        let dst = self.create_entry_alloca(fn_val, "crview.clone.dst", val_ty);
+        if let Some(bb) = cur {
+            self.builder.position_at_end(bb);
+        }
+        self.builder.build_store(src, val).unwrap();
+        self.builder
+            .build_call(clone_fn, &[src.into(), dst.into()], "crview.clone")
+            .unwrap();
+        self.builder
+            .build_load(val_ty, dst, "crview.cloned")
+            .unwrap()
     }
 
     /// Slice 3b: emit a leaf binding whose shim alloca points **into**

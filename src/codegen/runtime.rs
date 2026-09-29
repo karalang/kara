@@ -9430,6 +9430,44 @@ impl<'ctx> super::Codegen<'ctx> {
                         .borrow_vars
                         .borrowed_agg_payload_struct_vars
                         .contains(recv_name.as_str())
+                    // B-2026-09-29-85 — a by-value struct param (or owned
+                    // `self`) the prologue neither entry-copied nor took by
+                    // transfer (it owns a `shared` field) is a view onto the
+                    // CALLER's buffers too, and the caller's walk over its
+                    // argument frees them. `fn f(q: Q) -> String { q.s }`
+                    // handed that buffer out as well: `free(): double free
+                    // detected` at -O0. Only the `let t = q.s` spelling copied
+                    // (`deep_copy_owned_struct_param_field_move`), and that
+                    // helper never routes through here, so the two cannot stack.
+                    //
+                    // A GENERIC owner is left out: its field's declared type
+                    // is the bare parameter, and cloning through it names the
+                    // last-writer-wins `karac_clone_T` (B-2026-07-12-16), which
+                    // for `fn f(g: G[String]) -> String { g.v }` returned a
+                    // garbage length at -O2 when admitted.
+                    || (self
+                        .drop_rc
+                        .caller_retained_aggregate_memory
+                        .contains(recv_name.as_str())
+                        && self.inferred_receiver_type(object).is_some_and(|sn| {
+                            self.type_decls
+                                .struct_generic_params
+                                .get(sn.as_str())
+                                .is_none_or(|g| g.is_empty())
+                                // Per FIELD: a promoted `Option` / `Result`
+                                // field is the caller's to free only when no
+                                // by-value callee takes it, so one that does
+                                // (`fn e(a: Sa) -> Option[Map[..]] { a.m }`)
+                                // owns it here and must not be copied.
+                                && field.is_some_and(|f| {
+                                    let names = self.type_decls.struct_field_names.get(sn.as_str());
+                                    let tes = self.type_decls.struct_field_type_exprs.get(sn.as_str());
+                                    names
+                                        .and_then(|ns| ns.iter().position(|n| n == f))
+                                        .and_then(|i| tes.and_then(|t| t.get(i)))
+                                        .is_some_and(|te| self.caller_retained_view_leaf_copyable(te))
+                                })
+                        }))
                 {
                     // A struct-field leaf resolves through the owning
                     // struct's field table; a TUPLE-MEMBER leaf through the

@@ -1586,6 +1586,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_param_memory_is_callee_owned =
             self.scrutinee_carries_callee_owned_param_memory(scrutinee);
+        // B-2026-09-29-85 — see `compile_match`'s twin derivation.
+        self.pattern_state
+            .pattern_binding_scrutinee_is_caller_retained_struct_view =
+            self.scrutinee_is_caller_retained_struct_view(scrutinee);
         // B-2026-09-16-28 — see `compile_match`'s twin derivation.
         self.pattern_state
             .pattern_binding_scrutinee_private_box_variants =
@@ -1647,6 +1651,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-15-21 — cleared rather than restored; see the field's doc.
         self.pattern_state
             .pattern_binding_scrutinee_param_memory_is_callee_owned = false;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_caller_retained_struct_view = false;
         // B-2026-09-16-28 — cleared; see the field's doc.
         self.pattern_state
             .pattern_binding_scrutinee_private_box_variants
@@ -2082,6 +2088,43 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_or_default(),
             _ => std::collections::HashSet::new(),
         }
+    }
+
+    /// B-2026-09-29-85 — is this scrutinee a by-value struct param (or owned
+    /// `self`) that is a VIEW onto the caller's buffers: neither entry-copied
+    /// nor taken by transfer, which the prologue records in
+    /// `caller_retained_aggregate_memory` (a struct owning a `shared` field).
+    ///
+    /// A read the ownership pass defensively copied (`uam_copied_sites`) is
+    /// the frame's own value, not the view, so it answers no.
+    pub(super) fn scrutinee_is_caller_retained_struct_view(&self, e: &Expr) -> bool {
+        let name = match &e.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return false,
+        };
+        self.drop_rc.caller_retained_aggregate_memory.contains(name)
+            && !self
+                .span_tables
+                .uam_copied_sites
+                .contains(&(e.span.offset, e.span.length))
+    }
+
+    /// B-2026-09-29-85 — may a leaf of a caller-retained struct view be copied
+    /// out as the receiver's own? Not for a promoted `Option` / `Result`
+    /// field: the caller's walk over its argument frees one only when no
+    /// by-value callee's body takes it (`shared_owning_struct_field_sole_owner`),
+    /// so a callee that does take it is its sole owner, and a copy would leave
+    /// the original with nobody — `take_escape(a: Sa) -> Option[Map[..]] { a.m }`
+    /// leaked every map when this was asked per source instead of per field.
+    /// Nor for a bare `Map` / `Set` field, whose handle has no deep copy to
+    /// make. Every other field is one the caller's walk always frees.
+    pub(super) fn caller_retained_view_leaf_copyable(&self, te: &TypeExpr) -> bool {
+        !matches!(&te.kind, TypeKind::Path(p) if matches!(
+            p.segments.last().map(String::as_str),
+            Some("Option") | Some("Result") | Some("Map") | Some("Set")
+                | Some("SortedMap") | Some("SortedSet")
+        ))
     }
 
     pub(super) fn scrutinee_carries_callee_owned_param_memory(&self, e: &Expr) -> bool {

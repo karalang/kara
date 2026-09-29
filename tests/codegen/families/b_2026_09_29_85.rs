@@ -1,0 +1,66 @@
+//! B-2026-09-29-85 — a by-value struct param owning a `shared` field is
+//! neither entry-copied nor taken by transfer, so it is a VIEW onto the
+//! caller's buffers, freed by the caller's walk over its argument. Handing an
+//! owned field out of it (`q.s` returned, pushed, or bound by a `let` /
+//! `match` / `if let` destructure) passed the caller's buffer on uncopied, and
+//! both frames freed it: `free(): double free detected` at -O0 and -O2.
+
+use super::*;
+
+/// B-2026-09-29-85 — a field returned, pushed and bound by each destructure
+/// spelling, `String`, `Vec[i64]` and `Vec[String]` fields, an owned `self`
+/// receiver, a renamed binding, a rebound param and a `shared` field handed
+/// back, each with a fresh temp and a named argument.
+#[test]
+fn e2e_caller_retained_struct_param_hands_out_owned_field_once() {
+    let src = r#"shared struct ShIn { s: String }
+struct Q { i: ShIn, n: i64, s: String, v: Vec[i64], w: Vec[String] }
+fn mkq(k: i64) -> Q {
+    let mut v = Vec.new(); v.push(k);
+    let mut w = Vec.new(); w.push(f"vec-string-longer-than-sso-{k}");
+    Q { i: ShIn { s: f"shared-heap-string-longer-than-sso-{k}" }, n: k, s: f"own-heap-string-longer-than-sso-{k}", v: v, w: w }
+}
+fn keep(s: String) -> i64 { s.len() }
+impl Q {
+    fn take(self) -> String { self.s }
+    fn part(self) -> i64 { match self { Q { s, .. } => s.len() } }
+}
+fn f1(q: Q) -> String { q.s }
+fn f2(q: Q) -> String { let Q { i, n, s, v, w } = q; s }
+fn f3(q: Q) -> String { match q { Q { s, .. } => s } }
+fn f4(q: Q) -> i64 { if let Q { s, .. } = q { s.len() } else { 0 } }
+fn f5(q: Q) -> i64 { match q { Q { i, n, s, .. } => n } }
+fn f6(q: Q) -> i64 { let mut o = Vec.new(); o.push(q.s); o.len() }
+fn f7(q: Q) -> i64 { match q { Q { v, .. } => v.len() } }
+fn f8(q: Q) -> i64 { match q { Q { w, .. } => w.len() } }
+fn f9(q: Q) -> Vec[String] { q.w }
+fn f10(q: Q) -> i64 { q.take().len() }
+fn f11(q: Q) -> i64 { q.part() }
+fn f12(q: Q) -> i64 { match q { Q { s: t, .. } => keep(t) } }
+fn f13(q: Q) -> i64 { let r = q; match r { Q { s, .. } => keep(s) } }
+fn f14(q: Q) -> ShIn { match q { Q { i, s, .. } => i } }
+fn main() {
+    println(f"a{f1(mkq(1)).len()}"); let b1 = mkq(2); println(f"b{f1(b1).len()}");
+    println(f"a{f2(mkq(1)).len()}"); let b2 = mkq(2); println(f"b{f2(b2).len()}");
+    println(f"a{f3(mkq(1)).len()}"); let b3 = mkq(2); println(f"b{f3(b3).len()}");
+    println(f"a{f4(mkq(1))}"); let b4 = mkq(2); println(f"b{f4(b4)}");
+    println(f"a{f5(mkq(1))}"); let b5 = mkq(2); println(f"b{f5(b5)}");
+    println(f"a{f6(mkq(1))}"); let b6 = mkq(2); println(f"b{f6(b6)}");
+    println(f"a{f7(mkq(1))}"); let b7 = mkq(2); println(f"b{f7(b7)}");
+    println(f"a{f8(mkq(1))}"); let b8 = mkq(2); println(f"b{f8(b8)}");
+    println(f"a{f9(mkq(1)).len()}"); let b9 = mkq(2); println(f"b{f9(b9).len()}");
+    println(f"a{f10(mkq(1))}"); let b10 = mkq(2); println(f"b{f10(b10)}");
+    println(f"a{f11(mkq(1))}"); let b11 = mkq(2); println(f"b{f11(b11)}");
+    println(f"a{f12(mkq(1))}"); let b12 = mkq(2); println(f"b{f12(b12)}");
+    println(f"a{f13(mkq(1))}"); let b13 = mkq(2); println(f"b{f13(b13)}");
+    println(f"a{f14(mkq(1)).s.len()}"); let b14 = mkq(2); println(f"b{f14(b14).s.len()}");
+    println("end")
+}"#;
+    let want = "a33\nb33\na33\nb33\na33\nb33\na33\nb33\na1\nb2\na1\nb1\na1\nb1\na1\nb1\na1\nb1\na33\nb33\na33\nb33\na33\nb33\na33\nb33\na36\nb36\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    if let Some(aot) = run_program(src) {
+        assert_eq!(aot, want, "AOT");
+    }
+}

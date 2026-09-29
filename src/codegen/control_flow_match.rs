@@ -611,6 +611,15 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_param_memory_is_callee_owned =
             self.scrutinee_carries_callee_owned_param_memory(scrutinee);
+        // B-2026-09-29-85 — the scrutinee is a caller-retained struct VIEW,
+        // so a heap leaf a struct pattern binds out of it must be a copy.
+        let caller_retained_view = self.scrutinee_is_caller_retained_struct_view(scrutinee);
+        let saved_caller_retained_view_flag = std::mem::replace(
+            &mut self
+                .pattern_state
+                .pattern_binding_scrutinee_is_caller_retained_struct_view,
+            caller_retained_view,
+        );
         // B-2026-09-16-28 — restored, not cleared: an inner `match` in one arm
         // must not change what the next arm's bindings see.
         let private_box_variants = self.scrutinee_private_box_variants(scrutinee);
@@ -1996,6 +2005,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-15-21 — cleared rather than restored; see the field's doc.
         self.pattern_state
             .pattern_binding_scrutinee_param_memory_is_callee_owned = false;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_caller_retained_struct_view =
+            saved_caller_retained_view_flag;
         self.pattern_state
             .pattern_binding_scrutinee_is_transfer_owned_enum = saved_transfer_enum_flag;
         self.pattern_state

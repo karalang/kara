@@ -17446,7 +17446,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         // B-2026-07-09-12 clone-on-extract — is the source a VIEW whose heap the
-        // source does NOT own (no registered struct-drop of its own)? Two source
+        // source does NOT own (no registered struct-drop of its own)? Three source
         // classes qualify:
         //   (a) a shared-enum-payload VIEW (`match e { Call(c) => { let CallNode
         //       { .. } = c } }`) — the box's rc-drop owns its heap; and
@@ -17463,11 +17463,26 @@ impl<'ctx> super::Codegen<'ctx> {
         //       borrowed element correctly requires a copy — this IS the borrow
         //       semantics, not a workaround. (`.into_iter()` zero-copy consume is
         //       a tracked perf follow-up.)
-        let view_src: bool = !fresh
+        //   (c) B-2026-09-29-85 — a by-value struct param (or owned `self`)
+        //       the prologue neither entry-copied nor took by transfer
+        //       (`caller_retained_aggregate_memory`: it owns a `shared` field).
+        //       It is a view onto the CALLER's buffers, which the caller's walk
+        //       over its argument frees; a leaf handed out uncopied
+        //       (`let Q { s, .. } = q; s`) was freed there and again by
+        //       whoever received it.
+        //       Per FIELD, not per source: only a leaf the caller's walk
+        //       always frees qualifies (`caller_retained_view_leaf_copyable`).
+        //       A promoted `Option` / `Result` field is freed by that walk only
+        //       when no by-value callee takes it, so a callee that does is its
+        //       sole owner and keeps the plain move-out.
+        let view_src_base: bool = !fresh
             && callee_owned_src.is_none()
             && matches!(&value.kind, ExprKind::Identifier(root)
                 if self.payload_vars.shared_enum_payload_view_vars.contains_key(root.as_str())
                     || self.borrow_vars.for_loop_owned_agg_vars.contains(root.as_str()));
+        let caller_retained_src: bool = !fresh
+            && callee_owned_src.is_none()
+            && self.scrutinee_is_caller_retained_struct_view(value);
         // B-2026-09-06-30 — the fields of a LOCAL source that a mixed literal
         // recorded as the caller's (`param_view_struct_fields`, B-2026-08-29-47).
         // A leaf bound out of one is a view exactly as a leaf of a param
@@ -17529,6 +17544,8 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(field_te) = field_tes.get(idx).cloned() else {
                 continue;
             };
+            let view_src = view_src_base
+                || (caller_retained_src && self.caller_retained_view_leaf_copyable(&field_te));
             // Nested struct pattern (`inner: Inner { data }`): `bind_pattern`
             // already allocated the nested leaf bindings, but their dispatch
             // side-tables were never registered (so `data.len()` failed with

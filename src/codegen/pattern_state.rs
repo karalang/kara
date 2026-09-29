@@ -242,6 +242,18 @@ pub(crate) struct PatternState<'ctx> {
     /// stale `true` leaking into an enclosing construct is the direction that
     /// registers an owner nobody asked for.
     pub(crate) pattern_binding_scrutinee_param_memory_is_callee_owned: bool,
+    /// B-2026-09-29-85 — true while binding a plain struct pattern whose
+    /// scrutinee is a by-value struct param (or owned `self`) the prologue
+    /// neither entry-copied nor took by transfer
+    /// (`caller_retained_aggregate_memory`: a struct owning a `shared` field).
+    /// Such a param is a VIEW onto the caller's buffers, so a `String` / `Vec`
+    /// leaf bound out of it must be a copy before the leaf registers its own
+    /// free; see the plain-struct arm of `bind_pattern_values`.
+    ///
+    /// Restored by `compile_match` (an inner `match` in one arm must not
+    /// change what the next arm's bindings see) and cleared by the
+    /// `let`-pattern forms, like the flag above.
+    pub(crate) pattern_binding_scrutinee_is_caller_retained_struct_view: bool,
     /// B-2026-09-16-28 — the variants whose boxed payload the scrutinee, a
     /// by-value enum param, PRIVATIZED at entry (box and contents; see
     /// `PayloadVars::entry_private_payload_variants`). A binding deboxed out of
