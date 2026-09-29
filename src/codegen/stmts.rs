@@ -25290,6 +25290,14 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        // B-2026-09-29-22 — an `Option` / `Result` FIELD (`o.u = None` over
+        // `O { u: Option[S2] }`). Its head name is `Option`, which is neither a
+        // declared struct nor a user enum, so the gates below returned before
+        // any body ran and the displaced `Some` payload's `Drop` body was lost on
+        // every backend — the interpreter's twin arm fell to `_ => {}` the same
+        // way, which is why they agreed. The full type (resolved through a
+        // generic root's instantiation) drives the tag-guarded payload walker.
+        let mut optres_field_te: Option<TypeExpr> = None;
         let ftn = if generic_root {
             let Some(field_te) = self
                 .type_decls
@@ -25305,6 +25313,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 TypeKind::Path(p) if p.generic_args.is_none() && p.segments.len() == 1 => {
                     p.segments[0].clone()
                 }
+                TypeKind::Path(p)
+                    if p.segments.len() == 1
+                        && matches!(p.segments[0].as_str(), "Option" | "Result") =>
+                {
+                    optres_field_te = Some(resolved.clone());
+                    p.segments[0].clone()
+                }
                 _ => return,
             }
         } else {
@@ -25317,8 +25332,17 @@ impl<'ctx> super::Codegen<'ctx> {
             else {
                 return;
             };
+            if ftn == "Option" || ftn == "Result" {
+                optres_field_te = self
+                    .type_decls
+                    .struct_field_type_exprs
+                    .get(&base_tn)
+                    .and_then(|v| v.get(idx))
+                    .cloned();
+            }
             ftn
         };
+        let optres_field_te = optres_field_te.filter(|te| self.optres_te_reaches_user_drop(te));
         if self.type_decls.shared_types.contains_key(&ftn)
             || self
                 .type_decls
@@ -25352,7 +25376,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // alone converts an agreed gap into a run-vs-build divergence, which is
         // the outcome B-2026-09-15-23 measured when a sibling fix was tried
         // codegen-first.
-        let container_elem_te = if is_struct_field || is_enum_field {
+        let container_elem_te = if is_struct_field || is_enum_field || optres_field_te.is_some() {
             None
         } else {
             self.type_decls
@@ -25361,7 +25385,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .and_then(|v| v.get(idx))
                 .and_then(super::helpers::vec_inner_type_expr)
         };
-        if !is_struct_field && !is_enum_field && container_elem_te.is_none() {
+        if !is_struct_field
+            && !is_enum_field
+            && container_elem_te.is_none()
+            && optres_field_te.is_none()
+        {
             return;
         }
         // B-2026-09-15-28 — the container field's emission, ahead of the
@@ -25396,7 +25424,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return;
         }
-        if !self.type_runs_user_drop(&ftn, &mut Vec::new()) {
+        if optres_field_te.is_none() && !self.type_runs_user_drop(&ftn, &mut Vec::new()) {
             return;
         }
         // B-2026-09-06-55 — DECLINE when the assigned PLACE, or any prefix of
@@ -25592,7 +25620,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_call(f, &[fptr.into()], "").unwrap();
             }
         }
-        if is_struct_field {
+        if let Some(te) = &optres_field_te {
+            if let Some(w) = self.emit_optres_payload_user_drop_bodies_fn(te) {
+                self.builder.build_call(w, &[fptr.into()], "").unwrap();
+            }
+        } else if is_struct_field {
             if let Some(f) =
                 self.emit_user_drop_field_bodies_fn(&ftn, &std::collections::HashMap::new())
             {

@@ -162,6 +162,8 @@ fn main() {
             "  mid",
             "fld_opt_loop",
             "  d9",
+            "  d9",
+            "  d9",
             "  mid",
             "fld_res",
             "  d9",

@@ -11721,6 +11721,17 @@ impl<'a> super::Interpreter<'a> {
                                     Value::Array(_) => {
                                         self.run_discarded_value_user_drops(old.clone());
                                     }
+                                    // B-2026-09-29-22 — an `Option` / `Result`
+                                    // old value (`o.u = None` over an
+                                    // `Option[S2]` field). The user-enum arm
+                                    // above excludes both by name, so a displaced
+                                    // `Some` payload fell to `_` and its body never
+                                    // ran — and codegen's twin gate refused the
+                                    // `Option` head the same way, which is why the
+                                    // backends agreed. Both halves land together.
+                                    Value::EnumVariant { .. } => {
+                                        self.run_discarded_value_user_drops(old.clone());
+                                    }
                                     _ => {}
                                 }
                             }
