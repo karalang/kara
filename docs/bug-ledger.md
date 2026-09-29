@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 560 |
+| miscompile | 563 |
 | run-vs-build | 540 |
 | leak | 483 |
 | double-free | 361 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2371 |
-| interp | 697 |
+| codegen | 2373 |
+| interp | 699 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -412,8 +412,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-30 | 2026-09-29 | codegen | high | AN `Option` PARAM'S PAYLOAD BINDING REWRAPPED AND HANDED ON INSIDE THE CALLEE (`eat(Some(x))`) RUNS A NAMED ARGUMENT'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, IN `match`, `if let` AND `let .. else` ALIKE -- `fn f(a: Option[S]) -> i64 { if let Some(x) = a { eat(Some(x)); 3 } else { 0 } }` over `fn eat(o: Option[S]) { println("eat") }` with a named `a` prints `eat d2 d2 j3` at `-O0` / `-O2` against `--interp`'s `eat d2 j3`; memory clean | — |
 | B-2026-09-29-31 | 2026-09-29 | codegen | medium | A NAMED `Option` ARGUMENT WHOSE PAYLOAD HAS A `shared` FIELD AND A `Drop`-BEARING FIELD RUNS THE BODY INSIDE THE CALLEE WHEN THE CALLEE REBINDS THE ARM BINDING -- `fn f(w: Option[ShD]) -> i64 { if let Some(p) = w { let q = p; return q.n; } return 0; }` over `ShD { r: R, i: ShIn, n }` prints `d2 j2` at `-O0` / `-O2` against `--interp`'s `j2 d2` for `let o = Some(mkd(2)); println(f"j{f(o)}")`; memory clean. The fresh temp is right. B-2026-09-29-3's rebind fix does not reach a payload with a `shared` field | — |
 | B-2026-09-29-32 | 2026-09-29 | codegen | medium | AN `Option` PARAM WHOSE PAYLOAD HAS A `shared` FIELD AND WHICH THE CALLEE TAKES ON ONLY SOME PATHS LEAKS THE PAYLOAD ON THE OTHERS -- `fn f(w: Option[ShP], k: bool) -> i64 { if k { return w.unwrap().n; } return 5; }` over `ShP { i: ShIn, n }` loses 32 B per call that does not unwrap, at `-O0` on a fresh temp and (since B-2026-09-27-87's fix) on a named argument; output right everywhere | — |
-| B-2026-09-29-41 | 2026-09-29 | codegen | high | A STRUCT SUB-PATTERN FIELD BINDING THAT SHADOWS ITS OWN BY-VALUE `Option` PARAM (`fn f(s: Option[S]) { match s { Some(S { r, s }) => r.id, .. } }`) SEGFAULTS ON EVERY COMPILED SURFACE, AND THE SAME SHADOWING BY THE FIELD THE ARM READS (`fn f(r: Option[S]) { match r { Some(S { r, s }) => r.id, .. } }`) DOUBLE-FREES AT `-O0` -- `--interp` prints `d1 k1 end` for both; renaming the param makes both right | — |
-| B-2026-09-29-42 | 2026-09-29 | codegen | medium | A FIELD BINDING OF A DESTRUCTURED `Option` PARAM PAYLOAD REBOUND INSIDE THE CALLEE (`Some(S { r, s }) => { let y = r; y.id }`) LOSES A FRESH-TEMP ARGUMENT'S `Drop` BODY ON EVERY COMPILED SURFACE -- `f(Some(mks(1)))` prints `k1 end` at `-O0` / `-O2` against `--interp`'s `d1 k1 end`; a named argument is right; memory clean | — |
 | B-2026-09-29-43 | 2026-09-29 | codegen | medium | A DESTRUCTURED `Option` PARAM PAYLOAD WITH A `shared` FIELD WHOSE ARM USES ANOTHER FIELD BARE (`Some(ShP { i, n }) => n`) LEAKS THE `shared` FIELD'S BLOCK -- 32 B per call at `-O0`, fresh temp and named argument alike; output right everywhere; `i.s.len()` in the same arm is clean | — |
 | B-2026-09-29-61 | 2026-09-29 | interp+codegen | medium | A top-level `let` that SHADOWS a by-value parameter's name loses the caller's `Drop` body for that parameter, on BOTH backends (`fn f(s: S) -> i64 { let s = 5; s }` prints no `d1`; the interpreter agrees with codegen, so the oracle is wrong too) | — |
 | B-2026-09-29-62 | 2026-09-29 | interp | medium | The interpreter runs a `Drop` body TWICE when a pattern binding shadows its own identifier scrutinee and the value is used -- `let s = Some(mks(1)); match s { Some(S { r, s }) => r.id, .. }` prints `d1 d1`, and `fn f(s: Option[S]) -> T { match s { Some(S { r, s }) => T { r, s }, .. } }` prints an extra `d1` before returning; compiled builds are right | — |
@@ -430,6 +428,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-66 | 2026-09-29 | codegen | medium | MOVING AN `Option` FIELD OUT AND THEN STORING INTO IT LEAKS 16 B ON EVERY COMPILED SURFACE -- `let t = o.u; o.u = Some(mk(8));` over `struct O { u: Option[S2] }` prints the right text everywhere and valgrind reports `definitely lost: 16 bytes in 1 blocks` at -O0; the conditional-move spelling leaks the same | — |
 | B-2026-09-29-67 | 2026-09-29 | codegen | high | A GENERIC STRUCT LOCAL INSTANTIATED AT `Option[S]` OR `Result[S, E]` RUNS NO PAYLOAD `Drop` BODY AT SCOPE EXIT AND LEAKS 16 B ON EVERY COMPILED SURFACE -- `let q: Q[Option[S2]] = Q { u: Some(mk(9)) };` over `struct Q[U] { u: U }` prints `xtrue end` compiled where `--interp` prints `xtrue dS9 end` | — |
 | B-2026-09-29-68 | 2026-09-29 | interp+codegen | medium | STORING INTO A FIELD OF AN INDEXED ELEMENT (`v[0].u = mk(8)`) NEVER RUNS THE DISPLACED VALUE'S `Drop` BODY ON ANY BACKEND, THE INTERPRETER INCLUDED -- over `[W { u: mk(9) }]` with `struct W { u: S2 }` every surface prints `dS8 x end` where `dS9 dS8 x end` or `dS9 x dS8 end` is due; valgrind clean, so only the body is lost | — |
+| B-2026-09-29-70 | 2026-09-29 | codegen | medium | A field binding of a destructured `Option` param rebound as `let mut y = r` (never mutated), or rebound into a name the function binds twice, still loses a fresh temp's `Drop` body on every compiled surface -- the two rebind forms B-2026-09-29-42's fix does not follow | — |
+| B-2026-09-29-71 | 2026-09-29 | interp | medium | The interpreter runs a destructured `Option` param field's `Drop` body TWICE when the field binding comes from `let .. else` and is rebound (`let Some(S { r, s }) = a else { return 0 }; let y = r; y.id` prints `d1 d1 k1` for `f(Some(mks(1)))` and `d2 j2 d2` for a named argument); compiled builds are right | — |
+| B-2026-09-29-72 | 2026-09-29 | interp+codegen | medium | A destructured `Option` param payload (or one of its fields) pushed into a LOCAL `Vec` that dies in the callee runs a named argument's `Drop` body twice on every compiled surface, and both arguments' bodies twice in the interpreter -- `Some(S { r, s }) => { let mut v = Vec.new(); v.push(r); v.len() }` prints `d1 k1 d2 j1 d2` compiled, `d1 d1 k1 d2 j1 d2` interp | — |
 
 ### Relocated
 
@@ -3318,6 +3319,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-45 | codegen | medium | A FRESH `Option` TEMP PASSED TO A BORROWED `Option` PARAM (`g1(Some(mk(6, f"f")))` over `fn g1(x: ref Option[R])`) NEVER RUNS ITS PAYLOAD'S `Drop` BO… | 93c334064 |
 | B-2026-09-29-46 | codegen | medium | A NAMED `Option[R]` ARGUMENT TO A CALLEE THAT HANDS ITS `Option` PARAM BACK ON SOME EXITS LEAKS 32 B ON THE PATH WHERE IT DIES INSIDE, ON EVERY COMPI… | 3f68f43eb |
 | B-2026-09-29-51 | codegen | medium | A LOCAL THAT SHADOWS AN `Option` PARAM BY NAME RUNS NO `Drop` BODY FOR ITS OWN PAYLOAD WHEN A PATTERN BINDS OUT OF IT, ON EVERY COMPILED SURFACE -- `… | ca0a6d82e |
+| B-2026-09-29-41 | codegen | high | A STRUCT SUB-PATTERN FIELD BINDING THAT SHADOWS ITS OWN BY-VALUE `Option` PARAM (`fn f(s: Option[S]) { match s { Some(S { r, s }) => r.id, . | 064821fc6 |
+| B-2026-09-29-42 | codegen | medium | A FIELD BINDING OF A DESTRUCTURED `Option` PARAM PAYLOAD REBOUND INSIDE THE CALLEE (`Some(S { r, s }) => { let y = r; y.id }`) LOSES A FRESH-TEMP ARG… | 08f35bf2f |
 | B-2026-09-29-64 | interp+codegen | medium | AN OWNED-`self` METHOD THAT RETURNS `match self { . | 64dadf0a1 |
 | B-2026-09-29-74 | interp+codegen | medium | AN ASSIGNMENT THROUGH A `mut ref` PARAM (`fn gm(x: mut ref Option[R]) -> i64 { x = Some(mk(99, f"z")); 5 }`) NEVER RUNS THE DISPLACED VALUE'S `Drop`… | a6e088d76 |
 
