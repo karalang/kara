@@ -5689,6 +5689,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //    `cond_move_escaping_sites` is span-keyed and shared across
         //    monomorphizations, so re-seeding per mono is idempotent.
         self.drop_rc.cond_move_drop_flags.clear();
+        self.drop_rc.mut_let_names.clear();
         self.drop_rc.cond_move_drop_flag_slots.clear();
         self.drop_rc.retracted_live_generations.clear();
         self.drop_rc.cond_move_mem_drop_flags.clear();

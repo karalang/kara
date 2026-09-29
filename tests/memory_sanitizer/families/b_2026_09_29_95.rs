@@ -50,3 +50,35 @@ fn main() {
         "asan_receiver_in_an_untaken_branch_keeps_its_payload_body",
     );
 }
+
+/// B-2026-09-29-95 (follow-up) — a `let mut` user enum consumed as an
+/// owned-`self` receiver inside a branch and then reassigned runs the consumed
+/// payload's `Drop` body once. The per-path flag the branch clears guards the
+/// scope-exit walk, but a reassignment drops the displaced value's walk
+/// without consulting it, so `let mut t = E.A(mks(1)); if c { t.m1() };
+/// t = E.A(mks(2))` printed `dS1 m 1 dS1 dS2` at `c = true` on every compiled
+/// surface; a `let mut` binding keeps the all-paths retraction. Covers the
+/// reassignment after the branch, a returned reassigned value, and a
+/// reassignment inside the same branch in a loop body.
+#[test]
+fn asan_let_mut_receiver_consumed_in_a_branch_then_reassigned_runs_the_body_once() {
+    assert_clean_asan_run(
+        r#"struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+enum E { A(S), B(i64) }
+impl E {
+  fn m1(self) -> i64 { return match self { E.A(s) => s.id, E.B(n) => n } }
+}
+fn r1(c: bool) -> i64 { let mut t = E.A(mks(1)); if c { println(f"m {t.m1()}") }; t = E.A(mks(2)); println("re"); return 0 }
+fn r2(c: bool) -> i64 { let mut t = E.A(mks(3)); if c { println(f"m {t.m1()}") }; t = E.A(mks(4)); println("re"); return t.m1() }
+fn r3(c: bool) -> i64 { let mut t = E.A(mks(5)); let mut i = 0; while i < 1 { if c { println(f"m {t.m1()}"); t = E.A(mks(6)); }; i = i + 1; }; println("after"); return 0 }
+fn main() { println(f"r {r1(true)}"); println(f"r {r2(true)}"); println(f"r {r3(true)}"); println("end") }
+"#,
+        &[
+            "dS1", "m 1", "dS2", "re", "r 0", "dS3", "m 3", "re", "dS4", "r 4", "dS5", "m 5",
+            "dS6", "after", "r 0", "end",
+        ],
+        "asan_let_mut_receiver_consumed_in_a_branch_then_reassigned_runs_the_body_once",
+    );
+}

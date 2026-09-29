@@ -4378,6 +4378,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved = self.tracing.diag_span;
         self.tracing.diag_span = Some(stmt.span);
         self.forget_dead_binding_field_flags(stmt);
+        // B-2026-09-29-95 — see `DropRc::mut_let_names`.
+        if let StmtKind::Let {
+            is_mut: true,
+            pattern,
+            ..
+        } = &stmt.kind
+        {
+            if let PatternKind::Binding(n) = &pattern.kind {
+                self.drop_rc.mut_let_names.insert(n.clone());
+            }
+        }
         // B-2026-09-19-18 — see `DropRc::nll_holder_destructured_slots`.
         if let StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } =
             &stmt.kind

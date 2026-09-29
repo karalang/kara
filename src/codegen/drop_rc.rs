@@ -144,6 +144,13 @@ pub(crate) struct DropRc<'ctx> {
     /// exactly as they did before. That is what keeps this slice off the
     /// predicate question the row warns about.
     pub(crate) cond_move_drop_flags: HashMap<String, PointerValue<'ctx>>,
+    /// B-2026-09-29-95 — names bound by a `let mut` in the current function.
+    /// A reassignment drops the displaced value's payload walk without
+    /// consulting a per-path flag, so a name that may be reassigned keeps the
+    /// all-paths retraction at a nested owned-`self` hand-off: with the flag,
+    /// `let mut t = E.A(mks(1)); if c { t.m1() }; t = E.A(mks(2))` ran `dS1`
+    /// a second time at the reassignment on the path that called.
+    pub(crate) mut_let_names: HashSet<String>,
     /// B-2026-09-23-23 — the GENERATION each `cond_move_drop_flags` bit was
     /// created for: the binding's slot at the move site that made it, or
     /// `None` once two generations of one name have asked for it.

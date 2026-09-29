@@ -17445,6 +17445,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|v| v.ptr)
             .filter(|_| self.payload_vars.shadowed_top_level_locals.contains(name));
         if !self.drop_rc.cond_store_flag_params.contains(name)
+            && !self.drop_rc.mut_let_names.contains(name)
             && self.container_bodies_in_enclosing_frame(name, live)
         {
             if let Some(flag) = self.cond_move_drop_flag_for(name) {
