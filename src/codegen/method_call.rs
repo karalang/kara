@@ -7713,7 +7713,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         })
                     {
                         let recv_name = recv_name.clone();
-                        self.suppress_container_elem_bodies_for_var(&recv_name);
+                        self.suppress_container_elem_bodies_for_receiver(&recv_name);
                         // B-2026-09-17-13 — the MEMORY half, as the generic-impl
                         // twin below has done since B-2026-09-16-31. A concrete
                         // impl over a generic enum (`impl G1[String]`) now types

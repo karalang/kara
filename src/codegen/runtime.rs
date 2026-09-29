@@ -17386,6 +17386,70 @@ impl<'ctx> super::Codegen<'ctx> {
             })
     }
 
+    /// B-2026-09-29-95 — does `name`'s `ContainerElemBodies` walk (the `live`
+    /// generation's, when one is told apart) live in an ENCLOSING frame only,
+    /// i.e. is the code being compiled now nested in a scope the binding
+    /// outlives? See [`Self::user_drop_wrapper_in_enclosing_frame`].
+    fn container_bodies_in_enclosing_frame(
+        &self,
+        name: &str,
+        live: Option<PointerValue<'ctx>>,
+    ) -> bool {
+        let frames = &self.drop_rc.scope_cleanup_actions;
+        let owns = |f: &Vec<CleanupAction<'ctx>>| {
+            f.iter().any(|a| {
+                matches!(a, CleanupAction::UserDrop { binding_name, binding_ptr, kind, .. }
+                    if binding_name == name
+                        && *kind == UserDropKind::ContainerElemBodies
+                        && live.is_none_or(|p| *binding_ptr == p))
+            })
+        };
+        // The per-path flag guards EVERY action of the binding, so only a
+        // binding whose one armed action is this walk can take it: an enum
+        // with its own `Drop` (or a struct-field walk) would lose that body
+        // with the payload's on the path that moved only the payload.
+        let other = frames.iter().flatten().any(|a| {
+            matches!(a, CleanupAction::UserDrop { binding_name, kind, .. }
+                if binding_name == name && *kind != UserDropKind::ContainerElemBodies)
+        });
+        let n = frames.len();
+        !other && n >= 2 && !owns(&frames[n - 1]) && frames[..n - 1].iter().any(owns)
+    }
+
+    /// B-2026-09-29-95 — [`Self::suppress_container_elem_bodies_for_var`] for
+    /// a NAMED receiver of an owned-`self` method whose arm takes the payload.
+    /// That retraction is all-paths; a call compiled in a deeper frame than
+    /// the binding's walk (inside a branch, which may not run) clears the
+    /// binding's per-path flag instead, so the path that never called still
+    /// runs the payload body: `let t = E.A(mks(1)); if c { return t.m1() }`
+    /// at `c = false` freed the payload with no body run on every compiled
+    /// surface. The twin of B-2026-09-26-60's own-wrapper form. Receiver only:
+    /// the same flag at the let-move, keeping-call and match-arm hand-offs
+    /// disturbed fixtures whose other readers treat the flag's mere presence
+    /// as a signal (B-2026-09-29-95's remainder).
+    pub(super) fn suppress_container_elem_bodies_for_receiver(&mut self, name: &str) {
+        let live = self
+            .variables
+            .get(name)
+            .map(|v| v.ptr)
+            .filter(|_| self.payload_vars.shadowed_top_level_locals.contains(name));
+        if !self.drop_rc.cond_store_flag_params.contains(name)
+            && self.container_bodies_in_enclosing_frame(name, live)
+        {
+            if let Some(flag) = self.cond_move_drop_flag_for(name) {
+                let bool_t = self.context.bool_type();
+                if self
+                    .builder
+                    .build_store(flag, bool_t.const_int(0, false))
+                    .is_ok()
+                {
+                    return;
+                }
+            }
+        }
+        self.suppress_container_elem_bodies_for_var(name);
+    }
+
     pub(super) fn suppress_container_elem_bodies_for_var(&mut self, name: &str) {
         // B-2026-09-25-10 — the same decline `suppress_user_drop_for_var` makes
         // for a parameter whose drop a per-path flag owns: a caller-retained
