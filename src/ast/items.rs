@@ -7395,7 +7395,223 @@ pub fn fn_escaping_param_payload_variants(
     f: &Function,
     arg_index: usize,
 ) -> Vec<String> {
-    escaping_param_payload_variants_impl(f, arg_index, CallYieldRule::ReturnsIt(program))
+    let variants =
+        escaping_param_payload_variants_impl(f, arg_index, CallYieldRule::ReturnsIt(program));
+    // B-2026-09-29-75 — or handed, on every path, as the receiver of an
+    // owned-`self` method whose arm channel takes the payload over.
+    if variants.is_empty() && fn_param_payload_taken_by_owned_self_method(program, f, arg_index) {
+        return vec!["*".to_string()];
+    }
+    variants
+}
+
+/// B-2026-09-29-75 — is by-value user-enum parameter `arg_index` handed, on
+/// EVERY path, as the receiver of an owned-`self` method of its own enum whose
+/// arm channel takes the payload over (the method binds a part of `self` out,
+/// or matches on bare `self`)?
+///
+/// Such a method owns the payload: its arm runs the payload's `Drop` body (or,
+/// on a path that skips its `match`, its frame's adoption does,
+/// B-2026-09-29-77), which is why a caller holding a NAMED receiver stands its
+/// payload walk down at the call. A PARAM receiver has no walk in this frame to
+/// stand down, because the caller of this frame runs a by-value param's bodies,
+/// so that caller kept its walk and the body ran twice:
+/// `fn p2(t: E) -> i64 { let x = t.m2(); .. }` printed `dS2 p2 2 dS2` on
+/// every surface. Answering here, as a payload that leaves the frame, is what
+/// stands the caller's walk down.
+///
+/// DELIBERATELY UNDER-APPROXIMATE, the direction this channel keeps: the
+/// parameter's first mention must be that call, evaluated unconditionally in
+/// a top-level statement (not under a branch, a loop, a closure or a
+/// short-circuit), and the parameter must not be mentioned anywhere else. A
+/// call on some paths only (`if c { return t.m2() }`) answers false and keeps
+/// today's arrangement, since standing the caller down there would lose the
+/// body on the path that skips the call. So does an enum with its own `Drop`,
+/// whose bare-`self` arms bind views and leave the caller the owner, a generic
+/// method, and one whose return can carry the receiver back.
+pub fn fn_param_payload_taken_by_owned_self_method(
+    program: &crate::Program,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    param_payload_taken_by_owned_self_method(program, f, arg_index, 0)
+}
+
+/// Where the parameter goes at the call that takes it: the receiver of
+/// `method`, or argument `index` of free function `callee`.
+enum PayloadTakeSite<'a> {
+    Method(&'a str),
+    Call(&'a str, usize),
+}
+
+fn param_payload_taken_by_owned_self_method(
+    program: &crate::Program,
+    f: &Function,
+    arg_index: usize,
+    depth: usize,
+) -> bool {
+    // A generic callee is monomorphised, and the compiled caller does not
+    // resolve a monomorph through this channel, so admitting one here would
+    // stand the interpreter's caller down alone.
+    if depth > 4 || f.generic_params.is_some() {
+        return false;
+    }
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    let PatternKind::Binding(name) = &param.pattern.kind else {
+        return false;
+    };
+    let crate::ast::TypeKind::Path(tp) = &param.ty.kind else {
+        return false;
+    };
+    let [en] = tp.segments.as_slice() else {
+        return false;
+    };
+    if tp.generic_args.is_some() || program.drop_method_keys.contains_key(en.as_str()) {
+        return false;
+    }
+    let plain_enum = program.items.iter().any(|it| {
+        matches!(it, Item::EnumDef(d) if &d.name == en && !d.is_shared && !d.is_par
+            && d.generic_params.is_none())
+    });
+    if !plain_enum {
+        return false;
+    }
+    let takes_payload = |site: &PayloadTakeSite<'_>| match site {
+        PayloadTakeSite::Method(method) => program.items.iter().any(|it| {
+            let Item::ImplBlock(b) = it else {
+                return false;
+            };
+            let crate::ast::TypeKind::Path(bp) = &b.target_type.kind else {
+                return false;
+            };
+            b.generic_params.is_none()
+                && bp.segments.first() == Some(en)
+                && b.items.iter().any(|ii| {
+                    matches!(ii, ImplItem::Method(m)
+                        if m.name == *method
+                            && m.self_param == Some(SelfParam::Owned)
+                            && m.generic_params.is_none()
+                            && !fn_rebinds_self_whole(m)
+                            && !fn_conditionally_rebinds_self(m)
+                            && owned_self_return_cannot_carry_receiver(m, en, &program.items)
+                            && (fn_binds_self_part_out(m) || fn_matches_on_bare_self(m)))
+                })
+        }),
+        // One hop further: the parameter handed bare to a free function that
+        // takes it over the same way (`fn fwd(t: E) -> i64 { return p2(t) }`).
+        PayloadTakeSite::Call(callee, j) => program.items.iter().any(|it| {
+            matches!(it, Item::Function(g) if g.name == *callee
+                && param_payload_taken_by_owned_self_method(program, g, *j, depth + 1))
+        }),
+    };
+    let mentions = |e: &Expr| crate::deque_head::expr_mentions_name_deep(e, name);
+    // Is the taking call evaluated whenever `e` is? Descends only through
+    // positions that are always evaluated, and requires the parameter nowhere
+    // else.
+    fn reaches(e: &Expr, name: &str, hit: &dyn Fn(&PayloadTakeSite<'_>) -> bool) -> bool {
+        let m = |x: &Expr| crate::deque_head::expr_mentions_name_deep(x, name);
+        let bare = |x: &Expr| matches!(&x.kind, ExprKind::Identifier(n) if n == name);
+        match &e.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if bare(object) => {
+                hit(&PayloadTakeSite::Method(method)) && !args.iter().any(|a| m(&a.value))
+            }
+            ExprKind::Call { callee, args }
+                if matches!(&callee.kind, ExprKind::Identifier(_))
+                    && args.iter().any(|a| bare(&a.value)) =>
+            {
+                let ExprKind::Identifier(c) = &callee.kind else {
+                    return false;
+                };
+                let mut uses = args.iter().enumerate().filter(|(_, a)| m(&a.value));
+                match (uses.next(), uses.next()) {
+                    (Some((j, a)), None) => bare(&a.value) && hit(&PayloadTakeSite::Call(c, j)),
+                    _ => false,
+                }
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                let mut parts =
+                    std::iter::once(object.as_ref()).chain(args.iter().map(|a| &a.value));
+                one_reaches(&mut parts, name, hit)
+            }
+            ExprKind::Call { callee, args } => {
+                let mut parts =
+                    std::iter::once(callee.as_ref()).chain(args.iter().map(|a| &a.value));
+                one_reaches(&mut parts, name, hit)
+            }
+            ExprKind::Binary { op, left, right }
+                if !matches!(op, crate::ast::BinOp::And | crate::ast::BinOp::Or) =>
+            {
+                one_reaches(&mut [left.as_ref(), right.as_ref()].into_iter(), name, hit)
+            }
+            ExprKind::Unary { operand, .. } => reaches(operand, name, hit),
+            ExprKind::Return(Some(inner)) => reaches(inner, name, hit),
+            ExprKind::InterpolatedStringLit(parts) => {
+                let mut holes = parts.iter().filter_map(|p| match p {
+                    crate::ast::ParsedInterpolationPart::Expr(x, _) => Some(x.as_ref()),
+                    crate::ast::ParsedInterpolationPart::Text(_) => None,
+                });
+                one_reaches(&mut holes, name, hit)
+            }
+            _ => false,
+        }
+    }
+    // Exactly one of `parts` mentions the parameter, and that one reaches.
+    fn one_reaches<'e>(
+        parts: &mut dyn Iterator<Item = &'e Expr>,
+        name: &str,
+        hit: &dyn Fn(&PayloadTakeSite<'_>) -> bool,
+    ) -> bool {
+        let mut found = false;
+        for p in parts {
+            if crate::deque_head::expr_mentions_name_deep(p, name) {
+                if found || !reaches(p, name, hit) {
+                    return false;
+                }
+                found = true;
+            }
+        }
+        found
+    }
+    let stmt_mentions = |st: &crate::ast::Stmt| {
+        let mut cands = std::collections::HashSet::new();
+        cands.insert(name.clone());
+        let mut bad = std::collections::HashSet::new();
+        crate::deque_head::names_mentioned_in_stmt(st, &cands, &mut bad);
+        !bad.is_empty()
+    };
+    let mut first: Option<bool> = None;
+    for st in &f.body.stmts {
+        if !stmt_mentions(st) {
+            continue;
+        }
+        if first.is_some() {
+            return false;
+        }
+        first = Some(match &st.kind {
+            StmtKind::Let { pattern, value, .. } => {
+                !matches!(&pattern.kind, PatternKind::Binding(n) if n == name)
+                    && reaches(value, name, &takes_payload)
+            }
+            StmtKind::Expr(e) => reaches(e, name, &takes_payload),
+            _ => false,
+        });
+    }
+    if let Some(fe) = f.body.final_expr.as_deref() {
+        if mentions(fe) {
+            if first.is_some() {
+                return false;
+            }
+            first = Some(reaches(fe, name, &takes_payload));
+        }
+    }
+    first == Some(true)
 }
 
 /// [`fn_escaping_param_payload_variants`] asked of one variant (`Some`) or of
