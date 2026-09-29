@@ -15630,6 +15630,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         &p,
                         &self.drop_rc.cond_store_flag_params,
                     ) {
+                        self.drop_rc
+                            .pending_view_repoints
+                            .push((b.clone(), p.clone()));
                         self.drop_rc.cond_view_aliases.insert(b, p);
                     }
                 }
@@ -15658,6 +15661,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         &p,
                         &self.drop_rc.cond_store_flag_params,
                     ) {
+                        self.drop_rc
+                            .pending_view_repoints
+                            .push((b.clone(), p.clone()));
                         self.drop_rc.cond_view_aliases.insert(b.clone(), p);
                     }
                 }
@@ -15683,12 +15689,104 @@ impl<'ctx> super::Codegen<'ctx> {
         self.disarm_conditional_store_flags_handed_by(handed);
     }
 
+    /// B-2026-09-29-18 — a VIEW of an enclosing place (`let w = o.w;` or
+    /// `let O { w, k } = o;` while `o.w.r` is adopted) moved the part's value
+    /// into the local's slot, so the part's per-path walk must read it there:
+    /// the field of `w` at the part's remaining path. Left on the param's
+    /// moved-out field, the kept path ran the body over an emptied value
+    /// (`dD1` with no name). Same MOVE as [`Self::repoint_pending_part_aliases`]
+    /// makes for a local bound to the part itself.
+    fn repoint_pending_view_parts(&mut self) {
+        if self.drop_rc.pending_view_repoints.is_empty() {
+            return;
+        }
+        for (local, place) in std::mem::take(&mut self.drop_rc.pending_view_repoints) {
+            let Some(slot) = self.variables.get(local.as_str()).map(|v| v.ptr) else {
+                continue;
+            };
+            let Some(local_ty) = self.var_types.var_type_names.get(local.as_str()).cloned() else {
+                continue;
+            };
+            let parts: Vec<String> = self
+                .drop_rc
+                .cond_store_flag_params
+                .iter()
+                .filter(|n| {
+                    n.strip_prefix(place.as_str())
+                        .is_some_and(|r| r.starts_with('.'))
+                })
+                .cloned()
+                .collect();
+            for part in parts {
+                let rest = &part[place.len() + 1..];
+                let mut ty = local_ty.clone();
+                let mut ptr = slot;
+                let mut ok = true;
+                for seg in rest.split('.') {
+                    let Some(st) = self.type_decls.struct_types.get(ty.as_str()).copied() else {
+                        ok = false;
+                        break;
+                    };
+                    let Some(idx) = self
+                        .type_decls
+                        .struct_field_names
+                        .get(ty.as_str())
+                        .and_then(|ns| ns.iter().position(|n| n == seg))
+                    else {
+                        ok = false;
+                        break;
+                    };
+                    let next = self
+                        .type_decls
+                        .struct_field_type_exprs
+                        .get(ty.as_str())
+                        .and_then(|tes| tes.get(idx))
+                        .and_then(|te| match &te.kind {
+                            TypeKind::Path(p) if p.segments.len() == 1 => {
+                                Some(p.segments[0].clone())
+                            }
+                            _ => None,
+                        });
+                    let (Some(next), Ok(gep)) = (
+                        next,
+                        self.builder
+                            .build_struct_gep(st, ptr, idx as u32, "viewpart.gep"),
+                    ) else {
+                        ok = false;
+                        break;
+                    };
+                    ty = next;
+                    ptr = gep;
+                }
+                if !ok || !self.type_decls.struct_types.contains_key(ty.as_str()) {
+                    continue;
+                }
+                let Some(bodies) = self.emit_struct_user_drop_bodies_only_fn(&ty) else {
+                    continue;
+                };
+                for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+                    frame.retain(|a| {
+                        !matches!(a, CleanupAction::UserDrop { binding_name, .. } if *binding_name == part)
+                    });
+                }
+                self.track_user_drop_var_with_fn(
+                    "",
+                    &part,
+                    ptr,
+                    bodies,
+                    UserDropKind::StructFieldBodies,
+                );
+            }
+        }
+    }
+
     /// B-2026-09-27-105 — a `let r = w.r;` of an adopted param part MOVES the
     /// part's value into `r`'s slot (the param's field is left moved-from), so
     /// the part's per-path walk must read `r` from here on: point it at `r`'s
     /// slot with the part type's own bodies-only walker. Deferred to the next
     /// statement because the `let` hook runs before `r` has a slot.
     fn repoint_pending_part_aliases(&mut self) {
+        self.repoint_pending_view_parts();
         if self.drop_rc.pending_part_aliases.is_empty() {
             return;
         }
@@ -15840,6 +15938,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 || cg.payload_vars.param_view_locals.contains(n)
         };
         let aliases = &self.drop_rc.cond_part_aliases;
+        // B-2026-09-29-18 — and through a VIEW of an enclosing place: with
+        // `w` a view of `o.w`, `xs.push(w.r)` hands `o.w.r` over.
+        let views = &self.drop_rc.cond_view_aliases;
         let names: Vec<String> = self
             .drop_rc
             .cond_move_drop_flags
@@ -15850,6 +15951,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     || aliases
                         .iter()
                         .any(|(l, p)| p == *n && hands_over(handed, l))
+                    || views.iter().any(|(b, p)| {
+                        n.strip_prefix(p.as_str())
+                            .filter(|r| r.starts_with('.'))
+                            .is_some_and(|r| hands_over(handed, &format!("{b}{r}")))
+                    })
             })
             .filter(|n| !self.flagged_array_arg_stays_with_caller(handed, n))
             .filter(|n| !self.nested_call_arg_stays_with_caller(handed, n))

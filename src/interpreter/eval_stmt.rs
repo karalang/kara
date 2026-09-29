@@ -6913,6 +6913,25 @@ impl<'a> super::Interpreter<'a> {
         for p in via_alias {
             self.moved_out_user_drop_bindings.insert(p);
         }
+        // B-2026-09-29-18 — through a VIEW of an enclosing place: with `w` a
+        // view of `o.w`, `xs.push(w.r)` hands `o.w.r` over. Codegen's
+        // `disarm_conditional_store_flags_handed_by` reads the same aliases.
+        let via_view: Vec<String> = self
+            .cond_store_param_names
+            .iter()
+            .filter(|n| !parts_only || n.contains('.'))
+            .filter(|n| {
+                self.cond_store_view_aliases.iter().any(|(b, p)| {
+                    n.strip_prefix(p.as_str())
+                        .filter(|r| r.starts_with('.'))
+                        .is_some_and(|r| hands_over(handed, &format!("{b}{r}")))
+                })
+            })
+            .cloned()
+            .collect();
+        for n in via_view {
+            self.moved_out_user_drop_bindings.insert(n);
+        }
     }
 
     /// B-2026-09-23-17 — does `handed` pass the `Array` binding `name`, whose

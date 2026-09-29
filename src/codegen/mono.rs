@@ -5674,6 +5674,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.optres_payload_bodies_flags.clear();
         self.drop_rc.cond_store_flag_params.clear();
         self.drop_rc.pending_part_aliases.clear();
+        self.drop_rc.pending_view_repoints.clear();
         self.drop_rc.cond_part_aliases.clear();
         self.drop_rc.cond_view_aliases.clear();
         self.drop_rc.cond_returned_body_params.clear();

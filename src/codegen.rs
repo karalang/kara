@@ -6571,6 +6571,7 @@ impl<'ctx> Codegen<'ctx> {
                 loop_decl_rearm_anchors: HashMap::new(),
                 cond_store_flag_params: std::collections::HashSet::new(),
                 pending_part_aliases: Vec::new(),
+                pending_view_repoints: Vec::new(),
                 cond_part_aliases: Vec::new(),
                 cond_view_aliases: std::collections::HashMap::new(),
                 stmt_end_arg_memory_slots: rustc_hash::FxHashSet::default(),

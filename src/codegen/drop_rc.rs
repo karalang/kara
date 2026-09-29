@@ -293,6 +293,11 @@ pub(crate) struct DropRc<'ctx> {
     /// by the part's full name. The interpreter's `cond_store_view_aliases`
     /// is the twin.
     pub(crate) cond_view_aliases: std::collections::HashMap<String, String>,
+    /// B-2026-09-29-18 — `(local, place)` view aliases awaiting the local's
+    /// slot: the statement AFTER the `let` re-points each adopted part under
+    /// `place` onto the matching field of the local, which now holds the
+    /// part's value (the param's field was moved out).
+    pub(crate) pending_view_repoints: Vec<(String, String)>,
     /// B-2026-09-28-55 — fresh-temp call-argument slots (`__owned_agg_tmp`)
     /// whose MEMORY drop is due at the end of the statement that built them,
     /// not at the enclosing scope's exit. See `drain_temp_user_drops`. Never

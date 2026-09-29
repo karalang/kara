@@ -6181,27 +6181,29 @@ fn part_paths_from_root_mode(
                         // again when the container already owned it, on all
                         // four surfaces. Gated as the free-function route's
                         // projection is: statically at the top level, and
-                        // through the conditional query inside a branch. Only
-                        // a projection of the param (or `self`) itself: one off
-                        // a LOCAL view (`let O { w, k } = o; xs.push(w.r)`)
-                        // names the part relative to that local, which neither
-                        // backend's hand-over hook follows, so it keeps the
-                        // older answer. Nor one off a BORROWED root (`e.chew(w.r)`
-                        // with `w: ref W`): that argument is a copy the caller's
-                        // value never gives up (W0299), so masking it lost the
-                        // caller's body.
+                        // through the conditional query inside a branch. Not
+                        // one off a BORROWED root (`e.chew(w.r)` with `w: ref
+                        // W`): that argument is a copy the caller's value never
+                        // gives up (W0299), so masking it lost the caller's
+                        // body. Nor one off an ordinary local.
+                        //
+                        // B-2026-09-29-18 — a projection off a once-bound VIEW
+                        // of the param (`let O { w, k } = o;` or `let w = o.w;`,
+                        // then `xs.push(w.r)`) IS admitted: `denote` names it by
+                        // the part's full path, both backends' hand-over hooks
+                        // now read it through their view aliases, and codegen
+                        // moves the part's walk onto the view's field.
                         if matches!(
                             &a.value.kind,
                             ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
                         ) {
-                            let off_local = crate::ast::projection_binding_name(&a.value)
-                                .is_some_and(|p| {
-                                    let root = p.split('.').next().unwrap_or("");
-                                    cx.locals.contains(&root)
-                                        || cx.destr_lets.contains(&root)
-                                        || cx.proj_lets.contains(&root)
-                                        || cx.roots.contains(&root)
-                                });
+                            let root = crate::ast::projection_binding_name(&a.value)
+                                .map(|p| p.split('.').next().unwrap_or("").to_string())
+                                .unwrap_or_default();
+                            let off_view = cx.destr_lets.contains(&root.as_str())
+                                || cx.proj_lets.contains(&root.as_str());
+                            let off_local = (cx.locals.contains(&root.as_str()) && !off_view)
+                                || cx.roots.contains(&root.as_str());
                             if !off_local && (cx.top_level || cx.cond_site()) {
                                 note(&a.value, out);
                             }
