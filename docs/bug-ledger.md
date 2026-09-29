@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 556 |
+| miscompile | 559 |
 | run-vs-build | 540 |
 | leak | 481 |
 | double-free | 360 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2365 |
-| interp | 693 |
+| codegen | 2367 |
+| interp | 696 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -429,6 +429,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-65 | 2026-09-29 | interp+codegen | medium | A BY-VALUE `Option` PARAM TAKEN ON ONE PATH AND SHADOWED BY AN UNRELATED VALUE ON THE OTHER LOSES ITS PAYLOAD'S `Drop` BODY ON EVERY SURFACE -- `fn q1(t: Option[S], c: bool) -> i64 { if c { let u = match t { Option.Some(v) => v, n => n.unwrap() }; return u.id }; let t = Option.Some(mks(99)); println("q1"); return 1 }` at `q1(Option.Some(mks(7)), false)` prints `q1 dS99` where `dS7` is also due | — |
 | B-2026-09-29-74 | 2026-09-29 | interp+codegen | medium | AN ASSIGNMENT THROUGH A `mut ref` PARAM (`fn gm(x: mut ref Option[R]) -> i64 { x = Some(mk(99, f"z")); 5 }`) NEVER RUNS THE DISPLACED VALUE'S `Drop` BODY ON ANY COMPILED SURFACE (valgrind: 2 definite losses), and the interpreter drops a displaced struct but not a displaced `Option`; a FRESH-TEMP `mut` argument (`hm(mut mk(4, f"d"))`) runs `dR4` TWICE and never runs the stored `dR98` under `--interp` | — |
 | B-2026-09-29-50 | 2026-09-29 | codegen | medium | A CLOSURE CAPTURE OR A `let ... else` BINDING OF A HEAP-BOXED GENERIC `Array` PAYLOAD LEAKS EVERY ELEMENT BUFFER ON EVERY COMPILED SURFACE -- `match g { G.Y(x) => { let c = || x[0].len(); return c(); } .. }` and `let G.Y(x) = g else { return 0 }; return x[0].len();` over `G[Array[String, 2]]` lose both strings at `-O0`, with output correct everywhere | — |
+| B-2026-09-29-75 | 2026-09-29 | interp+codegen | medium | A BY-VALUE ENUM PARAM USED AS THE RECEIVER OF AN OWNED-`self` METHOD THAT MATCHES `self` RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY SURFACE -- with `fn m2(self) -> i64 { match self { E.A(s) => s.id, E.B(n) => n } }`, `fn p2(t: E) -> i64 { let x = t.m2(); println(f"p2 {x}"); return x }` at `p2(E.A(mks(2)))` prints `dS2 p2 2 dS2`, where `let t = E.A(mks(2)); t.m2()` on a local prints one body | — |
+| B-2026-09-29-76 | 2026-09-29 | interp | medium | A NESTED `let t = t.m1()` THAT SHADOWS AN ENCLOSING LOCAL ENUM, WHERE `m1` IS AN OWNED-`self` METHOD MATCHING `self`, RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` ONLY -- `fn v1(c: bool) -> i64 { let t = E.A(mks(6)); if c { let t = t.m1(); return t }; return 0 }` at `v1(true)` prints `dS6 dS6` under `--interp` and `dS6` at -O2 and -O0 | — |
+| B-2026-09-29-77 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` METHOD THAT MATCHES `self` ON ONLY SOME PATHS LOSES THE RECEIVER'S PAYLOAD `Drop` BODY ON THE PATHS THAT DO NOT, ON EVERY SURFACE -- `fn t1(self, c: bool) -> i64 { if c { match self { E.A(s) => s.id, E.B(n) => n } } else { 0 } }` at `let a = E.A(mks(1)); a.t1(false)` prints no `dS1`; since 64dadf0a1 the `if c { return match self { .. } }; return 0` spelling does too | — |
 
 ### Relocated
 
