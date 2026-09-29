@@ -2010,9 +2010,10 @@ fn main() {
 /// `let`-bound position, correct since B-2026-09-12-6 / B-2026-09-13-29 and
 /// unmoved by this commit.
 ///
-/// THE THREE `b-` CELLS ARE THE DELIBERATE BOUNDARY AND MUST STAY SILENT.
-/// `b-arrenum` (`Array[Mono, 1]`, a user ENUM element) and `b-tuple` are AGREED
-/// silences today, and the gate is narrowed to mirror
+/// THE `b-` CELLS ARE THE DELIBERATE BOUNDARY. `b-tuple` left it when
+/// B-2026-09-19-46 taught both backends the declared tuple payload, and now
+/// runs `d14 d15` on every surface. `b-arrenum` (`Array[Mono, 1]`, a user ENUM
+/// element) is an AGREED silence today, and the gate is narrowed to mirror
 /// `run_enum_payload_user_drops_value`'s element dispatch arm for arm so they stay
 /// that way: its declared-`Array` arm takes a `Value::Struct` element only, while
 /// its declared-`Vec` arm takes a struct OR a non-shared user enum. Asking the
@@ -2057,7 +2058,7 @@ fn main() {
     ) else {
         return;
     };
-    assert_eq!(out, "f-arr\nd1\nd2\nm\nf-vec\nd3\nm\nf-venum\nd4\nm\nf-bind\nd5\nd6\nm\nf-second\nd7\nd8\nm\nl-arr\nd10\nd11\nm\nl-vec\nd12\nm\nb-arrenum\nm\nb-tuple\nm\nb-unit\nm\nend\n", "got:\n{out}");
+    assert_eq!(out, "f-arr\nd1\nd2\nm\nf-vec\nd3\nm\nf-venum\nd4\nm\nf-bind\nd5\nd6\nm\nf-second\nd7\nd8\nm\nl-arr\nd10\nd11\nm\nl-vec\nd12\nm\nb-arrenum\nm\nb-tuple\nd14\nd15\nm\nb-unit\nm\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-17-15 — A GENERIC ENUM'S `shared` PAYLOAD IS NOW RC-RELEASED,

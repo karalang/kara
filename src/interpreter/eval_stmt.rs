@@ -24,6 +24,11 @@ use super::exec::{
 use super::value::{EnumData, Value};
 use super::{ConsoleSeg, ConsoleStream, Interpreter};
 
+/// B-2026-09-19-46 — the head recorded for a declared TUPLE enum payload,
+/// which has no path to take one from. Not a legal type name, so it cannot
+/// collide with a real head.
+const TUPLE_PAYLOAD_HEAD: &str = "()";
+
 impl<'a> super::Interpreter<'a> {
     /// B-2026-08-14-6 — apply the implicit int-to-float widening to an
     /// assignment RHS the typechecker flagged.
@@ -2767,7 +2772,14 @@ impl<'a> super::Interpreter<'a> {
         // `decls`, which is what lets the struct arm index it too.
         let heads: Vec<Option<String>> = decls
             .iter()
-            .map(|(_, te)| self.effective_payload_head(enum_name, variant, te, binding))
+            .map(|(_, te)| {
+                // B-2026-09-19-46 — a declared TUPLE payload has no path head;
+                // mark it so the loop below can admit it by declaration.
+                if matches!(te.kind, TypeKind::Tuple(_)) {
+                    return Some(TUPLE_PAYLOAD_HEAD.to_string());
+                }
+                self.effective_payload_head(enum_name, variant, te, binding)
+            })
             .collect();
         // (declared head type, payload value) for each declared position.
         let payloads: Vec<(Option<String>, Value)> = match data {
@@ -2852,6 +2864,40 @@ impl<'a> super::Interpreter<'a> {
             })
             .collect();
         for (declared_head, payload) in payloads.into_iter().rev() {
+            // B-2026-09-19-46 — a TUPLE payload: each item's bodies, through
+            // the walk every tuple-as-content position shares. The item
+            // dispatch below it admits a struct or an enum only, so
+            // `enum Ht { P((S1, S1)), Q }` ran nothing here, and neither did
+            // the generic spelling `G.X((S1, S1))` whose compiled twin runs
+            // both (the shared core's tuple arm, B-2026-09-05-14). Admitted
+            // by the DECLARED tuple, or by the enum's own parameter bound to
+            // a tuple value — the two heads whose compiled walkers now reach
+            // a tuple payload.
+            if let Value::Tuple(items) = &payload {
+                let own_param_tuple = declared_head
+                    .as_deref()
+                    .is_some_and(|h| own_params.iter().any(|p| p == h))
+                    && !matches!(enum_name.as_str(), "Option" | "Result");
+                if declared_head.as_deref() == Some(TUPLE_PAYLOAD_HEAD) || own_param_tuple {
+                    // An `Array` / `Vec` item's elements too, in item order:
+                    // the tuple-item walk admits structs, enums and tuples
+                    // only, while codegen's tuple walker descends into a
+                    // container item (`P((Array[R, 2], i64))` printed `dR dR`
+                    // compiled and nothing here).
+                    for it in items.iter().cloned() {
+                        if let Value::Array(rc) = &it {
+                            let elems: Vec<Value> =
+                                rc.read().map(|g| g.clone()).unwrap_or_default();
+                            for e in elems {
+                                self.run_discarded_value_user_drops(e);
+                            }
+                        } else {
+                            self.run_tuple_item_user_drops(vec![it]);
+                        }
+                    }
+                }
+                continue;
+            }
             // B-2026-09-12-24 — the `Array` PAYLOAD arm. The `Value::Struct`
             // destructure below drops an array payload on the floor, so an
             // enum variant declaring `Array[R, N]` ran its elements' `Drop`

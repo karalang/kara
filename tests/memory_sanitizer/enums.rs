@@ -653,7 +653,11 @@ fn asan_enum_container_payload_in_struct_field_keeps_one_owner() {
                     "l-vec",
                     "d12",
                     "m",
+                    // B-2026-09-19-46 — a declared tuple payload runs its
+                    // elements' bodies; this cell was silent before it.
                     "b-tuple",
+                    "d14",
+                    "d15",
                     "m",
                     "b-unit",
                     "m",
@@ -8391,13 +8395,10 @@ fn main() {
 /// exactly half the frees missing — and 66 / 66 with nothing lost after, on
 /// all four opt/auto-par surfaces and byte-identical to `--interp`.
 ///
-/// `dropelem` PRINTS NO `dR`, deliberately pinned that way. A user `Drop`
-/// BODY on an array element inside a tuple payload runs on no backend, and
-/// it AGREES between `--interp` and compiled code, so it is not a divergence
-/// and not this row's — it is the B-2026-09-12-6 / B-2026-09-15-17 family.
-/// Pinned so that whoever fixes the body channel sees this cell change here
-/// rather than discovering it downstream; the MEMORY half is what this
-/// fixture asserts and it is clean.
+/// `dropelem` PRINTS `dR dR`, at `mr`'s NLL end. It printed nothing on every
+/// backend, agreed, until B-2026-09-19-46 gave a declared tuple payload its
+/// element walk on both backends; the pin moved with that fix, as it was left
+/// here to. The MEMORY half is what this fixture asserts and it is clean.
 ///
 /// LIKE ITS SIBLING, THIS CLASS IS VISIBLE ONLY AT `-O0`. At the default opt
 /// level LLVM deletes the allocations, so a green default `--features llvm`
@@ -8475,6 +8476,8 @@ fn main() {
             "mf ok",
             "vecelem ok",
             "shared ok",
+            "dR",
+            "dR",
             "dropelem ok",
             "bare ok",
             "bare2 ok",
@@ -9050,10 +9053,9 @@ fn asan_an_enum_tuple_payload_sees_a_struct_element_that_owns_heap() {
 /// This fix touches neither the width nor the walker, and they are clean
 /// before and after.
 ///
-/// `(bool, Rec)` RUNS ITS USER `Drop` BODY ON NO BACKEND, before and after,
-/// `--interp` included — so it is agreed rather than divergent, and it is the
-/// B-2026-09-12-6 body-channel family, not this row. Recorded here so whoever
-/// repairs that channel sees this position.
+/// `(bool, Rec)` RAN ITS USER `Drop` BODY ON NO BACKEND, before and after
+/// this row, `--interp` included. B-2026-09-19-46 repaired that channel for a
+/// declared tuple payload, so the cell now prints `dR<i>` on both backends.
 ///
 /// OBSERVABLE ONLY AT `-O0`, which the row insists on and which makes the
 /// ordinary `--features llvm` run of this fixture VACUOUS: at the default opt
@@ -9114,8 +9116,10 @@ fn asan_subword_element_tuple_enum_payload_is_dropped() {
             "b1210-bool-two-strings",
         );
 
-    // A user-`Drop` STRUCT element behind the sub-word one. Its body runs on
-    // no backend (B-2026-09-12-6); the memory is this row's and is clean.
+    // A user-`Drop` STRUCT element behind the sub-word one. Its body ran on
+    // no backend until B-2026-09-19-46 (a declared tuple payload's element
+    // walk); it now runs on both, at `g`'s NLL end. The memory is this row's
+    // and is clean.
     assert_clean_asan_run(
         "struct Rec { id: i64, s: String }\n\
              impl Drop for Rec { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
@@ -9129,7 +9133,7 @@ fn asan_subword_element_tuple_enum_payload_is_dropped() {
              \x20   }\n\
              \x20   println(f\"end\");\n\
              }\n",
-        &["t", "t", "t", "end"],
+        &["dR0", "t", "dR1", "t", "dR2", "t", "end"],
         "b1210-drop-struct-element",
     );
 

@@ -11620,6 +11620,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !masked {
                     self.suppress_container_elem_bodies_for_var(scrut_name);
                 }
+                // B-2026-09-19-46 — the mask just took a TUPLE payload's bodies
+                // off the scrutinee, so its whole-tuple binding carries them.
+                self.fund_user_enum_tuple_payload_bindings(&enum_name, pattern);
                 // B-2026-09-18-1 — the mask just took this position's body off
                 // the by-value param's walker, so the arm's binding has to carry
                 // it. It cannot as registered: `bind_pattern_values` made it a
@@ -15409,6 +15412,11 @@ impl<'ctx> super::Codegen<'ctx> {
             self.enum_generic_param_names(enum_name)
         };
         consumed.into_iter().any(|pos| {
+            // B-2026-09-19-46 — a declared TUPLE payload is consumed when any
+            // element runs a body, the test the name-keyed walker registers on.
+            if let Some(TypeKind::Tuple(elems)) = tes.get(pos).map(|te| &te.kind) {
+                return elems.iter().any(|t| self.elem_te_runs_user_drop(t));
+            }
             tes.get(pos)
                 .and_then(|te| match &te.kind {
                     TypeKind::Path(p) => p.segments.first().cloned(),
@@ -18923,6 +18931,67 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.track_user_drop_var_with_fn(
                     "",
                     &b,
+                    slot.ptr,
+                    bodies,
+                    UserDropKind::ContainerElemBodies,
+                );
+            }
+        }
+    }
+
+    /// B-2026-09-19-46 — the user-enum twin of
+    /// [`Self::record_taken_tuple_payload_binding_tes`]: a consuming arm that
+    /// binds a declared TUPLE payload whole (`Ht.P(t)` over
+    /// `enum Ht { P((S1, S1)), Q }`) has just had that position masked off the
+    /// scrutinee's payload walk, so `t` registers the element walk a tuple
+    /// local registers at its `let`, and records its element types so a later
+    /// move (`let u = t`) takes the walk over. A binding that is a caller's
+    /// VIEW registers nothing, since its bodies are the caller's.
+    fn fund_user_enum_tuple_payload_bindings(&mut self, enum_name: &str, pattern: &Pattern) {
+        if matches!(enum_name, "Option" | "Result") {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        let Some(variant) = path.last() else {
+            return;
+        };
+        let Some((_, _, tes)) = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, n, _)| n == variant)
+        else {
+            return;
+        };
+        for (sub, te) in patterns.iter().zip(tes.iter()) {
+            let PatternKind::Binding(b) = &sub.kind else {
+                continue;
+            };
+            let TypeKind::Tuple(elems) = &te.kind else {
+                continue;
+            };
+            if self.payload_vars.param_payload_arm_views.contains(b)
+                || !elems.iter().any(|t| self.elem_te_runs_user_drop(t))
+            {
+                continue;
+            }
+            self.var_types
+                .tuple_var_elem_tes
+                .insert(b.clone(), elems.clone());
+            let Some(slot) = self.variables.get(b).copied() else {
+                continue;
+            };
+            let BasicTypeEnum::StructType(agg_ty) = slot.ty else {
+                continue;
+            };
+            if self.has_armed_container_elem_bodies(b) {
+                continue;
+            }
+            if let Some(bodies) = self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, elems) {
+                self.track_user_drop_var_with_fn(
+                    "",
+                    b,
                     slot.ptr,
                     bodies,
                     UserDropKind::ContainerElemBodies,

@@ -573,8 +573,18 @@ impl<'a> super::Interpreter<'a> {
                                     &arm.body,
                                     arm.guard.as_ref(),
                                 );
+                            // B-2026-09-19-46 — a user enum's TUPLE payload
+                            // bound out whole owns its items from here on, as
+                            // a container payload does. Not the seeded pair,
+                            // whose tuple payload has its own taken-tuple rule
+                            // just above.
+                            let takes_user_tuple =
+                                !matches!(enum_name.as_str(), "Option" | "Result")
+                                    && matches!(self.env.get(&n), Some(Value::Tuple(items))
+                                if items.iter().any(|e| self.field_value_carries_user_drop(e)));
                             let is_drop_binding = self.pattern_binding_owes_drop_body(&n)
-                                || self.taken_tuple_payload_binding_owes_drop(&n, takes_tuple);
+                                || self.taken_tuple_payload_binding_owes_drop(&n, takes_tuple)
+                                || takes_user_tuple;
                             // B-2026-09-06-20 — not for a binding out of a
                             // masked slot; see `masked_view_names` above.
                             if is_drop_binding && !masked_view_names.contains(&n) {
@@ -2411,7 +2421,7 @@ impl<'a> super::Interpreter<'a> {
                         .get(i)
                         .map(|(_, te)| {
                             self.type_expr_is_own_generic_param(enum_name, te)
-                                || self.type_expr_runs_user_drop(te)
+                                || self.payload_te_runs_user_drop(te)
                         })
                         .unwrap_or(false)
                     {
@@ -2426,7 +2436,7 @@ impl<'a> super::Interpreter<'a> {
                         .find(|(dn, _)| dn.as_deref() == Some(fp.name.as_str()))
                         .map(|(_, te)| {
                             self.type_expr_is_own_generic_param(enum_name, te)
-                                || self.type_expr_runs_user_drop(te)
+                                || self.payload_te_runs_user_drop(te)
                         })
                         .unwrap_or(false);
                     if !runs {
@@ -2512,7 +2522,7 @@ impl<'a> super::Interpreter<'a> {
                     .map(|(_, te)| {
                         matches!(&te.kind, crate::ast::TypeKind::Path(p)
                             if p.segments.first().is_some_and(|n| own_params.contains(n)))
-                            || self.type_expr_runs_user_drop(te)
+                            || self.payload_te_runs_user_drop(te)
                     })
                     .unwrap_or(false)
             })
@@ -2544,7 +2554,7 @@ impl<'a> super::Interpreter<'a> {
             decls.iter().enumerate().all(|(i, (_, te))| {
                 let runs = matches!(&te.kind, crate::ast::TypeKind::Path(p)
                     if p.segments.first().is_some_and(|n| own_params.contains(n)))
-                    || self.type_expr_runs_user_drop(te);
+                    || self.payload_te_runs_user_drop(te);
                 !runs || taken.contains(&(vname.clone(), i))
             })
         })
@@ -2628,10 +2638,23 @@ impl<'a> super::Interpreter<'a> {
                 .map(|(_, te)| {
                     matches!(&te.kind, crate::ast::TypeKind::Path(p)
                         if p.segments.first().is_some_and(|n| own_params.contains(n)))
-                        || self.type_expr_runs_user_drop(te)
+                        || self.payload_te_runs_user_drop(te)
                 })
                 .unwrap_or(false)
         })
+    }
+
+    /// B-2026-09-19-46 — [`Self::type_expr_runs_user_drop`] for an enum
+    /// PAYLOAD position, which may also be a TUPLE: it runs a body when any
+    /// element does. The consuming-arm disarm reads this so an arm that moves
+    /// a tuple payload out stands the scrutinee's payload walk down, the same
+    /// as it does for a struct payload. Codegen twin: the tuple clause of
+    /// `enum_pattern_consumes_user_drop_payload`.
+    fn payload_te_runs_user_drop(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(elems) => elems.iter().any(|t| self.payload_te_runs_user_drop(t)),
+            _ => self.type_expr_runs_user_drop(te),
+        }
     }
 
     /// B-2026-09-02-8 — does an `Option`/`Result` payload sub-pattern bind out

@@ -221,6 +221,8 @@ type EnumPayloadBodyField = (
     usize,
     Option<(TypeExpr, u32)>,
     Option<TypeExpr>,
+    // B-2026-09-19-46 — a declared TUPLE payload's whole type expression.
+    Option<TypeExpr>,
 );
 type EnumPayloadBodyTargets = Vec<(u64, String, Vec<EnumPayloadBodyField>)>;
 type EnumPayloadBodyCase<'ctx> = (BasicBlock<'ctx>, Vec<EnumPayloadBodyField>);
@@ -4490,6 +4492,20 @@ impl<'ctx> super::Codegen<'ctx> {
             let generic_params = self.enum_generic_param_names(type_name);
             for (_, _, tes) in self.enum_variant_field_type_exprs(type_name) {
                 for te in &tes {
+                    // B-2026-09-19-46 — a declared TUPLE payload, admitted on
+                    // the same element test its walker uses, so a struct
+                    // field holding `enum Ht { P((S1, S1)), Q }` reaches the
+                    // walk the enum's own binding already runs.
+                    if let TypeKind::Tuple(elems) = &te.kind {
+                        let mentions_param = elems.iter().any(|t| {
+                            matches!(&t.kind, TypeKind::Path(p)
+                                if p.segments.first().is_some_and(|n| generic_params.contains(n)))
+                        });
+                        if !mentions_param && elems.iter().any(|t| self.elem_te_runs_user_drop(t)) {
+                            return true;
+                        }
+                        continue;
+                    }
                     let TypeKind::Path(p) = &te.kind else {
                         continue;
                     };
@@ -12269,6 +12285,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 let Some((start_word, num_words)) = offsets.get(fi).copied() else {
                     continue;
                 };
+                // B-2026-09-19-46 — a declared TUPLE payload
+                // (`enum Ht { P((S1, S1)), Q }`). It is a `TypeKind::Tuple`,
+                // not a `Path`, so the head test below turned it away before
+                // it had a name, and the elements' bodies ran on NO backend.
+                // The generic spelling `G.X((S1, S1))` already ran them
+                // compiled through the shared core's tuple arm
+                // (B-2026-09-05-14); this is the same walker reached through
+                // the name-keyed head. Body-only, like every arm here: the
+                // tuple's heap is freed on the value's free channel.
+                //
+                // The interpreter half lands in the same commit, for the
+                // reason B-2026-09-12-6 gives.
+                if let TypeKind::Tuple(elem_tes) = &te.kind {
+                    if skip.contains(&(vname.clone(), fi)) {
+                        continue;
+                    }
+                    let mentions_param = elem_tes.iter().any(|t| {
+                        matches!(&t.kind, TypeKind::Path(p)
+                            if p.segments.first().is_some_and(|n| generic_params.contains(n)))
+                    });
+                    if !mentions_param && elem_tes.iter().any(|t| self.elem_te_runs_user_drop(t)) {
+                        fields.push((
+                            (start_word + 1) as u32,
+                            String::new(),
+                            num_words,
+                            None,
+                            None,
+                            Some(te.clone()),
+                        ));
+                    }
+                    continue;
+                }
                 let TypeKind::Path(p) = &te.kind else {
                     continue;
                 };
@@ -12308,6 +12356,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         num_words,
                         Some((elem_te, n)),
                         None,
+                        None,
                     ));
                     continue;
                 }
@@ -12333,6 +12382,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         num_words,
                         None,
                         Some(elem_te),
+                        None,
                     ));
                     continue;
                 }
@@ -12342,7 +12392,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     continue;
                 }
                 if self.type_runs_user_drop(&name, &mut Vec::new()) {
-                    fields.push(((start_word + 1) as u32, name, num_words, None, None));
+                    fields.push(((start_word + 1) as u32, name, num_words, None, None, None));
                 }
             }
             if !fields.is_empty() {
@@ -12417,7 +12467,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // them in reverse — `struct P { a: R, b: R }` printed `dR2 dR1` and
             // `enum E { T(R, R) }` printed `dR1 dR2`, measured on all four
             // surfaces. Both backends agreed, so no A/B check could see it.
-            for (field_idx, sname, num_words, array_parts, vec_elem) in fields.into_iter().rev() {
+            for (field_idx, sname, num_words, array_parts, vec_elem, tuple_te) in
+                fields.into_iter().rev()
+            {
                 let fp = self
                     .builder
                     .build_struct_gep(layout.llvm_type, p_arg, field_idx, "de.payload.p")
@@ -12437,6 +12489,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // rather than in the match below so both payload kinds share
                 // the one null-guarded walk.
                 let payload_llvm_words = match (&array_parts, &vec_elem) {
+                    // B-2026-09-19-46 — a tuple payload is boxed by the same
+                    // width test (`coerce_to_payload_words`) as a struct.
+                    _ if tuple_te.is_some() => Self::llvm_type_word_count(
+                        self.llvm_type_for_type_expr(tuple_te.as_ref().unwrap()),
+                    ),
                     (Some((elem_te, n)), _) => {
                         let elem_ty = self.llvm_type_for_type_expr(elem_te);
                         Self::llvm_type_word_count(elem_ty).saturating_mul(*n as usize)
@@ -12483,6 +12540,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     _ => fp,
                 };
+                // B-2026-09-19-46 — the tuple payload's element bodies, over
+                // the tuple aggregate at `fp` (inline or deboxed above).
+                if let Some(tte) = tuple_te {
+                    if let (
+                        TypeKind::Tuple(elem_tes),
+                        inkwell::types::BasicTypeEnum::StructType(agg_ty),
+                    ) = (&tte.kind, self.llvm_type_for_type_expr(&tte))
+                    {
+                        if let Some(f) = self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, elem_tes)
+                        {
+                            self.builder.build_call(f, &[fp.into()], "").unwrap();
+                        }
+                    }
+                    if let Some(nb) = box_next {
+                        self.builder.build_unconditional_branch(nb).unwrap();
+                        self.builder.position_at_end(nb);
+                    }
+                    continue;
+                }
                 if let Some((elem_te, n)) = array_parts {
                     let elem_ty = self.llvm_type_for_type_expr(&elem_te);
                     if let Some(f) = self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem_te, n)
