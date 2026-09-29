@@ -6500,7 +6500,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // owner existed for a destructured field, so a fresh temp's `Drop`
         // body ran on no compiled surface. A base the sub-patterns do not bind
         // unambiguously keeps the payload root, the answer it had before.
-        let field_roots = self.optres_param_struct_field_binding_tes(f, pname, variant, param_te);
+        let follow_rebinds = self.optres_payload_rebind_is_followed(param_te, Some(variant))
+            && !self.struct_elem_owns_shared_field(&root);
+        let mut field_roots =
+            self.optres_param_struct_field_binding_tes(f, pname, variant, param_te);
+        // B-2026-09-29-42 — and a whole immutable rebind of a field binding
+        // (`Some(S { r, s }) => { let y = r; y.id }`) resolves from that
+        // field's type too, on exactly the walks that follow the rebind
+        // (below). Asked from the payload root, `y.id` named no field of `S`,
+        // so it scored as an escape and a fresh temp's body ran on no
+        // compiled surface, the -29-2 defect one rebind further on.
+        if follow_rebinds {
+            extend_with_whole_rebinds(&f.body, &mut field_roots);
+        }
         let leaf_is_copy_read = |e: &Expr| -> bool {
             let base_root = projection_base_ident(e).and_then(|b| field_roots.get(b));
             self.projection_leaf_te_through_index(base_root.unwrap_or(&root), e)
@@ -6521,8 +6533,6 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-27-87 shape, which this would open on the fresh-temp
         // spelling that is clean today. It stays on the callee-owned route
         // until -27-87 makes the rebind a true view.
-        let follow_rebinds = self.optres_payload_rebind_is_followed(param_te, Some(variant))
-            && !self.struct_elem_owns_shared_field(&root);
         !crate::result_escape::optres_payload_escaping_param_variants_with_rebinds(
             f,
             &leaf_is_copy_read,
@@ -21638,6 +21648,98 @@ fn projection_base_ident(e: &Expr) -> Option<&str> {
             | ExprKind::Index { object, .. } => cur = object,
             ExprKind::Identifier(n) => return Some(n.as_str()),
             _ => return None,
+        }
+    }
+}
+
+/// B-2026-09-29-42 — add `y -> te(x)` to `roots` for every whole immutable
+/// rebind `let y = x;` in `b` (at any depth, chained) whose source is already
+/// in `roots`. A name bound more than once anywhere in `b` is left out, so a
+/// later unrelated `y` cannot borrow the field's type.
+fn extend_with_whole_rebinds(
+    b: &crate::ast::Block,
+    roots: &mut std::collections::HashMap<String, TypeExpr>,
+) {
+    use crate::index_disjoint::{for_each_block_child, for_each_child_public, Child};
+    fn visit_block(
+        b: &crate::ast::Block,
+        counts: &mut std::collections::HashMap<String, usize>,
+        rebinds: &mut Vec<(String, String)>,
+    ) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Let {
+                    is_mut,
+                    pattern,
+                    ty,
+                    value,
+                } => {
+                    for n in pattern.binding_names() {
+                        *counts.entry(n).or_default() += 1;
+                    }
+                    if let (
+                        false,
+                        None,
+                        crate::ast::PatternKind::Binding(y),
+                        ExprKind::Identifier(x),
+                    ) = (*is_mut, ty, &pattern.kind, &value.kind)
+                    {
+                        rebinds.push((y.clone(), x.clone()));
+                    }
+                }
+                StmtKind::LetElse { pattern, .. } => {
+                    for n in pattern.binding_names() {
+                        *counts.entry(n).or_default() += 1;
+                    }
+                }
+                StmtKind::LetUninit { name, .. } => *counts.entry(name.clone()).or_default() += 1,
+                _ => {}
+            }
+        }
+        for_each_block_child(b, &mut |c| match c {
+            Child::Expr(e) => visit_expr(e, counts, rebinds),
+            Child::Block(b) => visit_block(b, counts, rebinds),
+        });
+    }
+    fn visit_expr(
+        e: &Expr,
+        counts: &mut std::collections::HashMap<String, usize>,
+        rebinds: &mut Vec<(String, String)>,
+    ) {
+        let mut bind = |p: &crate::ast::Pattern| {
+            for n in p.binding_names() {
+                *counts.entry(n).or_default() += 1;
+            }
+        };
+        match &e.kind {
+            ExprKind::Match { arms, .. } => arms.iter().for_each(|a| bind(&a.pattern)),
+            ExprKind::IfLet { pattern, .. }
+            | ExprKind::WhileLet { pattern, .. }
+            | ExprKind::For { pattern, .. } => bind(pattern),
+            ExprKind::Closure { params, .. } => params.iter().for_each(|p| bind(&p.pattern)),
+            _ => {}
+        }
+        for_each_child_public(e, &mut |c| match c {
+            Child::Expr(e) => visit_expr(e, counts, rebinds),
+            Child::Block(b) => visit_block(b, counts, rebinds),
+        });
+    }
+    let mut counts = std::collections::HashMap::new();
+    let mut rebinds = Vec::new();
+    visit_block(b, &mut counts, &mut rebinds);
+    loop {
+        let mut grew = false;
+        for (y, x) in &rebinds {
+            if roots.contains_key(y) || counts.get(y).copied() != Some(1) {
+                continue;
+            }
+            if let Some(te) = roots.get(x).cloned() {
+                roots.insert(y.clone(), te);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
         }
     }
 }
