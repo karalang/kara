@@ -93,12 +93,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 545 |
-| run-vs-build | 538 |
-| leak | 473 |
+| run-vs-build | 540 |
+| leak | 474 |
 | double-free | 357 |
 | missing-feature | 214 |
 | codegen-gap | 203 |
-| other | 156 |
+| other | 157 |
 | diagnostics | 138 |
 | perf | 117 |
 | false-positive | 112 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2340 |
-| interp | 681 |
+| codegen | 2343 |
+| interp | 683 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -418,6 +418,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-33 | 2026-09-29 | codegen | medium | A USER ENUM'S `Option` / `Result` PAYLOAD LEAKS ITS HEAP ON EVERY COMPILED SURFACE -- `enum Hs { P(Option[String]), Q }` loses the String buffer (9 B), `P(Option[Vec[i64]])` 24 B, `P(Result[String, i64])` 9 B and `P(Option[S1])` with a Drop-bodied `S1` 41 B per value at -O0, in every position (let, ctor field, fn result, struct field, match arm), bodies right | — |
 | B-2026-09-29-34 | 2026-09-29 | codegen+interp | low | AN `Option` MATCH-ARM BINDING HANDED BY VALUE TO A CALLEE RUNS NO `Drop` BODY ON ANY BACKEND -- `match h { Ho.P(b) => tako(b) }` over `enum Ho { P(Option[S1]), Q }` and `match h { Option.Some(o) => tako(o) }` over `Option[Option[S1]]` print `n1` and no `dS` on all four surfaces, where a local (`let a = Some(s(1)); tako(a)`) and a fresh temp run it | — |
 | B-2026-09-29-35 | 2026-09-29 | codegen | medium | A `Vec` MATCH-ARM BINDING HANDED BY VALUE TO A CALLEE LOSES ITS ELEMENTS' `Drop` BODIES COMPILED WHILE `--interp` RUNS THEM -- `match h { Hv.P(v) => takv(v) }` over `enum Hv { P(Vec[S1]), Q }` prints `n1 dS1` under `--interp` and `n1` on jit, -O0 and -O2 | — |
+| B-2026-09-29-36 | 2026-09-29 | codegen | medium | A LOCAL `Array[W, N]` WHOSE ELEMENT STRUCT HOLDS A `shared` FIELD LEAKS EVERY ELEMENT'S RC BOX AT SCOPE EXIT, GENERIC OR NOT -- `let a: Array[W, 2] = [W { u: mk(1) }, W { u: mk(3) }]` (`struct W { u: S2 }`) prints the right bodies on every surface and loses 32 B in 2 blocks at -O0; `Array[Q[S2], 2]` and `Array[T[Sh], 1]` (`T[U] { u: U, id: i64 }`) lose the same per element | — |
+| B-2026-09-29-37 | 2026-09-29 | codegen | medium | REMAINDER OF B-2026-09-29-20: `v[i] = ..` OVER A `Vec` OF A GENERIC STRUCT WITH ITS OWN `impl[U] Drop` RUNS NEITHER THE DISPLACED VALUE'S OWN BODY NOR ITS FIELDS' BODIES, AND LEAKS ITS BOX -- `v[0] = D { u: mk(2), id: 2 }` over `[D { u: mk(1), id: 1 }]` prints `x2 dD2 dS2 end` compiled against `--interp`'s `dD1 dS1 x2 dD2 dS2 end`, 16 B lost at -O0 | — |
+| B-2026-09-29-38 | 2026-09-29 | interp | medium | THE INTERPRETER NEVER RUNS THE `Drop` BODY OF A VALUE POPPED OUT OF A `Vec` OF A GENERIC STRUCT -- `let a = v.pop()` over `[Q { u: mk(1) }, Q { u: mk(2) }]` prints `x1 dS1 end` under `--interp`, never `dS2`, while every compiled surface prints `dS2 x1 dS1 end`; the non-generic `Vec[W]` twin prints `dS2 x1 dS1 end` on all four | — |
+| B-2026-09-29-39 | 2026-09-29 | interp+codegen | medium | A `Map` VALUE THAT IS A GENERIC STRUCT INSTANTIATION RUNS NO `Drop` BODY ON ANY BACKEND -- `m.insert(1, Q { u: mk(1) })` over `Map[i64, Q[S2]]` prints `x1 end` on --interp, JIT, -O0 and -O2 and never `dS1`, while `Map[i64, S2]` and `Map[i64, W]` (`struct W { u: S2 }`) print `x1 dS1 end`; memory is clean | — |
 
 ### Relocated
 
