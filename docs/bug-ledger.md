@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 541 |
 | run-vs-build | 537 |
-| leak | 467 |
+| leak | 468 |
 | double-free | 355 |
 | missing-feature | 214 |
 | codegen-gap | 203 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2324 |
+| codegen | 2325 |
 | interp | 674 |
 | typecheck | 314 |
 | other | 112 |
@@ -299,7 +299,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-52 | 2026-09-26 | interp | medium | THE INTERPRETER LOSES BOTH FIELD BODIES OF A NAMED `Drop`-LESS STRUCT HANDED TO A CALLEE THAT KEEPS IT ON ONLY SOME PATHS, ON THE PATH WHERE IT DIES INSIDE -- `let o = maybew(w, false)` prints `ofalse end` under `--interp` where JIT, `-O2` seq and `-O2` par all print the due `dD107n107 dD7n7 ofalse end`; `gcsw(mut v, w, false)` loses them the same way | — |
 | B-2026-09-26-60 | 2026-09-26 | codegen | high | A NAMED `Drop` LOCAL MOVED INSIDE AN `if` ARM THAT IS NOT TAKEN LOSES ITS BODY ON EVERY COMPILED SURFACE, AND THE BUILTIN-PUSH SPELLING ALSO LEAKS ITS STRING -- `let d = mkd(2); if d.id > 3 { v.push(d); }` prints `l0 end` on JIT / `-O2` seq / `-O2` par against `--interp`'s correct `dD2n2 l0 end`, and loses 2 B in 1 block at `-O0`; the same move into a user callee (`std(mut v, d)`, `keepd(d)`) loses the body with memory balanced, and a `Drop`-less `W` pushed the same way loses both field bodies | — |
 | B-2026-09-26-61 | 2026-09-26 | other | medium | AN E2E FIXTURE THAT PANICS IN `link_or_skip` LEAVES ITS LINKED BINARY AND OBJECT IN `/tmp`, SO ONE STALE ARTIFACT UNDER `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` FILLS THE DISK -- a stale `target/release/karac_jit_runner` made all ~1835 fixtures of an ASAN ratchet leg panic after a SUCCESSFUL link, each stranding a ~13 MB `/tmp/karac_asan_<pid>_<n>` executable; the leg spent ~20 GiB and ended on ENOSPC, which hid the one-line staleness message behind a full disk | — |
-| B-2026-09-27-1 | 2026-09-27 | codegen | high | A GENERIC METHOD THAT HANDS A `shared`-FIELD STRUCT BACK ON ONLY SOME PATHS IS STILL USED AFTER FREE ON EVERY COMPILED SURFACE, with or without a `Drop` -- `k.gpk(s, true, w)` over `impl K { fn gpk[T](ref self, v: T, c: bool, w: T) -> T { if c { return v } return w } }` aborts under `karac run` with 2 valgrind errors at -O0 at both exits for `T = S3` and `T = S2`, the S2 cell also running a body twice (`dS6 dS6 dS5 t5 dS5` against `dS6 t5 dS5`); the remainder of B-2026-09-25-40, whose fix reached the generic FREE fn and the generic method STORE (`k.gst(s, true)`) but not this, because `compute_handback_safe_params` declines every generic impl method | — |
 | B-2026-09-27-10 | 2026-09-27 | codegen+interp | low | A CHAINED OWNED-`self` CALL WHOSE RECEIVER IS ANOTHER METHOD'S RESULT RUNS NO `Drop` BODY FOR THAT RESULT, on every surface -- `E.A(mk(14)).ret_self().none()` prints `n5` where `dE dR14 n5` is due, and a struct chain `S { r: mk(2) }.ret_self().none()` prints nothing where `dS2 dR2` is due; memory balanced | — |
 | B-2026-09-27-11 | 2026-09-27 | codegen+interp | medium | A NAMED STRUCT RECEIVER HANDED BACK WHOLE BY AN OWNED-`self` METHOD RUNS EVERY `Drop` BODY TWICE, on all four surfaces, own `Drop` or not -- `let b = a.ret_self()` over `struct S { r: R }` with `impl Drop for S` prints `dS1 dR1 dS1 dR1`, and over a plain `struct P { r: R }` prints `dR6 dR6`; a temp receiver whose method returns a fresh value loses its bodies; memory balanced | — |
 | B-2026-09-27-12 | 2026-09-27 | interp | medium | THE INTERPRETER MIS-OWNS A CONDITIONALLY-RETURNED BY-VALUE PARAM OF AN ENUM WITH ITS OWN `Drop`: `mb(a, false)` over `fn mb(e: E, c: bool) -> E { if c { return e } return E.B }` loses the payload body (`mb-new dE dE` against the compiled `mb-new dE dR2 dE`) and `mb(a, true)` runs the shell twice (`dE dR3 dE` against `dE dR3`); the always-returning `ide(q)` doubles the shell the same way | — |
@@ -420,6 +419,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-11 | 2026-09-29 | codegen | medium | A FIELD MOVED OUT OF A LOCAL THAT IS ITSELF A FIELD OF A BY-VALUE PARAM (`let w = o.w; let r = w.r;`, or `let O { w, k } = o; let r = w.r;`) LEAKS THE FIELD'S HEAP ON THE COMPILED BACKENDS -- 2 B in 1 block at -O0 whether or not `r` is ever handed over, while `let r = o.w.r;` and `let W { r, .. } = w;` are clean | — |
 | B-2026-09-29-12 | 2026-09-29 | interp+codegen | high | `unwrap()` ON A BY-VALUE `Option`/`Result` PARAM RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND CRASHES COMPILED WHEN THE `Option` IS BOXED, with no store anywhere -- `fn cu(t: Option[S]) { let x = t.unwrap(); println(f"u{x.id}") }` over `cu(Option.Some(mks(1)))` prints `u1 dS1 dS1 end` under `--interp`, segfaults at -O0 and double-frees at -O2, against the correct `u1 dS1 end`. CORRECTION: filed as a store-on-one-path / unwrap-on-the-other remainder of B-2026-09-29-9; the store is irrelevant, the unwrap alone is the fault | — |
 | B-2026-09-29-13 | 2026-09-29 | codegen | medium | A `let` THAT SHADOWS AN `Option` PARAM WITH A VALUE OF ANOTHER TYPE PRINTS AS THE PARAM'S TYPE ON EVERY COMPILED SURFACE -- `fn s2(t: Option[i64]) { let t = 3; println(f"s2 {t}") }` prints `s2 None` at -O0 and -O2 for `s2(Option.Some(7))`, against `--interp`'s correct `s2 3` | — |
+| B-2026-09-29-14 | 2026-09-29 | codegen | high | A GENERIC STRUCT PASSED BY `ref` TO A GENERIC CALLEE NEVER RUNS ITS FIELD'S `Drop` BODY AND LEAKS THE FIELD'S `shared` BOX ON EVERY COMPILED SURFACE -- `let q = Q { u: S2 { .. } }; q.rd()` over `impl[U] Q[U] { fn rd(ref self) -> i64 }`, or `rq(q)` over `fn rq[U](q: ref Q[U])`, prints `x1 end` where `--interp` prints `x1 dS9 end`, 16 B definitely lost at -O0; the non-generic `struct P { u: S2 }` twin and an unborrowed `Q` are clean | — |
 
 ### Relocated
 
@@ -3194,6 +3194,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-62 | interp+codegen | medium | FIXED FOR THE TAIL SPELLING (7ce7f24); THE TUPLE-PAYLOAD AND TWO-HOP SPELLINGS MOVED TO B-2026-09-27-19 -- THE SPELLINGS OF B-2026-09-26-37 ITS FIX D… | 7ce7f24 |
 | B-2026-09-26-50 | codegen | medium | A NAMED STRUCT WITH NO `Drop` OF ITS OWN WHOSE FIELDS CARRY ONE, MOVED WHOLE INTO A CALLEE THAT KEEPS IT, RUNS EACH FIELD'S BODY AT THE CALL AND AGAI… | 049da6f4e |
 | B-2026-09-26-63 | interp+codegen | medium | FOUR SPELLINGS OF A NAMED LOCAL'S `Drop` FIELD HANDED TO A KEEPING CALLEE STILL RUN THE FIELD'S BODY TWICE ON ALL FOUR SURFACES AFTER B-2026-09-26-47… | 2ab2f27ba |
+| B-2026-09-27-1 | codegen | high | A GENERIC METHOD THAT HANDS A `shared`-FIELD STRUCT BACK ON ONLY SOME PATHS IS STILL USED AFTER FREE ON EVERY COMPILED SURFACE, with or without a `Dr… | a32a5254f |
 | B-2026-09-27-2 | interp+codegen | high | MOVING AN ELEMENT OUT OF A LOCAL TUPLE BY `return t.0` OR A TAIL `t.0` RUNS ITS Drop BODY TWICE IN THE INTERPRETER, AND A CONDITIONAL MOVE (`if k { r… | e39f58c |
 | B-2026-09-27-3 | interp+codegen | high | A PROJECTION MOVED OUT IN A VALUE POSITION OTHER THAN `let x = p.f` / `return` / a function tail RUNS ITS Drop BODY TWICE ON EVERY BACKEND -- `let x… | bd5b43d |
 | B-2026-09-27-14 | interp+codegen | medium | TWO SPELLINGS OF B-2026-09-27-3 ITS FIX LEAVES AS THEY WERE: a STRUCT field at the tail of an `if` passed as a CALL ARGUMENT (`show(if k { p.a } else… | e06d859 |
