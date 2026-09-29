@@ -4,8 +4,6 @@
 //! `no method 'len' on type parameter 'T'` while the `match` spelling of the
 //! same destructure typechecked.
 
-use super::*;
-
 /// B-2026-09-29-103 — `let` destructures of `G[String]`, `G[Vec[i64]]`, a
 /// two-parameter `P[String, Vec[String]]`, a generic `G[T]` inside a generic
 /// fn, a leaf handed back, and a local literal.
