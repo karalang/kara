@@ -92,16 +92,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 573 |
+| miscompile | 574 |
 | run-vs-build | 541 |
-| leak | 485 |
-| double-free | 363 |
+| leak | 487 |
+| double-free | 367 |
 | missing-feature | 214 |
 | codegen-gap | 203 |
 | other | 158 |
 | diagnostics | 138 |
 | perf | 117 |
-| false-positive | 113 |
+| false-positive | 115 |
 | crash | 103 |
 | soundness | 97 |
 | use-after-free | 68 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2390 |
-| interp | 707 |
-| typecheck | 315 |
+| codegen | 2397 |
+| interp | 708 |
+| typecheck | 317 |
 | other | 112 |
 | ownership | 79 |
 | cli | 73 |
@@ -407,7 +407,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-30 | 2026-09-29 | codegen | high | AN `Option` PARAM'S PAYLOAD BINDING REWRAPPED AND HANDED ON INSIDE THE CALLEE (`eat(Some(x))`) RUNS A NAMED ARGUMENT'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, IN `match`, `if let` AND `let .. else` ALIKE -- `fn f(a: Option[S]) -> i64 { if let Some(x) = a { eat(Some(x)); 3 } else { 0 } }` over `fn eat(o: Option[S]) { println("eat") }` with a named `a` prints `eat d2 d2 j3` at `-O0` / `-O2` against `--interp`'s `eat d2 j3`; memory clean | — |
 | B-2026-09-29-31 | 2026-09-29 | codegen | medium | A NAMED `Option` ARGUMENT WHOSE PAYLOAD HAS A `shared` FIELD AND A `Drop`-BEARING FIELD RUNS THE BODY INSIDE THE CALLEE WHEN THE CALLEE REBINDS THE ARM BINDING -- `fn f(w: Option[ShD]) -> i64 { if let Some(p) = w { let q = p; return q.n; } return 0; }` over `ShD { r: R, i: ShIn, n }` prints `d2 j2` at `-O0` / `-O2` against `--interp`'s `j2 d2` for `let o = Some(mkd(2)); println(f"j{f(o)}")`; memory clean. The fresh temp is right. B-2026-09-29-3's rebind fix does not reach a payload with a `shared` field | — |
 | B-2026-09-29-32 | 2026-09-29 | codegen | medium | AN `Option` PARAM WHOSE PAYLOAD HAS A `shared` FIELD AND WHICH THE CALLEE TAKES ON ONLY SOME PATHS LEAKS THE PAYLOAD ON THE OTHERS -- `fn f(w: Option[ShP], k: bool) -> i64 { if k { return w.unwrap().n; } return 5; }` over `ShP { i: ShIn, n }` loses 32 B per call that does not unwrap, at `-O0` on a fresh temp and (since B-2026-09-27-87's fix) on a named argument; output right everywhere | — |
-| B-2026-09-29-43 | 2026-09-29 | codegen | medium | A DESTRUCTURED `Option` PARAM PAYLOAD WITH A `shared` FIELD WHOSE ARM USES ANOTHER FIELD BARE (`Some(ShP { i, n }) => n`) LEAKS THE `shared` FIELD'S BLOCK -- 32 B per call at `-O0`, fresh temp and named argument alike; output right everywhere; `i.s.len()` in the same arm is clean | — |
 | B-2026-09-29-61 | 2026-09-29 | interp+codegen | medium | A top-level `let` that SHADOWS a by-value parameter's name loses the caller's `Drop` body for that parameter, on BOTH backends (`fn f(s: S) -> i64 { let s = 5; s }` prints no `d1`; the interpreter agrees with codegen, so the oracle is wrong too) | — |
 | B-2026-09-29-62 | 2026-09-29 | interp | medium | The interpreter runs a `Drop` body TWICE when a pattern binding shadows its own identifier scrutinee and the value is used -- `let s = Some(mks(1)); match s { Some(S { r, s }) => r.id, .. }` prints `d1 d1`, and `fn f(s: Option[S]) -> T { match s { Some(S { r, s }) => T { r, s }, .. } }` prints an extra `d1` before returning; compiled builds are right | — |
 | B-2026-09-29-63 | 2026-09-29 | codegen | medium | A closure inside a match arm that captures a field binding destructured out of a by-value `Option` param loses the caller's `Drop` body on every compiled surface -- `fn f(p: Option[S]) -> String { match p { Some(S { r, s }) => { let g = |q: i64| q + r.id; f"{g(1)} {s}" } None => "n" } }` prints no `d1` at -O0/-O2, `--interp` prints `d1` | — |
@@ -439,6 +438,13 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-109 | 2026-09-29 | interp | medium | `--interp` RUNS THE `Drop` BODIES OF A `Vec[D]` DESTRUCTURED OUT OF A BORROWED `for` ELEMENT AT THE LEAF'S DEATH, WHILE THE COLLECTION STILL HOLDS THEM -- `for pair in v.iter() { let (a, j) = pair; .. } println(f"x{v.len()}")` prints `1 1 dD1 2 1 dD2 x2 end` interpreted against the compiled surfaces' `1 1 2 1 x2 dD1 dD2 end`; `v` is read after the loop and still holds both elements | — |
 | B-2026-09-29-95 | 2026-09-29 | codegen | medium | A LOCAL USER ENUM HANDED, INSIDE A BRANCH THAT DOES NOT RUN, AS THE RECEIVER OF AN OWNED-`self` METHOD THAT TAKES ITS PAYLOAD LOSES THE PAYLOAD'S `Drop` BODY ON THE PATH THAT NEVER CALLED, ON EVERY COMPILED SURFACE -- `fn a2(c: bool) -> i64 { let t = E.A(mks(2)); if c { return t.m1() }; return 0 }` at `a2(false)` prints `r 0` at -O2 and -O0 where `--interp` prints the due `dS2 r 0` | — |
 | B-2026-09-29-116 | 2026-09-29 | codegen | medium | REMAINDER OF B-2026-09-29-95: A LOCAL WHOSE CONTAINER WALK RUNS ITS PAYLOAD'S `Drop` BODY (A USER ENUM, AN `Option`, A TUPLE) STILL LOSES THAT BODY ON THE PATH THAT NEVER MOVED IT, ON EVERY COMPILED SURFACE, WHEN THE HAND-OFF INSIDE AN UNTAKEN BRANCH IS A `let` MOVE, A KEEPING CALL OR A PAYLOAD-BINDING `match` -- `let t = E.A(mks(4)); if c { let y = t; println("y") }` at `c = false` prints nothing for `t` compiled where `--interp` prints `dS4` | — |
+| B-2026-09-29-86 | 2026-09-29 | codegen | medium | A struct with a `shared` field AND an owned `String` field, destructured out of an `Option` by a `match` that binds all its fields and hands back only the scalar, leaks the `shared` block on every compiled surface, even over a LOCAL scrutinee (`let a = Some(mkq(1)); match a { Some(Q { i, n, s }) => n, None => 0 }`: 32 B definitely lost at -O0) | — |
+| B-2026-09-29-87 | 2026-09-29 | interp+codegen | medium | A destructured `Option` param that hands back a `Vec[i64]` field bare (`Some(S { r, v }) => v`) still loses its sibling field's `Drop` body on BOTH backends, for a fresh temp and a named argument alike; B-2026-09-29-43's fix covers only scalar and `String` fields | — |
+| B-2026-09-29-88 | 2026-09-29 | codegen | high | A GENERIC struct param with a `shared` field still double-frees a field it hands out, the remainder of B-2026-09-29-85 -- `fn f(g: G[String]) -> String { g.v }` over `struct G[T] { i: ShIn, v: T }`, `match g { G { v, .. } => v.len() }` and a generic `fn tk[T](g: G[T]) -> T { g.v }` abort at -O0 with `free(): double free detected`; -O2 and the interpreter print the right output | — |
+| B-2026-09-29-90 | 2026-09-29 | codegen | medium | A destructure of a by-value struct param with a `shared` field LEAKS an `Option[String]` field it does not bind -- `let Q { s, r, .. } = q` or `match q { Q { s, .. } => .. }` over a `Q` with an `o: Option[String]` loses the `Some` payload, 33 B per call at -O0, output right on every surface | — |
+| B-2026-09-29-103 | 2026-09-29 | typecheck | medium | `let` destructuring a CONCRETE instantiation of a generic struct types the leaf as the bare parameter, so `fn f(g: G[String]) -> i64 { let G { v, n } = g; v.len() }` is rejected with `no method 'len' on type parameter 'T'`; the `match` spelling of the same destructure typechecks | — |
+| B-2026-09-29-104 | 2026-09-29 | typecheck | low | A NESTED struct pattern over a generic struct in a `let` is rejected as refutable -- `let G { v: G { v, n }, n: m } = g` over `g: G[G[String]]` reports `refutable pattern in \`let\` binding`, while the same nested pattern over a non-generic struct (`let A { b: B { x }, y } = a`) is accepted | — |
+| B-2026-09-29-105 | 2026-09-29 | codegen | high | A `match` over a by-value struct param with a `shared` field that binds a nested struct field which ITSELF owns a `shared` field (`match q { Q { hs, .. } => hs.t.len() }`, `hs: Hs { sh: ShIn, t: String }`) double-frees at -O0 and -O2; the `let` spelling and `q.hs` returned are clean -- the remainder of B-2026-09-29-89 | — |
 
 ### Relocated
 
@@ -3334,6 +3340,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-51 | codegen | medium | A LOCAL THAT SHADOWS AN `Option` PARAM BY NAME RUNS NO `Drop` BODY FOR ITS OWN PAYLOAD WHEN A PATTERN BINDS OUT OF IT, ON EVERY COMPILED SURFACE -- `… | ca0a6d82e |
 | B-2026-09-29-41 | codegen | high | A STRUCT SUB-PATTERN FIELD BINDING THAT SHADOWS ITS OWN BY-VALUE `Option` PARAM (`fn f(s: Option[S]) { match s { Some(S { r, s }) => r.id, . | 064821fc6 |
 | B-2026-09-29-42 | codegen | medium | A FIELD BINDING OF A DESTRUCTURED `Option` PARAM PAYLOAD REBOUND INSIDE THE CALLEE (`Some(S { r, s }) => { let y = r; y.id }`) LOSES A FRESH-TEMP ARG… | 08f35bf2f |
+| B-2026-09-29-43 | codegen | medium | A DESTRUCTURED `Option` PARAM PAYLOAD WITH A `shared` FIELD WHOSE ARM USES ANOTHER FIELD BARE (`Some(ShP { i, n }) => n`) LEAKS THE `shared` FIELD'S… | 167b6244b |
 | B-2026-09-29-47 | codegen | high | A STRUCT DESTRUCTURE WITH `..` AFTER ONE OF ITS FIELDS WAS MOVED OUT READS FREED MEMORY ON EVERY COMPILED SURFACE -- `let x = q.u; let W3 { n, . | 00db9b945 |
 | B-2026-09-29-64 | interp+codegen | medium | AN OWNED-`self` METHOD THAT RETURNS `match self { . | 64dadf0a1 |
 | B-2026-09-29-74 | interp+codegen | medium | AN ASSIGNMENT THROUGH A `mut ref` PARAM (`fn gm(x: mut ref Option[R]) -> i64 { x = Some(mk(99, f"z")); 5 }`) NEVER RUNS THE DISPLACED VALUE'S `Drop`… | a6e088d76 |
@@ -3343,6 +3350,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-79 | codegen | high | A NESTED STRUCT FIELD RETURNED OUT OF A BY-VALUE PARAM THAT HOLDS A `shared` VALUE READS FREED MEMORY ON EVERY COMPILED SURFACE (TITLE CORRECTED AT C… | 8b58e6865 |
 | B-2026-09-29-78 | codegen | high | `i128` / `u128` ARITHMETIC BESIDE A SUFFIXLESS LITERAL IS COMPUTED AT 64 BITS WHEN COMPILED -- `b + 1` over `b: i128 = 100000000000000000000i128` pri… | be94bca62 |
 | B-2026-09-29-100 | codegen | high | REMAINDER OF B-2026-09-29-79: A LOCAL BOUND STRAIGHT FROM A NESTED STRUCT FIELD OF A BY-VALUE PARAM THAT HOLDS A `shared` VALUE STILL ALIASES THE CAL… | dbf3f7187 |
+| B-2026-09-29-85 | codegen | high | A by-value struct PARAM with a `shared` field (which the prologue neither entry-copies nor takes by transfer) double-frees an owned `String` field it… | d48b3fcef |
+| B-2026-09-29-89 | codegen | high | A `match` over a by-value struct param with a `shared` field that binds a nested STRUCT field (`match q { Q { h, . | c09cc8a89 |
 
 </details>
 
