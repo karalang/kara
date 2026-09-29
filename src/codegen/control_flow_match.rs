@@ -160,6 +160,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // container drops). The parser's `self.tokens[self.pos].token` shape.
         let (scrut, did_clone_borrowed_index_field) =
             self.clone_borrowed_index_field_enum_scrutinee(scrutinee, scrut)?;
+        // B-2026-09-19-45 — the NAMED `Array` local twin of the `v[i]` clone
+        // above. Joins `did_clone_borrowed_index_field` so the materializer
+        // below drop-tracks the clone the same way.
+        let (scrut, did_clone_array_local_index) =
+            self.clone_owned_array_local_enum_index(scrutinee, scrut)?;
+        let did_clone_borrowed_index_field =
+            did_clone_borrowed_index_field || did_clone_array_local_index;
         // B-2026-07-14-1: a bare `for`-loop element (`for p in v { match p { … } }`)
         // over a heap-bearing non-shared user ENUM whose arm MOVES a payload out.
         // The element bit-copy-aliases the container slot, so the moved payload
@@ -646,7 +653,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .pattern_binding_scrutinee_is_owned_elem_clone;
         self.pattern_state
             .pattern_binding_scrutinee_is_owned_elem_clone = self.expr_is_heap_vec_index(scrutinee)
-            || self.expr_is_heap_vec_index_field_rooted(scrutinee);
+            || self.expr_is_heap_vec_index_field_rooted(scrutinee)
+            || self.array_local_enum_index_elem_te(scrutinee).is_some();
         // B-2026-08-02-25 (match-arm leg) — the source binding's payload-bodies
         // walk is armed HERE, before any arm's suppressor runs. A consuming arm
         // retracts it; for a BOXED payload that walk is the body's only fire

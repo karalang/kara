@@ -3960,6 +3960,91 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
             }
         }
+        self.upgrade_enum_element_array_payloads(program);
+    }
+
+    /// B-2026-09-19-45 — the `BoxedArray` pass above for an `Array[E, N]`
+    /// payload whose ELEMENT is a user enum, run once every enum has a layout.
+    ///
+    /// That pass sizes the element through `payload_word_count_for_type_expr`,
+    /// which answers 1 for any enum (the enum-in-enum carve-out), so
+    /// `enum Ha { P(Array[Mono, 1]), Q }` compared `1 * 1 > 1`, kept kind
+    /// `None`, and got no drop switch at all. The pack side reads the real
+    /// width (10 words for a `Mono` over a three-`String` struct) and boxes it,
+    /// so the box (80 B) and the element's heap were stranded while the
+    /// element bodies ran. The generic twin `G[Array[Mono, 1]]` was clean
+    /// because a monomorph sizes the payload from its LLVM type.
+    ///
+    /// A pass of its own rather than a clause in the one above because the
+    /// element's layout must exist, and an enum may name one declared further
+    /// down. The element width is the element enum's LLVM width, which is what
+    /// `coerce_to_payload_words` measures.
+    fn upgrade_enum_element_array_payloads(&mut self, program: &Program) {
+        for item in &program.items {
+            let Item::EnumDef(e) = item else {
+                continue;
+            };
+            if e.is_shared || e.is_par {
+                continue;
+            }
+            let mut upgrades: Vec<(String, usize)> = Vec::new();
+            let Some(layout) = self.type_decls.enum_layouts.get(&e.name) else {
+                continue;
+            };
+            for v in &e.variants {
+                let field_tys: Vec<&TypeExpr> = match &v.kind {
+                    VariantKind::Unit => continue,
+                    VariantKind::Tuple(tys) => tys.iter().collect(),
+                    VariantKind::Struct(fields) => fields.iter().map(|f| &f.ty).collect(),
+                };
+                let (Some(kinds), Some(offs)) = (
+                    layout.field_drop_kinds.get(&v.name),
+                    layout.field_word_offsets.get(&v.name),
+                ) else {
+                    continue;
+                };
+                for (fi, field_ty) in field_tys.into_iter().enumerate() {
+                    if kinds.get(fi) != Some(&EnumDropKind::None) {
+                        continue;
+                    }
+                    let Some((elem_te, n)) = self.array_elem_and_len(field_ty) else {
+                        continue;
+                    };
+                    let TypeKind::Path(ep) = &elem_te.kind else {
+                        continue;
+                    };
+                    let Some(elem_layout) = ep
+                        .segments
+                        .first()
+                        .and_then(|en| self.type_decls.enum_layouts.get(en))
+                    else {
+                        continue;
+                    };
+                    if elem_layout.is_shared {
+                        continue;
+                    }
+                    let elem_words = Self::llvm_type_word_count(elem_layout.llvm_type.into());
+                    let field_words = offs.get(fi).map(|(_, w)| *w).unwrap_or(1);
+                    if elem_words.saturating_mul(n as usize) > field_words {
+                        upgrades.push((v.name.clone(), fi));
+                    }
+                }
+            }
+            if upgrades.is_empty() {
+                continue;
+            }
+            if let Some(layout) = self.type_decls.enum_layouts.get_mut(&e.name) {
+                for (vname, fi) in upgrades {
+                    if let Some(k) = layout
+                        .field_drop_kinds
+                        .get_mut(&vname)
+                        .and_then(|ks| ks.get_mut(fi))
+                    {
+                        *k = EnumDropKind::BoxedArray;
+                    }
+                }
+            }
+        }
     }
 
     /// Compound-payload enum codegen (CP5) — recursive per-field word-count

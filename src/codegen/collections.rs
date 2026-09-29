@@ -4074,6 +4074,84 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(elem_te) = self.vec_index_elem_type_expr(object) else {
             return Ok(val);
         };
+        self.clone_index_element_at(value, val, elem_te)
+    }
+
+    /// B-2026-09-19-45 — `match a[i] { .. }` over a NAMED `Array[E, N]` local
+    /// whose element is a non-shared user enum: deep-clone the element exactly
+    /// as [`Self::clone_owned_vec_index_element`] does for a `Vec`, and report
+    /// whether it did so the caller drop-tracks the clone.
+    ///
+    /// Without it an arm that bound a payload out of the element (`Mono.P(r)`)
+    /// moved it out of the ARRAY'S OWN SLOT: the binding's drop and the
+    /// array's element drain freed one buffer (double free, measured on
+    /// `enum Mono { P(R), Q }` at every opt level). The `Vec` spelling was
+    /// clean because `vec_index_elem_type_expr` resolves a Vec local's element
+    /// and an Array local's lives in a separate table (`array_elem_type_exprs`,
+    /// which its comment keeps separate on purpose). Scoped to the match
+    /// scrutinee and to enum elements: that is the site measured, and the other
+    /// consumers of an array index are typechecked as borrows or Copy reads.
+    pub(super) fn clone_owned_array_local_enum_index(
+        &mut self,
+        value: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<(BasicValueEnum<'ctx>, bool), String> {
+        let Some(elem_te) = self.array_local_enum_index_elem_te(value) else {
+            return Ok((val, false));
+        };
+        let cloned = self.clone_index_element_at(value, val, elem_te)?;
+        Ok((cloned, true))
+    }
+
+    /// The gate behind [`Self::clone_owned_array_local_enum_index`]: the
+    /// element `TypeExpr` of `a[i]` when `a` is a named `Array` local whose
+    /// element is a heap-bearing non-shared user enum. Also read by the match
+    /// site's owned-element-clone flag, so the clone's binding is not mourned
+    /// a second time (the array still owns the element and runs its body).
+    pub(super) fn array_local_enum_index_elem_te(&self, value: &Expr) -> Option<TypeExpr> {
+        let ExprKind::Index { object, index } = &value.kind else {
+            return None;
+        };
+        if matches!(&index.kind, ExprKind::Range { .. }) {
+            return None;
+        }
+        let ExprKind::Identifier(name) = &object.kind else {
+            return None;
+        };
+        if self
+            .var_types
+            .var_elem_type_exprs
+            .contains_key(name.as_str())
+        {
+            return None;
+        }
+        let elem_te = self
+            .var_types
+            .array_elem_type_exprs
+            .get(name.as_str())
+            .cloned()?;
+        let elem_is_owned_enum = match &elem_te.kind {
+            TypeKind::Path(p) if p.segments.len() == 1 => self
+                .type_decls
+                .enum_layouts
+                .get(p.segments[0].as_str())
+                .is_some_and(|l| !l.is_shared),
+            _ => false,
+        };
+        if !elem_is_owned_enum || super::vec_method::is_trivially_copyable_te(&elem_te) {
+            return None;
+        }
+        Some(elem_te)
+    }
+
+    /// The deep clone behind [`Self::clone_owned_vec_index_element`], at an
+    /// element type the caller already resolved.
+    fn clone_index_element_at(
+        &mut self,
+        value: &Expr,
+        val: BasicValueEnum<'ctx>,
+        elem_te: TypeExpr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         if super::vec_method::is_trivially_copyable_te(&elem_te) {
             return Ok(val);
         }
