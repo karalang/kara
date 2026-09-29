@@ -2971,12 +2971,32 @@ impl<'a> super::Interpreter<'a> {
                             self.run_container_elem_user_drop_bodies(&e);
                             continue;
                         }
-                        let Value::Struct { name: en, .. } = &e else {
-                            continue;
-                        };
-                        if self.program.drop_method_keys.contains_key(en) {
-                            let en = en.clone();
-                            self.run_user_drop_body_only(&en, e.clone());
+                        match &e {
+                            Value::Struct { name: en, .. } => {
+                                if self.program.drop_method_keys.contains_key(en) {
+                                    let en = en.clone();
+                                    self.run_user_drop_body_only(&en, e.clone());
+                                }
+                            }
+                            // B-2026-09-19-50 — a user ENUM element, its own
+                            // body then its payload's, exactly as the `Vec` arm
+                            // below dispatches it. `enum Ha { P(Array[Mono, 1]),
+                            // Q }` ran `Mono`'s payload bodies on every compiled
+                            // surface (`emit_slot_drop_bodies_at` is
+                            // element-shape-agnostic) and on none here. A
+                            // `shared` / `par` element is left out, as codegen's
+                            // `Array` gate leaves it out: every compiled surface
+                            // is silent on `Array[Sm, 1]`.
+                            Value::EnumVariant { enum_name: en, .. }
+                                if !self.enum_is_shared(en) =>
+                            {
+                                if self.program.drop_method_keys.contains_key(en) {
+                                    let en = en.clone();
+                                    self.run_user_drop_body_only(&en, e.clone());
+                                }
+                                self.run_enum_payload_user_drops_value(&e);
+                            }
+                            _ => {}
                         }
                     }
                     continue;
@@ -2995,10 +3015,10 @@ impl<'a> super::Interpreter<'a> {
             // which is an AGREED gap: both sides silent, so no A/B rule saw it
             // and memory was balanced, so no sanitizer leg did either.
             //
-            // The element dispatch is WIDER than the array arm's and has to be:
-            // that arm handles a `Value::Struct` element only, and the shape
-            // this row reports is `Vec[Mono]` over a user ENUM whose payload
-            // owns the body. Codegen's twin resolves the same two element kinds
+            // The element dispatch takes a user ENUM as well as a struct: the
+            // shape this row reports is `Vec[Mono]` over a user enum whose
+            // payload owns the body. (The `Array` arm above took a struct only
+            // until B-2026-09-19-50 gave it the same pair.) Codegen's twin resolves the same two element kinds
             // through `emit_vec_elem_user_drop_bodies_fn_mono`, which takes a
             // struct OR a non-shared enum layout, so admitting both here is
             // what keeps the two walks equal rather than widening past them.

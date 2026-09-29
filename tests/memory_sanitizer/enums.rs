@@ -598,6 +598,12 @@ fn asan_generic_enum_with_generic_drop_impl_keeps_one_owner() {
 /// list that is otherwise fully drained. It stays pinned in the transcript
 /// fixtures, where it is visible without being load-bearing, and it is the
 /// cell that must move when its own row closes.
+///
+/// It has: B-2026-09-19-45 freed the stranded bytes and B-2026-09-19-50 ran
+/// the body, and the cell is now memory-clean at `-O0` and printing `d13`
+/// everywhere. Its ASAN coverage lives in that row's family file
+/// (`asan_array_of_enums_payload_positions`, the `field` cell), so this
+/// fixture stays as it is.
 #[test]
 fn asan_enum_container_payload_in_struct_field_keeps_one_owner() {
     assert_clean_asan_run(

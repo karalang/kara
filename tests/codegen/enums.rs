@@ -2010,18 +2010,14 @@ fn main() {
 /// `let`-bound position, correct since B-2026-09-12-6 / B-2026-09-13-29 and
 /// unmoved by this commit.
 ///
-/// THE `b-` CELLS ARE THE DELIBERATE BOUNDARY. `b-tuple` left it when
-/// B-2026-09-19-46 taught both backends the declared tuple payload, and now
-/// runs `d14 d15` on every surface. `b-arrenum` (`Array[Mono, 1]`, a user ENUM
-/// element) is an AGREED silence today, and the gate is narrowed to mirror
-/// `run_enum_payload_user_drops_value`'s element dispatch arm for arm so they stay
-/// that way: its declared-`Array` arm takes a `Value::Struct` element only, while
-/// its declared-`Vec` arm takes a struct OR a non-shared user enum. Asking the
-/// emitter's wider `elem_te_runs_user_drop` here instead was measured to make
-/// `b-arrenum` print on all three compiled surfaces and nowhere under `--interp`
-/// — one fresh divergence bought for three closed, which is what 0eba4d1's revert
-/// was about. `b-arrenum`'s family is the row's remainder; `b-tuple` is
-/// B-2026-09-19-46.
+/// THE `b-` CELLS WERE THE DELIBERATE BOUNDARY, and both have left it.
+/// `b-tuple` left when B-2026-09-19-46 taught both backends the declared
+/// tuple payload, and runs `d14 d15` on every surface. `b-arrenum`
+/// (`Array[Mono, 1]`, a user ENUM element) was an agreed silence, held so
+/// by a gate narrowed to mirror the interpreter's declared-`Array` arm,
+/// which took a `Value::Struct` element only. B-2026-09-19-50 widened
+/// that arm and this gate together, to the non-shared user enum the `Vec`
+/// arm already took, so it runs `d13` on every surface.
 #[test]
 fn e2e_enum_container_payload_in_struct_field_runs_element_drop_bodies() {
     let Some(out) = run_program(
@@ -2058,7 +2054,7 @@ fn main() {
     ) else {
         return;
     };
-    assert_eq!(out, "f-arr\nd1\nd2\nm\nf-vec\nd3\nm\nf-venum\nd4\nm\nf-bind\nd5\nd6\nm\nf-second\nd7\nd8\nm\nl-arr\nd10\nd11\nm\nl-vec\nd12\nm\nb-arrenum\nm\nb-tuple\nd14\nd15\nm\nb-unit\nm\nend\n", "got:\n{out}");
+    assert_eq!(out, "f-arr\nd1\nd2\nm\nf-vec\nd3\nm\nf-venum\nd4\nm\nf-bind\nd5\nd6\nm\nf-second\nd7\nd8\nm\nl-arr\nd10\nd11\nm\nl-vec\nd12\nm\nb-arrenum\nd13\nm\nb-tuple\nd14\nd15\nm\nb-unit\nm\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-17-15 — A GENERIC ENUM'S `shared` PAYLOAD IS NOW RC-RELEASED,

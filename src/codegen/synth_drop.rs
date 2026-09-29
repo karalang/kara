@@ -4602,26 +4602,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // invisible to a cell matrix that varies only the type.
                 //
                 // THE ELEMENT TEST MIRRORS THE INTERPRETER'S ELEMENT DISPATCH,
-                // ARM FOR ARM, and the asymmetry between the two arms below is
-                // the whole reason this is not one call to
-                // `elem_te_runs_user_drop`. That predicate is the EMITTER's
-                // gate and reaches further than the interpreter does:
-                // `run_enum_payload_user_drops_value`'s declared-`Array` arm
-                // dispatches a `Value::Struct` element only, while its
-                // declared-`Vec` arm takes a struct OR a non-shared user enum.
-                // Asking the wider question here admits `Array[Mono, N]` over a
-                // user enum, whose compiled field position then prints where
-                // the interpreter stays silent — measured, and it is a FRESH
-                // divergence traded for the three above. Five more cells of
-                // that same enum-element family sit one head over
-                // (B-2026-09-10-20's own remainder) and none of them is closed
-                // by widening this gate, so buying one here buys nothing.
+                // ARM FOR ARM, which is why this is not one call to
+                // `elem_te_runs_user_drop` — that predicate is the EMITTER's
+                // gate and reaches further than the interpreter does.
+                // `run_enum_payload_user_drops_value`'s declared-`Array` and
+                // declared-`Vec` arms both take a struct OR a non-shared user
+                // enum element; the `Array` arm took a struct only until
+                // B-2026-09-19-50 widened it and this gate together, so
+                // `Array[Mono, N]` in a struct field runs its bodies on every
+                // surface rather than opening a divergence on one.
                 //
-                // Tuple payloads are excluded for the same reason and are
-                // filed separately (B-2026-09-19-46): the interpreter's walker
-                // has no tuple arm at all, so every tuple cell is an AGREED
-                // silence today and admitting it here would open a sixth
-                // divergence.
+                // Tuple payloads are not this test's: the declared-tuple row
+                // above admits them (B-2026-09-19-46).
                 let elem_head_runs_body = |this: &Self, elem: &TypeExpr, seen: &mut Vec<String>| {
                     let TypeKind::Path(ep) = &elem.kind else {
                         return (false, false);
@@ -4648,8 +4640,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 for te in &tes {
                     if let Some((elem, n)) = self.array_elem_and_len(te) {
-                        // Struct elements only — the declared-`Array` arm's reach.
-                        if n > 0 && elem_head_runs_body(self, &elem, seen).0 {
+                        // Struct OR user-enum elements — the declared-`Array`
+                        // arm's reach since B-2026-09-19-50 widened it to the
+                        // `Vec` arm's.
+                        let (st, en) = elem_head_runs_body(self, &elem, seen);
+                        if n > 0 && (st || en) {
                             return true;
                         }
                     }
