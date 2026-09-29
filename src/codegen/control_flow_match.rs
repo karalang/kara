@@ -11186,7 +11186,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else if matches!(
                     field_ty,
                     BasicTypeEnum::ArrayType(_) | BasicTypeEnum::VectorType(_)
-                ) {
+                ) || matches!(field_ty, BasicTypeEnum::IntType(it) if it.get_bit_width() > 64)
+                {
+                    // B-2026-09-29-97 — an `i128`/`u128` FIELD spans two words
+                    // too, so it reached the "multi-word non-struct" fallback
+                    // below and `insertvalue`d word 0 into the `i128` slot:
+                    // `enum E { Int(Lit) }` over `struct Lit { value: i128, .. }`
+                    // failed module verification. The shared rebuilder rejoins
+                    // the little-endian word pair, as it does for a bare
+                    // `Option[i128]` payload.
+                    //
                     // An `Array[T, N]` / `Vector[T, N]` FIELD spans N element
                     // words. Before B-2026-08-31-18 taught `llvm_type_word_count`
                     // about vectors, such a field reported one word and fell to
@@ -11266,11 +11275,14 @@ impl<'ctx> super::Codegen<'ctx> {
             } else if matches!(
                 field_ty,
                 BasicTypeEnum::ArrayType(_) | BasicTypeEnum::VectorType(_)
-            ) {
+            ) || matches!(field_ty, BasicTypeEnum::IntType(it) if it.get_bit_width() > 64)
+            {
                 // Twin of the array/vector branch in `reconstruct_payload_value`
                 // (B-2026-08-31-18) — this helper is the one a NESTED struct
                 // field recurses through, so both need it or a vector one level
-                // down still collapses to word 0.
+                // down still collapses to word 0. A 128-bit int field is the
+                // same case (B-2026-09-29-97): the scalar arm below zero-
+                // extended word 0 alone, silently dropping the high word.
                 self.rebuild_value_from_payload_word_slice(field_ty, slice)?
             } else {
                 let word = slice

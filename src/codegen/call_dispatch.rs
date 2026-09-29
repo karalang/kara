@@ -20891,6 +20891,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         BasicValueEnum::VectorValue(vv) => {
                             Self::llvm_type_word_count(vv.get_type().into())
                         }
+                        // An `i128`/`u128` FIELD spans two words, split by the
+                        // wide-scalar arm below. `_ => 1` sent it through
+                        // `coerce_to_i64`, which kept the low word only, so
+                        // `E.Int(Lit { value: 10^20, k: 3 })` over
+                        // `struct Lit { value: i128, k: i64 }` stored
+                        // `{ lo, 3, 0 }` and the unpack read `value` from
+                        // `(lo, 3)` and `k` as 0 (B-2026-09-29-97).
+                        BasicValueEnum::IntValue(iv) => {
+                            Self::llvm_type_word_count(iv.get_type().into())
+                        }
                         _ => 1,
                     };
                     let sub_words = if sub_count <= 1 {
