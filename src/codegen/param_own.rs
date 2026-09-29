@@ -3348,20 +3348,6 @@ impl<'ctx> super::Codegen<'ctx> {
         // this path; disarming it lost the body on every surface (`x dS0 end`
         // against `x dS4 dS0 end`). The interpreter's twin is the struct and
         // `Option`/`Result` arms of `user_drop_array_arg_stays_with_caller`.
-        let mut same_type: Option<crate::ast::TypeExpr> = None;
-        let enum_name = if self.payload_vars.cond_handback_array_params.contains(name) {
-            None
-        } else if let Some(en) = self.adopted_inline_user_enum_param_name(name) {
-            Some(en)
-        } else {
-            match self.plain_struct_or_optres_user_drop_param_te(name) {
-                Some(te) => {
-                    same_type = Some(te);
-                    None
-                }
-                None => return false,
-            }
-        };
         // B-2026-09-28-22 — the consumer may also be an instance METHOD
         // (`q.eat(s)`), an ASSOCIATED function (`K.eat(s)`) or, for the
         // struct / `Option` / `Result` shapes, a GENERIC free function whose
@@ -3395,6 +3381,30 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let Some(f) = crate::codegen::declarations::find_function_ast(program, &fname) else {
             return false;
+        };
+        // B-2026-09-28-56 — a BORROWED parameter never takes the value, whatever
+        // its type, so the adopted per-path flag stays armed across the call:
+        // `look(r)` with `fn look(x: ref R)` on the exit that does not hand `r`
+        // back cleared it, and `r`'s body ran on no surface. Asked before the
+        // shape test below, which knows only by-value consumers. The
+        // interpreter's twin is the same arm of
+        // `user_drop_array_arg_stays_with_caller`.
+        if crate::ast::call_binds_arg_to_borrowed_param(f, args, name) {
+            return true;
+        }
+        let mut same_type: Option<crate::ast::TypeExpr> = None;
+        let enum_name = if self.payload_vars.cond_handback_array_params.contains(name) {
+            None
+        } else if let Some(en) = self.adopted_inline_user_enum_param_name(name) {
+            Some(en)
+        } else {
+            match self.plain_struct_or_optres_user_drop_param_te(name) {
+                Some(te) => {
+                    same_type = Some(te);
+                    None
+                }
+                None => return false,
+            }
         };
         if (f.generic_params.is_some() && same_type.is_none())
             || self.is_coroutine_compiled(&f.name)

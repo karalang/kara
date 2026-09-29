@@ -7084,6 +7084,14 @@ impl<'a> super::Interpreter<'a> {
         let Some(f) = f else {
             return false;
         };
+        // B-2026-09-28-56 — a BORROWED parameter never takes the value, whatever
+        // its type, so the adopted per-path owner stays armed across the call:
+        // `look(r)` with `fn look(x: ref R)` on the exit that does not hand
+        // `r` back disarmed it, and `r`'s body ran on no surface. Codegen's twin
+        // is the same arm of `flagged_array_arg_stays_with_caller`.
+        if crate::ast::call_binds_arg_to_borrowed_param(f, args, name) {
+            return true;
+        }
         // B-2026-09-27-96 — and a by-value USER enum whose payload runs a user
         // `Drop` body, the same caller-retained shape one type over: a plain
         // `consume(h)` of such an enum runs the body at the caller's binding,

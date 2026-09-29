@@ -4287,6 +4287,15 @@ pub fn fn_conditionally_returns_param_bare(
     // escape. Empty for every shape the syntactic resolution cannot settle,
     // which reproduces today's answer.
     let copy_fields = param_scalar_field_names(program, &param.ty);
+    // B-2026-09-28-56 — the param's own type name, for a borrowed-receiver
+    // method called on it (`mentions_only_as_consumed_arg`). A plain,
+    // non-generic path only.
+    let recv_ty: Option<&str> = match &param.ty.kind {
+        crate::ast::TypeKind::Path(q) if q.generic_args.is_none() && q.segments.len() == 1 => {
+            q.segments.first().map(String::as_str)
+        }
+        _ => None,
+    };
 
     /// May `e` mention `name`? Conservative in the DECLINING direction: any
     /// shape not explicitly recognized answers `true`, which fails condition 3
@@ -4471,10 +4480,50 @@ pub fn fn_conditionally_returns_param_bare(
         copy_fields: &[String],
         program: Option<&crate::Program>,
         self_name: &str,
+        recv_ty: Option<&str>,
     ) -> bool {
-        let rec =
-            |x: &Expr| mentions_only_as_consumed_arg(x, name, copy_fields, program, self_name);
+        let rec = |x: &Expr| {
+            mentions_only_as_consumed_arg(x, name, copy_fields, program, self_name, recv_ty)
+        };
         match &e.kind {
+            // B-2026-09-28-56 — a method with a BORROWED receiver called on the
+            // param (`R { id: r.peek() }` over `fn peek(ref self) -> i64`)
+            // keeps nothing of it, like a borrowed free-function argument
+            // below. Resolved through the param type's own impl; an owned
+            // `self`, an unresolved method, or a borrow handed back declines.
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if matches!(&object.kind, ExprKind::Identifier(n) if name.iter().any(|x| x == n)) => {
+                let Some(m) = recv_ty.zip(program).and_then(|(ty, p)| {
+                    p.items.iter().find_map(|it| match it {
+                        Item::ImplBlock(imp)
+                            if matches!(&imp.target_type.kind, crate::ast::TypeKind::Path(q)
+                                if q.segments.last().map(String::as_str) == Some(ty)) =>
+                        {
+                            imp.items.iter().find_map(|ii| match ii {
+                                crate::ast::ImplItem::Method(m) if &m.name == method => Some(&**m),
+                                _ => None,
+                            })
+                        }
+                        _ => None,
+                    })
+                }) else {
+                    return false;
+                };
+                matches!(m.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef))
+                    && !m.return_type.as_ref().is_some_and(|rt| {
+                        matches!(
+                            rt.kind,
+                            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+                        )
+                    })
+                    && args
+                        .iter()
+                        .all(|a| mentions_only_as_copy_read(&a.value, name, copy_fields))
+            }
             // An arithmetic operator reaches here as a call on a scalar
             // type's path (`eat(r) + 1` is `i64.add(eat(r), 1)`), whose
             // operands are values of that scalar type: the param can only
@@ -4482,6 +4531,18 @@ pub fn fn_conditionally_returns_param_bare(
             ExprKind::Call { callee, args }
                 if matches!(&callee.kind, ExprKind::Path { segments, .. }
                     if segments.len() == 2 && is_scalar_type_name(&segments[0])) =>
+            {
+                args.iter().all(|a| rec(&a.value))
+            }
+            // B-2026-09-28-56 — a constructor (`Some(..)`, a user variant)
+            // builds its value from its arguments and keeps nothing else, so
+            // each argument answers for itself: `Some(mk(peek(o)))` reads `o`
+            // through the borrow and hands none of it out. A bare param
+            // argument is not admitted here (the recursion declines it); that
+            // hand-over is `yields_wrapped_named`'s shape.
+            ExprKind::Call { callee, args }
+                if option_result_ctor_payload(e).is_some()
+                    || program.is_some_and(|p| is_user_variant_ctor(p, callee)) =>
             {
                 args.iter().all(|a| rec(&a.value))
             }
@@ -4508,10 +4569,24 @@ pub fn fn_conditionally_returns_param_bare(
                 args.iter().enumerate().all(|(j, a)| {
                     if matches!(&a.value.kind, ExprKind::Identifier(n) if name.iter().any(|x| x == n))
                     {
-                        !matches!(
+                        // B-2026-09-28-56 — a BORROWED parameter keeps
+                        // nothing of the argument: `R { id: peek(r) }` with
+                        // `fn peek(x: ref R) -> i64` reads `r` and leaves it to
+                        // die in this frame, exactly as a copy read does, so
+                        // the per-path owner is the one owed. Unless the callee
+                        // hands a borrow back, which would outlive `r`.
+                        if matches!(
                             gf.params[j].ty.kind,
                             crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
-                        ) && !fn_returns_param(gf, j)
+                        ) {
+                            return !gf.return_type.as_ref().is_some_and(|rt| {
+                                matches!(
+                                    rt.kind,
+                                    crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+                                )
+                            });
+                        }
+                        !fn_returns_param(gf, j)
                             && fn_returns_param_owned_part_paths(program, gf, j).is_empty()
                             && !fn_moves_param_into_outliving_place(gf, j)
                             && program.is_some_and(|p| {
@@ -4519,7 +4594,10 @@ pub fn fn_conditionally_returns_param_bare(
                                     && !fn_moves_param_into_outliving_place_via_call(p, gf, j)
                             })
                     } else {
-                        mentions_only_as_copy_read(&a.value, name, copy_fields)
+                        // B-2026-09-28-56 — a nested call in argument position
+                        // (`mk(peek(r), ..)`) answers for itself, as it does
+                        // inside a struct literal.
+                        rec(&a.value)
                     }
                 })
             }
@@ -4995,6 +5073,7 @@ pub fn fn_conditionally_returns_param_bare(
                     &copy_fields,
                     program,
                     f.name.as_str(),
+                    recv_ty,
                 )
             {
                 return false;
@@ -5286,6 +5365,32 @@ pub fn fn_returns_param_part_paths(f: &Function, arg_index: usize) -> Vec<ParamP
     returned_param_part_paths_impl(f, arg_index, None)
 }
 
+/// B-2026-09-28-56 — does the call whose parameters are `f.params` and whose
+/// arguments are `args` bind `name`, bare and exactly once, to a BORROWED
+/// (`ref` / `mut ref`) parameter? Such a call never takes the value, whatever
+/// its type, so it is not a hand-over: a per-path owner adopted for `name`
+/// stays armed across it. Both backends' conditional-store disarms ask it
+/// (`user_drop_array_arg_stays_with_caller`, `flagged_array_arg_stays_with_caller`).
+pub fn call_binds_arg_to_borrowed_param(
+    f: &Function,
+    args: &[crate::ast::CallArg],
+    name: &str,
+) -> bool {
+    let mut hits = args
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| matches!(&a.value.kind, ExprKind::Identifier(n) if n == name));
+    let (Some((i, _)), None) = (hits.next(), hits.next()) else {
+        return false;
+    };
+    f.params.get(i).is_some_and(|p| {
+        matches!(
+            p.ty.kind,
+            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+        )
+    })
+}
+
 /// B-2026-09-17-33 — the one call inside `handed` that takes the flagged
 /// param `name` as a bare argument, when that is the param's ONLY appearance
 /// there: `R { name: f"z", id: eat(r) }` gives `eat(r)`.
@@ -5334,11 +5439,13 @@ pub fn sole_nested_consuming_call<'e>(handed: &'e Expr, name: &str) -> Option<&'
             _ => {}
         }
     }
-    if matches!(
-        handed.kind,
-        ExprKind::Call { .. } | ExprKind::MethodCall { .. }
-    ) {
-        return None;
+    // B-2026-09-28-56 — only a call that takes the param DIRECTLY is the
+    // direct test's; `mk(peek(r), ..)` hands `r` to no one and its nested
+    // `peek(r)` answers here like one nested in a struct literal.
+    if let ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } = &handed.kind {
+        if args.iter().any(|a| is_name(&a.value, name)) {
+            return None;
+        }
     }
     let mut calls = Vec::new();
     let mut other = false;
