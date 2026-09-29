@@ -8717,7 +8717,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     let head = head.to_string();
                     let slot = self.create_entry_alloca(fn_val, "uam.fld.struct", val.get_type());
                     self.builder.build_store(slot, val).ok()?;
+                    // B-2026-09-29-47 — CLONE-ON-EXTRACT, as the identifier arm
+                    // above has been since B-2026-09-06-59: the clone gets its
+                    // own cleanup at the destination, so a bare `shared` field
+                    // is rc-INC'd or both owners rc-DEC one count. Without it
+                    // `let x = q.u; let W { n, .. } = q;` (the destructure is
+                    // what makes the move a use-after-move site) freed `u.h`'s
+                    // box at `x`'s drop and then read and wrote it again in
+                    // `q`'s — `Invalid read/write of size 8` into the freed
+                    // 16-byte refcount block, and a `malloc(): unaligned
+                    // tcache chunk` abort under `karac run`.
+                    //
+                    // A by-value PARAM root is the exception, measured: under
+                    // caller-retains the destination is a param VIEW that
+                    // registers no drop in the callee (the caller releases the
+                    // whole argument), so a bump there has no matching release
+                    // and leaks the 16-byte box. An owned `self` receiver is the
+                    // same case spelled differently (`fn go(self)`), so it
+                    // answers as the view walk at `SelfValue` does.
+                    let root_is_param_view = self.expr_is_param_view(object)
+                        || (matches!(object.kind, ExprKind::SelfValue)
+                            && self.fn_ctx.current_fn_param_names.contains("self")
+                            && !self.borrow_vars.ref_params.contains_key("self"));
+                    let saved_rc_inc = self.drop_rc.deep_copy_rc_inc_bare_shared;
+                    self.drop_rc.deep_copy_rc_inc_bare_shared = !root_is_param_view;
                     self.deep_copy_struct_heap_fields_in_place(slot, &head);
+                    self.drop_rc.deep_copy_rc_inc_bare_shared = saved_rc_inc;
                     let cloned = self
                         .builder
                         .build_load(val.get_type(), slot, "uam.fld.struct.clone")
