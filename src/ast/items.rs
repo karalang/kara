@@ -6173,6 +6173,40 @@ fn part_paths_from_root_mode(
                 let Some(program) = cx.program else { return };
                 if outliving_store::place_root_outlives(object, cx.roots) {
                     for a in args {
+                        // B-2026-09-29-10 — a PROJECTION of the param pushed
+                        // under an outliving root (`xs.push(w.r)`, `xs.push(t.0)`)
+                        // hands the part over exactly as `let r = w.r;
+                        // xs.push(r)` does, which is the only spelling this
+                        // route read: the caller's walk ran the part's body
+                        // again when the container already owned it, on all
+                        // four surfaces. Gated as the free-function route's
+                        // projection is: statically at the top level, and
+                        // through the conditional query inside a branch. Only
+                        // a projection of the param (or `self`) itself: one off
+                        // a LOCAL view (`let O { w, k } = o; xs.push(w.r)`)
+                        // names the part relative to that local, which neither
+                        // backend's hand-over hook follows, so it keeps the
+                        // older answer. Nor one off a BORROWED root (`e.chew(w.r)`
+                        // with `w: ref W`): that argument is a copy the caller's
+                        // value never gives up (W0299), so masking it lost the
+                        // caller's body.
+                        if matches!(
+                            &a.value.kind,
+                            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+                        ) {
+                            let off_local = crate::ast::projection_binding_name(&a.value)
+                                .is_some_and(|p| {
+                                    let root = p.split('.').next().unwrap_or("");
+                                    cx.locals.contains(&root)
+                                        || cx.destr_lets.contains(&root)
+                                        || cx.proj_lets.contains(&root)
+                                        || cx.roots.contains(&root)
+                                });
+                            if !off_local && (cx.top_level || cx.cond_site()) {
+                                note(&a.value, out);
+                            }
+                            continue;
+                        }
                         if !matches!(&a.value.kind, ExprKind::Identifier(_)) {
                             continue;
                         }
