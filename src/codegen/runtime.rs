@@ -11404,7 +11404,20 @@ impl<'ctx> super::Codegen<'ctx> {
             .peekable();
         let all_stood_down = payload_args.peek().is_some()
             && payload_args.all(|(direct, a)| {
-                direct
+                // B-2026-09-27-88 — a fresh temp is nobody else's memory
+                // whether the param IS the payload type or merely wraps it
+                // (`f(Some(mk(1)))` over `fn f(w: Option[ShP]) -> Option[ShP]
+                // { return w; }`): the call site owns no temp the callee may
+                // hand back (`call_arg_flows_into_return` skips that block), so
+                // the result is its only candidate owner, and declining lost
+                // the `shared` field (32 B at -O0). The NAMED spelling keeps the
+                // decline: its argument is still armed, and the result is
+                // recorded as its alias.
+                let fresh = matches!(
+                    &a.kind,
+                    ExprKind::Call { .. } | ExprKind::StructLiteral { .. }
+                );
+                (direct || fresh)
                     && match &a.kind {
                         ExprKind::Identifier(n) => !self.var_holds_memory_action(n),
                         // B-2026-09-26-27 — a FRESH temporary is nobody else's

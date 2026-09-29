@@ -3047,8 +3047,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // call — an argument is a consuming position that does not
                 // transfer this payload class (see
                 // `suppress_inline_option_agg_binding_transfer`) — so the temp
-                // gets that registrar, under the escape gate the entry-copy arm
-                // uses. `f(Some(ShP { i: ShIn { .. }, n: 3 }))` stranded the
+                // gets that registrar when the callee does not take the payload
+                // (B-2026-09-27-88 below). `f(Some(ShP { i: ShIn { .. }, n: 3 }))` stranded the
                 // `shared` field's block and its `String` on every call.
                 //
                 let inline_struct_shape =
@@ -3057,16 +3057,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         None
                     };
-                let caller_owns_inline_struct =
-                    inline_struct_shape.as_ref().and_then(|(te, escapes)| {
-                        (!escapes
-                            && self
-                                .callee_by_value_optres_param_bodies_te(&name, i, &a.value)
-                                .is_some_and(|(_, skip)| skip.is_empty()))
-                        .then(|| te.clone())
-                    });
-                if let Some(param_te) = caller_owns_inline_struct
+                // B-2026-09-27-88 — owned here exactly when the callee does not
+                // take the payload, the question the NAMED spelling below asks
+                // too, so the two spellings of one call cannot disagree about
+                // who frees it. It used to be the BODY channel's consuming
+                // question (`callee_by_value_optres_param_bodies_te` with an
+                // empty skip set), which counts a returned projection of the
+                // payload as handing the payload out whatever the field's type:
+                // `Some(p) => p.n` over an `i64` field declined, and the temp
+                // leaked its `shared` field, while `let k = p.n; k` was owned.
+                // The param-level escape set is not the question either: it
+                // counts `w.is_some()` as an escape where the callee frees
+                // nothing.
+                let callee_takes_inline_struct = inline_struct_shape.is_some()
+                    && self.callee_takes_optres_param_payload(&name, i);
+                if let Some(param_te) = inline_struct_shape
                     .as_ref()
+                    .filter(|_| !callee_takes_inline_struct)
                     .filter(|_| self.optres_arg_is_unowned_temp(&a.value))
                 {
                     self.track_optres_arg_temp(val, param_te, true, false);
@@ -3080,9 +3087,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `w.unwrap()`, `v.push(w)` each give the payload an owner
                 // there, and the caller's scope-exit `karac_drop_Option_<T>`
                 // then read the `shared` field's freed block.
-                let callee_frees_inline_struct = inline_struct_shape.is_some()
-                    && self.callee_takes_optres_param_payload(&name, i);
-                if callee_frees_inline_struct && matches!(&a.value.kind, ExprKind::Identifier(_)) {
+                if callee_takes_inline_struct && matches!(&a.value.kind, ExprKind::Identifier(_)) {
                     self.suppress_inline_option_agg_binding_transfer(&a.value);
                 }
                 // B-2026-09-09-18 — the BODY channel for the same temp, which
@@ -6920,32 +6925,29 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// B-2026-09-17-11 — the declared type of free function `callee_name`'s
     /// by-value parameter `arg_index` when it is an `Option` whose STRUCT
-    /// payload is laid inline (neither boxed nor the `{ptr,len,cap}` overlay),
-    /// paired with whether the parameter ESCAPES the callee. Non-escaping is
-    /// the one shape whose fresh-temp argument has no owner in either frame
-    /// unless the caller takes it. `None` for a method, whose receiver shifts the index
-    /// and whose payload shapes this row did not measure.
+    /// payload is laid inline (neither boxed nor the `{ptr,len,cap}` overlay).
+    /// `None` for a method, whose receiver shifts the index and whose payload
+    /// shapes this row did not measure.
     ///
-    /// B-2026-09-27-87 — the escape answer comes back as the second element
-    /// rather than filtering the result, because the NAMED argument at the same
-    /// call site needs the shape alone: the temp registrar owns only a
-    /// non-escaping param, while the named hand-over asks the callee's own
-    /// question (`callee_takes_optres_param_payload`). Formerly
+    /// B-2026-09-27-87 / -88 — the SHAPE alone: who owns the payload is asked
+    /// separately, by `callee_takes_optres_param_payload`, for the fresh-temp
+    /// and the named spellings alike. This used to carry the param-level
+    /// escape answer too, which counts `w.is_some()` as an escape. Formerly
     /// `callee_nonescaping_inline_struct_option_param_te`.
     pub(super) fn callee_inline_struct_option_param(
         &self,
         callee_name: &str,
         arg_index: usize,
-    ) -> Option<(TypeExpr, bool)> {
+    ) -> Option<TypeExpr> {
         let program = self.program_snapshot.as_deref()?;
         let f = super::declarations::find_function_ast(program, callee_name)?;
         if f.self_param.is_some() || f.generic_params.is_some() {
             return None;
         }
         let p = f.params.get(arg_index)?;
-        let crate::ast::PatternKind::Binding(pname) = &p.pattern.kind else {
+        if !matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(_)) {
             return None;
-        };
+        }
         let payload = Self::option_payload_te(&p.ty)?;
         if self.option_payload_is_boxed(&payload)
             || self.option_inline_payload_elem(&p.ty).is_some()
@@ -6963,9 +6965,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return None;
         }
-        let escapes =
-            !crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str());
-        Some((p.ty.clone(), escapes))
+        Some(p.ty.clone())
     }
 
     /// B-2026-09-27-87 — does free function `callee_name`'s frame give the
