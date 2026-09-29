@@ -1469,20 +1469,40 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
 ///   * `collect()` into a non-`Vec` `FromIterator` target (B-2026-08-17-36).
 fn desugar_stmt_rewrites_in_program(program: &mut Program) {
     let sigs = collect_arg_sigs(program);
+    let payloads = unwrap_payload_types(program);
+    // A trait method's body is left alone (no payload types): its parameters
+    // can name the trait's own type parameters and associated types.
+    let no_payloads = std::collections::HashSet::new();
+    let none = UnwrapPayloadTypes {
+        payloads: &no_payloads,
+        generics: std::collections::HashSet::new(),
+    };
     for item in &mut program.items {
         match item {
             Item::Function(f) => {
                 let ret = f.return_type.clone();
                 let params = std::mem::take(&mut f.params);
-                walk_fn_body(&mut f.body, ret.as_ref(), &params, &sigs);
+                let uw = UnwrapPayloadTypes {
+                    payloads: &payloads,
+                    generics: generic_param_names(&[f.generic_params.as_ref()]),
+                };
+                walk_fn_body(&mut f.body, ret.as_ref(), &params, &sigs, &uw);
                 f.params = params;
             }
             Item::ImplBlock(imp) => {
+                let impl_generics = imp.generic_params.clone();
                 for it in &mut imp.items {
                     if let ImplItem::Method(m) = it {
                         let ret = m.return_type.clone();
                         let params = std::mem::take(&mut m.params);
-                        walk_fn_body(&mut m.body, ret.as_ref(), &params, &sigs);
+                        let uw = UnwrapPayloadTypes {
+                            payloads: &payloads,
+                            generics: generic_param_names(&[
+                                impl_generics.as_ref(),
+                                m.generic_params.as_ref(),
+                            ]),
+                        };
+                        walk_fn_body(&mut m.body, ret.as_ref(), &params, &sigs, &uw);
                         m.params = params;
                     }
                 }
@@ -1493,13 +1513,13 @@ fn desugar_stmt_rewrites_in_program(program: &mut Program) {
                         let ret = m.return_type.clone();
                         let params = std::mem::take(&mut m.params);
                         if let Some(body) = &mut m.body {
-                            walk_fn_body(body, ret.as_ref(), &params, &sigs);
+                            walk_fn_body(body, ret.as_ref(), &params, &sigs, &none);
                         }
                         m.params = params;
                     }
                 }
             }
-            Item::TestCase(tc) => walk_fn_body(&mut tc.body, None, &[], &sigs),
+            Item::TestCase(tc) => walk_fn_body(&mut tc.body, None, &[], &sigs, &none),
             Item::ConstDecl(c) => {
                 // Not a function body: no parameters, and no local bindings to
                 // stand down for. A fresh context with no collected names is
@@ -1591,6 +1611,18 @@ struct WalkCx<'a> {
     /// every function, given that a plain `String` parameter is enough to put a
     /// function in `ArgSigs`.
     saw_collect: bool,
+    /// B-2026-09-29-12 — every plain name the body ASSIGNS (`t = ..`,
+    /// `t += ..`). With `bound`, what stands [`lower_param_unwrap`] down for a
+    /// parameter: a reassigned `t` may no longer hold the caller's value.
+    assigned: std::collections::HashSet<String>,
+    /// Did pass 1 see an `unwrap`-family call? Pass 3 is skipped otherwise.
+    saw_unwrap: bool,
+    /// `Some` on pass 3 only: the parameters [`lower_param_unwrap`] rewrites.
+    unwraps: Option<&'a ParamUnwraps>,
+    /// How many closure bodies the walk is inside. A closure's `t.unwrap()`
+    /// consumes a CAPTURE, which is a different ownership question, so pass 3
+    /// leaves it alone.
+    closure_depth: usize,
 }
 
 impl WalkCx<'_> {
@@ -1599,6 +1631,10 @@ impl WalkCx<'_> {
             bound: std::collections::HashSet::new(),
             args: None,
             saw_collect: false,
+            assigned: std::collections::HashSet::new(),
+            saw_unwrap: false,
+            unwraps: None,
+            closure_depth: 0,
         }
     }
 
@@ -1707,14 +1743,37 @@ fn rewrite_call_arg_collects(
 /// rewrite to an explicit `return` and the function body's own tail keeps the
 /// pass syntactic and is what the two spellings in the row's repro use; the
 /// rest still fails loudly at typecheck rather than silently building a `Vec`.
-fn walk_fn_body(block: &mut Block, ret: Option<&TypeExpr>, params: &[Param], sigs: &ArgSigs) {
+fn walk_fn_body(
+    block: &mut Block,
+    ret: Option<&TypeExpr>,
+    params: &[Param],
+    sigs: &ArgSigs,
+    uw_types: &UnwrapPayloadTypes<'_>,
+) {
     let mut cx = WalkCx::collecting();
-    for p in params {
-        cx.bind_pattern(&p.pattern);
-    }
     walk_block(block, ret, &mut cx);
     if let (Some(tail), Some(ty)) = (block.final_expr.as_mut(), ret) {
         desugar_collect_target(ty, tail);
+    }
+
+    // Pass 3 — a by-value `Option` / `Result` parameter's `unwrap`
+    // (B-2026-09-29-12). Asked BEFORE the parameters join `bound`, since the
+    // question is whether the BODY rebinds one of them.
+    if cx.saw_unwrap {
+        let rebound: std::collections::HashSet<String> =
+            cx.bound.union(&cx.assigned).cloned().collect();
+        let uw = param_unwraps(params, uw_types.payloads, &uw_types.generics, &rebound);
+        if !uw.is_empty() {
+            let mut cx3 = WalkCx::collecting();
+            cx3.unwraps = Some(&uw);
+            walk_block(block, ret, &mut cx3);
+            if let Some(tail) = block.final_expr.as_mut() {
+                lower_param_unwrap_at(tail, &cx3);
+            }
+        }
+    }
+    for p in params {
+        cx.bind_pattern(&p.pattern);
     }
 
     // Pass 2 — argument position (B-2026-08-18-27). Skipped entirely when no
@@ -1745,6 +1804,9 @@ fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
             // Recurse FIRST so a nested `let` inside the value (a closure body,
             // a block expr) is rewritten before this one wraps the value.
             walk_expr(value, ret, cx);
+            if matches!(pattern.kind, PatternKind::Binding(_)) {
+                lower_param_unwrap_at(value, cx);
+            }
             if let Some(ty) = ty {
                 desugar_collect_target(ty, value);
             }
@@ -1769,16 +1831,20 @@ fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
             }
             walk_block(body, ret, cx);
         }
-        StmtKind::Assign { target, value } => {
-            walk_expr(target, ret, cx);
-            walk_expr(value, ret, cx);
-        }
-        StmtKind::CompoundAssign { target, value, .. } => {
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            if let ExprKind::Identifier(n) = &target.kind {
+                cx.assigned.insert(n.clone());
+            }
             walk_expr(target, ret, cx);
             walk_expr(value, ret, cx);
         }
         StmtKind::Expr(e) => walk_expr(e, ret, cx),
-        StmtKind::MultiAssign { .. } => {
+        StmtKind::MultiAssign { targets, .. } => {
+            for t in targets.iter() {
+                if let ExprKind::Identifier(n) = &t.kind {
+                    cx.assigned.insert(n.clone());
+                }
+            }
             let span = stmt.span;
             let placeholder = StmtKind::Expr(Expr {
                 kind: ExprKind::Error,
@@ -1916,6 +1982,12 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
             if method == "collect" {
                 cx.saw_collect = true;
             }
+            if matches!(
+                method.as_str(),
+                "unwrap" | "expect" | "unwrap_err" | "expect_err"
+            ) {
+                cx.saw_unwrap = true;
+            }
             walk_expr(object, ret, cx);
             for a in args.iter_mut() {
                 walk_expr(&mut a.value, ret, cx);
@@ -2000,11 +2072,14 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
             for cp in params.iter() {
                 cx.bind_pattern(&cp.pattern);
             }
+            cx.closure_depth += 1;
             walk_expr(body, None, cx);
+            cx.closure_depth -= 1;
         }
         ExprKind::Return(opt) => {
             if let Some(e) = opt {
                 walk_expr(e, ret, cx);
+                lower_param_unwrap_at(e, cx);
                 // B-2026-08-18-18 — `return <chain>.collect()` against a
                 // declared non-`Vec` return type, the sibling of the
                 // annotated-`let` form. Same syntactic rewrite, same
@@ -2068,6 +2143,278 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
             walk_block(body, ret, cx);
         }
     }
+}
+
+/// B-2026-09-29-12 — pass 3's rewrite, at one of the WHOLE-VALUE positions it
+/// is limited to: a `let` binding's value, a `return` operand, and the
+/// function body's tail. A projection (`t.unwrap().id`) or a method receiver
+/// is left alone, because codegen cannot type a field read off a `match`
+/// receiver and the interpreter runs a `match` temporary's body twice there.
+fn lower_param_unwrap_at(expr: &mut Expr, cx: &WalkCx<'_>) {
+    if let (Some(uw), 0) = (cx.unwraps, cx.closure_depth) {
+        lower_param_unwrap(expr, uw);
+    }
+}
+
+// ── By-value `Option` / `Result` parameter unwrap (B-2026-09-29-12) ─────
+
+/// Which unwrapping methods [`lower_param_unwrap`] may rewrite on one
+/// parameter, read off its declared type.
+#[derive(Clone, Copy)]
+struct ParamUnwrap {
+    /// `Result` rather than `Option`.
+    result: bool,
+    /// `unwrap` / `expect` (the `Some` / `Ok` payload).
+    ok: bool,
+    /// `unwrap_err` / `expect_err` (the `Err` payload).
+    err: bool,
+}
+
+type ParamUnwraps = std::collections::HashMap<String, ParamUnwrap>;
+
+/// What [`param_unwraps`] needs from outside the function: the admitted
+/// payload type names, and the generic parameters in scope, which may shadow
+/// one of them.
+struct UnwrapPayloadTypes<'a> {
+    payloads: &'a std::collections::HashSet<String>,
+    generics: std::collections::HashSet<String>,
+}
+
+fn generic_param_names(lists: &[Option<&GenericParams>]) -> std::collections::HashSet<String> {
+    lists
+        .iter()
+        .flatten()
+        .flat_map(|gp| gp.params.iter().map(|p| p.name.clone()))
+        .collect()
+}
+
+/// The non-`shared` user struct and enum names declared at the top level —
+/// the payload types [`param_unwraps`] admits.
+fn unwrap_payload_types(program: &Program) -> std::collections::HashSet<String> {
+    program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::StructDef(s) if !s.is_shared => Some(s.name.clone()),
+            Item::EnumDef(e) if !e.is_shared => Some(e.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// B-2026-09-29-12 — the by-value `Option` / `Result` parameters whose
+/// `unwrap`-family calls [`lower_param_unwrap`] rewrites, with the methods each
+/// admits.
+///
+/// A parameter qualifies when it is a plain binding of declared type
+/// `Option[P]` or `Result[P, E]` and the unwrapped payload is a non-`shared`
+/// user struct or enum that is not one of `generics`. The payload restriction
+/// is scope, not soundness — the rewrite means the same thing for any payload
+/// — and keeps the lowering off the `shared` payloads whose RC-elision paths
+/// (`ownership/elision.rs`'s option cursors) key on the method spelling, and
+/// off primitive and `String` payloads, which were already right.
+///
+/// `rebound` is every name the body binds or assigns: a parameter shadowed or
+/// reassigned anywhere is left alone, since a later `t` may not be the
+/// parameter at all.
+fn param_unwraps(
+    params: &[Param],
+    payload_types: &std::collections::HashSet<String>,
+    generics: &std::collections::HashSet<String>,
+    rebound: &std::collections::HashSet<String>,
+) -> ParamUnwraps {
+    let admits = |ga: Option<&GenericArg>| {
+        let Some(GenericArg::Type(te)) = ga else {
+            return false;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        p.segments
+            .last()
+            .is_some_and(|n| payload_types.contains(n) && !generics.contains(n))
+    };
+    let mut out = ParamUnwraps::new();
+    for p in params {
+        let PatternKind::Binding(name) = &p.pattern.kind else {
+            continue;
+        };
+        if rebound.contains(name) {
+            continue;
+        }
+        let TypeKind::Path(path) = &p.ty.kind else {
+            continue;
+        };
+        let [head] = path.segments.as_slice() else {
+            continue;
+        };
+        let args = path.generic_args.as_deref().unwrap_or(&[]);
+        let pu = match (head.as_str(), args.len()) {
+            ("Option", 1) => ParamUnwrap {
+                result: false,
+                ok: admits(args.first()),
+                err: false,
+            },
+            ("Result", 2) => ParamUnwrap {
+                result: true,
+                ok: admits(args.first()),
+                err: admits(args.get(1)),
+            },
+            _ => continue,
+        };
+        if pu.ok || pu.err {
+            out.insert(name.clone(), pu);
+        }
+    }
+    out
+}
+
+/// B-2026-09-29-12 — lower `t.unwrap()` on a by-value `Option` / `Result`
+/// parameter to the `match` it stands for:
+///
+/// ```text
+/// t.unwrap()        =>  match t { Option.Some(v) => v, n => n.unwrap() }
+/// t.expect("m")     =>  match t { Option.Some(v) => v, n => n.expect("m") }
+/// t.unwrap_err()    =>  match t { Result.Err(v) => v, n => n.unwrap_err() }
+/// ```
+///
+/// WHY A LOWERING. Both backends already model a parameter destructured by a
+/// `match`: the arm binding is the payload's one owner, the caller stands
+/// down for the variant the arm takes, and a hand-back of the binding is a
+/// hand-back of the payload. The method spelling had no such model. The
+/// interpreter ran the payload's `Drop` body once for the binding the unwrap
+/// produced and again for the parameter, on every payload kind; codegen
+/// freed a boxed `Option`'s box inside the callee while the caller's
+/// `__optbox_arg_tmp` owner freed it again after the call (a segfault at
+/// -O0, `double free` at -O2, with or without a `Drop` body anywhere).
+/// Spelling the method as its match routes it through the one path both
+/// backends already agree on, rather than teaching three more places what a
+/// consuming method on a parameter means.
+///
+/// The failing arm keeps the method: `n` holds the `None` / `Err` (or `Ok`)
+/// value, so `n.unwrap()` panics with the native message, and its span keeps
+/// the original call's line and column, so the panic site is unchanged.
+///
+/// `expect` / `expect_err` are rewritten only over a string-literal message:
+/// the method evaluates its argument before testing the variant and the arm
+/// only on failure, so any other argument could reorder a side effect.
+///
+/// The lowering inherits the `match` spelling's own limits, which are not
+/// this function's to fix: a take on only SOME paths (`if c { let x =
+/// t.unwrap() }`) runs no body on the others, on every backend. Positions
+/// are limited by [`lower_param_unwrap_at`].
+fn lower_param_unwrap(expr: &mut Expr, uw: &ParamUnwraps) {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+        ..
+    } = &expr.kind
+    else {
+        return;
+    };
+    let ExprKind::Identifier(name) = &object.kind else {
+        return;
+    };
+    let Some(pu) = uw.get(name) else {
+        return;
+    };
+    let takes_err = match method.as_str() {
+        "unwrap" | "expect" if pu.ok => false,
+        "unwrap_err" | "expect_err" if pu.err => true,
+        _ => return,
+    };
+    let arity_ok = match method.as_str() {
+        "unwrap" | "unwrap_err" => args.is_empty(),
+        _ => {
+            matches!(args.as_slice(), [a] if a.label.is_none()
+                && matches!(a.value.kind, ExprKind::StringLit(_)))
+        }
+    };
+    if !arity_ok {
+        return;
+    }
+    let variant = match (pu.result, takes_err) {
+        (false, _) => ["Option", "Some"],
+        (true, false) => ["Result", "Ok"],
+        (true, true) => ["Result", "Err"],
+    };
+
+    let base = expr.span;
+    let payload = format!("__karac_uw_v_{}", base.offset);
+    let rest = format!("__karac_uw_n_{}", base.offset);
+    let s1 = collect_synth_span(&base, 1);
+    let s2 = collect_synth_span(&base, 2);
+    let s3 = collect_synth_span(&base, 3);
+    let s4 = collect_synth_span(&base, 4);
+    let s5 = collect_synth_span(&base, 5);
+    let s6 = collect_synth_span(&base, 6);
+
+    let placeholder = Expr {
+        kind: ExprKind::Error,
+        span: base,
+    };
+    let ExprKind::MethodCall {
+        object,
+        method,
+        turbofish,
+        args,
+        args_close_span,
+    } = std::mem::replace(expr, placeholder).kind
+    else {
+        unreachable!("matched MethodCall above")
+    };
+
+    // The failing arm: the original call, now on the arm's binding. The
+    // call keeps the original LINE and COLUMN (the panic site) under a
+    // zero-length span, so it cannot share a side-table key with the
+    // scrutinee, which keeps the receiver's real span.
+    let failing = Expr {
+        kind: ExprKind::MethodCall {
+            object: Box::new(collect_ident(&rest, s1)),
+            method,
+            turbofish,
+            args,
+            args_close_span,
+        },
+        span: s2,
+    };
+    let arms = vec![
+        MatchArm {
+            pattern: Pattern {
+                kind: PatternKind::TupleVariant {
+                    path: variant.iter().map(|s| s.to_string()).collect(),
+                    patterns: vec![Pattern {
+                        kind: PatternKind::Binding(payload.clone()),
+                        span: s3,
+                    }],
+                },
+                span: s3,
+            },
+            guard: None,
+            body: collect_ident(&payload, s4),
+            span: s3,
+        },
+        MatchArm {
+            pattern: Pattern {
+                kind: PatternKind::Binding(rest),
+                span: s5,
+            },
+            guard: None,
+            body: failing,
+            span: s5,
+        },
+    ];
+    // The match takes a synthesized span too: the method call's `Expr.span`
+    // is its RECEIVER's, so reusing it would record the payload type at the
+    // scrutinee's key.
+    *expr = Expr {
+        kind: ExprKind::Match {
+            scrutinee: object,
+            arms,
+        },
+        span: s6,
+    };
 }
 
 // ── `impl Trait` argument-position desugar ──────────────────────
