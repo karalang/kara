@@ -9051,6 +9051,277 @@ pub fn fn_escaping_param_payload_destructured_elems(
     out
 }
 
+/// B-2026-09-19-31 — does `f` own the ELEMENT bindings of its by-value
+/// `Option`/`Result` parameter's destructured tuple payload itself, for the
+/// arm of `variant`, because some of them leave on one path only?
+///
+/// ```text
+/// fn eat(o: Option[(R, R)], k: bool) -> R {
+///     match o { Some((a, b)) => { if k { return a; } return b; } None => { .. } }
+/// }
+/// ```
+///
+/// [`fn_escaping_param_payload_destructured_elems`] answers per ARM, not per
+/// path out of it, so it reports both `a` and `b` here and the caller stands
+/// the whole payload down. The part that stayed behind on the path taken —
+/// `a` at `k = false`, `b` at `k = true` — then had its body run by nobody, on
+/// all four surfaces.
+///
+/// The caller's answer is kept as it is, and the per-path half moves into the
+/// callee: in this shape both backends bind the arm's elements as OWNERS, as
+/// they already do for a local scrutinee, so a `return a` moves `a` and the
+/// element it leaves behind dies at the frame's exit under the ordinary move
+/// tracking. That split is only sound where the caller stands down EVERY
+/// element, which is why the escaping set must be the whole tuple.
+///
+/// Deliberately narrow, each clause a way the caller's stand-down or the
+/// callee's move tracking could miss one owner:
+///
+///   * a free, non-generic function whose body is only the `match` over the
+///     parameter, with no guard and no other mention of the parameter;
+///   * exactly one arm binds anything, and it destructures `variant`'s payload
+///     into plain bindings;
+///   * every element leaves by a `return` or a yielded tail, never by an
+///     assignment or a store, whose flag-clearing the arm cannot see; and
+///   * at least one element leaves only under nested control flow. An arm
+///     whose every hand-back sits at its own statement level is already
+///     answered per path by the escaping set, and keeps that answer.
+pub fn fn_destructured_payload_is_callee_owned(
+    program: &crate::Program,
+    f: &Function,
+    arg_index: usize,
+    variant: &str,
+) -> bool {
+    if f.generic_params.is_some() || f.self_param.is_some() {
+        return false;
+    }
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    let PatternKind::Binding(pname) = &param.pattern.kind else {
+        return false;
+    };
+    let crate::ast::TypeKind::Path(tp) = &param.ty.kind else {
+        return false;
+    };
+    if !matches!(
+        tp.segments.last().map(String::as_str),
+        Some("Option") | Some("Result")
+    ) {
+        return false;
+    }
+    // INLINE and heap-free payloads only. A payload wider than the envelope's
+    // area (three words for `Option`, five for `Result`) is heap-boxed, and
+    // the compiled backends keep a boxed payload's leaves as views under one
+    // element walk that cannot differ per exit, so owning the leaves there
+    // runs the returned one's body twice. Counted here from the AST so both
+    // backends decline the same calls.
+    fn heap_free_words(program: &crate::Program, te: &TypeExpr, depth: u32) -> Option<u64> {
+        if depth > 8 {
+            return None;
+        }
+        match &te.kind {
+            crate::ast::TypeKind::Tuple(elems) if !elems.is_empty() => elems
+                .iter()
+                .map(|t| heap_free_words(program, t, depth + 1))
+                .sum(),
+            crate::ast::TypeKind::Path(p) if p.generic_args.is_none() && p.segments.len() == 1 => {
+                let n = p.segments[0].as_str();
+                if matches!(
+                    n,
+                    "i8" | "i16"
+                        | "i32"
+                        | "i64"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "isize"
+                        | "usize"
+                        | "f32"
+                        | "f64"
+                        | "bool"
+                        | "char"
+                ) {
+                    return Some(1);
+                }
+                program.items.iter().find_map(|it| match it {
+                    Item::StructDef(sd)
+                        if sd.name == n
+                            && !sd.is_shared
+                            && !sd.is_par
+                            && sd.generic_params.is_none() =>
+                    {
+                        sd.fields
+                            .iter()
+                            .map(|fd| heap_free_words(program, &fd.ty, depth + 1))
+                            .sum::<Option<u64>>()
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        }
+    }
+    let (payload_ty, area) = match (
+        tp.segments.last().map(String::as_str),
+        variant,
+        tp.generic_args.as_deref(),
+    ) {
+        (Some("Option"), "Some", Some([crate::ast::GenericArg::Type(t)])) => (t, 3),
+        (Some("Result"), "Ok", Some([crate::ast::GenericArg::Type(t), _])) => (t, 5),
+        (Some("Result"), "Err", Some([_, crate::ast::GenericArg::Type(t)])) => (t, 5),
+        _ => return false,
+    };
+    if !matches!(payload_ty.kind, crate::ast::TypeKind::Tuple(_))
+        || heap_free_words(program, payload_ty, 0).is_none_or(|w| w > area)
+    {
+        return false;
+    }
+    let only = match (f.body.stmts.as_slice(), f.body.final_expr.as_deref()) {
+        ([], Some(e)) => e,
+        ([st], None) => match &st.kind {
+            StmtKind::Expr(e) => e,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    let ExprKind::Match { scrutinee, arms } = &only.kind else {
+        return false;
+    };
+    if !matches!(&scrutinee.kind, ExprKind::Identifier(n) if n == pname) {
+        return false;
+    }
+    let mut owned_arm: Option<(&[Pattern], &Expr)> = None;
+    for a in arms {
+        if a.guard.is_some() || crate::deque_head::expr_mentions_name_deep(&a.body, pname) {
+            return false;
+        }
+        // A unit variant parses as a `Binding` of its (possibly qualified)
+        // name, so `None` / `Option.None` bind nothing here; any other bare
+        // name is a catch-all that takes the whole parameter.
+        let binds_nothing = match &a.pattern.kind {
+            PatternKind::Wildcard => true,
+            PatternKind::Binding(n) => n == "None" || n.contains('.'),
+            _ => a.pattern.binding_names().is_empty(),
+        };
+        if binds_nothing {
+            continue;
+        }
+        if owned_arm.is_some() {
+            return false;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &a.pattern.kind else {
+            return false;
+        };
+        if path.last().map(String::as_str) != Some(variant) {
+            return false;
+        }
+        let [inner] = patterns.as_slice() else {
+            return false;
+        };
+        let PatternKind::Tuple(elems) = &inner.kind else {
+            return false;
+        };
+        if !elems
+            .iter()
+            .all(|p| matches!(p.kind, PatternKind::Binding(_)))
+        {
+            return false;
+        }
+        owned_arm = Some((elems.as_slice(), &a.body));
+    }
+    let Some((elems, body)) = owned_arm else {
+        return false;
+    };
+    // Every element that CAN carry a body must be one the caller stands down,
+    // or the caller's walk and the arm's binding would both own it. A scalar
+    // element owes nothing on either side.
+    let escaping =
+        fn_escaping_param_payload_destructured_elems(program, f, arg_index, Some(variant));
+    let crate::ast::TypeKind::Tuple(elem_tys) = &payload_ty.kind else {
+        return false;
+    };
+    if escaping.is_empty()
+        || elem_tys.len() != elems.len()
+        || (0..elems.len())
+            .any(|i| !escaping.contains(&i) && !type_expr_cannot_carry_drop_body(&elem_tys[i]))
+    {
+        return false;
+    }
+    let names: Vec<String> = elems
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| escaping.contains(i))
+        .flat_map(|(_, p)| p.binding_names())
+        .collect();
+    let no_roots: [&str; 0] = [];
+    if payload_escapes_by_assignment(body, &names, &f.body, CallYieldRule::ReturnsIt(program))
+        || names.iter().any(|n| {
+            outliving_store::stores(body, n, &no_roots) || stored_via_call(body, n, program)
+        })
+    {
+        return false;
+    }
+    // The elements the arm hands back at its OWN statement level. Only when
+    // that is short of the whole set does a hand-back depend on the path.
+    let rule = CallYieldRule::ReturnsIt(program);
+    let top_level = |n: &str| -> bool {
+        let yields = |e: &Expr| match &e.kind {
+            ExprKind::Return(Some(inner)) => payload_yields(inner, n, rule),
+            _ => payload_yields(e, n, rule),
+        };
+        match &body.kind {
+            ExprKind::Block(b) => {
+                b.stmts.iter().any(|st| match &st.kind {
+                    StmtKind::Expr(e) => matches!(&e.kind, ExprKind::Return(Some(inner))
+                        if payload_yields(inner, n, rule)),
+                    _ => false,
+                }) || b.final_expr.as_deref().is_some_and(yields)
+            }
+            _ => yields(body),
+        }
+    };
+    !names.iter().all(|n| top_level(n))
+}
+
+/// B-2026-09-19-31 — the element binding NAMES
+/// [`fn_destructured_payload_is_callee_owned`] hands to `f`, over every
+/// by-value parameter and payload variant. The interpreter reads this at frame
+/// entry, since it knows the callee's AST there and not at the `match`.
+pub fn fn_callee_owned_payload_elem_names(program: &crate::Program, f: &Function) -> Vec<String> {
+    let mut out = Vec::new();
+    let arms = match (f.body.stmts.as_slice(), f.body.final_expr.as_deref()) {
+        ([], Some(e)) => e,
+        ([st], None) => match &st.kind {
+            StmtKind::Expr(e) => e,
+            _ => return out,
+        },
+        _ => return out,
+    };
+    let ExprKind::Match { arms, .. } = &arms.kind else {
+        return out;
+    };
+    for i in 0..f.params.len() {
+        for a in arms {
+            let PatternKind::TupleVariant { path, .. } = &a.pattern.kind else {
+                continue;
+            };
+            let Some(v) = path.last() else {
+                continue;
+            };
+            if fn_destructured_payload_is_callee_owned(program, f, i, v) {
+                for n in a.pattern.binding_names() {
+                    if !out.contains(&n) {
+                        out.push(n);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// What [`fn_returns_param_tuple_arm_elems`]'s walks carry: the program (for
 /// the callee lookups), the whole function body (for the assignment route),
 /// and the outliving roots (for the store routes).

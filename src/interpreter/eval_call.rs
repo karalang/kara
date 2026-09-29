@@ -2347,6 +2347,19 @@ impl<'a> super::Interpreter<'a> {
                 };
                 self.consumed_payload_local_names_stack
                     .push(consumed_locals);
+                // B-2026-09-19-31 — see the field.
+                let owned_elems = if closure_env.is_some() {
+                    std::collections::HashSet::new()
+                } else {
+                    self.callee_fn_for_param_ownership_of(&fn_name, assoc_owner)
+                        .map(|f| {
+                            crate::ast::fn_callee_owned_payload_elem_names(self.program, f)
+                                .into_iter()
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                self.callee_owned_payload_elems_stack.push(owned_elems);
                 self.owned_param_frame_is_method.push(false);
                 // B-2026-08-09-10 — `moved_out_user_drop_bindings` is keyed by
                 // NAME with no frame scoping, so a callee that moves a payload
@@ -2484,6 +2497,7 @@ impl<'a> super::Interpreter<'a> {
                     .unwrap_or_default();
                 self.whole_param_alias_stack.pop();
                 self.consumed_payload_local_names_stack.pop();
+                self.callee_owned_payload_elems_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 if is_stdlib_wrapper {
                     self.stdlib_wrapper_call_spans.pop();

@@ -596,6 +596,15 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_optres_bodies_are_caller_retained =
             self.scrutinee_optres_param_bodies_are_caller_retained(scrutinee);
+        // B-2026-09-19-31 — a destructured payload whose elements leave on
+        // one path only is the CALLEE's: the caller stands every element down,
+        // so the arm binds them as owners, exactly as for a local scrutinee,
+        // and a `return a` moves `a` while its sibling dies at the frame's exit.
+        if self.scrutinee_destructured_payload_is_callee_owned(scrutinee, arms) {
+            self.pattern_state.pattern_binding_scrutinee_is_owned_param = false;
+            self.pattern_state
+                .pattern_binding_scrutinee_optres_bodies_are_caller_retained = false;
+        }
         // B-2026-09-19-61 — the same question for a SEEDED ctor temp, which
         // the flag above cannot see because it is keyed by the scrutinee's own
         // name. See the field's doc.

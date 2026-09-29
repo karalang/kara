@@ -803,6 +803,13 @@ pub struct Interpreter<'a> {
     /// which parts changed hands. Empty for a closure frame, and for a callee
     /// this frame cannot resolve to a program function.
     pub(crate) consumed_payload_local_names_stack: Vec<HashSet<String>>,
+    /// B-2026-09-19-31 — parallel to `consumed_payload_local_names_stack`: the
+    /// element bindings of a destructured by-value `Option`/`Result` payload
+    /// that this frame OWNS, because some of them leave on one path only
+    /// (`crate::ast::fn_callee_owned_payload_elem_names`). The caller stands
+    /// every element down, so the arm binds these as real slots rather than as
+    /// views. Empty for a method or closure frame.
+    pub(crate) callee_owned_payload_elems_stack: Vec<HashSet<String>>,
     /// B-2026-09-14-7 — the NAMED-LOCAL half of the consumed-part stand-down,
     /// keyed `(binding, path)` exactly as `moved_out_nested_field_bodies` is.
     ///
@@ -1438,6 +1445,7 @@ impl<'a> Interpreter<'a> {
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),
             consumed_payload_local_names_stack: Vec::new(),
+            callee_owned_payload_elems_stack: Vec::new(),
             moved_out_optres_payload_bodies: HashSet::new(),
             whole_param_alias_stack: Vec::new(),
             owned_param_frame_is_method: Vec::new(),

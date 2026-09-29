@@ -266,8 +266,28 @@ impl<'a> super::Interpreter<'a> {
                             | PatternKind::Tuple(..)
                     )
                     && scrutinee_place.is_some_and(|sp| self.place_root_is_owned_param(sp));
-                if scrutinee_is_owned_param_name || scrutinee_projects_owned_param {
-                    for bound in arm.pattern.binding_names() {
+                // B-2026-09-19-31 — unless this frame OWNS the arm's
+                // destructured elements (see
+                // `callee_owned_payload_elems_stack`): then each is a real
+                // slot, so a `return a` moves `a` and its sibling dies at the
+                // frame's exit, the per-path answer the caller cannot give.
+                let arm_bindings = arm.pattern.binding_names();
+                let arm_elems_callee_owned = scrutinee_is_owned_param_name
+                    && !arm_bindings.is_empty()
+                    && self
+                        .callee_owned_payload_elems_stack
+                        .last()
+                        .is_some_and(|s| arm_bindings.iter().all(|b| s.contains(b.as_str())));
+                if arm_elems_callee_owned {
+                    for bound in arm_bindings {
+                        if self.pattern_binding_owes_drop_body(&bound)
+                            && !self.pending_arm_drop_bindings.contains(&bound)
+                        {
+                            self.pending_arm_drop_bindings.push(bound);
+                        }
+                    }
+                } else if scrutinee_is_owned_param_name || scrutinee_projects_owned_param {
+                    for bound in arm_bindings {
                         if let Some(top) = self.owned_param_names_stack.last_mut() {
                             top.insert(bound);
                         }

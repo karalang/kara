@@ -794,6 +794,8 @@ impl<'a> super::Interpreter<'a> {
                     .unwrap_or_default();
                 self.consumed_payload_local_names_stack
                     .push(consumed_locals);
+                self.callee_owned_payload_elems_stack
+                    .push(std::collections::HashSet::new());
                 // A method frame hands its args to no caller-side fire — see
                 // `owned_param_frame_is_method`.
                 self.owned_param_frame_is_method.push(true);
@@ -1155,6 +1157,7 @@ impl<'a> super::Interpreter<'a> {
                     .unwrap_or_default();
                 self.whole_param_alias_stack.pop();
                 self.consumed_payload_local_names_stack.pop();
+                self.callee_owned_payload_elems_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 self.method_frame_caller_retains_args.pop();
                 self.method_frame_sole_owned.pop();

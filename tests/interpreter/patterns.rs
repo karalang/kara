@@ -8017,11 +8017,11 @@ end
 /// the first three are the boundaries of the narrowing and the fourth is the
 /// case where a part cannot escape because nothing can refer to it.
 ///
-/// `condfalse` is a KNOWN remaining gap, pinned here rather than fixed: the
-/// escape predicate declines a CONDITIONAL hand-back by long-standing
-/// convention on this channel (recording it would mask a part that really did
-/// die on the other branch), so `dR19` is still owed and still lost. Measured
-/// identical before this fix. Filed separately rather than left implicit.
+/// `condfalse` was a KNOWN remaining gap pinned here, `got:20 dR20` with
+/// `dR19` lost on every surface, until B-2026-09-19-31: the escape set is
+/// per arm and cannot say which branch returned, so the callee now owns the
+/// destructured elements in that shape and the part left behind dies at its
+/// exit (`crate::ast::fn_destructured_payload_is_callee_owned`).
 ///
 /// The CODEGEN twin is `tests/codegen.rs`'s
 /// `e2e_destructured_payload_keeps_the_unmoved_parts_body`, byte-identical
@@ -8064,7 +8064,7 @@ fn main() {
     println("end")
 }
 "#);
-    assert_eq!(out, "scalarout\n  dR5\n  got:9\ndropout\n  dR7\n  got:6\n  dR6\nresultout\n  dR8\n  got:9\nwildkept\n  dR10\n  got:9\nmiddleout\n  dR11\n  dR13\n  got:12\n  dR12\nbothout\n  got:14\n  dR14\n  dR15\nreadonly\n  dR16\n  dR17\n  got:33\nwholeout\n  got:9\n  dR18\ncondfalse\n  got:20\n  dR20\ngenout\n  dR21\n  got:9\nmethod\n  dR22\n  got:9\nunused\n  dR24\n  dR23\n  x\nend\n", "got:\n{out}");
+    assert_eq!(out, "scalarout\n  dR5\n  got:9\ndropout\n  dR7\n  got:6\n  dR6\nresultout\n  dR8\n  got:9\nwildkept\n  dR10\n  got:9\nmiddleout\n  dR11\n  dR13\n  got:12\n  dR12\nbothout\n  got:14\n  dR14\n  dR15\nreadonly\n  dR16\n  dR17\n  got:33\nwholeout\n  got:9\n  dR18\ncondfalse\n  dR19\n  got:20\n  dR20\ngenout\n  dR21\n  got:9\nmethod\n  dR22\n  got:9\nunused\n  dR24\n  dR23\n  x\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-19-30 — a WILDCARD leaf in a heap-BOXED destructured payload made

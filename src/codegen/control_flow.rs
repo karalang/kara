@@ -2024,6 +2024,48 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-19-31 — is this `match` the one shape
+    /// [`crate::ast::fn_destructured_payload_is_callee_owned`] hands to the
+    /// callee: a by-value `Option`/`Result` param whose destructured payload
+    /// elements leave on some paths only? Asked of the source function by the
+    /// param's position, so the interpreter's arm binding
+    /// (`pattern_match.rs`) answers the same matches.
+    pub(super) fn scrutinee_destructured_payload_is_callee_owned(
+        &self,
+        scrutinee: &Expr,
+        arms: &[crate::ast::MatchArm],
+    ) -> bool {
+        let ExprKind::Identifier(n) = &scrutinee.kind else {
+            return false;
+        };
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(source) =
+            crate::codegen::declarations::find_function_ast(program, &self.fn_ctx.current_fn_name)
+        else {
+            return false;
+        };
+        let Some(idx) = source
+            .params
+            .iter()
+            .position(|p| matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(b) if b == n))
+        else {
+            return false;
+        };
+        let Some(variant) = arms.iter().find_map(|a| match &a.pattern.kind {
+            crate::ast::PatternKind::TupleVariant { path, .. }
+                if !a.pattern.binding_names().is_empty() =>
+            {
+                path.last().cloned()
+            }
+            _ => None,
+        }) else {
+            return false;
+        };
+        crate::ast::fn_destructured_payload_is_callee_owned(program, source, idx, &variant)
+    }
+
     /// B-2026-09-19-48 — is this scrutinee a by-value `Option`/`Result` param
     /// whose payload's field `Drop` bodies the CALLER still owns?
     ///
