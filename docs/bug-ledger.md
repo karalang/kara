@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 545 |
 | run-vs-build | 540 |
 | leak | 475 |
-| double-free | 359 |
+| double-free | 360 |
 | missing-feature | 214 |
 | codegen-gap | 203 |
 | other | 157 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2346 |
-| interp | 685 |
+| codegen | 2347 |
+| interp | 686 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -425,6 +425,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-27 | 2026-09-29 | interp+codegen | high | A BY-VALUE `Option` PARAM STORED WHOLE ON ONE PATH AND ITS PAYLOAD TAKEN ON ANOTHER DOUBLE-FREES COMPILED WHEN THE PAYLOAD IS BOXED, AND A THIRD PATH DOING NEITHER RUNS NO BODY ON ANY SURFACE -- `fn cp(t: Option[S], v: mut ref Vec[Option[S]], c: bool) -> i64 { if c { v.push(t) } else { let y = match t { Option.Some(q) => q, Option.None => mks(0) }; println(f"p{y.id}") }; return 1 }` called with `false` then `true` prints `p1 dS1 r1 r1 n1 dS2 end` under `--interp` and nothing compiled (valgrind: invalid reads and an invalid free of the box) | — |
 | B-2026-09-29-28 | 2026-09-29 | interp+codegen | medium | A BY-VALUE `Result` OR USER-ENUM PARAM STORED ON ONE PATH AND PAYLOAD-TAKEN ON ANOTHER RUNS NO BODY ON A THIRD PATH THAT DOES NEITHER, ON EVERY SURFACE -- `fn cp(t: Result[S, i64], v: mut ref Vec[Result[S, i64]], c: i64) -> i64 { if c == 0 { v.push(t) } else if c == 1 { let y = match t { Result.Ok(q) => q, Result.Err(e) => mks(e) }; .. } else { println("nothing") }; return 1 }` called with `Ok(mks(3))` and `c == 2` prints no `dS3`; `enum G { A(S), B(i64) }` the same | — |
 | B-2026-09-29-29 | 2026-09-29 | codegen | high | A TAKE THAT REBINDS THE PARAM'S OWN NAME (`let t = match t { .. }`) KEEPS THE B-2026-09-29-27 DOUBLE FREE COMPILED -- `fn cp(t: Option[S], v: mut ref Vec[Option[S]], c: bool) -> i64 { if c { v.push(t) } else { let t = match t { Option.Some(q) => q, Option.None => mks(0) }; println(f"p{t.id}") }; return 1 }` prints nothing compiled (valgrind at -O0 reports invalid reads of the box main freed); `--interp` prints `p1 dS1 n1 dS2 end` | — |
+| B-2026-09-29-40 | 2026-09-29 | interp+codegen | high | `let t = t.unwrap()` THAT REBINDS A BY-VALUE `Option` PARAM'S OWN NAME RUNS THE PAYLOAD'S BODY TWICE UNDER `--interp` AND DOUBLE-FREES COMPILED -- `fn cu(t: Option[S]) -> i64 { let t = t.unwrap(); println(f"u{t.id}"); return 1 }` prints `u10 dS10 dS10 d1 end` under `--interp` and `free(): double free detected in tcache 2` at -O2; the same inside a branch | — |
 
 ### Relocated
 
