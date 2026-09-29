@@ -2898,6 +2898,33 @@ impl<'a> super::Interpreter<'a> {
                 }
                 continue;
             }
+            // B-2026-09-19-47 — an `Option` / `Result` value under the enum's
+            // own parameter (`G.X(o)` at `T = Option[Vec[S1]]`). The enum arm
+            // below refuses an own-param ENUM payload, which is right for a
+            // user or `shared` enum and wrong for the seeded pair: codegen's
+            // instantiation-keyed walker (`emit_generic_enum_payload_user_
+            // drop_bodies_fn`) reaches an `Option`/`Result` payload through
+            // its envelope arm, now with the arm's `Vec` question as well, so
+            // `G[Option[S1]]` and `G[Option[Array[S1, 1]]]` ran their bodies
+            // compiled and nothing here. The value-driven discard walk is the
+            // one the direct `Option`/`Result` temps already use.
+            if let Value::EnumVariant { enum_name: pn, .. } = &payload {
+                let own_param = declared_head
+                    .as_deref()
+                    .is_some_and(|h| own_params.iter().any(|p| p == h))
+                    && !matches!(enum_name.as_str(), "Option" | "Result");
+                // And a DECLARED `Option`/`Result` payload (`enum Ho {
+                // P(Option[S1]), Q }`), which the enum arm below sends to a
+                // user-enum payload walk that has nothing to say about the
+                // seeded pair: it ran no body on any backend until codegen's
+                // name-keyed walker gained the row beside this one.
+                let declared_optres = declared_head.as_deref() == Some(pn.as_str())
+                    && !matches!(enum_name.as_str(), "Option" | "Result");
+                if (own_param || declared_optres) && matches!(pn.as_str(), "Option" | "Result") {
+                    self.run_discarded_value_user_drops(payload.clone());
+                    continue;
+                }
+            }
             // B-2026-09-12-24 — the `Array` PAYLOAD arm. The `Value::Struct`
             // destructure below drops an array payload on the floor, so an
             // enum variant declaring `Array[R, N]` ran its elements' `Drop`
@@ -10219,7 +10246,7 @@ impl<'a> super::Interpreter<'a> {
     /// Kept out of `type_expr_runs_user_drop` itself: its other callers ask a
     /// different question about the same predicate and are deliberately left
     /// alone.
-    fn optres_payload_te_runs_user_drop(&self, pt: &TypeExpr) -> bool {
+    pub(super) fn optres_payload_te_runs_user_drop(&self, pt: &TypeExpr) -> bool {
         // B-2026-09-17-20 — recursive per element, like the array leg below,
         // so a nested tuple / `Vec` / `Option` element qualifies the payload
         // as far as the walk's tuple arm now reaches.

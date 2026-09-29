@@ -221,7 +221,8 @@ type EnumPayloadBodyField = (
     usize,
     Option<(TypeExpr, u32)>,
     Option<TypeExpr>,
-    // B-2026-09-19-46 — a declared TUPLE payload's whole type expression.
+    // B-2026-09-19-46 / -47 — a declared TUPLE, `Option` or `Result` payload's
+    // whole type expression, walked as one aggregate.
     Option<TypeExpr>,
 );
 type EnumPayloadBodyTargets = Vec<(u64, String, Vec<EnumPayloadBodyField>)>;
@@ -4513,6 +4514,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         continue;
                     };
                     if generic_params.iter().any(|g| g == n) {
+                        continue;
+                    }
+                    // B-2026-09-19-47 — a declared `Option`/`Result` payload, on
+                    // the element test its walker's row uses.
+                    if matches!(n.as_str(), "Option" | "Result") {
+                        if !Self::type_expr_mentions_param(te, &generic_params)
+                            && self.optres_te_reaches_user_drop(te)
+                        {
+                            return true;
+                        }
                         continue;
                     }
                     if self.type_runs_user_drop(n, seen) {
@@ -12317,6 +12328,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     continue;
                 }
+                // B-2026-09-19-47 — a declared `Option` / `Result` payload
+                // (`enum Hq { P(Option[Vec[S1]]), Q }`). The struct gate below
+                // answers `None` for the seeded pair, so its payload's bodies ran
+                // on no backend. Walked through the same envelope emitter the
+                // generic head reaches it by, with the `Vec` question answered
+                // `true` as every arm of that head answers it. Carried in the
+                // aggregate slot the tuple row uses; the case body tells the two
+                // apart by the type's kind.
+                if let TypeKind::Path(p) = &te.kind {
+                    if matches!(
+                        p.segments.first().map(String::as_str),
+                        Some("Option" | "Result")
+                    ) {
+                        if !skip.contains(&(vname.clone(), fi))
+                            && !Self::type_expr_mentions_param(te, &generic_params)
+                            && self
+                                .emit_optres_payload_user_drop_bodies_fn_ex(te, true)
+                                .is_some()
+                        {
+                            fields.push((
+                                (start_word + 1) as u32,
+                                String::new(),
+                                num_words,
+                                None,
+                                None,
+                                Some(te.clone()),
+                            ));
+                        }
+                        continue;
+                    }
+                }
                 let TypeKind::Path(p) = &te.kind else {
                     continue;
                 };
@@ -12552,6 +12594,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         {
                             self.builder.build_call(f, &[fp.into()], "").unwrap();
                         }
+                    } else if matches!(tte.kind, TypeKind::Path(_)) {
+                        // B-2026-09-19-47 — the declared `Option`/`Result` row.
+                        if let Some(f) = self.emit_optres_payload_user_drop_bodies_fn_ex(&tte, true)
+                        {
+                            self.builder.build_call(f, &[fp.into()], "").unwrap();
+                        }
                     }
                     if let Some(nb) = box_next {
                         self.builder.build_unconditional_branch(nb).unwrap();
@@ -12643,6 +12691,33 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         Some(walker)
+    }
+
+    /// B-2026-09-19-47 — does a walk of `te` reach a user `Drop` body, asked
+    /// through every `Option` / `Result` / `Vec` level as well as the tuple and
+    /// `Array` levels `elem_te_runs_user_drop` already recurses into. That
+    /// predicate reads an `Option`'s HEAD, so `Option[Vec[S1]]` answered false
+    /// while `emit_optres_payload_user_drop_bodies_fn_ex(.., true)` walks it;
+    /// a gate that is to agree with that emitter has to reach as far.
+    pub(super) fn optres_te_reaches_user_drop(&self, te: &TypeExpr) -> bool {
+        if let TypeKind::Path(p) = &te.kind {
+            match p.segments.first().map(String::as_str) {
+                Some("Option" | "Result") => {
+                    return p.generic_args.as_ref().is_some_and(|args| {
+                        args.iter().any(|a| match a {
+                            GenericArg::Type(t) => self.optres_te_reaches_user_drop(t),
+                            _ => false,
+                        })
+                    });
+                }
+                Some("Vec") => {
+                    return super::helpers::vec_inner_type_expr(te)
+                        .is_some_and(|e| self.optres_te_reaches_user_drop(&e));
+                }
+                _ => {}
+            }
+        }
+        self.elem_te_runs_user_drop(te)
     }
 
     /// B-2026-07-30-11 (Option/Result leg) — `__karac_dropelems_opt_<T>` /
@@ -13588,6 +13663,12 @@ impl<'ctx> super::Codegen<'ctx> {
             /// `{ptr, len, cap}` handle here.
             vec_elem: Option<TypeExpr>,
             envelope: bool,
+            /// B-2026-09-19-47 — this ARM's own `include_vec`, carried to the
+            /// envelope recursion. The generic head passes `false` for the
+            /// walker and `true` for every arm, so an `Option[Vec[R]]` payload
+            /// was admitted by the arm and then walked one level down with the
+            /// head's `false`, and the `Vec` elements ran no body.
+            walk_vec: bool,
             pte: TypeExpr,
             thresh: usize,
             /// B-2026-09-20-55 — this arm's field offset inside the payload
@@ -13608,6 +13689,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             array_parts: None,
                             vec_elem: None,
                             envelope: false,
+                            walk_vec: include_vec,
                             pte,
                             thresh,
                             start_word,
@@ -13644,6 +13726,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         array_parts: Some((elem_te, n)),
                         vec_elem: None,
                         envelope: false,
+                        walk_vec: include_vec,
                         pte,
                         thresh,
                         start_word,
@@ -13669,6 +13752,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         array_parts: None,
                         vec_elem: Some(elem_te),
                         envelope: false,
+                        walk_vec: include_vec,
                         pte,
                         thresh,
                         start_word,
@@ -13699,7 +13783,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // case body's call below returns this same function instead of
                 // re-synthesising it.
                 if matches!(sname.as_str(), "Option" | "Result") {
-                    self.emit_optres_payload_user_drop_bodies_fn(&pte)?;
+                    self.emit_optres_payload_user_drop_bodies_fn_ex(&pte, include_vec)?;
                     return Some(PayloadArm {
                         tag,
                         sname,
@@ -13707,6 +13791,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         array_parts: None,
                         vec_elem: None,
                         envelope: true,
+                        walk_vec: include_vec,
                         pte,
                         thresh,
                         start_word,
@@ -13746,6 +13831,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     array_parts: None,
                     vec_elem: None,
                     envelope: false,
+                    walk_vec: include_vec,
                     pte,
                     thresh,
                     start_word,
@@ -13832,6 +13918,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     array_parts,
                     vec_elem,
                     envelope,
+                    walk_vec,
                     pte,
                     thresh,
                     start_word,
@@ -13920,7 +14007,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the recursion needs no reshaping. Body-only like every
                     // sibling arm: the inner envelope's box and interior are
                     // owned by the value's free channel, unchanged by this.
-                    self.emit_optres_payload_user_drop_bodies_fn_ex(&pte, include_vec)
+                    self.emit_optres_payload_user_drop_bodies_fn_ex(&pte, walk_vec)
                 } else if let Some(elem_tes) = &tuple_elems {
                     // B-2026-09-05-14 — the tuple payload: run each Drop-carrying
                     // element's body over the tuple aggregate at `target_ptr`

@@ -582,9 +582,20 @@ impl<'a> super::Interpreter<'a> {
                                 !matches!(enum_name.as_str(), "Option" | "Result")
                                     && matches!(self.env.get(&n), Some(Value::Tuple(items))
                                 if items.iter().any(|e| self.field_value_carries_user_drop(e)));
+                            // B-2026-09-19-47 — and an `Option`/`Result`
+                            // payload of a user enum, bound out whole, owns
+                            // its payload the same way.
+                            let takes_user_optres =
+                                !matches!(enum_name.as_str(), "Option" | "Result")
+                                    && self.env.get(&n).is_some_and(|v| {
+                                        matches!(&v, Value::EnumVariant { enum_name: pn, .. }
+                                            if matches!(pn.as_str(), "Option" | "Result"))
+                                            && self.field_value_carries_user_drop(&v)
+                                    });
                             let is_drop_binding = self.pattern_binding_owes_drop_body(&n)
                                 || self.taken_tuple_payload_binding_owes_drop(&n, takes_tuple)
-                                || takes_user_tuple;
+                                || takes_user_tuple
+                                || takes_user_optres;
                             // B-2026-09-06-20 — not for a binding out of a
                             // masked slot; see `masked_view_names` above.
                             if is_drop_binding && !masked_view_names.contains(&n) {
@@ -2653,6 +2664,16 @@ impl<'a> super::Interpreter<'a> {
     fn payload_te_runs_user_drop(&self, te: &TypeExpr) -> bool {
         match &te.kind {
             TypeKind::Tuple(elems) => elems.iter().any(|t| self.payload_te_runs_user_drop(t)),
+            // B-2026-09-19-47 — a declared `Option`/`Result` payload asks its
+            // PAYLOAD, through every nested level, as its walk does.
+            TypeKind::Path(p)
+                if matches!(
+                    p.segments.last().map(String::as_str),
+                    Some("Option" | "Result")
+                ) =>
+            {
+                self.optres_payload_te_runs_user_drop(te)
+            }
             _ => self.type_expr_runs_user_drop(te),
         }
     }

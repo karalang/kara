@@ -11622,7 +11622,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // B-2026-09-19-46 — the mask just took a TUPLE payload's bodies
                 // off the scrutinee, so its whole-tuple binding carries them.
-                self.fund_user_enum_tuple_payload_bindings(&enum_name, pattern);
+                self.fund_user_enum_tuple_payload_bindings(scrut_name, &enum_name, pattern, body);
                 // B-2026-09-18-1 — the mask just took this position's body off
                 // the by-value param's walker, so the arm's binding has to carry
                 // it. It cannot as registered: `bind_pattern_values` made it a
@@ -15417,6 +15417,20 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(TypeKind::Tuple(elems)) = tes.get(pos).map(|te| &te.kind) {
                 return elems.iter().any(|t| self.elem_te_runs_user_drop(t));
             }
+            // B-2026-09-19-47 — a declared `Option`/`Result` payload, on the
+            // question its walker row (`emit_enum_payload_user_drop_bodies_
+            // fn_skipping`) is admitted by.
+            if let Some(te) = tes.get(pos) {
+                if let TypeKind::Path(p) = &te.kind {
+                    if matches!(
+                        p.segments.first().map(String::as_str),
+                        Some("Option" | "Result")
+                    ) && !matches!(enum_name, "Option" | "Result")
+                    {
+                        return self.optres_te_reaches_user_drop(te);
+                    }
+                }
+            }
             tes.get(pos)
                 .and_then(|te| match &te.kind {
                     TypeKind::Path(p) => p.segments.first().cloned(),
@@ -18947,7 +18961,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// local registers at its `let`, and records its element types so a later
     /// move (`let u = t`) takes the walk over. A binding that is a caller's
     /// VIEW registers nothing, since its bodies are the caller's.
-    fn fund_user_enum_tuple_payload_bindings(&mut self, enum_name: &str, pattern: &Pattern) {
+    fn fund_user_enum_tuple_payload_bindings(
+        &mut self,
+        scrut_name: &str,
+        enum_name: &str,
+        pattern: &Pattern,
+        body: Option<&Expr>,
+    ) {
         if matches!(enum_name, "Option" | "Result") {
             return;
         }
@@ -18964,10 +18984,95 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        // B-2026-09-19-47 — the scrutinee's instantiation, for a payload
+        // declared as one of the enum's own parameters.
+        let params = self.enum_generic_param_names(enum_name);
+        let subst: std::collections::HashMap<String, TypeExpr> = match self
+            .type_decls
+            .enum_inst_var_types
+            .get(scrut_name)
+            .map(|t| &t.kind)
+        {
+            Some(TypeKind::Path(ip)) => params
+                .iter()
+                .cloned()
+                .zip(ip.generic_args.iter().flatten().filter_map(|g| match g {
+                    GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                }))
+                .collect(),
+            _ => std::collections::HashMap::new(),
+        };
         for (sub, te) in patterns.iter().zip(tes.iter()) {
             let PatternKind::Binding(b) = &sub.kind else {
                 continue;
             };
+            // B-2026-09-19-47 — an `Option`/`Result` payload bound out whole,
+            // declared (`Ho.P(o)` over `P(Option[S1])`) or through the enum's
+            // own parameter (`G.X(o)` at `G[Option[S1]]`). The mask just took
+            // its bodies off the scrutinee's walker, so the binding carries
+            // them through the same envelope walker, `Vec` question and all.
+            let optres_te = match &te.kind {
+                TypeKind::Path(p)
+                    if matches!(
+                        p.segments.first().map(String::as_str),
+                        Some("Option" | "Result")
+                    ) && !Self::type_expr_mentions_param(te, &params) =>
+                {
+                    Some(te.clone())
+                }
+                TypeKind::Path(p)
+                    if p.generic_args.is_none()
+                        && p.segments.len() == 1
+                        && params.contains(&p.segments[0]) =>
+                {
+                    subst.get(&p.segments[0]).cloned().filter(|t| {
+                        matches!(&t.kind, TypeKind::Path(ip)
+                            if matches!(ip.segments.first().map(String::as_str),
+                                Some("Option" | "Result")))
+                    })
+                }
+                _ => None,
+            };
+            if let Some(ote) = optres_te {
+                // Declined where the arm hands the binding to a CALL as an
+                // argument (`Ho.P(o) => tako(o)`): the interpreter disarms the
+                // arm slot on that hand-over and nothing downstream runs the
+                // payload's body, so a walker here would fire it on this side
+                // alone. Filed as its own row; the rebind (`let u = o`) and
+                // every read stay funded.
+                let handed_to_call = body.is_some_and(|e| {
+                    super::bce_length_pin::expr_contains(e, &|x| match &x.kind {
+                        ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => args
+                            .iter()
+                            .any(|a| matches!(&a.value.kind, ExprKind::Identifier(n) if n == b)),
+                        _ => false,
+                    })
+                });
+                if self.payload_vars.param_payload_arm_views.contains(b)
+                    || handed_to_call
+                    || !self.optres_te_reaches_user_drop(&ote)
+                    || self.has_armed_container_elem_bodies(b)
+                {
+                    continue;
+                }
+                let Some(slot) = self.variables.get(b).copied() else {
+                    continue;
+                };
+                if let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn_ex(&ote, true) {
+                    self.var_types
+                        .optres_var_payload_tes
+                        .insert(b.clone(), ote.clone());
+                    self.track_user_drop_var_with_fn(
+                        "",
+                        b,
+                        slot.ptr,
+                        bodies,
+                        UserDropKind::ContainerElemBodies,
+                    );
+                }
+                continue;
+            }
             let TypeKind::Tuple(elems) = &te.kind else {
                 continue;
             };
