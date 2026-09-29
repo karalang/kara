@@ -924,7 +924,13 @@ impl<'a> super::Interpreter<'a> {
                                             self.program,
                                             f,
                                             i,
-                                        ));
+                                        )
+                                        // B-2026-09-29-15 — or its payload
+                                        // taken from inside a branch.
+                                        || (f.generic_params.is_none()
+                                            && crate::ast::fn_branch_takes_param_payload(
+                                                f, i,
+                                            )));
                                 // B-2026-09-27-128 — a generic method's `Option[T]`
                                 // resolved to the bound value's type, as the
                                 // free-fn frame does.

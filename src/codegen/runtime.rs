@@ -15991,6 +15991,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     .copied()
             })
             .collect();
+        // B-2026-09-29-15 — a `let` that takes the payload out of a `match` /
+        // `if let` on a param the take registration adopted hands the payload
+        // over as surely as a store does: the arm binding owns it from here.
+        let takes: Vec<String> = self
+            .drop_rc
+            .cond_store_flag_params
+            .iter()
+            .filter(|n| self.fn_ctx.current_fn_param_names.contains(n.as_str()))
+            .filter(|n| crate::ast::is_param_payload_take(handed, n))
+            .cloned()
+            .collect();
+        let names: Vec<String> = names.into_iter().chain(takes).collect();
         let bool_t = self.context.bool_type();
         for n in names {
             if let Some(flag) = self.drop_rc.cond_move_drop_flags.get(n.as_str()).copied() {

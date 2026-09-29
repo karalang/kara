@@ -21334,7 +21334,7 @@ impl<'ctx> super::Codegen<'ctx> {
 /// `Result` of those. A user type or a generic parameter answers `false`, which
 /// keeps the old all-or-nothing stand-down, so an answer this cannot give is
 /// never a lost body.
-fn optres_variant_payload_is_bodiless(param_te: &TypeExpr, variant: &str) -> bool {
+pub(super) fn optres_variant_payload_is_bodiless(param_te: &TypeExpr, variant: &str) -> bool {
     fn closed(te: &TypeExpr) -> bool {
         match &te.kind {
             TypeKind::Tuple(elems) => elems.iter().all(closed),

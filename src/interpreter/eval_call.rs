@@ -2949,10 +2949,32 @@ impl<'a> super::Interpreter<'a> {
             let cond_stored = crate::ast::fn_conditionally_stores_param(f, i)
                 || crate::ast::fn_conditionally_hands_param_to_flip_callee(self.program, f, i)
                 || crate::ast::fn_branch_hands_param_to_storer(self.program, f, i);
-            if !cond_returned && !cond_stored {
+            // B-2026-09-29-15 — or its payload bound out of a `match` / `if
+            // let` on it from inside a branch: the caller stands down for the
+            // variants the arm hands out (`fn_returns_param_payload_of`), so on
+            // the path that never reaches the `match` this frame is the only
+            // owner left. Codegen's twin is the take arm of
+            // `compile_function`'s parameter loop.
+            let cond_taken =
+                f.generic_params.is_none() && crate::ast::fn_branch_takes_param_payload(f, i);
+            if !cond_returned && !cond_stored && !cond_taken {
                 continue;
             }
             match self.env.get(name) {
+                Some(v @ Value::EnumVariant { .. })
+                    if cond_taken
+                        && matches!(&v, Value::EnumVariant { enum_name, variant, .. }
+                        if !self.program.drop_method_keys.contains_key(enum_name.as_str())
+                            && crate::ast::fn_returns_param_payload_of(
+                                self.program,
+                                f,
+                                i,
+                                Some(variant.as_str()),
+                            ))
+                        && self.field_value_carries_user_drop(&v) =>
+                {
+                    out.push(name.to_string());
+                }
                 Some(Value::Struct { name: tn, .. })
                     if self.program.drop_method_keys.contains_key(tn.as_str()) =>
                 {
@@ -3273,7 +3295,10 @@ impl<'a> super::Interpreter<'a> {
                 .get(i)
                 .is_some_and(|a| Self::arg_place_reaches_caller_drop_fire(&a.value))
                 && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
-                && !cond_stored;
+                && !cond_stored
+                // B-2026-09-29-15 — the caller stood a named argument down for
+                // the payload a branch's `match` takes, too.
+                && (f.generic_params.is_some() || !crate::ast::fn_branch_takes_param_payload(f, i));
             if caller_still_owns {
                 continue;
             }
@@ -3288,7 +3313,29 @@ impl<'a> super::Interpreter<'a> {
                         || self.cond_store_field_bodies_adopted(f, i, tn.as_str())
                         || self.cond_return_field_bodies_adopted(f, i, tn.as_str())
                 }
-                Value::EnumVariant { .. } => self.enum_value_runs_user_drop(&value),
+                // B-2026-09-29-15 — or an `Option` / `Result` / user enum
+                // whose payload a `match` on it takes from inside a branch, as
+                // the free-function sibling claims it.
+                Value::EnumVariant {
+                    ref enum_name,
+                    ref variant,
+                    ..
+                } => {
+                    self.enum_value_runs_user_drop(&value)
+                        || (f.generic_params.is_none()
+                            && crate::ast::fn_branch_takes_param_payload(f, i)
+                            && !self
+                                .program
+                                .drop_method_keys
+                                .contains_key(enum_name.as_str())
+                            && crate::ast::fn_returns_param_payload_of(
+                                self.program,
+                                f,
+                                i,
+                                Some(variant.as_str()),
+                            )
+                            && self.field_value_carries_user_drop(&value))
+                }
                 // B-2026-09-23-19 — a by-value `Array` of user-`Drop` elements
                 // returned on SOME exits, the method twin of B-2026-09-23-15's
                 // free-function arm in `cond_returned_param_drop_names` and on

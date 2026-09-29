@@ -4151,6 +4151,41 @@ impl<'ctx> super::Codegen<'ctx> {
                             .insert(param_name.clone());
                     }
                 }
+                // B-2026-09-29-15 — the TAKE sibling of the two
+                // B-2026-09-28-67 store arms above. A by-value `Option` /
+                // `Result` or user enum whose payload a `match` / `if let` on
+                // it binds out from inside a branch (`if c { let y = match t {
+                // Option.Some(v) => v, .. } }`) had no owner for the payload's
+                // body on the path that never reached the `match`: the caller
+                // stands down for the variants the arm hands out, per variant
+                // and not per path, so `cp(Some(mks(4)), false)` printed no
+                // `dS4` on any surface. BODIES ONLY, of exactly the variants
+                // the caller stood down for, under the per-path flag the
+                // taking `let` clears (`arm_conditional_store_flag`). The
+                // memory stays where it was on every path: the caller keeps it,
+                // boxed payload included, exactly as for the unconditional
+                // take.
+                if func.generic_params.is_none()
+                    && !self.is_coroutine_compiled(&func.name)
+                    && crate::ast::fn_branch_takes_param_payload(func, i)
+                {
+                    if let Some(bodies) = self.branch_take_param_bodies_fn(func, i, &param.ty) {
+                        self.track_user_drop_var_with_fn(
+                            "",
+                            &param_name,
+                            alloca,
+                            bodies,
+                            crate::codegen::state::UserDropKind::ContainerElemBodies,
+                        );
+                        let _ = self.cond_move_drop_flag_for(&param_name);
+                        self.drop_rc
+                            .cond_store_flag_params
+                            .insert(param_name.clone());
+                        self.payload_vars
+                            .cond_handback_optres_params
+                            .insert(param_name.clone());
+                    }
+                }
                 // B-2026-08-30-28 — the STORE sibling of the conditional
                 // -return registration directly above, and the same defect one
                 // escape route over.

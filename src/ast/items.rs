@@ -10491,7 +10491,8 @@ pub fn fn_branch_stores_param_whole(f: &Function, arg_index: usize) -> bool {
     if fn_stores_param_whole_into_container(f, arg_index) {
         return false;
     }
-    branch_handover_tally(f, arg_index, None).is_some_and(|t| t.stores > 0 && !t.other)
+    branch_handover_tally(f, arg_index, None)
+        .is_some_and(|t| t.stores > 0 && t.payload_takes == 0 && !t.other)
 }
 
 /// B-2026-09-28-80 — the CALL sibling of [`fn_branch_stores_param_whole`]:
@@ -10516,7 +10517,70 @@ pub fn fn_branch_hands_param_to(
     takes: &dyn Fn(&str, usize) -> bool,
 ) -> bool {
     branch_handover_tally(f, arg_index, Some(takes))
-        .is_some_and(|t| t.calls > 0 && t.nested && !t.other)
+        .is_some_and(|t| t.calls > 0 && t.nested && t.payload_takes == 0 && !t.other)
+}
+
+/// B-2026-09-29-15 — the TAKE sibling of [`fn_branch_stores_param_whole`]:
+/// does `f` bind the payload of by-value parameter `arg_index` out of a `match`
+/// / `if let` on it (`let y = match t { Option.Some(v) => v, .. }`) from inside
+/// a branch, with every other mention of the parameter being such a take?
+///
+/// The caller stands down for a payload the callee's arm hands out, per
+/// VARIANT and not per path (`fn_escaping_param_payload_variants`), so on the
+/// path that never reaches the `match` nobody ran the payload's body:
+/// `fn cp(t: Option[S], c: bool) { if c { let y = match t { .. }; } }` printed
+/// no `dS` for `cp(Some(..), false)` on any surface. The frame owns the
+/// payload's bodies per path under the conditional-store flag, which the
+/// taking `let` clears.
+///
+/// At least one take must sit inside a branch: an unconditional top-level take
+/// leaves no path on which the payload dies here. Strict in the same way as
+/// its siblings: a store, a hand-over or any other mention answers `false`.
+pub fn fn_branch_takes_param_payload(f: &Function, arg_index: usize) -> bool {
+    branch_handover_tally(f, arg_index, None).is_some_and(|t| {
+        t.payload_takes > 0 && t.nested && t.stores == 0 && t.calls == 0 && !t.other
+    })
+}
+
+/// B-2026-09-29-15 — is `value` a `match` / `if let` on the bare parameter
+/// `name` that hands a payload binding out as its value, with no other mention
+/// of `name` inside it? The shape [`fn_branch_takes_param_payload`] counts and
+/// the per-path flag's disarm recognises, so the two cannot drift.
+pub fn is_param_payload_take(value: &Expr, name: &str) -> bool {
+    fn yields_binding(body: &Expr, pattern: &crate::ast::Pattern) -> bool {
+        let tail = match &body.kind {
+            ExprKind::Block(b) if b.stmts.is_empty() => b.final_expr.as_deref(),
+            _ => Some(body),
+        };
+        matches!(tail.map(|t| &t.kind), Some(ExprKind::Identifier(n))
+            if pattern.binding_names().iter().any(|b| b == n))
+    }
+    let bare = |e: &Expr| matches!(&e.kind, ExprKind::Identifier(n) if n == name);
+    let m = |e: &Expr| crate::deque_head::expr_mentions_name_deep(e, name);
+    match &value.kind {
+        ExprKind::Match { scrutinee, arms } => {
+            bare(scrutinee)
+                && arms.iter().any(|a| yields_binding(&a.body, &a.pattern))
+                && arms
+                    .iter()
+                    .all(|a| !m(&a.body) && !a.guard.as_ref().is_some_and(&m))
+        }
+        ExprKind::IfLet {
+            pattern,
+            value: v,
+            then_block,
+            else_branch,
+        } => {
+            bare(v)
+                && then_block.stmts.is_empty()
+                && then_block.final_expr.as_deref().is_some_and(|t| {
+                    matches!(&t.kind, ExprKind::Identifier(n)
+                        if pattern.binding_names().iter().any(|b| b == n))
+                })
+                && !else_branch.as_deref().is_some_and(m)
+        }
+        _ => false,
+    }
 }
 
 /// B-2026-09-28-80 — [`fn_branch_hands_param_to`] with the acceptance the
@@ -10545,6 +10609,9 @@ type HandoverAccept<'a> = &'a dyn Fn(&str, usize) -> bool;
 struct BranchHandoverTally {
     stores: usize,
     calls: usize,
+    /// B-2026-09-29-15 — `let` values that take the payload out of a `match`
+    /// / `if let` on the parameter ([`is_param_payload_take`]).
+    payload_takes: usize,
     nested: bool,
     other: bool,
 }
@@ -10711,7 +10778,12 @@ fn branch_handover_tally(
         for st in &b.stmts {
             match &st.kind {
                 StmtKind::Let { pattern, value, .. } => {
-                    w.t.other |= mentions(value, w.name);
+                    if is_param_payload_take(value, w.name) {
+                        w.t.payload_takes += 1;
+                        w.t.nested |= w.depth > 0;
+                    } else {
+                        w.t.other |= mentions(value, w.name);
+                    }
                     if let PatternKind::Binding(n) = &pattern.kind {
                         if n == w.name {
                             w.t.other = true;
@@ -10740,6 +10812,7 @@ fn branch_handover_tally(
         t: BranchHandoverTally {
             stores: 0,
             calls: 0,
+            payload_takes: 0,
             nested: false,
             other: false,
         },

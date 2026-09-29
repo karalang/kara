@@ -3550,6 +3550,63 @@ impl<'ctx> super::Codegen<'ctx> {
             && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
     }
 
+    /// B-2026-09-29-15 — the bodies-only walker the callee runs, under the
+    /// per-path flag, for by-value param `arg_index` of `f` whose payload a
+    /// `match` / `if let` takes from inside a branch
+    /// ([`crate::ast::fn_branch_takes_param_payload`]), or `None` when the
+    /// caller stood nothing down.
+    ///
+    /// It walks exactly what the caller's own walk skips for the same
+    /// argument (`callee_enum_arg_payload_escape`), so the two ends answer
+    /// from one list: for `Option` / `Result` that stand-down is
+    /// all-or-nothing once a variant whose payload runs a body escapes, and
+    /// for a user enum it is the escaping variants' payloads alone.
+    pub(super) fn branch_take_param_bodies_fn(
+        &mut self,
+        f: &crate::ast::Function,
+        arg_index: usize,
+        te: &TypeExpr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let program = self.program_snapshot.clone()?;
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let [en] = p.segments.as_slice() else {
+            return None;
+        };
+        let variants = crate::ast::fn_escaping_param_payload_variants(&program, f, arg_index);
+        if en == "Option" || en == "Result" {
+            let escapes = variants.iter().any(|v| {
+                v == "*" || !super::call_dispatch::optres_variant_payload_is_bodiless(te, v)
+            });
+            if !escapes || !self.optres_payload_runs_user_drop(te) {
+                return None;
+            }
+            return self.emit_optres_payload_user_drop_bodies_fn(te);
+        }
+        let user_enum = p.generic_args.is_none()
+            && self
+                .type_decls
+                .enum_layouts
+                .get(en.as_str())
+                .is_some_and(|l| !l.is_shared)
+            && !program.drop_method_keys.contains_key(en.as_str());
+        if !user_enum || variants.is_empty() {
+            return None;
+        }
+        let mut skip = std::collections::BTreeSet::new();
+        if !variants.iter().any(|v| v == "*") {
+            for (_, vname, tes) in self.enum_variant_field_type_exprs(en) {
+                if !variants.contains(&vname) {
+                    for fi in 0..tes.len() {
+                        skip.insert((vname.clone(), fi));
+                    }
+                }
+            }
+        }
+        self.emit_enum_payload_user_drop_bodies_fn_skipping(en, &skip)
+    }
+
     /// B-2026-09-23-26 — the `Option` / `Result` sibling of
     /// [`Self::conditional_callee_owned_array_handback`]: a by-value
     /// `Option[R]` / `Result[O, E]` param whose payload runs a user `Drop`
