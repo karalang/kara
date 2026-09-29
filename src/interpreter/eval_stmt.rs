@@ -105,10 +105,19 @@ impl<'a> super::Interpreter<'a> {
         // record has to be back before the enclosing block's slot for that
         // binding fires, and that slot fires only after this call returns.
         self.outer_shadow_moved_restore.push(Vec::new());
+        self.outer_shadow_container_moved_restore.push(Vec::new());
         self.param_shadow_restore.push(Vec::new());
         let result = self.eval_block_scope(block);
         for name in self.outer_shadow_moved_restore.pop().unwrap_or_default() {
             self.moved_out_user_drop_bindings.insert(name);
+        }
+        // B-2026-09-29-76 — the payload-walk record, likewise.
+        for name in self
+            .outer_shadow_container_moved_restore
+            .pop()
+            .unwrap_or_default()
+        {
+            self.moved_out_container_bodies_bindings.insert(name);
         }
         // B-2026-09-29-51 — see the field.
         for (name, was_owned) in self.param_shadow_restore.pop().unwrap_or_default() {
@@ -293,6 +302,7 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             self.let_displaced_moved.clear();
+            self.let_displaced_container_moved.clear();
             // B-2026-08-31-7 — the interpreter twin of codegen's
             // `clear_stale_param_view_marks`, and it has to land with it.
             // `owned_param_names_stack`'s top frame is this frame's view set,
@@ -349,6 +359,7 @@ impl<'a> super::Interpreter<'a> {
             // NLL placement / scope-exit ordering tests for plain
             // bindings stay unchanged.
             let displaced_moved = std::mem::take(&mut self.let_displaced_moved);
+            let displaced_container_moved = std::mem::take(&mut self.let_displaced_container_moved);
             self.suppress_let_rebind_user_drop(stmt, &mut cleanup);
             // B-2026-09-16-23 — the rebind's source may be an ENCLOSING
             // block's binding, whose slot the line above cannot reach.
@@ -358,6 +369,17 @@ impl<'a> super::Interpreter<'a> {
             for name in &outer_shadowed {
                 if displaced_moved.contains(name) {
                     if let Some(top) = self.outer_shadow_moved_restore.last_mut() {
+                        top.push(name.clone());
+                    }
+                }
+            }
+            // B-2026-09-29-76 — and one whose PAYLOAD walk the RHS took over
+            // (`let t = t.m1()`, `m1` an owned-`self` method matching `self`):
+            // the enclosing `t` gets its stand-down back when this block ends,
+            // or its slot runs the payload's body a second time.
+            for name in &outer_shadowed {
+                if displaced_container_moved.contains(name) {
+                    if let Some(top) = self.outer_shadow_container_moved_restore.last_mut() {
                         top.push(name.clone());
                     }
                 }
@@ -431,7 +453,13 @@ impl<'a> super::Interpreter<'a> {
             // to freeze and the one object keeps its single owner. BEFORE
             // `push_drops_for_stmt`: once that runs, a slot with this name is
             // ambiguous between the old binding and the new one.
-            self.freeze_shadowed_drop_slots(stmt, &mut cleanup, &shadowed_before, &displaced_moved);
+            self.freeze_shadowed_drop_slots(
+                stmt,
+                &mut cleanup,
+                &shadowed_before,
+                &displaced_moved,
+                &displaced_container_moved,
+            );
             // B-2026-09-02-17 — and a binding taken out of a container ELEMENT
             // the container still owns registers no slot either, for the same
             // caller-retains reason: `v[i]` is a `ref T`, so the container's
@@ -1346,6 +1374,7 @@ impl<'a> super::Interpreter<'a> {
         cleanup: &mut Vec<CleanupAction>,
         shadowed: &[(String, Value)],
         displaced_moved: &[String],
+        displaced_container_moved: &[String],
     ) {
         if shadowed.is_empty() {
             return;
@@ -1384,7 +1413,15 @@ impl<'a> super::Interpreter<'a> {
             // call recorded the move and the new binding's re-arm noted it, so
             // the taken path decides; the frozen copy stays for the other.
             let hands_back = self.let_rhs_hands_shadowed_binding_back(stmt, name)
-                || displaced_moved.contains(name);
+                || displaced_moved.contains(name)
+                // B-2026-09-29-76 — or its payload walk was taken over on this
+                // path (`let t = t.m1()`, `m1` an owned-`self` method matching
+                // `self`) and the value owes no body of its own beyond it: the
+                // method's arm ran the payload's body, so a frozen copy would
+                // run it again (`dS10 dS10`).
+                || (displaced_container_moved.contains(name)
+                    && matches!(value, Value::EnumVariant { enum_name, .. }
+                        if !self.program.drop_method_keys.contains_key(enum_name.as_str())));
             let Some(idx) = cleanup
                 .iter()
                 .rposition(|a| matches!(a, CleanupAction::Drop { name: n } if n == name))
@@ -11300,6 +11337,10 @@ impl<'a> super::Interpreter<'a> {
                     // block loop gives it to the displaced binding's slot.
                     if self.moved_out_user_drop_bindings.contains(&bound) {
                         self.let_displaced_moved.push(bound.clone());
+                    }
+                    // B-2026-09-29-76 — and its payload walk, for the same reason.
+                    if self.moved_out_container_bodies_bindings.contains(&bound) {
+                        self.let_displaced_container_moved.push(bound.clone());
                     }
                     self.rearm_container_bodies_for_name(&bound);
                 }

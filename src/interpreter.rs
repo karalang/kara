@@ -866,6 +866,16 @@ pub struct Interpreter<'a> {
     /// re-inserting at block exit restores "moved" to the binding that is live
     /// again once the block ends, before its slot in the enclosing block fires.
     pub(crate) outer_shadow_moved_restore: Vec<Vec<String>>,
+    /// B-2026-09-29-76 — the PAYLOAD-walk sibling of `let_displaced_moved`:
+    /// names a `let` just rebound whose previous binding's container bodies
+    /// had moved out (`moved_out_container_bodies_bindings` held the name when
+    /// the new binding re-armed it). An owned-`self` method matching on its
+    /// receiver records exactly that for a named receiver, so
+    /// `let t = t.m1()` erased the one fact the displaced `t`'s slot needs.
+    pub(crate) let_displaced_container_moved: Vec<String>,
+    /// B-2026-09-29-76 — per block, the `outer_shadow_moved_restore` sibling
+    /// for `moved_out_container_bodies_bindings`.
+    pub(crate) outer_shadow_container_moved_restore: Vec<Vec<String>>,
     /// B-2026-09-29-51 — per block, the PARAMETERS a `let` in this block
     /// shadowed: `(name, was an owned-param view)`. A shadow ends with its
     /// block, so the exit gives the name back its param-ness — the owned-param
@@ -1436,6 +1446,8 @@ impl<'a> Interpreter<'a> {
             moved_out_user_drop_bindings: HashSet::new(),
             let_displaced_moved: Vec::new(),
             outer_shadow_moved_restore: Vec::new(),
+            let_displaced_container_moved: Vec::new(),
+            outer_shadow_container_moved_restore: Vec::new(),
             param_shadow_restore: Vec::new(),
             cond_move_escaping_sites: HashSet::new(),
             cond_move_call_arg_sites: HashSet::new(),
