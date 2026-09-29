@@ -6492,8 +6492,18 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(root) = optres_payload_te(param_te, Some(variant)) else {
             return false;
         };
+        // B-2026-09-29-2 — a projection off a FIELD binding of a struct
+        // sub-pattern (`Some(S { r, s }) => r.id`) is resolved from that
+        // field's declared type, not from the payload's: asked from the payload
+        // root, `r.id` named no field of `S`, so it scored as an escape, both
+        // ends of the call read "the callee takes it", and no callee-side
+        // owner existed for a destructured field, so a fresh temp's `Drop`
+        // body ran on no compiled surface. A base the sub-patterns do not bind
+        // unambiguously keeps the payload root, the answer it had before.
+        let field_roots = self.optres_param_struct_field_binding_tes(f, pname, variant, param_te);
         let leaf_is_copy_read = |e: &Expr| -> bool {
-            self.projection_leaf_te_through_index(&root, e)
+            let base_root = projection_base_ident(e).and_then(|b| field_roots.get(b));
+            self.projection_leaf_te_through_index(base_root.unwrap_or(&root), e)
                 .is_some_and(|leaf| !self.elem_te_runs_user_drop(&leaf))
         };
         // B-2026-09-29-3 — and through a whole immutable rebind of the arm's
@@ -6520,6 +6530,82 @@ impl<'ctx> super::Codegen<'ctx> {
         )
         .get(pname)
         .is_some_and(|vs| vs.contains(variant))
+    }
+
+    /// B-2026-09-29-2 — the declared type of each name a struct sub-pattern
+    /// binds to a FIELD of `variant`'s named-struct payload, in the patterns
+    /// whose scrutinee is the by-value param `pname` (`match` / `if let` /
+    /// `while let` arms and `let .. else`): `Some(S { r, s: t })` gives
+    /// `r -> R`, `t -> String`.
+    ///
+    /// A name bound in two places to different fields, or bound WHOLE
+    /// (`Some(r)`) anywhere over the same param, is left out, so its
+    /// projections keep the payload-rooted answer. Only a sole struct payload
+    /// with no generic arguments, the shape `optres_payload_taken_fields`
+    /// answers for, so the declared field types are concrete.
+    fn optres_param_struct_field_binding_tes(
+        &self,
+        f: &crate::ast::Function,
+        pname: &str,
+        variant: &str,
+        param_te: &TypeExpr,
+    ) -> std::collections::HashMap<String, TypeExpr> {
+        use crate::ast::{Pattern, PatternKind};
+        let mut out = std::collections::HashMap::new();
+        let Some(sname) = self.sole_struct_payload_name(param_te) else {
+            return out;
+        };
+        let (Some(names), Some(tys)) = (
+            self.type_decls.struct_field_names.get(sname.as_str()),
+            self.struct_field_type_exprs(&sname),
+        ) else {
+            return out;
+        };
+        let mut found: Vec<(String, Option<String>)> = Vec::new();
+        let mut from_pattern = |pat: &Pattern| {
+            let PatternKind::TupleVariant { path, patterns } = &pat.kind else {
+                return;
+            };
+            if path.last().map(String::as_str) != Some(variant) || patterns.len() != 1 {
+                return;
+            }
+            match &patterns[0].kind {
+                PatternKind::Binding(b) => found.push((b.clone(), None)),
+                PatternKind::Struct { path, fields, .. }
+                    if path.last().map(String::as_str) == Some(sname.as_str()) =>
+                {
+                    for fp in fields {
+                        match &fp.pattern {
+                            None => found.push((fp.name.clone(), Some(fp.name.clone()))),
+                            Some(sub) => {
+                                if let PatternKind::Binding(b) = &sub.kind {
+                                    found.push((b.clone(), Some(fp.name.clone())));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        };
+        collect_param_scrutinee_patterns(&f.body, pname, &mut from_pattern);
+        for (b, field) in &found {
+            let Some(field) = field else { continue };
+            if found
+                .iter()
+                .any(|(b2, f2)| b2 == b && f2.as_deref() != Some(field.as_str()))
+            {
+                continue;
+            }
+            if let Some(ty) = names
+                .iter()
+                .position(|n| n == field)
+                .and_then(|i| tys.get(i))
+            {
+                out.insert(b.clone(), ty.clone());
+            }
+        }
+        out
     }
 
     /// B-2026-09-19-48 — the STRUCT sibling of [`Self::tuple_payload_arity`]:
@@ -21516,4 +21602,119 @@ fn block_unwraps_binding(b: &crate::ast::Block, name: &str) -> bool {
         });
     }
     found || b.final_expr.as_ref().is_some_and(|e| expr(e, name))
+}
+
+/// B-2026-09-29-2 — the identifier a projection chain (`r.id`, `t.0.v`,
+/// `a[i].v`) is rooted at, or `None` when it is not a chain off a name.
+fn projection_base_ident(e: &Expr) -> Option<&str> {
+    let mut cur = e;
+    loop {
+        match &cur.kind {
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. }
+            | ExprKind::Index { object, .. } => cur = object,
+            ExprKind::Identifier(n) => return Some(n.as_str()),
+            _ => return None,
+        }
+    }
+}
+
+/// B-2026-09-29-2 — hand `each` the pattern of every `match` arm, `if let`,
+/// `while let` and `let .. else` in `b` whose scrutinee is the bare name
+/// `pname`, at any depth.
+fn collect_param_scrutinee_patterns(
+    b: &crate::ast::Block,
+    pname: &str,
+    each: &mut dyn FnMut(&crate::ast::Pattern),
+) {
+    fn is_param(e: &Expr, pname: &str) -> bool {
+        matches!(&e.kind, ExprKind::Identifier(n) if n == pname)
+    }
+    fn expr(e: &Expr, pname: &str, each: &mut dyn FnMut(&crate::ast::Pattern)) {
+        match &e.kind {
+            ExprKind::Match { scrutinee, arms } if is_param(scrutinee, pname) => {
+                for a in arms {
+                    each(&a.pattern);
+                }
+            }
+            ExprKind::IfLet { pattern, value, .. } | ExprKind::WhileLet { pattern, value, .. }
+                if is_param(value, pname) =>
+            {
+                each(pattern)
+            }
+            _ => {}
+        }
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b)
+            | ExprKind::Comptime(b) => block(b, pname, each),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                expr(condition, pname, each);
+                block(then_block, pname, each);
+                if let Some(x) = else_branch.as_deref() {
+                    expr(x, pname, each);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                expr(value, pname, each);
+                block(then_block, pname, each);
+                if let Some(x) = else_branch.as_deref() {
+                    expr(x, pname, each);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                expr(condition, pname, each);
+                block(body, pname, each);
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                expr(value, pname, each);
+                block(body, pname, each);
+            }
+            ExprKind::For { iterable, body, .. } => {
+                expr(iterable, pname, each);
+                block(body, pname, each);
+            }
+            ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
+                block(body, pname, each)
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                expr(scrutinee, pname, each);
+                for a in arms {
+                    if let Some(g) = &a.guard {
+                        expr(g, pname, each);
+                    }
+                    expr(&a.body, pname, each);
+                }
+            }
+            k => crate::rc_elide::walk_children_pub(k, &mut |c| expr(c, pname, each)),
+        }
+    }
+    fn block(b: &crate::ast::Block, pname: &str, each: &mut dyn FnMut(&crate::ast::Pattern)) {
+        for st in &b.stmts {
+            if let crate::ast::StmtKind::LetElse { pattern, value, .. } = &st.kind {
+                if is_param(value, pname) {
+                    each(pattern);
+                }
+            }
+            crate::rc_elide::walk_stmt_children_pub(st, &mut |c| expr(c, pname, each));
+        }
+        if let Some(e) = b.final_expr.as_deref() {
+            expr(e, pname, each);
+        }
+    }
+    block(b, pname, each)
 }
