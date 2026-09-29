@@ -3050,18 +3050,40 @@ impl<'ctx> super::Codegen<'ctx> {
                 // gets that registrar, under the escape gate the entry-copy arm
                 // uses. `f(Some(ShP { i: ShIn { .. }, n: 3 }))` stranded the
                 // `shared` field's block and its `String` on every call.
-                if self.callee_optres_param_entry_copied(&name, i).is_none()
-                    && self.optres_arg_is_unowned_temp(&a.value)
+                //
+                let inline_struct_shape =
+                    if self.callee_optres_param_entry_copied(&name, i).is_none() {
+                        self.callee_inline_struct_option_param(&name, i)
+                    } else {
+                        None
+                    };
+                let caller_owns_inline_struct =
+                    inline_struct_shape.as_ref().and_then(|(te, escapes)| {
+                        (!escapes
+                            && self
+                                .callee_by_value_optres_param_bodies_te(&name, i, &a.value)
+                                .is_some_and(|(_, skip)| skip.is_empty()))
+                        .then(|| te.clone())
+                    });
+                if let Some(param_te) = caller_owns_inline_struct
+                    .as_ref()
+                    .filter(|_| self.optres_arg_is_unowned_temp(&a.value))
                 {
-                    if let Some(param_te) = self
-                        .callee_nonescaping_inline_struct_option_param_te(&name, i)
-                        .filter(|_| {
-                            self.callee_by_value_optres_param_bodies_te(&name, i, &a.value)
-                                .is_some_and(|(_, skip)| skip.is_empty())
-                        })
-                    {
-                        self.track_optres_arg_temp(val, &param_te, true, false);
-                    }
+                    self.track_optres_arg_temp(val, param_te, true, false);
+                }
+                // B-2026-09-27-87 — the NAMED spelling of that shape, when the
+                // callee takes the payload. The let-site
+                // `track_inline_option_agg_payload_var` stays armed across the
+                // call (see the note above), which is right while the callee
+                // only reads the payload and is the second release when the
+                // callee's frame frees it: `let q = p` in the arm,
+                // `w.unwrap()`, `v.push(w)` each give the payload an owner
+                // there, and the caller's scope-exit `karac_drop_Option_<T>`
+                // then read the `shared` field's freed block.
+                let callee_frees_inline_struct = inline_struct_shape.is_some()
+                    && self.callee_takes_optres_param_payload(&name, i);
+                if callee_frees_inline_struct && matches!(&a.value.kind, ExprKind::Identifier(_)) {
+                    self.suppress_inline_option_agg_binding_transfer(&a.value);
                 }
                 // B-2026-09-09-18 — the BODY channel for the same temp, which
                 // the memory registration above cannot carry and which no
@@ -6898,16 +6920,23 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// B-2026-09-17-11 — the declared type of free function `callee_name`'s
     /// by-value parameter `arg_index` when it is an `Option` whose STRUCT
-    /// payload is laid inline (neither boxed nor the `{ptr,len,cap}` overlay)
-    /// and the parameter provably does not escape the callee — the one shape
-    /// whose fresh-temp argument has no owner in either frame unless the
-    /// caller takes it. `None` for a method, whose receiver shifts the index
+    /// payload is laid inline (neither boxed nor the `{ptr,len,cap}` overlay),
+    /// paired with whether the parameter ESCAPES the callee. Non-escaping is
+    /// the one shape whose fresh-temp argument has no owner in either frame
+    /// unless the caller takes it. `None` for a method, whose receiver shifts the index
     /// and whose payload shapes this row did not measure.
-    pub(super) fn callee_nonescaping_inline_struct_option_param_te(
+    ///
+    /// B-2026-09-27-87 — the escape answer comes back as the second element
+    /// rather than filtering the result, because the NAMED argument at the same
+    /// call site needs the shape alone: the temp registrar owns only a
+    /// non-escaping param, while the named hand-over asks the callee's own
+    /// question (`callee_takes_optres_param_payload`). Formerly
+    /// `callee_nonescaping_inline_struct_option_param_te`.
+    pub(super) fn callee_inline_struct_option_param(
         &self,
         callee_name: &str,
         arg_index: usize,
-    ) -> Option<TypeExpr> {
+    ) -> Option<(TypeExpr, bool)> {
         let program = self.program_snapshot.as_deref()?;
         let f = super::declarations::find_function_ast(program, callee_name)?;
         if f.self_param.is_some() || f.generic_params.is_some() {
@@ -6934,9 +6963,52 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return None;
         }
-        crate::result_escape::by_value_nonescaping_param_names(f)
-            .contains(pname.as_str())
-            .then(|| p.ty.clone())
+        let escapes =
+            !crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str());
+        Some((p.ty.clone(), escapes))
+    }
+
+    /// B-2026-09-27-87 — does free function `callee_name`'s frame give the
+    /// payload of its by-value `Option`/`Result` param `arg_index` an owner of
+    /// its own, and so free it? Two routes, the ones measured: the param is
+    /// stored whole (`v.push(w)`), the param is the receiver of an
+    /// `unwrap`-family call (whose result the callee owns and frees), or a
+    /// variant's payload leaves its arm binding for something other than a
+    /// copy read (`let q = p`, `sink(p)`).
+    ///
+    /// NOT `by_value_nonescaping_param_names`: that set is conservative the
+    /// other way and counts a method receiver (`w.is_some()`) as an escape,
+    /// where the callee frees nothing. Asked here that would hand the
+    /// payload to a frame that never releases it.
+    pub(super) fn callee_takes_optres_param_payload(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        if self.callee_stores_param_whole(callee_name, arg_index) {
+            return true;
+        }
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = super::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        let Some(p) = f.params.get(arg_index) else {
+            return false;
+        };
+        let crate::ast::PatternKind::Binding(pname) = &p.pattern.kind else {
+            return false;
+        };
+        if block_unwraps_binding(&f.body, pname) {
+            return true;
+        }
+        self.optres_payload_escape_map(f, &p.ty, None)
+            .get(pname.as_str())
+            .is_some_and(|vs| {
+                vs.iter()
+                    .any(|v| !self.optres_payload_variant_only_copy_read(f, &p.ty, arg_index, v))
+            })
     }
 
     pub(super) fn track_optres_arg_temp(
@@ -21383,4 +21455,41 @@ fn optres_payload_te(param_te: &TypeExpr, want_variant: Option<&str>) -> Option<
         ("Result", "Err") => args.get(1).map(|t| (*t).clone()),
         _ => None,
     }
+}
+
+/// B-2026-09-27-87 — does `b` call an `unwrap`-family method directly on the
+/// bare binding `name` (`w.unwrap()`, `w.expect(..)`, `w.unwrap_or(d)`)? Such a
+/// call hands the payload to a value the enclosing frame owns. Walked with the
+/// exhaustive child visitor, so a call inside a loop or closure is found too.
+fn block_unwraps_binding(b: &crate::ast::Block, name: &str) -> bool {
+    fn expr(e: &Expr, name: &str) -> bool {
+        if let ExprKind::MethodCall { object, method, .. } = &e.kind {
+            if matches!(&object.kind, ExprKind::Identifier(n) if n == name)
+                && matches!(
+                    method.as_str(),
+                    "unwrap"
+                        | "expect"
+                        | "unwrap_or"
+                        | "unwrap_or_else"
+                        | "unwrap_or_default"
+                        | "unwrap_err"
+                        | "expect_err"
+                )
+            {
+                return true;
+            }
+        }
+        let mut found = false;
+        crate::rc_elide::walk_children_pub(&e.kind, &mut |c| {
+            found = found || expr(c, name);
+        });
+        found
+    }
+    let mut found = false;
+    for s in &b.stmts {
+        crate::rc_elide::walk_stmt_children_pub(s, &mut |c| {
+            found = found || expr(c, name);
+        });
+    }
+    found || b.final_expr.as_ref().is_some_and(|e| expr(e, name))
 }
