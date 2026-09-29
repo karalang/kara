@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 540 |
+| miscompile | 541 |
 | run-vs-build | 537 |
 | leak | 467 |
 | double-free | 355 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2323 |
+| codegen | 2324 |
 | interp | 674 |
 | typecheck | 314 |
 | other | 112 |
@@ -419,6 +419,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-10 | 2026-09-29 | codegen+interp | medium | A FIELD OR ELEMENT OF A BY-VALUE PARAM PUSHED DIRECTLY INTO A `mut ref` CONTAINER (`xs.push(w.r)`, `xs.push(t.0)`) RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- once in the callee and once when the container dies, unconditionally or on the pushing path, while a push into a LOCAL container and the `let r = w.r; xs.push(r)` spelling run it once | — |
 | B-2026-09-29-11 | 2026-09-29 | codegen | medium | A FIELD MOVED OUT OF A LOCAL THAT IS ITSELF A FIELD OF A BY-VALUE PARAM (`let w = o.w; let r = w.r;`, or `let O { w, k } = o; let r = w.r;`) LEAKS THE FIELD'S HEAP ON THE COMPILED BACKENDS -- 2 B in 1 block at -O0 whether or not `r` is ever handed over, while `let r = o.w.r;` and `let W { r, .. } = w;` are clean | — |
 | B-2026-09-29-12 | 2026-09-29 | interp+codegen | high | `unwrap()` ON A BY-VALUE `Option`/`Result` PARAM RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND CRASHES COMPILED WHEN THE `Option` IS BOXED, with no store anywhere -- `fn cu(t: Option[S]) { let x = t.unwrap(); println(f"u{x.id}") }` over `cu(Option.Some(mks(1)))` prints `u1 dS1 dS1 end` under `--interp`, segfaults at -O0 and double-frees at -O2, against the correct `u1 dS1 end`. CORRECTION: filed as a store-on-one-path / unwrap-on-the-other remainder of B-2026-09-29-9; the store is irrelevant, the unwrap alone is the fault | — |
+| B-2026-09-29-13 | 2026-09-29 | codegen | medium | A `let` THAT SHADOWS AN `Option` PARAM WITH A VALUE OF ANOTHER TYPE PRINTS AS THE PARAM'S TYPE ON EVERY COMPILED SURFACE -- `fn s2(t: Option[i64]) { let t = 3; println(f"s2 {t}") }` prints `s2 None` at -O0 and -O2 for `s2(Option.Some(7))`, against `--interp`'s correct `s2 3` | — |
 
 ### Relocated
 
