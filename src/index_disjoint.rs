@@ -1835,7 +1835,7 @@ fn for_each_child<'a>(expr: &'a Expr, on: &mut dyn FnMut(Child<'a>)) {
 
 /// Visit every immediate sub-expression and sub-block of every statement in
 /// `block`, plus its tail expression.
-fn for_each_block_child<'a>(block: &'a Block, on: &mut dyn FnMut(Child<'a>)) {
+pub(crate) fn for_each_block_child<'a>(block: &'a Block, on: &mut dyn FnMut(Child<'a>)) {
     for stmt in &block.stmts {
         match &stmt.kind {
             StmtKind::Let { value, .. } => on(Child::Expr(value)),

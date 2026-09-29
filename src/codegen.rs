@@ -145,6 +145,7 @@ mod reduce;
 mod refinement;
 mod runtime;
 mod runtime_fns;
+mod scrutinee_shadow;
 mod shadow;
 mod slice_alias;
 mod span_tables;
@@ -8054,6 +8055,24 @@ impl<'ctx> Codegen<'ctx> {
         // `crate::ast::unmutated_param_mut_rebinds`.
         let demoted = crate::ast::demote_unmutated_param_rebinds(program);
         let program = demoted.as_ref().unwrap_or(program);
+        // B-2026-09-29-41 — an arm binding that shadows its own scrutinee
+        // (`match s { Some(S { r, s }) => … }`) gets a fresh name, because
+        // every post-binding step of the arm finds the scrutinee BY NAME. See
+        // `scrutinee_shadow.rs`.
+        let rc_promoted = |n: &str| {
+            self.drop_rc
+                .rc_fallback_fns
+                .values()
+                .any(|names| names.contains(n))
+                || self
+                    .drop_rc
+                    .arc_fallback_fns
+                    .values()
+                    .any(|names| names.contains(n))
+        };
+        let unshadowed =
+            scrutinee_shadow::rename_scrutinee_shadowing_bindings(program, &rc_promoted);
+        let program = unshadowed.as_ref().unwrap_or(program);
         // B-2026-08-21-6 — the parser deleted each `Map[K, V, H]` hasher
         // argument and left the choice here, keyed by the container path's
         // span. Every `Codegen::new` entry funnels through this method, so one
