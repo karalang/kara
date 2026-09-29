@@ -20246,13 +20246,24 @@ impl<'ctx> super::Codegen<'ctx> {
         field: &str,
         val: BasicValueEnum<'ctx>,
     ) {
-        let ExprKind::Identifier(obj) = &object.kind else {
-            return;
+        // B-2026-09-26-8 — a METHOD's receiver is the same regime: `fn get(ref
+        // self) -> Sh { self.s }` hands out an alias of a field the caller
+        // still owns. `self` parses as `SelfValue`, not an `Identifier`, so this
+        // gate declined it and the result carried no ref of its own: the
+        // caller's binding and the holder each released once against a count
+        // of one (valgrind: an invalid read and write of size 8), and a
+        // projection `h.get().k` ran `Sh`'s body while `h` still held it. The
+        // receiver is registered under the name "self" wherever it is bound,
+        // so every check below answers for it as for a named param.
+        let obj: &str = match &object.kind {
+            ExprKind::Identifier(obj) => obj.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return,
         };
         // Params only: a LOCAL's field move-out is the same-scope case, where
         // the null-store neutralizer already transfers the handle (measured
         // clean both before and after this change).
-        if !self.fn_ctx.current_fn_param_names.contains(obj.as_str()) {
+        if !self.fn_ctx.current_fn_param_names.contains(obj) {
             return;
         }
         // A shared OBJECT's field read incs on its own path.
