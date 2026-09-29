@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 569 |
+| miscompile | 570 |
 | run-vs-build | 540 |
 | leak | 485 |
 | double-free | 362 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2382 |
-| interp | 703 |
+| codegen | 2383 |
+| interp | 704 |
 | typecheck | 315 |
 | other | 112 |
 | ownership | 79 |
@@ -418,7 +418,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-49 | 2026-09-29 | codegen | medium | AN `Array` ENUM PAYLOAD WHOSE ELEMENT IS A `shared enum` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND AND LEAKS 58 B COMPILED -- `enum Hsh { P(Array[Sm, 1]), Q }` over `shared enum Sm { P(R), Q }` prints no `dR` on `--interp`, the JIT, -O0 or -O2, and valgrind at -O0 reports `58 (48 direct, 10 indirect) bytes in 1 blocks definitely lost` | — |
 | B-2026-09-29-65 | 2026-09-29 | interp+codegen | medium | A BY-VALUE `Option` PARAM TAKEN ON ONE PATH AND SHADOWED BY AN UNRELATED VALUE ON THE OTHER LOSES ITS PAYLOAD'S `Drop` BODY ON EVERY SURFACE -- `fn q1(t: Option[S], c: bool) -> i64 { if c { let u = match t { Option.Some(v) => v, n => n.unwrap() }; return u.id }; let t = Option.Some(mks(99)); println("q1"); return 1 }` at `q1(Option.Some(mks(7)), false)` prints `q1 dS99` where `dS7` is also due | — |
 | B-2026-09-29-50 | 2026-09-29 | codegen | medium | A CLOSURE CAPTURE OR A `let ... else` BINDING OF A HEAP-BOXED GENERIC `Array` PAYLOAD LEAKS EVERY ELEMENT BUFFER ON EVERY COMPILED SURFACE -- `match g { G.Y(x) => { let c = || x[0].len(); return c(); } .. }` and `let G.Y(x) = g else { return 0 }; return x[0].len();` over `G[Array[String, 2]]` lose both strings at `-O0`, with output correct everywhere | — |
-| B-2026-09-29-75 | 2026-09-29 | interp+codegen | medium | A BY-VALUE ENUM PARAM USED AS THE RECEIVER OF AN OWNED-`self` METHOD THAT MATCHES `self` RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY SURFACE -- with `fn m2(self) -> i64 { match self { E.A(s) => s.id, E.B(n) => n } }`, `fn p2(t: E) -> i64 { let x = t.m2(); println(f"p2 {x}"); return x }` at `p2(E.A(mks(2)))` prints `dS2 p2 2 dS2`, where `let t = E.A(mks(2)); t.m2()` on a local prints one body | — |
 | B-2026-09-29-76 | 2026-09-29 | interp | medium | A NESTED `let t = t.m1()` THAT SHADOWS AN ENCLOSING LOCAL ENUM, WHERE `m1` IS AN OWNED-`self` METHOD MATCHING `self`, RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` ONLY -- `fn v1(c: bool) -> i64 { let t = E.A(mks(6)); if c { let t = t.m1(); return t }; return 0 }` at `v1(true)` prints `dS6 dS6` under `--interp` and `dS6` at -O2 and -O0 | — |
 | B-2026-09-29-73 | 2026-09-29 | codegen | medium | A NAMED `Option[Array[R, N]]` LOCAL WHOSE ELEMENT RUNS A USER `Drop` DOUBLE-FREES WHEN A `match` ARM PUSHES ITS BINDING INTO A `Vec` OR STORES IT IN A STRUCT LITERAL -- `let o: Option[Array[R, 2]] = Option.Some(mka()); match o { Option.Some(v) => { w.push(v) } .. }` aborts with `free(): double free detected in tcache 2` at `-O0` and `-O2` against a correct `--interp`, because the `Option`'s own element walk still runs after the arm moved the elements out | — |
 | B-2026-09-29-66 | 2026-09-29 | codegen | medium | MOVING AN `Option` FIELD OUT AND THEN STORING INTO IT LEAKS 16 B ON EVERY COMPILED SURFACE -- `let t = o.u; o.u = Some(mk(8));` over `struct O { u: Option[S2] }` prints the right text everywhere and valgrind reports `definitely lost: 16 bytes in 1 blocks` at -O0; the conditional-move spelling leaks the same | — |
@@ -437,6 +436,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-92 | 2026-09-29 | codegen | medium | A FRESH-TEMP STRUCT WHOSE ENUM FIELD BOXES AN `Array` PAYLOAD STILL DOUBLE-FREES WHEN HANDED ON BY VALUE, AS AN ARGUMENT OR AS AN OWNED-`self` RECEIVER -- `give(Hb { g: Eb.A(mk()) })`, `give(mkh())` and `Hb { g: Eb.A(mk()) }.give()` over `struct Hb { g: Eb }` and `enum Eb { A(Array[String, 2]), B }` abort with `free(): double free detected in tcache 2` at `-O0` and `-O2` (7 valgrind errors at `-O0`) before and after B-2026-09-20-4, whose NAMED spellings are clean | — |
 | B-2026-09-29-93 | 2026-09-29 | codegen | low | A CONCRETE STRUCT HOLDING A GENERIC ENUM FIELD WHOSE PAYLOAD IS HEAP-BOXED LEAKS THE PAYLOAD'S OWN HEAP AT SCOPE EXIT, with no call anywhere -- `let h = Hb { g: G.Y(f"aaaaaaaa-1") };` over `struct Hb { g: G[String] }` loses the 10-byte String, `G[Array[String, 2]]` loses both 10-byte elements (20 B in 2 blocks) and `G[Vec[String]]` leaks as well, at `-O0`, while `let g = G.Y([..])` alone is clean | — |
 | B-2026-09-29-94 | 2026-09-29 | typecheck | low | A NEGATED SUFFIXLESS LITERAL IS NOT WIDTH-POLYMORPHIC THE WAY A POSITIVE ONE IS -- `a + -1` over `a: i32` is rejected with "cannot mix integer types 'i32' and 'i64'", and so are `a.min(-1)` and `a.wrapping_add(-1)`, and `b * -1` / `b - -1` over `b: i128`, while `a + 1`, `a.min(1)`, `a.wrapping_add(1)` and `let x: i32 = -1` are all accepted | — |
+| B-2026-09-29-96 | 2026-09-29 | interp+codegen | medium | REMAINDER OF B-2026-09-29-75: A BY-VALUE ENUM PARAM HANDED TO AN OWNED-`self` METHOD THAT TAKES ITS PAYLOAD STILL RUNS THE PAYLOAD'S `Drop` BODY TWICE, ON EVERY SURFACE, WHEN THE CALL IS ON SOME PATHS ONLY, THE CALLEE IS GENERIC, THE ENUM HAS ITS OWN `Drop`, OR THE METHOD RETURNS THE ENUM -- `fn p8(t: E, c: bool) -> i64 { if c { return t.m2() }; .. }` at `p8(E.A(mks(7)), true)` prints `dS7 dS7` | — |
 
 ### Relocated
 
@@ -3332,6 +3332,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-42 | codegen | medium | A FIELD BINDING OF A DESTRUCTURED `Option` PARAM PAYLOAD REBOUND INSIDE THE CALLEE (`Some(S { r, s }) => { let y = r; y.id }`) LOSES A FRESH-TEMP ARG… | 08f35bf2f |
 | B-2026-09-29-64 | interp+codegen | medium | AN OWNED-`self` METHOD THAT RETURNS `match self { . | 64dadf0a1 |
 | B-2026-09-29-74 | interp+codegen | medium | AN ASSIGNMENT THROUGH A `mut ref` PARAM (`fn gm(x: mut ref Option[R]) -> i64 { x = Some(mk(99, f"z")); 5 }`) NEVER RUNS THE DISPLACED VALUE'S `Drop`… | a6e088d76 |
+| B-2026-09-29-75 | interp+codegen | medium | A BY-VALUE ENUM PARAM USED AS THE RECEIVER OF AN OWNED-`self` METHOD THAT MATCHES `self` RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY SURFACE -- wit… | efe14e6b9 |
 | B-2026-09-29-77 | interp+codegen | medium | AN OWNED-`self` METHOD THAT MATCHES `self` ON ONLY SOME PATHS LOSES THE RECEIVER'S PAYLOAD `Drop` BODY ON THE PATHS THAT DO NOT, ON EVERY SURFACE --… | d8f9f2bf5 |
 | B-2026-09-29-78 | codegen | high | `i128` / `u128` ARITHMETIC BESIDE A SUFFIXLESS LITERAL IS COMPUTED AT 64 BITS WHEN COMPILED -- `b + 1` over `b: i128 = 100000000000000000000i128` pri… | be94bca62 |
 
