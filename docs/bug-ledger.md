@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 553 |
 | run-vs-build | 540 |
-| leak | 479 |
+| leak | 480 |
 | double-free | 360 |
 | missing-feature | 214 |
 | codegen-gap | 203 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2360 |
+| codegen | 2361 |
 | interp | 690 |
 | typecheck | 314 |
 | other | 112 |
@@ -135,8 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-19-29 | 2026-09-19 | interp | medium | TWO HOLDERS BUILT FROM ONE `shared enum` BINDING RUN ITS PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON EVERY COMPILED BACKEND -- `struct Hs { m: SMono }` built twice from one `s` prints `A d2:9 d2:9 ok` against `A ok d2:9`, in every one of the five holder positions, because an alias of a shared enum is a deep VALUE CLONE in this backend and there is no refcount to consult | — |
 | B-2026-09-19-31 | 2026-09-19 | codegen+interp | medium | A CONDITIONALLY HANDED-BACK PART OF AN OWNED `Option` PAYLOAD LOSES THE PART THAT DIED, ON ALL FOUR SURFACES -- `fn eat(o: Option[(R, R)], k: bool) -> R { match o { Some((a, b)) => { if k { return a; } return b; } .. } }` called with `k = false` prints `got:6 dR6 end` against the due `dR5 got:6 dR6 end` everywhere, so the A/B parity rule sees nothing; the UNCONDITIONAL spelling of the same arm is correct since B-2026-09-14-18, which is what leaves this shape behind as the family's last all-surface loss | — |
 | B-2026-09-19-32 | 2026-09-19 | codegen | low | THE ESCAPING DEBOX LEAKS ITS MOVED-OUT PAYLOAD WHEN THE ENUM HAS NO `impl Drop` -- `fn take(o: Ve) -> String { if let Ve.A(s) = o { s } else { .. } }` loses 310 B over 20 calls at -O0, identically on the `match` spelling, and adding a Drop impl to the same enum makes both clean | — |
-| B-2026-09-19-47 | 2026-09-19 | codegen+interp | low | A `Vec` INSIDE AN `Option` INSIDE A GENERIC ENUM PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `G.X(o)` over `Option[Vec[S1]]` prints nothing on all four surfaces where the one-level-shallower control `let o: Option[Vec[S1]]` prints `dS6`, and the codegen half is one parameter away while the interpreter half wants B-2026-09-17-15's instantiation chain | — |
-| B-2026-09-19-50 | 2026-09-19 | codegen+interp | medium | A DECLARED `Array[E, N]` PAYLOAD WHOSE ELEMENT IS A USER ENUM RUNS THE ELEMENT'S PAYLOAD `Drop` BODIES ON EVERY COMPILED SURFACE AND NONE UNDER `--interp` -- `enum Ha { P(Array[Mono, 1]), Q }` over `enum Mono { P(R), Q }` diverges at four positions (let-bound, discarded, whole move, consuming match arm) and is an agreed silence at two (fresh-temp argument, struct field), while the struct-element control `Array[R, 2]` agrees on all four surfaces at every position. The two halves have DIFFERENT causes -- the interpreter's declared-`Array` arm dispatches a `Value::Struct` element only, and the two gaps are a measured payload-WIDTH artifact -- so it cannot be closed one position at a time | — |
 | B-2026-09-19-54 | 2026-09-19 | codegen | medium | A GENERIC BOXED `Array[String, N]` PAYLOAD REBOUND TO A LOCAL IN THE ARM INVALID-FREES -- `match g { G.Y(x) => { let y = x; return y[0].len(); } }` reports 2 valgrind errors at `-O0` with output correct on every backend, while its mono twin and all three other arm shapes of the same payload are clean, so the move-binding path has a second owner the hand-on path does not | — |
 | B-2026-09-19-60 | 2026-09-19 | codegen | medium | A CONSUMING ARM THAT REBINDS A SEEDED `Array` PAYLOAD INTO A LOCAL LEAVES TWO OWNERS -- `match Option.Some(a) { Some(v) => { let u = v; .. } }` over a NAMED `Array[R, 2]` local aborts with two invalid frees at `-O0` against a correct `--interp`, and `@main` carries TWO `__karac_drop_array_te_R_2` calls over one element storage. No interior walk is armed for a consuming arm, so B-2026-09-19-58's paired retraction has nothing to pair with; B-2026-09-19-54 is the generic-envelope cousin (output correct, no abort) and B-2026-09-17-5 the bodies-channel twin | — |
 | B-2026-09-20-3 | 2026-09-20 | codegen | medium | A CHAINED PLACE'S ENUM FIELD HANDED TO A BY-VALUE CALLEE IS STILL FREED TWICE after B-2026-09-19-51 -- `eatb(k.h.g)` over `struct Kb { h: Hb }` / `struct Hb { g: Eb }` reports 11 allocs / 14 frees and 7 errors, unchanged before and after -51's fix, because its neutraliser takes a NAMED BINDING ROOT ONLY and a two-hop place needs the GEP chain walked | — |
@@ -432,6 +430,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-63 | 2026-09-29 | codegen | medium | A closure inside a match arm that captures a field binding destructured out of a by-value `Option` param loses the caller's `Drop` body on every compiled surface -- `fn f(p: Option[S]) -> String { match p { Some(S { r, s }) => { let g = |q: i64| q + r.id; f"{g(1)} {s}" } None => "n" } }` prints no `d1` at -O0/-O2, `--interp` prints `d1` | — |
 | B-2026-09-29-47 | 2026-09-29 | codegen | high | A STRUCT DESTRUCTURE WITH `..` AFTER ONE OF ITS FIELDS WAS MOVED OUT READS FREED MEMORY ON EVERY COMPILED SURFACE -- `let x = q.u; let W3 { n, .. } = q;` over `W3 { u: S2, n: i64 }` prints the right text with 1 invalid read at -O0 and an abort in `malloc` under `karac run`; reading the remaining field by projection (`let s = q.s`) is clean | — |
 | B-2026-09-29-48 | 2026-09-29 | interp+codegen | high | A BY-VALUE STRUCT PARAM REBOUND TO A LOCAL AND THEN FIELD-STORED GOES WRONG ON EVERY BACKEND -- in `fn f(q0: W) -> i64 { let mut q = q0; let x = q.u; q.u = mk(8); ... }` the stored value's `dS8` never runs anywhere and compiled leaks its 16 B box; without the move (`let mut q = q0; q.u = mk(8);`) `--interp` runs the displaced `dS9` twice and compiled reads freed memory | — |
+| B-2026-09-29-49 | 2026-09-29 | codegen | medium | AN `Array` ENUM PAYLOAD WHOSE ELEMENT IS A `shared enum` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND AND LEAKS 58 B COMPILED -- `enum Hsh { P(Array[Sm, 1]), Q }` over `shared enum Sm { P(R), Q }` prints no `dR` on `--interp`, the JIT, -O0 or -O2, and valgrind at -O0 reports `58 (48 direct, 10 indirect) bytes in 1 blocks definitely lost` | — |
 
 ### Relocated
 
@@ -3025,8 +3024,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-19-44 | codegen | medium | A DESTRUCTURING `if let` LOSES ITS BOXED PAYLOAD'S `Drop` BODY ON EVERY COMPILED BACKEND, where the `match` SPELLING OF THE SAME PATTERN KEEPS IT --… | d55122cbc |
 | B-2026-09-19-45 | codegen | medium | A DECLARED `Array[E, N]` ENUM PAYLOAD WHOSE ELEMENT IS A USER ENUM STRANDS THE ELEMENT'S HEAP -- `enum Ha { P(Array[Mono, 1]), Q }` over `enum Mono {… | 6add83283 |
 | B-2026-09-19-46 | codegen+interp | low | A DECLARED TUPLE ENUM PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `enum Ht { P((S1, S1)), Q }` prints nothing on `--interp`, the JIT, `-O0`… | ff383abc1 |
+| B-2026-09-19-47 | codegen+interp | low | A `Vec` INSIDE AN `Option` INSIDE A GENERIC ENUM PAYLOAD RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `G.X(o)` over `Option[Vec[S1]]` prints nothing… | 0416ba6a9 |
 | B-2026-09-19-48 | codegen | medium | A NAMED-LOCAL `Option` ARGUMENT WHOSE PAYLOAD IS A NAMED STRUCT RUNS THE SURVIVING FIELD'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, and an arm th… | 1aff971 |
 | B-2026-09-19-49 | codegen | high | AN `Array[S, 1]` ENUM PAYLOAD RUNS ITS ELEMENT'S `Drop` BODY AGAINST THE WRONG MEMORY ON EVERY COMPILED SURFACE -- `enum D1 { P(Array[Sd, 1]), Q }` p… | 5358868 |
+| B-2026-09-19-50 | codegen+interp | medium | A DECLARED `Array[E, N]` PAYLOAD WHOSE ELEMENT IS A USER ENUM RUNS THE ELEMENT'S PAYLOAD `Drop` BODIES ON EVERY COMPILED SURFACE AND NONE UNDER `--in… | 4196968bf |
 | B-2026-09-19-51 | codegen | medium | A STRUCT'S ENUM FIELD HANDED TO A BY-VALUE CALLEE IS FREED TWICE, because a moved-out enum field is never neutralised the way a moved-out `Vec`/`Stri… | 6431067 |
 | B-2026-09-19-52 | codegen | high | A STRUCT-SHAPED VARIANT'S BOXED `Array` PAYLOAD HANDED TO A BY-VALUE CALLEE ABORTS ON BOTH SPELLINGS -- `match g { G.S { a } => eat(a) }` over `Array… | 2fbff99df |
 | B-2026-09-19-53 | codegen | high | A `shared enum`'s HEAP PAYLOAD IS NEVER FREED, whatever the arm does and whatever the payload is -- a read-only arm over `shared enum G[T] { Y(T), N… | 7faff81eb |
