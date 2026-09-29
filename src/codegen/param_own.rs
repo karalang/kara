@@ -4181,7 +4181,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(f) = crate::codegen::declarations::find_function_ast(program, callee_name) else {
             return false;
         };
-        if f.generic_params.is_none() || self.is_coroutine_compiled(&f.name) {
+        // B-2026-09-27-1 — a method of a GENERIC impl (`impl[U] Q[U] { fn
+        // qu(ref self, v: U, ..) }`) declares no type params of its own, yet
+        // is compiled per monomorph with the impl's, so it is generic here.
+        if (f.generic_params.is_none() && !self.mono_state.generic_fns.contains_key(callee_name))
+            || self.is_coroutine_compiled(&f.name)
+        {
             return false;
         }
         if f.params.get(arg_index).is_none() {
@@ -4568,8 +4573,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// by name; a concrete struct result is admitted as there. Everything else
     /// (`-> Option[T]`, `-> Ho[T]`) declines, for the concrete predicate's
     /// reason. Every other gate is the concrete predicate's, including
-    /// `handback_safe_params`, which considers generic FREE functions and
-    /// declines generic impl methods, so a generic METHOD keeps today's path.
+    /// `handback_safe_params`, which considers generic free functions and,
+    /// since B-2026-09-27-1, generic methods and methods of generic impls.
     pub(super) fn conditional_handback_memory_moves_to_mono_callee(
         &self,
         callee_name: &str,
@@ -4582,7 +4587,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(f) = crate::codegen::declarations::find_function_ast(program, callee_name) else {
             return false;
         };
-        if f.generic_params.is_none() || self.is_coroutine_compiled(&f.name) {
+        // B-2026-09-27-1 — a method of a GENERIC impl (`impl[U] Q[U] { fn
+        // qu(ref self, v: U, ..) }`) declares no type params of its own, yet
+        // is compiled per monomorph with the impl's, so it is generic here.
+        if (f.generic_params.is_none() && !self.mono_state.generic_fns.contains_key(callee_name))
+            || self.is_coroutine_compiled(&f.name)
+        {
             return false;
         }
         let Some(param) = f.params.get(arg_index) else {

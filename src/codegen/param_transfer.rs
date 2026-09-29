@@ -921,9 +921,15 @@ pub(crate) fn compute_handback_safe_params(
             }
             Item::ImplBlock(b) => {
                 // A TRAIT impl is reachable through dispatch this walk cannot
-                // enumerate, and a GENERIC impl is compiled per monomorph, whose
-                // param loop is a different registrar. Both decline outright.
-                if b.trait_name.is_some() || b.generic_params.is_some() {
+                // enumerate, so it declines outright. B-2026-09-27-1 — a
+                // GENERIC impl, and a generic method of any impl, used to
+                // decline too ("compiled per monomorph, whose param loop is a
+                // different registrar"), but the mono prologue has had that
+                // registrar's memory arm since B-2026-09-25-40, and both mono
+                // halves index the receiver-excluding slot this walk judges.
+                // Declining them left `k.gpk(s, true, w)` over `fn gpk[T](ref
+                // self, v: T, c: bool, w: T) -> T` freeing `s` in both frames.
+                if b.trait_name.is_some() {
                     continue;
                 }
                 let TypeKind::Path(tp) = &b.target_type.kind else {
@@ -934,7 +940,7 @@ pub(crate) fn compute_handback_safe_params(
                 };
                 for ii in &b.items {
                     let ImplItem::Method(m) = ii else { continue };
-                    if m.is_pub || m.generic_params.is_some() {
+                    if m.is_pub {
                         continue;
                     }
                     let key = format!("{type_name}.{}", m.name);
