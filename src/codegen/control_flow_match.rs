@@ -17411,6 +17411,87 @@ impl<'ctx> super::Codegen<'ctx> {
     /// compiled surface aborted `free(): double free` where the free-function
     /// spelling beside them was clean. The index is the source argument's
     /// position on all three: the AST method's `params` exclude the receiver.
+    /// B-2026-09-29-46 — the narrowing of [`Self::call_passthrough_armed_boxed_source`]
+    /// to a call that hands a NAMED boxed `Option` argument back on SOME exits
+    /// only (`fn h0(o: Option[R], f: bool) -> Option[R] { if f { return o }
+    /// return Some(mk(0)) }`). Its result is the source's box on one path and a
+    /// FRESH box on the other, so neither "the source owns it" nor "the result
+    /// owns it" is right for both; the let site settles it per path at run
+    /// time (`release_cond_handed_back_box`). A free or associated function
+    /// only, so the argument index is the parameter index.
+    pub(super) fn call_cond_passthrough_boxed_option_source(&self, value: &Expr) -> Option<String> {
+        let (callee_name, args) = self.passthrough_callee_key(value)?;
+        let program = self.program_snapshot.as_deref()?;
+        let f = super::declarations::find_function_ast(program, &callee_name)?;
+        if f.self_param.is_some() {
+            return None;
+        }
+        args.iter().enumerate().find_map(|(i, a)| {
+            let ExprKind::Identifier(n) = &a.value.kind else {
+                return None;
+            };
+            let is_option = f.params.get(i).is_some_and(|p| {
+                matches!(&p.ty.kind, crate::ast::TypeKind::Path(tp)
+                    if tp.segments.len() == 1 && tp.segments[0] == "Option")
+            });
+            (is_option
+                && self.call_arg_flows_into_return(&callee_name, i)
+                && self
+                    .payload_vars
+                    .boxed_enum_payload_vars
+                    .contains(n.as_str())
+                && !crate::ast::fn_always_returns_param(Some(program), f, i))
+            .then(|| n.clone())
+        })
+    }
+
+    /// B-2026-09-29-46 — after `let b = h0(x, ..)` over a conditional hand-back
+    /// (see [`Self::call_cond_passthrough_boxed_option_source`]): when the call
+    /// returned `x`'s own box, `b` now holds it, so clear `x`'s box word and let
+    /// `b`'s registration be its one owner; otherwise `b` holds a fresh box and
+    /// `x` keeps its own. `x` was moved into the call, so nothing reads the
+    /// cleared word except `x`'s box drop, which skips a null box.
+    pub(super) fn release_cond_handed_back_box(&mut self, src: &str, dst_slot: PointerValue<'ctx>) {
+        let Some(src_slot) = self.variables.get(src).map(|v| v.ptr) else {
+            return;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get("Option") else {
+            return;
+        };
+        let enum_ty = layout.llvm_type;
+        let i64_t = self.context.i64_type();
+        let (Ok(dst_w_ptr), Ok(src_w_ptr)) = (
+            self.builder
+                .build_struct_gep(enum_ty, dst_slot, 1, "handback.dst.w0.ptr"),
+            self.builder
+                .build_struct_gep(enum_ty, src_slot, 1, "handback.src.w0.ptr"),
+        ) else {
+            return;
+        };
+        let (Ok(dst_w), Ok(src_w)) = (
+            self.builder.build_load(i64_t, dst_w_ptr, "handback.dst.w0"),
+            self.builder.build_load(i64_t, src_w_ptr, "handback.src.w0"),
+        ) else {
+            return;
+        };
+        let (dst_w, src_w) = (dst_w.into_int_value(), src_w.into_int_value());
+        let Ok(same) = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            dst_w,
+            src_w,
+            "handback.same.box",
+        ) else {
+            return;
+        };
+        let Ok(kept) =
+            self.builder
+                .build_select(same, i64_t.const_zero(), src_w, "handback.src.w0.kept")
+        else {
+            return;
+        };
+        let _ = self.builder.build_store(src_w_ptr, kept);
+    }
+
     pub(super) fn call_passthrough_armed_boxed_source(&self, value: &Expr) -> Option<String> {
         let (callee_name, args) = self.passthrough_callee_key(value)?;
         args.iter().enumerate().find_map(|(i, a)| {

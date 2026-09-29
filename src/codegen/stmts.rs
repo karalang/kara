@@ -8385,7 +8385,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if self.optres_handback_box_is_callers(value) {
                                     boxed.clear();
                                 }
-                                if let Some(src) = self.call_passthrough_armed_boxed_source(value) {
+                                // B-2026-09-29-46 — a hand-back on SOME exits
+                                // only: the result is the source's box on one
+                                // path and a fresh one on the other. Skipping
+                                // the result (below) left the fresh box with no
+                                // owner, 32 B per call. Keep this binding's
+                                // registration and settle the box per path.
+                                let cond_src = self
+                                    .call_cond_passthrough_boxed_option_source(value)
+                                    .filter(|_| boxed.iter().all(|(e, _, _)| *e == "Option"));
+                                if let Some(src) = cond_src {
+                                    self.release_cond_handed_back_box(&src, slot.ptr);
+                                    self.payload_vars
+                                        .boxed_passthrough_chain_alias
+                                        .remove(var_name);
+                                } else if let Some(src) =
+                                    self.call_passthrough_armed_boxed_source(value)
+                                {
                                     let callee_owns_box = boxed
                                         .iter()
                                         .all(|(e, _, inner)| *e == "Option" && inner.is_none());
