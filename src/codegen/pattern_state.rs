@@ -254,6 +254,12 @@ pub(crate) struct PatternState<'ctx> {
     /// change what the next arm's bindings see) and cleared by the
     /// `let`-pattern forms, like the flag above.
     pub(crate) pattern_binding_scrutinee_is_caller_retained_struct_view: bool,
+    /// B-2026-09-29-105 — true while binding ONE leaf of a caller-retained
+    /// struct view that `copy_view_struct_sharing_handles` just copied field
+    /// by field (a nested struct owning a `shared` field). The copy is the
+    /// leaf's own, so the leaf registers its struct drop, which the
+    /// copy-supported gate would otherwise refuse for such a struct.
+    pub(crate) pattern_binding_leaf_owns_view_copy: bool,
     /// B-2026-09-16-28 — the variants whose boxed payload the scrutinee, a
     /// by-value enum param, PRIVATIZED at entry (box and contents; see
     /// `PayloadVars::entry_private_payload_variants`). A binding deboxed out of

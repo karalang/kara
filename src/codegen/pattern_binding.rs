@@ -1331,7 +1331,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // copy-supported proxy stands in for.
                                     || self
                                         .pattern_state
-                                        .pattern_binding_field_boxed_payload_disarmed);
+                                        .pattern_binding_field_boxed_payload_disarmed
+                                    // B-2026-09-29-105 — a leaf copied out of a
+                                    // caller-retained view field by field owns
+                                    // that copy outright.
+                                    || self.pattern_state.pattern_binding_leaf_owns_view_copy);
                             // B-2026-07-10-3: an `Option`/`Result` scrutinee whose
                             // INLINE struct payload (held as a value in the slot, not
                             // heap-boxed) is bound WHOLE as `e`. The dedicated inline
@@ -2570,7 +2574,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // own free as if it had moved the field out, so hand it
                         // a copy — what `let t = q.s` already does
                         // (`deep_copy_owned_struct_param_field_move`).
-                        let field_val = if self
+                        let (field_val, owns_view_copy) = if self
                             .pattern_state
                             .pattern_binding_scrutinee_is_caller_retained_struct_view
                             && field_pat
@@ -2580,17 +2584,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         {
                             self.copy_caller_retained_view_leaf(&struct_name, idx, field_val)
                         } else {
-                            field_val
+                            (field_val, false)
                         };
-                        if let Some(sub_pat) = &field_pat.pattern {
-                            self.bind_pattern_values(sub_pat, field_val)?;
+                        let saved_owns_view_copy = std::mem::replace(
+                            &mut self.pattern_state.pattern_binding_leaf_owns_view_copy,
+                            owns_view_copy,
+                        );
+                        let bound = if let Some(sub_pat) = &field_pat.pattern {
+                            self.bind_pattern_values(sub_pat, field_val)
                         } else {
                             let synthetic = Pattern {
                                 kind: PatternKind::Binding(field_pat.name.clone()),
                                 span: field_pat.span,
                             };
-                            self.bind_pattern_values(&synthetic, field_val)?;
-                        }
+                            self.bind_pattern_values(&synthetic, field_val)
+                        };
+                        self.pattern_state.pattern_binding_leaf_owns_view_copy =
+                            saved_owns_view_copy;
+                        bound?;
                     }
                 }
                 Ok(())
@@ -2652,7 +2663,7 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         idx: usize,
         val: BasicValueEnum<'ctx>,
-    ) -> BasicValueEnum<'ctx> {
+    ) -> (BasicValueEnum<'ctx>, bool) {
         let Some(field_te) = self
             .type_decls
             .struct_field_type_exprs
@@ -2660,10 +2671,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|tes| tes.get(idx))
             .cloned()
         else {
-            return val;
+            return (val, false);
         };
         if !val.is_struct_value() {
-            return val;
+            return (val, false);
         }
         // B-2026-09-29-89 — a nested plain STRUCT leaf (`Q { h, .. }` with
         // `h: H { t: String }`) aliases the caller's buffers exactly as a
@@ -2681,10 +2692,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .get(n.as_str())
                         .is_none_or(|g| g.is_empty())
             }));
-            // A nested struct that itself owns a `shared` field is left
-            // alone: its clone helper allocates a fresh box for that field
-            // rather than sharing it, and a field moved out of the copy
-            // (`Q { hs, .. } => { let sh = hs.sh; .. }`) then leaked the copy.
+            if !is_plain_struct || !self.te_owns_heap_below_buffer(&field_te) {
+                return (val, false);
+            }
+            // B-2026-09-29-105 — a nested struct that itself owns a `shared`
+            // field is copied FIELD BY FIELD, sharing that field's handle
+            // (rc-inc) rather than cloning its box: the clone helper allocates
+            // a fresh box, and a field moved out of that copy
+            // (`Q { hs, .. } => { let sh = hs.sh; .. }`) leaked it.
             let owns_shared = match &field_te.kind {
                 TypeKind::Path(p) => p
                     .segments
@@ -2692,17 +2707,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     .is_some_and(|n| self.struct_owns_shared_field(n, &mut Vec::new())),
                 _ => true,
             };
-            if !is_plain_struct || owns_shared || !self.te_owns_heap_below_buffer(&field_te) {
-                return val;
+            if owns_shared {
+                let TypeKind::Path(p) = &field_te.kind else {
+                    return (val, false);
+                };
+                let Some(inner) = p.segments.last().cloned() else {
+                    return (val, false);
+                };
+                return match self.copy_view_struct_sharing_handles(&inner, val) {
+                    Some(copied) => (copied, true),
+                    None => (val, false),
+                };
             }
-            return self.clone_caller_retained_view_leaf(&field_te, val);
+            return (self.clone_caller_retained_view_leaf(&field_te, val), false);
         }
         if self.is_string_type_expr(&field_te) {
             let i8t = self.context.i8_type().into();
-            return self.emit_vecstr_defensive_copy(val, i8t, None);
+            return (self.emit_vecstr_defensive_copy(val, i8t, None), false);
         }
         let Some(elem_ty) = self.extract_vec_elem_type(&field_te) else {
-            return val;
+            return (val, false);
         };
         let elem_has_own_heap = crate::codegen::helpers::vec_inner_type_expr(&field_te)
             .map(|e| {
@@ -2712,7 +2736,7 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .unwrap_or(true);
         if !elem_has_own_heap {
-            return self.emit_vecstr_defensive_copy(val, elem_ty, None);
+            return (self.emit_vecstr_defensive_copy(val, elem_ty, None), false);
         }
         // A `Vec` whose elements own heap (`Vec[String]`): the deep clone the
         // return-position cloner uses for the same field handed out as
@@ -2724,9 +2748,135 @@ impl<'ctx> super::Codegen<'ctx> {
                     || self.option_inner_shared_type_for_type_expr(&e).is_some()
             });
         if elem_is_shared || !self.te_owns_heap_below_buffer(&field_te) {
-            return val;
+            return (val, false);
         }
-        self.clone_caller_retained_view_leaf(&field_te, val)
+        (self.clone_caller_retained_view_leaf(&field_te, val), false)
+    }
+
+    /// B-2026-09-29-105 — copy a struct value owned by a caller-retained view
+    /// one field at a time: a `shared` handle is shared (rc-inc), a `String`
+    /// or a heap-free `Vec` is copied, a scalar is kept, and a nested plain
+    /// struct recurses. `None` (leave the value as it was) for any other field
+    /// shape. The whole shape is planned before anything is emitted, so a
+    /// refusal never leaves a handle inc'd or a buffer copied behind it.
+    fn copy_view_struct_sharing_handles(
+        &mut self,
+        struct_name: &str,
+        val: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let st = *self.type_decls.struct_types.get(struct_name)?;
+        if !val.is_struct_value() || val.get_type() != st.into() {
+            return None;
+        }
+        // A `Drop` body anywhere inside would run for the copy AND in the
+        // caller's walk over the original: leave such a value alone.
+        if self.type_runs_user_drop(struct_name, &mut Vec::new()) {
+            return None;
+        }
+        let plan = self.plan_view_struct_copy(struct_name, st, 0)?;
+        Some(
+            self.emit_view_struct_copy(&plan, val.into_struct_value())
+                .into(),
+        )
+    }
+
+    fn plan_view_struct_copy(
+        &self,
+        struct_name: &str,
+        st: StructType<'ctx>,
+        depth: usize,
+    ) -> Option<Vec<ViewCopyPlan<'ctx>>> {
+        if depth > 8
+            || self.type_decls.shared_types.contains_key(struct_name)
+            || !self
+                .type_decls
+                .struct_generic_params
+                .get(struct_name)
+                .is_none_or(|g| g.is_empty())
+        {
+            return None;
+        }
+        let tes = self.type_decls.struct_field_type_exprs.get(struct_name)?;
+        if st.count_fields() as usize != tes.len() {
+            return None;
+        }
+        let vec_ty = self.vec_struct_type();
+        let mut plans = Vec::with_capacity(tes.len());
+        for (i, te) in tes.iter().enumerate() {
+            let fty = st.get_field_type_at_index(i as u32)?;
+            let plan = if let Some(heap) = self.shared_heap_type_for_type_expr(te) {
+                ViewCopyPlan::Shared(heap)
+            } else if self.is_string_type_expr(te) {
+                ViewCopyPlan::Str
+            } else if let Some(elem_ty) = self.extract_vec_elem_type(te) {
+                let elem_has_own_heap = crate::codegen::helpers::vec_inner_type_expr(te)
+                    .map(|e| {
+                        self.type_expr_has_drop_heap(&e)
+                            || self.te_owns_option_heap_payload(&e)
+                            || self.shared_heap_type_for_type_expr(&e).is_some()
+                    })
+                    .unwrap_or(true);
+                if elem_has_own_heap || fty != vec_ty.into() {
+                    return None;
+                }
+                ViewCopyPlan::Vec(elem_ty)
+            } else if fty.is_int_type() || fty.is_float_type() {
+                ViewCopyPlan::Keep
+            } else if let TypeKind::Path(p) = &te.kind {
+                let n = p.segments.last()?;
+                let inner_st = *self.type_decls.struct_types.get(n.as_str())?;
+                if fty != inner_st.into() {
+                    return None;
+                }
+                ViewCopyPlan::Nested(self.plan_view_struct_copy(n, inner_st, depth + 1)?)
+            } else {
+                return None;
+            };
+            plans.push(plan);
+        }
+        Some(plans)
+    }
+
+    fn emit_view_struct_copy(
+        &mut self,
+        plans: &[ViewCopyPlan<'ctx>],
+        sv: inkwell::values::StructValue<'ctx>,
+    ) -> inkwell::values::StructValue<'ctx> {
+        let mut out = sv;
+        for (i, plan) in plans.iter().enumerate() {
+            let f = self
+                .builder
+                .build_extract_value(sv, i as u32, "crview.fw")
+                .unwrap();
+            let nv = match plan {
+                ViewCopyPlan::Keep => continue,
+                ViewCopyPlan::Shared(heap) => {
+                    let fn_val = self.current_fn.unwrap();
+                    let cur = self.builder.get_insert_block();
+                    let slot = self.create_entry_alloca(fn_val, "crview.fw.sh", f.get_type());
+                    if let Some(bb) = cur {
+                        self.builder.position_at_end(bb);
+                    }
+                    self.builder.build_store(slot, f).unwrap();
+                    self.rc_inc_shared_handle_at_slot(slot, *heap);
+                    continue;
+                }
+                ViewCopyPlan::Str => {
+                    let i8t = self.context.i8_type().into();
+                    self.emit_vecstr_defensive_copy(f, i8t, None)
+                }
+                ViewCopyPlan::Vec(elem_ty) => self.emit_vecstr_defensive_copy(f, *elem_ty, None),
+                ViewCopyPlan::Nested(inner) => self
+                    .emit_view_struct_copy(inner, f.into_struct_value())
+                    .into(),
+            };
+            out = self
+                .builder
+                .build_insert_value(out, nv, i as u32, "crview.fw.ins")
+                .unwrap()
+                .into_struct_value();
+        }
+        out
     }
 
     /// Deep-clone `val` (of declared type `field_te`) through its
@@ -3465,4 +3615,14 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
     }
+}
+
+/// B-2026-09-29-105 — how one field of a caller-retained view's nested
+/// struct is copied (`copy_view_struct_sharing_handles`).
+enum ViewCopyPlan<'ctx> {
+    Keep,
+    Shared(StructType<'ctx>),
+    Str,
+    Vec(BasicTypeEnum<'ctx>),
+    Nested(Vec<ViewCopyPlan<'ctx>>),
 }

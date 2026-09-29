@@ -7024,6 +7024,7 @@ impl<'ctx> Codegen<'ctx> {
                 pattern_binding_seeded_array_payload_stays_with_caller: false,
                 pattern_binding_scrutinee_param_memory_is_callee_owned: false,
                 pattern_binding_scrutinee_is_caller_retained_struct_view: false,
+                pattern_binding_leaf_owns_view_copy: false,
                 pattern_binding_scrutinee_private_box_variants: HashSet::new(),
                 pattern_binding_scrutinee_is_transfer_owned_enum: false,
                 pattern_binding_payload_arm_binds_are_caller_views: false,
