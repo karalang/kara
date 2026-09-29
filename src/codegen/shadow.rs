@@ -377,6 +377,23 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn forget_var_metadata(&mut self, name: &str) {
         let _ = self.take_var_metadata(name);
     }
+
+    /// B-2026-09-29-17 — a PATTERN binding (`match` / `if let` / `while let`
+    /// arm, `let .. else`) that shadows a `ref` / `mut ref` parameter must not
+    /// inherit the parameter's borrow tags. `let v = ..` purges them through
+    /// `bind_pattern`; the pattern binders did not, so the new `v` stayed in
+    /// `ref_params` and every read of it dereferenced its VALUE as a pointer:
+    /// `match t { Option.Some(v) => v, .. }` beside `v: mut ref i64` panicked
+    /// codegen, and a `String` binding beside `v: ref String` read a wrong
+    /// `len()`. Only a borrowed name is purged, so no other shadow changes;
+    /// the arm / `if let` scope snapshot restores the parameter's tags after.
+    pub(super) fn forget_shadowed_borrow_metadata(&mut self, name: &str) {
+        if self.borrow_vars.ref_params.contains_key(name)
+            || self.borrow_vars.signature_ref_params.contains(name)
+        {
+            self.forget_var_metadata(name);
+        }
+    }
 }
 
 /// A whole-environment snapshot of every name-keyed variable map (the primary
