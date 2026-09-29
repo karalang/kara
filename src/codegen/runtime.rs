@@ -5470,6 +5470,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // element) keeps the base path byte-for-byte.
             let subst = self.generic_struct_subst_from_inst(&name, elem_te);
             if !subst.is_empty() {
+                // B-2026-09-29-20 — the element's `shared` edges are asked
+                // through the instantiation too (`Vec[T[Sh]]`, `Vec[Q[Q[S2]]]`),
+                // exactly as `track_struct_var_inst` asks for a let-bound owner.
+                // The name-only test above reads `u: U` as owning nothing, so
+                // the value drop alone ran and every element's box leaked.
+                if self.struct_owns_shared_field_subst(&name, &mut Vec::new(), Some(&subst)) {
+                    return self.emit_vec_elem_struct_with_shared_drop_fn_mono(&name, Some(&subst));
+                }
                 return self.emit_struct_drop_synthesis_mono(&name, &subst);
             }
             return self.emit_struct_drop_synthesis(&name);

@@ -1399,8 +1399,40 @@ impl<'ctx> super::Codegen<'ctx> {
         //     `attributes` / nested `Block.stmts`). The walker's drain now runs
         //     ONLY in the shared-enum-box path (`owns_buffer_free == true`), where
         //     no `__karac_drop_struct_<S>` runs and the walker is the sole drop.
-        let Some(&st) = self.type_decls.struct_types.get(struct_name) else {
+        let Some(&erased_st) = self.type_decls.struct_types.get(struct_name) else {
             return;
+        };
+        // B-2026-09-29-20 — a generic owner's field offsets are the
+        // INSTANTIATION's; the name-keyed entry is the erased layout, which
+        // agrees with it only at field 0.
+        let st = match (
+            subst,
+            self.type_decls.struct_generic_params.get(struct_name),
+        ) {
+            (Some(s), Some(params)) if !s.is_empty() && !params.is_empty() => {
+                let args: Option<Vec<GenericArg>> = params
+                    .iter()
+                    .map(|p| s.get(p).cloned().map(GenericArg::Type))
+                    .collect();
+                match args {
+                    Some(args) => {
+                        let inst = TypeExpr {
+                            kind: TypeKind::Path(crate::ast::PathExpr {
+                                segments: vec![struct_name.to_string()],
+                                generic_args: Some(args),
+                                span: Default::default(),
+                            }),
+                            span: Default::default(),
+                        };
+                        match self.llvm_type_for_type_expr(&inst) {
+                            inkwell::types::BasicTypeEnum::StructType(st) => st,
+                            _ => erased_st,
+                        }
+                    }
+                    None => erased_st,
+                }
+            }
+            _ => erased_st,
         };
         let Some(ftes) = self
             .type_decls
@@ -1861,12 +1893,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                 "nstr.nest.p",
                             ) {
                                 let name = head.clone();
-                                self.emit_nested_struct_shared_rc_decs_ex(
+                                // B-2026-09-29-20 — a nested GENERIC struct
+                                // (`Q[S3]` inside `Q[Q[S3]]`) is walked through
+                                // its own instantiation; name-only, its field
+                                // is the bare `U` and nothing was released.
+                                let nested_subst = if p.generic_args.is_some() {
+                                    self.generic_struct_subst_from_inst(&name, fte)
+                                } else {
+                                    Default::default()
+                                };
+                                self.emit_nested_struct_shared_rc_decs_ex_mono(
                                     field_ptr,
                                     &name,
                                     drop_fn,
                                     nbf,
                                     Some(nbf),
+                                    Some(&nested_subst).filter(|s| !s.is_empty()),
                                 );
                             }
                         }

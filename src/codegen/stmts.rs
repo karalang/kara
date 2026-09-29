@@ -15993,6 +15993,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             // exactly why the field-rooted spelling was clean
                             // at 17 allocs / 17 frees while `a[0] = b` over
                             // `Array[D, 2]` (`D { s: String }`) aborted.
+                            // B-2026-09-29-20 — the element's instantiation
+                            // rides along: a generic element (`Vec[Q[S2]]`)
+                            // zeroed through the ERASED layout left the
+                            // source's `shared` box armed, and once the
+                            // container's element drop released that box too
+                            // the source's scope-exit drop read it freed.
+                            let mut elem_inst: Option<TypeExpr> = None;
                             let elem_struct = self
                                 .vec_index_elem_type_expr(object)
                                 .or_else(|| self.array_index_target_elem_type_expr(object))
@@ -16000,13 +16007,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                     let TypeKind::Path(p) = &te.kind else {
                                         return None;
                                     };
-                                    p.segments.last().cloned().filter(|n| {
+                                    let n = p.segments.last().cloned().filter(|n| {
                                         self.type_decls.struct_types.contains_key(n.as_str())
                                             && !self
                                                 .type_decls
                                                 .shared_types
                                                 .contains_key(n.as_str())
-                                    })
+                                    });
+                                    elem_inst = Some(te.clone());
+                                    n
                                 });
                             // A slice or map target does not own its elements
                             // (borrowed / side-table), so disarming the source
@@ -16023,7 +16032,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if let Some(src_slot) = self.variables.get(src).copied() {
                                     // B-2026-09-02-20 — see the helper.
                                     let vp = self.move_suppression_value_ptr(src, src_slot.ptr);
-                                    self.zero_struct_move_caps(vp, &sname);
+                                    let subst = elem_inst
+                                        .as_ref()
+                                        .map(|i| self.generic_struct_subst_from_inst(&sname, i))
+                                        .filter(|s| !s.is_empty());
+                                    self.zero_struct_move_caps_mono(vp, &sname, subst.as_ref());
                                 }
                                 // B-2026-08-26-31 — the BODIES half of the
                                 // same move. `zero_struct_move_caps` disarms
@@ -24881,15 +24894,35 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(etn) = p.segments.first().cloned() else {
             return;
         };
-        if self.type_decls.shared_types.contains_key(&etn)
-            || self
-                .type_decls
-                .struct_generic_params
-                .get(&etn)
-                .is_some_and(|ps| !ps.is_empty())
-        {
+        if self.type_decls.shared_types.contains_key(&etn) {
             return;
         }
+        // B-2026-09-29-20 — a GENERIC struct element (`Vec[Q[S2]]`,
+        // `Vec[Q[String]]`) used to decline here outright, and no other channel
+        // releases a displaced struct element: `v[0] = Q { .. }` lost the old
+        // value's whole heap (36 B for a `Q[String]` at `-O0`) and never ran
+        // its fields' Drop bodies, while `--interp` ran them. It now takes the
+        // same arms below through the element's instantiation. A generic
+        // struct with an `impl Drop` of its OWN still declines: its body is a
+        // monomorphised method this arm has no name for.
+        let generic_subst = if self
+            .type_decls
+            .struct_generic_params
+            .get(&etn)
+            .is_some_and(|ps| !ps.is_empty())
+        {
+            let subst = self.generic_struct_subst_from_inst(&etn, &elem_te);
+            let owns_body = self
+                .program_snapshot
+                .as_deref()
+                .is_some_and(|prog| prog.drop_method_keys.contains_key(etn.as_str()));
+            if subst.is_empty() || owns_body {
+                return;
+            }
+            Some(subst)
+        } else {
+            None
+        };
         let is_struct = self.type_decls.struct_types.contains_key(&etn);
         let is_enum = etn != "Option"
             && etn != "Result"
@@ -24906,6 +24939,23 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        if let Some(subst) = &generic_subst {
+            if run_bodies {
+                if let Some(f) = self.emit_user_drop_field_bodies_fn(&etn, subst) {
+                    self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                }
+            }
+            let mem_fn = if self.struct_owns_shared_field_subst(&etn, &mut Vec::new(), Some(subst))
+            {
+                self.emit_vec_elem_struct_with_shared_drop_fn_mono(&etn, Some(subst))
+            } else {
+                self.emit_struct_drop_synthesis_mono(&etn, subst)
+            };
+            if let Some(f) = mem_fn {
+                self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+            }
+            return;
+        }
         if run_bodies && self.type_runs_user_drop(&etn, &mut Vec::new()) {
             let owns_body = self
                 .program_snapshot

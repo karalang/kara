@@ -930,7 +930,25 @@ impl<'ctx> super::Codegen<'ctx> {
         stack: &mut Vec<String>,
         subst: Option<&std::collections::HashMap<String, TypeExpr>>,
     ) -> bool {
-        if stack.iter().any(|s| s == struct_name) {
+        // B-2026-09-29-20 — the cycle guard keys on the INSTANTIATION when
+        // there is one, so `Q[Q[S2]]` can descend from `Q` at `U = Q[S2]` into
+        // `Q` at `U = S2`. Keyed by name alone it read the inner `Q` as a
+        // cycle and answered `false`, and the outer binding's `shared` box
+        // walk was never registered. A genuine self-reference repeats the same
+        // instantiation and still trips it; the depth cap bounds a
+        // polymorphically recursive type, whose instantiations never repeat.
+        let key = match subst {
+            Some(s) if !s.is_empty() => {
+                let mut parts: Vec<String> = s
+                    .iter()
+                    .map(|(k, v)| format!("{k}={}", Self::drop_mono_mangle_component(v)))
+                    .collect();
+                parts.sort();
+                format!("{struct_name}[{}]", parts.join(","))
+            }
+            _ => struct_name.to_string(),
+        };
+        if stack.len() > 32 || stack.contains(&key) {
             return false;
         }
         let Some(ftes) = self
@@ -941,7 +959,7 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return false;
         };
-        stack.push(struct_name.to_string());
+        stack.push(key);
         let owns = ftes.iter().any(|fte| match subst {
             Some(s) if !s.is_empty() => {
                 let cte = crate::codegen::helpers::subst_type_params_in_type_expr(fte, s);
@@ -1409,6 +1427,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.type_decls.struct_field_type_exprs.contains_key(head)
                     && !self.type_decls.shared_type_decl_names.contains(head)
                 {
+                    // B-2026-09-29-20 — a nested GENERIC struct (`Q[S2]` as the
+                    // field of `Q[Q[S2]]`) is asked through its own
+                    // instantiation. Name-only, its field read as the bare `U`
+                    // and owned nothing, so the outer binding took the value
+                    // drop alone and the inner `S2`'s `shared` box leaked.
+                    if p.generic_args.is_some() {
+                        let subst = self.generic_struct_subst_from_inst(head, fte);
+                        if !subst.is_empty() {
+                            return self.struct_owns_shared_field_subst(head, stack, Some(&subst));
+                        }
+                    }
                     return self.struct_owns_shared_field(head, stack);
                 }
                 false

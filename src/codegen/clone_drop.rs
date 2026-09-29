@@ -173,6 +173,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // through to the shallow primitive clone for shared (RC) types
                 // and layout-block structs (handled / unsupported elsewhere).
                 if let Some(name) = head {
+                    // B-2026-09-29-20 — a GENERIC struct instantiation clones
+                    // through its own layout and substituted field types. The
+                    // name-keyed clone below walks the erased layout and copies
+                    // `u: U` as a primitive word, so `Vec[Q[S2]].clone()` read
+                    // garbage for every field past the first and aliased the
+                    // `shared` box without a retain.
+                    if p.generic_args.is_some() && self.type_decls.struct_types.contains_key(name) {
+                        let subst = self.generic_struct_subst_from_inst(name, te);
+                        if !subst.is_empty() {
+                            if let Some(f) = self.emit_struct_clone_fn_mono(name, te, &subst) {
+                                self.drop_rc.clone_fn_cache.insert(type_name, f);
+                                return f;
+                            }
+                        }
+                    }
                     if self.type_decls.struct_types.contains_key(name) {
                         if let Some(f) = self.emit_struct_clone_fn(name) {
                             self.drop_rc.clone_fn_cache.insert(type_name, f);
@@ -1111,6 +1126,76 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.builder.build_return(None).unwrap();
 
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(clone_fn)
+    }
+
+    /// B-2026-09-29-20 — [`Self::emit_struct_clone_fn`] for one instantiation
+    /// of a generic struct: the layout is the instantiated `TypeExpr`'s and
+    /// each field clones through its SUBSTITUTED type, so a `U = S2` field is
+    /// deep-cloned (and its `shared` edges retained) rather than copied as the
+    /// erased placeholder. `None` under the same conditions as the base fn.
+    fn emit_struct_clone_fn_mono(
+        &mut self,
+        struct_name: &str,
+        inst: &TypeExpr,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if self.type_decls.shared_types.contains_key(struct_name) {
+            return None;
+        }
+        let fn_name = format!("karac_clone_struct_{}", Self::display_mangle_te(inst));
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let inkwell::types::BasicTypeEnum::StructType(struct_ty) =
+            self.llvm_type_for_type_expr(inst)
+        else {
+            return None;
+        };
+        let field_tes: Vec<TypeExpr> = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name)?
+            .iter()
+            .map(|fte| crate::codegen::helpers::subst_type_params_in_type_expr(fte, subst))
+            .collect();
+        if struct_ty.count_fields() as usize != field_tes.len() {
+            return None;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn = self
+            .module
+            .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+        let child_fns: Vec<FunctionValue<'ctx>> = field_tes
+            .iter()
+            .map(|te| self.emit_owning_clone_fn_for_type_expr(te))
+            .collect();
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+        for (i, child_fn) in child_fns.iter().enumerate() {
+            let src_field = self
+                .builder
+                .build_struct_gep(struct_ty, src, i as u32, &format!("s.f{i}.s"))
+                .unwrap();
+            let dst_field = self
+                .builder
+                .build_struct_gep(struct_ty, dst, i as u32, &format!("s.f{i}.d"))
+                .unwrap();
+            self.builder
+                .build_call(*child_fn, &[src_field.into(), dst_field.into()], "")
+                .unwrap();
+        }
+        self.builder.build_return(None).unwrap();
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
