@@ -3759,7 +3759,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 &mut self.mono_state.type_subst_call_te,
                 subst_call_te.clone(),
             );
-            for a in args.iter() {
+            for (i, a) in args.iter().enumerate() {
                 mono_agg.push(match &a.value.kind {
                     ExprKind::StructLiteral { path, .. } => match path.last() {
                         Some(sname) if self.mono_entry_copies_aggregate_param(sname) => {
@@ -3769,8 +3769,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     },
                     _ => (false, None),
                 });
+                // B-2026-09-29-14 — only a BY-VALUE param takes the argument
+                // over. A borrowed one (`ref self` on a generic impl, `q: ref
+                // Q[U]`) leaves it with the caller, and retracting here lost
+                // the caller's whole cleanup: `q.rd()` over `impl[U] Q[U] {
+                // fn rd(ref self) -> i64 }` never ran `q.u`'s `Drop` body and
+                // leaked its `shared` box on every compiled surface.
+                let by_value = generic_fn
+                    .params
+                    .get(i)
+                    .is_some_and(|p| !matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)));
                 transfer_ident.push(match &a.value.kind {
-                    ExprKind::Identifier(var) => self
+                    ExprKind::Identifier(var) if by_value => self
                         .var_types
                         .var_type_names
                         .get(var.as_str())
