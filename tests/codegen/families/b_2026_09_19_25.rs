@@ -1,0 +1,76 @@
+//! B-2026-09-19-25 -- payload-ownership registries survive an unrelated generic
+//! call earlier in the same caller (the one-way clear B-2026-09-17-8 fixed).
+
+use super::*;
+
+/// B-2026-09-19-25 — the registry audit: each of the nine payload-ownership
+/// registries B-2026-09-17-8 carried across a nested monomorph compile, used
+/// AFTER an unrelated generic call (`gid(5)`) in the same caller. `Option`,
+/// `Result`, aggregate payloads, an `Option[Map]`, boxed generic enums,
+/// `Array` payloads (seeded and user enum), a debox (`if let G1.Y(s) = g {
+/// return s }`), a rebind, and the generic call taking the binding itself.
+///
+/// Before 71692550b, five of the twenty double-freed, lost a body or crashed
+/// at -O0 (`c01`, `c04`, `c19`, `c05`, `c09`); every cell now matches
+/// `--interp`.
+#[test]
+fn e2e_payload_registries_survive_an_earlier_generic_call() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { R { id: n, s: f"ssssssss{n}" } }
+fn gid[T](x: T) -> T { x }
+enum G1[T] { Y(T), N }
+enum Ea { A(Array[R, 2]), B }
+fn eats(s: String) -> i64 { s.len() }
+fn eatr(r: R) -> i64 { r.id }
+fn eato(o: Option[R]) -> i64 { match o { Some(r) => r.id, None => 0 } }
+fn eatres(o: Result[R, i64]) -> i64 { match o { Ok(r) => r.id, Err(e) => e } }
+fn f_c01() -> i64 { let o: Option[String] = Some(f"aaaaaaaa-1"); let k = gid(5); match o { Some(s) => eats(s) + k, None => 0 } }
+fn f_c02() -> i64 { let o: Option[R] = Some(mk(2)); let k = gid(5); match o { Some(r) => eatr(r) + k, None => 0 } }
+fn f_c03() -> i64 { let o: Option[R] = Some(mk(3)); let k = gid(5); eato(o) + k }
+fn f_c04() -> i64 { let o: Result[String, i64] = Ok(f"aaaaaaaa-4"); let k = gid(5); match o { Ok(s) => eats(s) + k, Err(e) => e } }
+fn f_c05() -> i64 { let o: Result[R, i64] = Ok(mk(5)); let k = gid(5); eatres(o) + k }
+fn f_c06() -> i64 { let o: Option[(String, i64)] = Some((f"aaaaaaaa-6", 6)); let k = gid(5); match o { Some(t) => eats(t.0) + k, None => 0 } }
+fn f_c07() -> i64 { let o: Option[(R, i64)] = Some((mk(7), 7)); let k = gid(5); match o { Some(t) => t.1 + k, None => 0 } }
+fn f_c08() -> i64 { let o: Result[(R, i64), i64] = Ok((mk(8), 8)); let k = gid(5); match o { Ok(t) => t.1 + k, Err(e) => e } }
+fn f_c09() -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(1, f"aaaaaaaa-9"); let o: Option[Map[i64, String]] = Some(m); let k = gid(5); match o { Some(mm) => mm.len() + k, None => 0 } }
+fn f_c10() -> i64 { let g: G1[String] = G1.Y(f"aaaaaaaa-10"); let k = gid(5); match g { G1.Y(s) => eats(s) + k, G1.N => 0 } }
+fn f_c11() -> i64 { let g: G1[R] = G1.Y(mk(11)); let k = gid(5); match g { G1.Y(r) => eatr(r) + k, G1.N => 0 } }
+fn f_c12() -> i64 { let o: Option[Array[String, 2]] = Some([f"aaaaaaaa-12", f"bbbbbbbb-12"]); let k = gid(5); match o { Some(a) => a[0].len() + k, None => 0 } }
+fn f_c13() -> i64 { let o: Option[Array[R, 2]] = Some([mk(13), mk(14)]); let k = gid(5); match o { Some(a) => a[0].id + k, None => 0 } }
+fn f_c14() -> i64 { let e: Ea = Ea.A([mk(15), mk(16)]); let k = gid(5); match e { Ea.A(a) => a[1].id + k, Ea.B => 0 } }
+fn f_c15() -> String { let g: G1[String] = G1.Y(f"aaaaaaaa-17"); let k = gid(5); if let G1.Y(s) = g { return s } f"none" }
+fn f_c16() -> R { let g: G1[R] = G1.Y(mk(18)); let k = gid(5); if let G1.Y(r) = g { return r } mk(0) }
+fn f_c17() -> i64 { let o: Option[Array[R, 2]] = Some([mk(19), mk(20)]); let k = gid(5); match o { Some(a) => { let b = a; b[0].id + k } None => 0 } }
+fn f_c18() -> i64 { let g: G1[Array[String, 2]] = G1.Y([f"aaaaaaaa-21", f"bbbbbbbb-21"]); let k = gid(5); match g { G1.Y(a) => a[0].len() + k, G1.N => 0 } }
+fn f_c19() -> i64 { let o: Option[String] = Some(f"aaaaaaaa-22"); let k = gid(5); let p = o; match p { Some(s) => eats(s) + k, None => 0 } }
+fn f_c20() -> i64 { let g: G1[R] = G1.Y(mk(23)); let k = gid(g); match k { G1.Y(r) => eatr(r), G1.N => 0 } }
+fn main() {
+ { let x = f_c01(); println(f"c01 {x}") }
+ { let x = f_c02(); println(f"c02 {x}") }
+ { let x = f_c03(); println(f"c03 {x}") }
+ { let x = f_c04(); println(f"c04 {x}") }
+ { let x = f_c05(); println(f"c05 {x}") }
+ { let x = f_c06(); println(f"c06 {x}") }
+ { let x = f_c07(); println(f"c07 {x}") }
+ { let x = f_c08(); println(f"c08 {x}") }
+ { let x = f_c09(); println(f"c09 {x}") }
+ { let x = f_c10(); println(f"c10 {x}") }
+ { let x = f_c11(); println(f"c11 {x}") }
+ { let x = f_c12(); println(f"c12 {x}") }
+ { let x = f_c13(); println(f"c13 {x}") }
+ { let x = f_c14(); println(f"c14 {x}") }
+ { let x = f_c15(); println(f"c15 {x.len()}") }
+ { let x = f_c16(); println(f"c16 {x.id}") }
+ { let x = f_c17(); println(f"c17 {x}") }
+ { let x = f_c18(); println(f"c18 {x}") }
+ { let x = f_c19(); println(f"c19 {x}") }
+ { let x = f_c20(); println(f"c20 {x}") }
+ println("end")
+}"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "c01 15\ndR2\nc02 7\ndR3\nc03 8\nc04 15\ndR5\nc05 10\nc06 15\ndR7\nc07 12\ndR8\nc08 13\nc09 6\nc10 16\ndR11\nc11 16\nc12 16\ndR13\ndR14\nc13 18\ndR15\ndR16\nc14 21\nc15 11\nc16 18\ndR18\ndR19\ndR20\nc17 24\nc18 16\nc19 16\ndR23\nc20 23\nend\n", "got:\n{out}");
+}
