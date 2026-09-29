@@ -94,15 +94,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 541 |
 | run-vs-build | 537 |
-| leak | 468 |
-| double-free | 355 |
+| leak | 469 |
+| double-free | 356 |
 | missing-feature | 214 |
 | codegen-gap | 203 |
 | other | 155 |
 | diagnostics | 138 |
 | perf | 117 |
 | false-positive | 112 |
-| crash | 101 |
+| crash | 102 |
 | soundness | 97 |
 | use-after-free | 62 |
 
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2325 |
-| interp | 674 |
+| codegen | 2328 |
+| interp | 676 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -419,6 +419,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-12 | 2026-09-29 | interp+codegen | high | `unwrap()` ON A BY-VALUE `Option`/`Result` PARAM RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND CRASHES COMPILED WHEN THE `Option` IS BOXED, with no store anywhere -- `fn cu(t: Option[S]) { let x = t.unwrap(); println(f"u{x.id}") }` over `cu(Option.Some(mks(1)))` prints `u1 dS1 dS1 end` under `--interp`, segfaults at -O0 and double-frees at -O2, against the correct `u1 dS1 end`. CORRECTION: filed as a store-on-one-path / unwrap-on-the-other remainder of B-2026-09-29-9; the store is irrelevant, the unwrap alone is the fault | — |
 | B-2026-09-29-13 | 2026-09-29 | codegen | medium | A `let` THAT SHADOWS AN `Option` PARAM WITH A VALUE OF ANOTHER TYPE PRINTS AS THE PARAM'S TYPE ON EVERY COMPILED SURFACE -- `fn s2(t: Option[i64]) { let t = 3; println(f"s2 {t}") }` prints `s2 None` at -O0 and -O2 for `s2(Option.Some(7))`, against `--interp`'s correct `s2 3` | — |
 | B-2026-09-29-14 | 2026-09-29 | codegen | high | A GENERIC STRUCT PASSED BY `ref` TO A GENERIC CALLEE NEVER RUNS ITS FIELD'S `Drop` BODY AND LEAKS THE FIELD'S `shared` BOX ON EVERY COMPILED SURFACE -- `let q = Q { u: S2 { .. } }; q.rd()` over `impl[U] Q[U] { fn rd(ref self) -> i64 }`, or `rq(q)` over `fn rq[U](q: ref Q[U])`, prints `x1 end` where `--interp` prints `x1 dS9 end`, 16 B definitely lost at -O0; the non-generic `struct P { u: S2 }` twin and an unborrowed `Q` are clean | — |
+| B-2026-09-29-15 | 2026-09-29 | interp+codegen | medium | A `match` / `if let` THAT TAKES A BY-VALUE `Option` / `Result` / USER-ENUM PARAM'S PAYLOAD ON ONLY SOME PATHS RUNS NO BODY ON THE OTHERS, ON EVERY SURFACE, and B-2026-09-29-12 routes `unwrap` onto it -- `fn cp(t: Option[S], c: bool) { if c { let y = match t { Option.Some(v) => v, Option.None => panic("n") }; println(f"p{y.id}") } }` prints nothing for `cp(Some(mks(4)), false)` where `dS4` is owed; `if c { let x = t.unwrap() }` now does the same. Two neighbours are worse: a store on one path and a take on the other (`if c { v.push(t) } else { let x = t.unwrap() }`) crashes compiled, and an `Option[E]` payload taken whole and then destructured double-frees at -O0 | — |
+| B-2026-09-29-16 | 2026-09-29 | interp+codegen | high | `t.unwrap()` ON A BY-VALUE `Option` PARAM AS A PROJECTION RECEIVER STILL RUNS THE BODY TWICE UNDER `--interp` AND CRASHES COMPILED, the spelling B-2026-09-29-12's lowering leaves alone -- `fn cu(t: Option[S]) { println(f"u{t.unwrap().id}") }` prints `u1 dS1 dS1 end` under `--interp`, segfaults at -O0 and double-frees at -O2; a GENERIC `fn ge[T](t: Option[T]) -> T { return t.unwrap() }` still runs the body twice under `--interp` (`dS3 g3 dS3`), compiled right | — |
+| B-2026-09-29-17 | 2026-09-29 | codegen | medium | CODEGEN PANICS WHEN A `match` ARM BINDING SHADOWS A `ref` / `mut ref` PARAMETER'S NAME AND THE ARM YIELDS IT -- `fn cp(t: Option[i64], v: mut ref Vec[i64]) -> i64 { let y = match t { Option.Some(v) => v, Option.None => 0 }; return y }` aborts `karac build` with `Found StructValue(..) but expected PointerValue variant` at src/codegen.rs:11017; `--interp` prints `3` | — |
 
 ### Relocated
 
