@@ -103,6 +103,14 @@ pub(crate) struct PayloadEscapeFrame {
     pub(crate) arm_views: HashMap<String, usize>,
     /// (param index, name path inside the payload) handed out by a `return`.
     pub(crate) escapes: Vec<(usize, Vec<String>)>,
+    /// B-2026-09-29-44 — the params declared `ref` / `mut ref`, whose value
+    /// the caller owns outright.
+    pub(crate) borrowed: std::collections::HashSet<String>,
+    /// B-2026-09-29-44 — params a `let` of the same name has shadowed in this
+    /// frame; the name no longer denotes the param (see
+    /// `names_borrowed_param`). Never cleared, so a shadow scoped to an inner
+    /// block keeps the pre-fix (owning) answer after that block — conservative.
+    pub(crate) shadowed: std::collections::HashSet<String>,
 }
 
 pub struct Interpreter<'a> {

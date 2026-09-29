@@ -1573,6 +1573,15 @@ impl<'a> super::Interpreter<'a> {
                 .is_some_and(|params| params.contains(n.as_str())))
     }
 
+    /// B-2026-09-29-44 — does `n` name one of this frame's BORROWED (`ref` /
+    /// `mut ref`) params, not since shadowed by a `let`? A binding taken out of
+    /// such a param is a view: the caller owns the value and runs its body.
+    pub(super) fn names_borrowed_param(&self, n: &str) -> bool {
+        self.payload_escape_frames
+            .last()
+            .is_some_and(|f| f.borrowed.contains(n) && !f.shadowed.contains(n))
+    }
+
     pub(super) fn scrutinee_expr_is_consuming(&self, e: &Expr) -> bool {
         // B-2026-08-29-10 — a method frame's owned-param scrutinee is NOT
         // consuming, and this is the RETRACTION of 57bfb26, which made it so on
@@ -1593,10 +1602,16 @@ impl<'a> super::Interpreter<'a> {
         // back to deferring — the same answer a free function has always given,
         // which is what makes it the oracle rather than a preference.
         match &e.kind {
-            ExprKind::Identifier(n) => !self
-                .owned_param_names_stack
-                .last()
-                .is_some_and(|params| params.contains(n.as_str())),
+            // B-2026-09-29-44 — nor is a BORROWED (`ref` / `mut ref`) param:
+            // the caller owns the value outright, so an arm binding out of it
+            // is a view and runs no body (`names_borrowed_param`).
+            ExprKind::Identifier(n) => {
+                !(self
+                    .owned_param_names_stack
+                    .last()
+                    .is_some_and(|params| params.contains(n.as_str()))
+                    || self.names_borrowed_param(n))
+            }
             // B-2026-09-28-13 — except an identity hand-back of an owned param
             // (`id(a)`), which is that param's envelope and consumes nothing,
             // exactly as the bare `a` above.

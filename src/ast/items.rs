@@ -5391,6 +5391,20 @@ pub fn call_binds_arg_to_borrowed_param(
     })
 }
 
+/// B-2026-09-29-44 — the names of `f`'s params declared `ref T` / `mut ref T`.
+pub fn borrowed_param_names(f: &Function) -> std::collections::HashSet<String> {
+    f.params
+        .iter()
+        .filter(|p| {
+            matches!(
+                p.ty.kind,
+                crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+            )
+        })
+        .filter_map(|p| p.name().map(str::to_string))
+        .collect()
+}
+
 /// B-2026-09-17-33 — the one call inside `handed` that takes the flagged
 /// param `name` as a bare argument, when that is the param's ONLY appearance
 /// there: `R { name: f"z", id: eat(r) }` gives `eat(r)`.

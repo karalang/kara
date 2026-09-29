@@ -2280,8 +2280,16 @@ impl<'a> super::Interpreter<'a> {
                 );
                 self.owned_param_names_stack.push(seed_params);
                 // B-2026-09-26-37 — see `PayloadEscapeFrame`.
+                let borrowed = if closure_env.is_some() {
+                    std::collections::HashSet::new()
+                } else {
+                    self.callee_fn_for_param_ownership_of(&fn_name, assoc_owner)
+                        .map(crate::ast::borrowed_param_names)
+                        .unwrap_or_default()
+                };
                 self.payload_escape_frames
                     .push(crate::interpreter::PayloadEscapeFrame {
+                        borrowed,
                         params: if closure_env.is_some() {
                             Vec::new()
                         } else {

@@ -761,9 +761,14 @@ impl<'a> super::Interpreter<'a> {
                             .collect()
                     })
                     .unwrap_or_default();
+                let borrowed = self
+                    .impl_method_ast(&type_name, method)
+                    .map(crate::ast::borrowed_param_names)
+                    .unwrap_or_default();
                 self.payload_escape_frames
                     .push(crate::interpreter::PayloadEscapeFrame {
                         params: escape_params,
+                        borrowed,
                         ..Default::default()
                     });
                 // B-2026-09-06-9 — the whole-alias sibling; see the field.

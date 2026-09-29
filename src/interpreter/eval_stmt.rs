@@ -419,6 +419,7 @@ impl<'a> super::Interpreter<'a> {
             let own_body_only_before = self.own_body_only_view_bindings.len();
             if !self.let_destructures_owned_param(stmt)
                 && !Self::let_binds_borrowed_container_elem(stmt)
+                && !self.let_else_binds_from_borrowed_param(stmt)
             {
                 push_drops_for_stmt_except(stmt, &mut cleanup, &view_leaves);
             } else if self.own_body_only_view_bindings.len() > own_body_only_before {
@@ -4453,6 +4454,9 @@ impl<'a> super::Interpreter<'a> {
                 top.remove(n);
             }
         }
+        if let Some(frame) = self.payload_escape_frames.last_mut() {
+            frame.shadowed.extend(names.iter().cloned());
+        }
         for n in &names {
             self.param_view_struct_fields.retain(|(root, _)| root != n);
             self.param_view_tuple_elems.retain(|(root, _)| root != n);
@@ -4878,6 +4882,20 @@ impl<'a> super::Interpreter<'a> {
                 .flat_map(|(_, p)| p.binding_names())
                 .collect(),
             _ => Vec::new(),
+        }
+    }
+
+    /// B-2026-09-29-44 — `let Some(r) = x else { … }` where `x` is a BORROWED
+    /// (`ref` / `mut ref`) param: `r` is a view into a value the caller owns
+    /// outright, so it registers no slot. The `match` / `if let` spellings
+    /// answer the same through `scrutinee_expr_is_consuming`.
+    fn let_else_binds_from_borrowed_param(&self, stmt: &Stmt) -> bool {
+        match &stmt.kind {
+            StmtKind::LetElse { value, .. } => match &value.kind {
+                ExprKind::Identifier(n) => self.names_borrowed_param(n),
+                _ => false,
+            },
+            _ => false,
         }
     }
 
