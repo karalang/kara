@@ -5016,6 +5016,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .and_then(|n| self.type_decls.shared_types.get(n.as_str()))
                 .map(|i| i.heap_type);
         }
+        // B-2026-09-19-38 — a `shared enum`'s UNIT variant (`take(U.A)`,
+        // `take(A)`) is a construction too, `emit_rc_alloc` with `rc = 1`, and
+        // it is not a `Call`, so it was answered `None` and every evaluation
+        // stranded its box (16 B) and ran no `Drop` body compiled.
+        if let Some(en) = self.shared_unit_variant_owner(expr) {
+            return self.type_decls.shared_types.get(&en).map(|i| i.heap_type);
+        }
         if !self.expr_yields_fresh_owned_temp(expr) {
             return None;
         }

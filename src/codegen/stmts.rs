@@ -25943,6 +25943,19 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.optres_handback_box_is_callers(tail) {
             return;
         }
+        // B-2026-09-19-38 — a discarded fresh `shared enum` (`U.A;`, `A;`,
+        // `U.B(4);`, `mku();`). Every registrar below keys on an inline
+        // aggregate or on `owned_temp_drops`, which records `Type::Shared`
+        // (a `shared struct`) and never a user `shared enum`, so the box was
+        // stranded and its `Drop` body ran on no compiled surface while
+        // `--interp` ran it at the `;`. The caller owns the one reference the
+        // constructor or the callee handed back.
+        if let BasicValueEnum::PointerValue(ptr) = val {
+            if let Some(heap_type) = self.discarded_fresh_shared_enum_heap_type(tail) {
+                self.track_rc_var("__discard_shared_enum", ptr, heap_type);
+                return;
+            }
+        }
         // B-2026-06-10-6: a discarded inline-`Option` temp
         // (`v.pop();`, `make_opt();`) leaks its `String`/`Vec`
         // payload — the erased Option drop switch can't free it
@@ -28267,7 +28280,35 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Restricted to `shared` enums on purpose: a plain enum's unit variant is
     /// an inline aggregate with no refcount, so no site reading this predicate
     /// has anything to do differently for one.
+    /// The heap type of a discarded fresh `shared enum` temp: a unit variant,
+    /// a payload variant constructor, or a free-function call result
+    /// (B-2026-09-19-38). A `shared struct` result is excluded: the owned-temp
+    /// chokepoint already releases it.
+    fn discarded_fresh_shared_enum_heap_type(
+        &self,
+        tail: &Expr,
+    ) -> Option<inkwell::types::StructType<'ctx>> {
+        let heap_type = self.fresh_arg_bare_shared_heap_type(tail)?;
+        let is_enum = self.type_decls.enum_layouts.iter().any(|(n, l)| {
+            l.is_shared
+                && self
+                    .type_decls
+                    .shared_types
+                    .get(n)
+                    .is_some_and(|i| i.heap_type == heap_type)
+        });
+        is_enum.then_some(heap_type)
+    }
+
     fn shared_unit_variant_construction(&self, expr: &Expr) -> bool {
+        self.shared_unit_variant_owner(expr).is_some()
+    }
+
+    /// The `shared` enum a [`Self::shared_unit_variant_construction`] builds,
+    /// or `None`. B-2026-09-19-38's three unbound positions (an argument, a
+    /// scrutinee, a discarded statement) need the heap type to release the
+    /// box, so they need the name and not only the answer.
+    pub(super) fn shared_unit_variant_owner(&self, expr: &Expr) -> Option<String> {
         let owner = match &expr.kind {
             ExprKind::Identifier(name) => self.fresh_bare_unit_variant_enum(name),
             // `U.A` is the SPELLING this bug is reported in, and it does not
@@ -28283,7 +28324,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.variables.contains_key(&segments[0])
                     || self.mod_bindings.module_bindings.contains_key(&segments[0])
                 {
-                    return false;
+                    return None;
                 }
                 let declares_unit =
                     self.type_decls
@@ -28294,26 +28335,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                 && l.field_counts.get(&segments[1]).copied().unwrap_or(0) == 0
                         });
                 if !declares_unit {
-                    return false;
+                    return None;
                 }
                 Some(segments[0].clone())
             }
             ExprKind::FieldAccess { object, field } => {
                 let ExprKind::Identifier(en) = &object.kind else {
-                    return false;
+                    return None;
                 };
                 let declares_unit = self.type_decls.enum_layouts.get(en).is_some_and(|l| {
                     l.tags.contains_key(field)
                         && l.field_counts.get(field).copied().unwrap_or(0) == 0
                 });
                 if !declares_unit {
-                    return false;
+                    return None;
                 }
                 self.bare_unit_variant_owner(field)
             }
-            _ => return false,
+            _ => return None,
         };
-        owner.is_some_and(|en| self.type_decls.shared_types.contains_key(&en))
+        owner.filter(|en| self.type_decls.shared_types.contains_key(en))
     }
 
     /// True when `expr` is `<map>.get(k)` on a Map (or SortedMap) whose VALUE

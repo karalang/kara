@@ -386,7 +386,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // needs a `StructValue` (the `Option` struct), this one the RC box
             // `PointerValue`, so at most one can fire.
             freshtemp_shared_enum =
-                self.track_freshtemp_shared_enum_scrutinee(scrutinee, &pats, scrut);
+                self.track_freshtemp_shared_enum_scrutinee(scrutinee, &pats, scrut, true);
         }
         // Detect borrow-returning scrutinees so pattern bindings don't
         // register a `FreeVecBuffer` against a buffer the container still
@@ -23430,8 +23430,21 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         patterns: &[&Pattern],
         val: BasicValueEnum<'ctx>,
+        admit_unit_variant: bool,
     ) -> Option<PointerValue<'ctx>> {
-        if !self.expr_yields_fresh_owned_temp(scrutinee) {
+        // B-2026-09-19-38 — `match U.A { .. }`: a `shared enum`'s unit variant
+        // is a fresh box with no owner, exactly as `match mk() { .. }` is.
+        // `match` only (`admit_unit_variant`): its caller releases the box at
+        // the match's end, while the `if let` / `while let` / `let .. else`
+        // callers leave it to the enclosing scope, which is later than
+        // `--interp` runs the body; those forms still decline a fresh call
+        // temp's body too, so they stay as they were for both spellings.
+        let unit_owner = if admit_unit_variant {
+            self.shared_unit_variant_owner(scrutinee)
+        } else {
+            None
+        };
+        if unit_owner.is_none() && !self.expr_yields_fresh_owned_temp(scrutinee) {
             return None;
         }
         if self.scrutinee_is_borrow_call(scrutinee) {
@@ -23442,9 +23455,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicValueEnum::PointerValue(ptr) = val else {
             return None;
         };
-        let enum_name = patterns
-            .iter()
-            .find_map(|p| self.variant_pattern_enum_name(p))?;
+        let enum_name = match unit_owner {
+            Some(en) => en,
+            None => patterns
+                .iter()
+                .find_map(|p| self.variant_pattern_enum_name(p))?,
+        };
         if !self
             .type_decls
             .enum_layouts

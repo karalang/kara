@@ -6394,6 +6394,33 @@ impl<'a> super::Interpreter<'a> {
         rhs
     }
 
+    /// [`Self::freshtemp_scrutinee_user_drop_type`] for a `match`, which also
+    /// admits a `shared enum`'s unit variant (`match U.A { .. }`,
+    /// B-2026-09-19-38): a fresh value exactly as `match mk()` is, and compiled
+    /// its box now has an owner whose release runs the body at the match's
+    /// end. A plain enum's unit variant runs none on either backend, and the
+    /// `if let` / `while let` forms decline it compiled, so both stay out.
+    pub(crate) fn freshtemp_match_scrutinee_user_drop_type(
+        &self,
+        scrutinee: &Expr,
+    ) -> Option<String> {
+        let owner = match &scrutinee.kind {
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                if self.env.get(&segments[0]).is_some()
+                    || self.qualified_enum_variant_is_unit(&segments[0], &segments[1]) != Some(true)
+                {
+                    None
+                } else {
+                    Some(segments[0].clone())
+                }
+            }
+            ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n),
+            _ => return self.freshtemp_scrutinee_user_drop_type(scrutinee),
+        }?;
+        (self.enum_is_shared(&owner) && self.program.drop_method_keys.contains_key(&owner))
+            .then_some(owner)
+    }
+
     /// B-2026-07-11-26 (interp parity with the codegen
     /// `materialize_freshtemp_enum_scrutinee` user-Drop hook): the type name of
     /// a FRESH-temp enum scrutinee whose type carries a user `impl Drop`, else

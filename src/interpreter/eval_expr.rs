@@ -1595,7 +1595,7 @@ impl<'a> super::Interpreter<'a> {
                 // B-2026-07-11-26: run a fresh-temp enum scrutinee's user `Drop`
                 // after the match arm (`eval_match` binds payloads from a borrow,
                 // so `val` survives), mirroring codegen.
-                let scrut_drop = self.freshtemp_scrutinee_user_drop_type(scrutinee);
+                let scrut_drop = self.freshtemp_match_scrutinee_user_drop_type(scrutinee);
                 let result = self.eval_match(Some(scrutinee), &val, arms, &expr.span);
                 if let Some(tn) = scrut_drop {
                     self.run_user_drop_body_on_value(&tn, val);
