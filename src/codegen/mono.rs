@@ -4364,6 +4364,8 @@ impl<'ctx> super::Codegen<'ctx> {
             let saved_self_arms_bind_views = std::mem::take(&mut self.fn_ctx.self_arms_bind_views);
             let saved_owned_struct_params =
                 std::mem::take(&mut self.borrow_vars.owned_struct_params);
+            let saved_caller_retained_views =
+                std::mem::take(&mut self.borrow_vars.caller_retained_struct_field_views);
             let saved_param_view_locals = std::mem::take(&mut self.payload_vars.param_view_locals);
             let saved_param_view_callee_owned =
                 std::mem::take(&mut self.drop_rc.param_view_callee_owned);
@@ -4443,6 +4445,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.fn_ctx.current_fn_param_names = saved_fn_param_names;
             self.fn_ctx.self_arms_bind_views = saved_self_arms_bind_views;
             self.borrow_vars.owned_struct_params = saved_owned_struct_params;
+            self.borrow_vars.caller_retained_struct_field_views = saved_caller_retained_views;
             self.payload_vars.param_view_locals = saved_param_view_locals;
             self.drop_rc.param_view_callee_owned = saved_param_view_callee_owned;
             self.drop_rc.caller_retained_aggregate_memory = saved_caller_retained_memory;
@@ -5289,6 +5292,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-16-31 — per-function, set by `compile_mono_function`.
         let saved_self_arms_bind_views = std::mem::take(&mut self.fn_ctx.self_arms_bind_views);
         let saved_owned_struct_params = std::mem::take(&mut self.borrow_vars.owned_struct_params);
+        let saved_caller_retained_views =
+            std::mem::take(&mut self.borrow_vars.caller_retained_struct_field_views);
         let saved_param_view_locals = std::mem::take(&mut self.payload_vars.param_view_locals);
         let saved_param_view_callee_owned =
             std::mem::take(&mut self.drop_rc.param_view_callee_owned);
@@ -5346,6 +5351,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.fn_ctx.current_fn_param_names = saved_fn_param_names;
         self.fn_ctx.self_arms_bind_views = saved_self_arms_bind_views;
         self.borrow_vars.owned_struct_params = saved_owned_struct_params;
+        self.borrow_vars.caller_retained_struct_field_views = saved_caller_retained_views;
         self.payload_vars.param_view_locals = saved_param_view_locals;
         self.drop_rc.param_view_callee_owned = saved_param_view_callee_owned;
         self.drop_rc.caller_retained_aggregate_memory = saved_caller_retained_memory;
@@ -5580,6 +5586,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         self.borrow_vars.owned_struct_params.clear();
+        self.borrow_vars.caller_retained_struct_field_views.clear();
         self.payload_vars.param_view_locals.clear();
         self.payload_vars.enum_box_only_array_locals.clear();
         self.payload_vars

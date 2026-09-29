@@ -165,6 +165,14 @@ pub(crate) struct BorrowVars<'ctx> {
     /// independent (B-2026-06-10-2). Cleared per-function alongside
     /// `ref_params`.
     pub(crate) owned_struct_params: HashSet<String>,
+    /// B-2026-09-29-79 — immutable locals bound to a NESTED-STRUCT field of a
+    /// caller-retains by-value struct param (`let x = q.u`), keyed to the
+    /// field's struct name. The binding is a view: the callee registers no drop
+    /// for it and the caller frees the argument, `u` included. So a `return x`
+    /// hands out words whose heap the caller is about to free, and the return
+    /// site clones them (`clone_caller_retained_struct_field_for_return`).
+    /// Per-function, cleared and saved beside `owned_struct_params`.
+    pub(crate) caller_retained_struct_field_views: std::collections::HashMap<String, String>,
     /// Owned by-value `Array[T, N]` params / `self` whose element owns heap and
     /// therefore carry a scope-exit element drop (B-2026-08-22-18 follow-up,
     /// registered by `make_array_param_callee_owned`). Unlike the struct/tuple

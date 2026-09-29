@@ -4951,6 +4951,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 // map never describes a name it no longer owns. See
                 // `Codegen::int_const_locals`.
                 if let PatternKind::Binding(bind_name) = &pattern.kind {
+                    // B-2026-09-29-79 — record an immutable view of a
+                    // caller-retained param's nested struct field, so a later
+                    // `return x` clones it. Any other binding of the name
+                    // clears the entry, as for `int_const_locals` below.
+                    let view_head = match (&value.kind, is_mut) {
+                        (ExprKind::FieldAccess { object, field }, false) => match &object.kind {
+                            ExprKind::Identifier(o) => {
+                                self.caller_retained_struct_field_head(o, field)
+                            }
+                            ExprKind::SelfValue => {
+                                self.caller_retained_struct_field_head("self", field)
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    match view_head {
+                        Some(head) => {
+                            self.borrow_vars
+                                .caller_retained_struct_field_views
+                                .insert(bind_name.clone(), head);
+                        }
+                        None => {
+                            self.borrow_vars
+                                .caller_retained_struct_field_views
+                                .remove(bind_name.as_str());
+                        }
+                    }
                     match (&value.kind, is_mut) {
                         // `int_const_locals` is an i64 constant table feeding
                         // loop-bound reasoning. A 128-bit literal is not a

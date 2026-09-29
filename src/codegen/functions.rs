@@ -1669,6 +1669,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.borrowed_agg_payload_struct_vars.clear();
         self.accel.gpu_buffer_vars.clear();
         self.borrow_vars.owned_struct_params.clear();
+        self.borrow_vars.caller_retained_struct_field_views.clear();
         self.borrow_vars.owned_array_params.clear();
         self.payload_vars.param_view_locals.clear();
         self.payload_vars.enum_box_only_array_locals.clear();

@@ -20332,6 +20332,139 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_refcount_inc(&type_name, heap_type, ptr);
     }
 
+    /// B-2026-09-29-79 — is `obj` a by-value struct param (or owned `self`)
+    /// that the CALLER retains? A struct owning a `shared` field is neither
+    /// entry-copied nor taken by transfer, so the callee registers no drop for
+    /// it and the caller frees the argument. Every other by-value struct param
+    /// is this frame's own (entry copy or transfer), which is why "is a
+    /// by-value param" is not the question: a projection destructured out of
+    /// one and then read again still needs its use-after-move copy.
+    pub(super) fn struct_param_is_caller_retained(&self, obj: &str) -> bool {
+        if !self.fn_ctx.current_fn_param_names.contains(obj)
+            || self.borrow_vars.ref_params.contains_key(obj)
+        {
+            return false;
+        }
+        let Some(type_name) = self.var_types.var_type_names.get(obj) else {
+            return false;
+        };
+        !self
+            .type_decls
+            .shared_types
+            .contains_key(type_name.as_str())
+            && self
+                .type_decls
+                .struct_types
+                .contains_key(type_name.as_str())
+            && self.struct_owns_shared_field(type_name, &mut Vec::new())
+            && !self.aggregate_param_copy_supported_struct(type_name, &mut Vec::new())
+    }
+
+    /// B-2026-09-29-79 — the struct name of `obj.field` when that field is a
+    /// NESTED non-`shared` struct handed out of a CALLER-RETAINS by-value
+    /// struct param (or owned `self`), else `None`.
+    ///
+    /// The nested-struct sibling of
+    /// [`Self::share_direct_shared_field_ref_for_return`]'s regime, with the
+    /// same predicate (`struct_owns_shared_field`: a struct owning a `shared`
+    /// field is neither entry-copied nor taken by transfer, so the callee
+    /// registers no drop for it and the caller frees the argument). A direct
+    /// `shared` field needs one `+1`; a nested struct needs its whole heap
+    /// duplicated, because the caller frees every buffer and releases every
+    /// box of the field it still holds. `fn f(q: W) -> S { return q.u }` over
+    /// `W { u: S }` and `S { h: Sh, id: i64 }` read freed memory (garbage
+    /// `h.k` at -O0, an abort under `karac run`), and a `String` beside the
+    /// `shared` field was a plain double free.
+    pub(super) fn caller_retained_struct_field_head(
+        &self,
+        obj: &str,
+        field: &str,
+    ) -> Option<String> {
+        if !self.struct_param_is_caller_retained(obj) {
+            return None;
+        }
+        let type_name = self.var_types.var_type_names.get(obj)?.clone();
+        let idx = self
+            .type_decls
+            .struct_field_names
+            .get(&type_name)?
+            .iter()
+            .position(|n| n == field)?;
+        let fte = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(&type_name)?
+            .get(idx)?
+            .clone();
+        let fte = self.subst_monomorph_type_params(&fte);
+        let TypeKind::Path(p) = &fte.kind else {
+            return None;
+        };
+        // A generic head is laid out per instantiation; the in-place copy
+        // below walks the base declaration, so it is left to its own rows.
+        if p.segments.len() != 1 || p.generic_args.as_ref().is_some_and(|a| !a.is_empty()) {
+            return None;
+        }
+        let head = p.segments[0].as_str();
+        if !self.type_decls.struct_types.contains_key(head)
+            || self.type_decls.shared_types.contains_key(head)
+        {
+            return None;
+        }
+        Some(head.to_string())
+    }
+
+    /// B-2026-09-29-79 — a returned value that is a caller-retained param's
+    /// nested struct field, spelled directly (`return q.u`, the tail `q.u`, and
+    /// `self.u`) or through an immutable local bound to it (`let x = q.u;
+    /// return x`), leaves as a CLONE: heap fields duplicated and bare `shared`
+    /// fields retained (`deep_copy_rc_inc_bare_shared`, the clone-on-extract
+    /// mode B-2026-09-06-59 and -47 use). The caller frees its argument whole
+    /// and the result is then the clone's alone. Every other value passes
+    /// through unchanged.
+    pub(super) fn clone_caller_retained_struct_field_for_return(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let head = match &expr.kind {
+            ExprKind::FieldAccess { object, field } => {
+                let obj = match &object.kind {
+                    ExprKind::Identifier(o) => o.as_str(),
+                    ExprKind::SelfValue => "self",
+                    _ => return val,
+                };
+                self.caller_retained_struct_field_head(obj, field)
+            }
+            ExprKind::Identifier(x) => self
+                .borrow_vars
+                .caller_retained_struct_field_views
+                .get(x.as_str())
+                .cloned(),
+            _ => None,
+        };
+        let Some(head) = head else {
+            return val;
+        };
+        if !val.is_struct_value() || val.get_type() == self.vec_struct_type().into() {
+            return val;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return val;
+        };
+        let slot = self.create_entry_alloca(fn_val, "ret.fld.clone", val.get_type());
+        if self.builder.build_store(slot, val).is_err() {
+            return val;
+        }
+        let saved = self.drop_rc.deep_copy_rc_inc_bare_shared;
+        self.drop_rc.deep_copy_rc_inc_bare_shared = true;
+        self.deep_copy_struct_heap_fields_in_place(slot, &head);
+        self.drop_rc.deep_copy_rc_inc_bare_shared = saved;
+        self.builder
+            .build_load(val.get_type(), slot, "ret.fld.cloned")
+            .unwrap_or(val)
+    }
+
     /// B-2026-09-04-31 — the TUPLE-ELEMENT twin of
     /// [`Self::share_direct_shared_field_ref_for_return`]: `return a.0` (or the
     /// tail spelling) handing out a `shared` element of a by-value TUPLE param.

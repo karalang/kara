@@ -6975,6 +6975,7 @@ impl<'ctx> Codegen<'ctx> {
                 for_loop_elem_struct_views: HashSet::new(),
                 borrowed_agg_payload_struct_vars: HashSet::new(),
                 owned_struct_params: HashSet::new(),
+                caller_retained_struct_field_views: HashMap::new(),
                 owned_array_params: HashMap::new(),
                 var_option_shared_heap: HashMap::new(),
                 ref_option_shared_heap: HashMap::new(),

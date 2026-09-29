@@ -8346,7 +8346,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved = std::mem::replace(&mut self.in_return_defensive_copy, true);
         let out = self.maybe_defensive_copy_param_arg(ret_expr, val);
         self.in_return_defensive_copy = saved;
-        out
+        // B-2026-09-29-79 — a caller-retained param's nested struct field
+        // leaves as a clone. Every return spelling reaches this hook (the
+        // explicit `return`, the plain and monomorph tails), so one call covers
+        // them all. When the argument cloner above already copied the value
+        // (B-2026-09-29-85 admits a caller-retained root for a direct
+        // `return q.u`), a second clone would leak the first: its `Sh` box
+        // and `String` buffer were measured lost at -O0.
+        if out != val {
+            return out;
+        }
+        self.clone_caller_retained_struct_field_for_return(ret_expr, out)
     }
 
     /// B-2026-08-10-21 — the copy half of the `UseAfterMove` defensive copy.
@@ -8714,6 +8724,36 @@ impl<'ctx> super::Codegen<'ctx> {
                     && val.is_struct_value()
                     && val.get_type() != self.vec_struct_type().into()
                 {
+                    // A CALLER-RETAINED param root takes NO copy
+                    // (B-2026-09-29-79, measured). The callee registers no drop
+                    // for that param and the caller releases the whole
+                    // argument, `u` included; the destructure frees nothing
+                    // here either. A copy therefore had no owner: with a bare
+                    // `shared` bump it leaked the 16-byte box (why -47 first
+                    // withheld the bump), and even without one it leaked every
+                    // `String` / `Vec` buffer it duplicated (31 B for a 31-byte
+                    // `String`, on origin/main as well). A view that escapes by
+                    // `return` is cloned there
+                    // (`clone_caller_retained_struct_field_for_return`). A
+                    // param this frame OWNS (entry copy or transfer) still
+                    // copies: skipping it there double-freed the projected
+                    // leaf (`rlive` in `asan_param_projection_optres_leaf_is_balanced`).
+                    let root_name = match &object.kind {
+                        ExprKind::Identifier(o) => Some(o.as_str()),
+                        ExprKind::SelfValue => Some("self"),
+                        _ => None,
+                    };
+                    if root_name.is_some_and(|o| self.struct_param_is_caller_retained(o)) {
+                        return None;
+                    }
+                    // Any other param-view root keeps -47's rule: copy, but
+                    // with no bump, since its destination registers no drop.
+                    // An owned `self` receiver answers as the view walk at
+                    // `SelfValue` does.
+                    let root_is_param_view = self.expr_is_param_view(object)
+                        || (matches!(object.kind, ExprKind::SelfValue)
+                            && self.fn_ctx.current_fn_param_names.contains("self")
+                            && !self.borrow_vars.ref_params.contains_key("self"));
                     let head = head.to_string();
                     let slot = self.create_entry_alloca(fn_val, "uam.fld.struct", val.get_type());
                     self.builder.build_store(slot, val).ok()?;
@@ -8727,18 +8767,6 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `q`'s — `Invalid read/write of size 8` into the freed
                     // 16-byte refcount block, and a `malloc(): unaligned
                     // tcache chunk` abort under `karac run`.
-                    //
-                    // A by-value PARAM root is the exception, measured: under
-                    // caller-retains the destination is a param VIEW that
-                    // registers no drop in the callee (the caller releases the
-                    // whole argument), so a bump there has no matching release
-                    // and leaks the 16-byte box. An owned `self` receiver is the
-                    // same case spelled differently (`fn go(self)`), so it
-                    // answers as the view walk at `SelfValue` does.
-                    let root_is_param_view = self.expr_is_param_view(object)
-                        || (matches!(object.kind, ExprKind::SelfValue)
-                            && self.fn_ctx.current_fn_param_names.contains("self")
-                            && !self.borrow_vars.ref_params.contains_key("self"));
                     let saved_rc_inc = self.drop_rc.deep_copy_rc_inc_bare_shared;
                     self.drop_rc.deep_copy_rc_inc_bare_shared = !root_is_param_view;
                     self.deep_copy_struct_heap_fields_in_place(slot, &head);
