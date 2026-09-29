@@ -3875,15 +3875,35 @@ impl<'ctx> super::Codegen<'ctx> {
             return (a, b);
         };
         let (aw, bw) = (av.get_type().get_bit_width(), bv.get_type().get_bit_width());
+        // B-2026-09-29-78 — "the wider side is the literal artifact" holds only
+        // while i64 is the widest integer. Beside an `i128`/`u128` branch the
+        // suffixless literal is the NARROW one, and truncating the real value
+        // to it dropped the top 64 bits: `if b > 0 { b - 3 } else { 0 }` over
+        // `b: i128 = 10^20` gave 7766279631452241917 compiled. Past 64 bits
+        // the literal is what moves, sign-extended (an unsuffixed literal
+        // under an unsigned type is non-negative, so sext and zext agree).
+        if aw.max(bw) > 64 && aw != bw {
+            return if aw > bw {
+                (
+                    a,
+                    self.resize_branch_value_in_pred(bv, av.get_type(), b_pred),
+                )
+            } else {
+                (
+                    self.resize_branch_value_in_pred(av, bv.get_type(), a_pred),
+                    b,
+                )
+            };
+        }
         if aw > bw {
             (
-                self.truncate_branch_value_in_pred(av, bv.get_type(), a_pred),
+                self.resize_branch_value_in_pred(av, bv.get_type(), a_pred),
                 b,
             )
         } else if bw > aw {
             (
                 a,
-                self.truncate_branch_value_in_pred(bv, av.get_type(), b_pred),
+                self.resize_branch_value_in_pred(bv, av.get_type(), b_pred),
             )
         } else {
             (a, b)
@@ -3899,7 +3919,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// is saved and restored, so the caller (positioned at the merge block)
     /// sees no change. Shared by the `if` / `if let` two-arm merge and the
     /// `match` N-arm merge (`unify_int_match_arm_widths`).
-    fn truncate_branch_value_in_pred(
+    ///
+    /// It also WIDENS, for the one case where the literal is the narrow side: a
+    /// sibling at `i128`/`u128` (B-2026-09-29-78). `coerce_int_to` picks the
+    /// direction from the widths; its extension is a sign extension.
+    fn resize_branch_value_in_pred(
         &self,
         v: IntValue<'ctx>,
         target: IntType<'ctx>,
@@ -3910,10 +3934,7 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(term) => self.builder.position_before(&term),
             None => self.builder.position_at_end(pred),
         }
-        let t = self
-            .builder
-            .build_int_truncate(v, target, "ifw.trunc")
-            .unwrap();
+        let t = self.coerce_int_to(v, target, false);
         if let Some(bb) = resume {
             self.builder.position_at_end(bb);
         }
@@ -3952,7 +3973,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Float sibling of [`truncate_branch_value_in_pred`]: `fptrunc` a phi-bound
+    /// Float sibling of [`resize_branch_value_in_pred`]: `fptrunc` a phi-bound
     /// `f64` branch value down to `target` (`f32`) at the end of its predecessor,
     /// so the result dominates the phi's incoming edge.
     fn fptrunc_branch_value_in_pred(
@@ -3997,6 +4018,24 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(min_width) = min_width else {
             return;
         };
+        // B-2026-09-29-78 — an arm at `i128`/`u128` makes the suffixless
+        // literal arms the narrow ones, so the minimum is the literal artifact
+        // and the real value must not be cut down to it. Widen every narrower
+        // arm to 128 instead (see `unify_int_branch_widths`).
+        let has_wide = arms.iter().any(|(v, _)| {
+            matches!(v, BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() > 64)
+        });
+        if has_wide {
+            let wide = self.context.i128_type();
+            for (v, bb) in arms.iter_mut() {
+                if let BasicValueEnum::IntValue(iv) = v {
+                    if iv.get_type().get_bit_width() < 128 {
+                        *v = self.resize_branch_value_in_pred(*iv, wide, *bb);
+                    }
+                }
+            }
+            return;
+        }
         let target = match min_width {
             8 => self.context.i8_type(),
             16 => self.context.i16_type(),
@@ -4007,7 +4046,7 @@ impl<'ctx> super::Codegen<'ctx> {
         for (v, bb) in arms.iter_mut() {
             if let BasicValueEnum::IntValue(iv) = v {
                 if iv.get_type().get_bit_width() > min_width {
-                    *v = self.truncate_branch_value_in_pred(*iv, target, *bb);
+                    *v = self.resize_branch_value_in_pred(*iv, target, *bb);
                 }
             }
         }
@@ -4168,7 +4207,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Int→float sibling of [`truncate_branch_value_in_pred`] /
+    /// Int→float sibling of [`resize_branch_value_in_pred`] /
     /// [`floatcast_branch_value_in_pred`]: convert a phi-bound integer branch
     /// value to `target` at the END of its predecessor block (before that
     /// block's terminating branch to the merge), so the result dominates the

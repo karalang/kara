@@ -4157,6 +4157,16 @@ impl<'ctx> super::Codegen<'ctx> {
             let rv_raw = self.compile_expr(&args[0].value)?;
             let lv = self.widen_int_to_i64(lv_raw, is_unsigned);
             let rv = self.widen_int_to_i64(rv_raw, is_unsigned);
+            // B-2026-09-29-78 — "normalize both sides to i64" leaves a 128-bit
+            // receiver at i128 and an unsuffixed literal argument at i64, so
+            // `b.wrapping_add(1)` over `b: i128` emitted `add i128 %b, i64 1`
+            // and failed module verification. Past 64 bits the receiver's
+            // width is the carrier, and the argument extends to it.
+            let (lv, rv) = if lv.get_type().get_bit_width() > 64 {
+                (lv, self.coerce_int_to(rv, lv.get_type(), is_unsigned))
+            } else {
+                (lv, rv)
+            };
             let wide = match method {
                 "wrapping_add" => self.builder.build_int_add(lv, rv, "wadd"),
                 "wrapping_sub" => self.builder.build_int_sub(lv, rv, "wsub"),

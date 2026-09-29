@@ -8618,7 +8618,27 @@ impl<'ctx> super::Codegen<'ctx> {
         let (lv, rv) = {
             let lw = lv.get_type().get_bit_width();
             let rw = rv.get_type().get_bit_width();
-            if lw > rw {
+            // B-2026-09-29-78 — the rule above is "the NARROW side is the typed
+            // one", which holds only while the default literal width (i64) is
+            // the widest integer there is. A 128-bit operand inverts it: the
+            // unsuffixed literal is now the narrow side, so truncating the wide
+            // one threw away the value's top 64 bits. `b + 1` over
+            // `b: i128 = 10^20` printed 7766279631452241921 compiled (the low
+            // word plus one) where `--interp` printed 100000000000000000001,
+            // `b * 2` trapped a spurious `integer overflow` at i64, and `b > 5`
+            // compared the low words. Past 64 bits the literal is what moves,
+            // extended at the op's signedness; below it nothing changes.
+            if lw.max(rw) > 64 && lw != rw {
+                let wide = if lw > rw {
+                    lv.get_type()
+                } else {
+                    rv.get_type()
+                };
+                (
+                    self.coerce_int_to(lv, wide, is_unsigned),
+                    self.coerce_int_to(rv, wide, is_unsigned),
+                )
+            } else if lw > rw {
                 (
                     self.builder
                         .build_int_truncate(lv, rv.get_type(), "iop.l.tr")
