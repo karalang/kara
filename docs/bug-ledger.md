@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 112 |
 | crash | 103 |
 | soundness | 97 |
-| use-after-free | 63 |
+| use-after-free | 65 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2358 |
-| interp | 689 |
+| codegen | 2360 |
+| interp | 690 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -401,7 +401,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-7 | 2026-09-29 | codegen | medium | `let ... else` OVER A `shared enum` RELEASES THE OBJECT AT THE `let` AND RUNS THE PAYLOAD'S `Drop` BODY BEFORE LATER READS OF THE BINDING, AND THE PLAIN-ENUM SPELLING ICEs NONDETERMINISTICALLY -- `let G.Y(x) = g else { return }; println(f"{x.id}");` prints `dR1 1 end` compiled where `--interp` prints `1 dR1 end`; over a monomorphic `shared enum M` the build panics at pattern_binding.rs `GEPIndex` on some runs | — |
 | B-2026-09-29-8 | 2026-09-29 | codegen | low | `for g in v` OVER A `Vec[G[R]]` OF GENERIC `shared enum`s RUNS EACH PAYLOAD'S `Drop` BODY AT THE `Vec`'s DEATH INSTEAD OF AT THE END OF ITS ITERATION -- `let v: Vec[G[R]] = [G.Y(mk(1))]; for g in v { match g { .. } }` prints `1 end dR1` compiled where `--interp` and the monomorphic `Vec[M]` twin print `1 dR1 end` | — |
 | B-2026-09-29-16 | 2026-09-29 | interp+codegen | high | `t.unwrap()` ON A BY-VALUE `Option` PARAM AS A PROJECTION RECEIVER STILL RUNS THE BODY TWICE UNDER `--interp` AND CRASHES COMPILED, the spelling B-2026-09-29-12's lowering leaves alone -- `fn cu(t: Option[S]) { println(f"u{t.unwrap().id}") }` prints `u1 dS1 dS1 end` under `--interp`, segfaults at -O0 and double-frees at -O2; a GENERIC `fn ge[T](t: Option[T]) -> T { return t.unwrap() }` still runs the body twice under `--interp` (`dS3 g3 dS3`), compiled right | — |
-| B-2026-09-29-20 | 2026-09-29 | codegen | high | A NESTED GENERIC STRUCT `Q[Q[S2]]` LEAKS THE INNER VALUE'S `shared` BOX ON EVERY COMPILED SURFACE WITH NO CALL INVOLVED -- `let q = Q { u: Q { u: S2 { h: Sh { .. }, id: 9 } } }; println("x")` runs `dS9` on every surface but loses 16 B in 1 block at -O0 compiled; the non-generic `P2 { u: P { u: S2 } }` twin is clean | — |
 | B-2026-09-29-21 | 2026-09-29 | codegen | high | MOVING A FIELD OUT OF A GENERIC STRUCT LOCAL AND THEN STORING INTO IT READS FREED MEMORY ON EVERY COMPILED SURFACE -- `let mut q = Q { u: mk(9) }; let x = q.u; q.u = mk(8);` over `Q[S2]` prints `x8 9 dS9 end` (the new value's `dS8` lost) against `--interp`'s `x8 9 dS9 dS8 end`, with 1 invalid read at -O0 and an abort in `malloc` under `karac run`; the conditional-move spelling reads freed memory too | — |
 | B-2026-09-29-22 | 2026-09-29 | interp+codegen | high | ASSIGNING TO AN `Option[S]` FIELD NEVER RUNS THE DISPLACED `Some` PAYLOAD'S `Drop` BODY ON ANY BACKEND, THE INTERPRETER INCLUDED -- `let mut o = O { u: Some(mk(9)) }; o.u = None;` over `struct O { u: Option[S2] }` prints `x end` everywhere where `dS9 x end` is due, as a plain `S2` field or an enum field runs it; valgrind clean, so only the body is lost; the generic `Q[Option[S2]]` spelling agrees | — |
 | B-2026-09-29-23 | 2026-09-29 | codegen+interp | high | REMAINDER OF B-2026-09-19-22/-23: A BOXED GENERIC ENUM PARAM THE CALLEE MAY HAND BACK STILL MISBEHAVES WHEN THE CALLEE TOUCHES IT ON THE OTHER LEG -- a fresh temp handed to `fn pk[T](g: G1[T], c: bool) -> G1[T] { if c { return g } eat(g); return G1.N }` double-frees at -O0; a callee that `match`es the param on that leg loses the payload body compiled; `--interp` loses the body of a param forwarded to `eat`; a `G1[Sh]` (`shared struct`) payload leaks 49 B compiled; a box returned inside `H[T] { g: G1[T] }` runs no body and leaks | — |
@@ -431,6 +430,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-61 | 2026-09-29 | interp+codegen | medium | A top-level `let` that SHADOWS a by-value parameter's name loses the caller's `Drop` body for that parameter, on BOTH backends (`fn f(s: S) -> i64 { let s = 5; s }` prints no `d1`; the interpreter agrees with codegen, so the oracle is wrong too) | — |
 | B-2026-09-29-62 | 2026-09-29 | interp | medium | The interpreter runs a `Drop` body TWICE when a pattern binding shadows its own identifier scrutinee and the value is used -- `let s = Some(mks(1)); match s { Some(S { r, s }) => r.id, .. }` prints `d1 d1`, and `fn f(s: Option[S]) -> T { match s { Some(S { r, s }) => T { r, s }, .. } }` prints an extra `d1` before returning; compiled builds are right | — |
 | B-2026-09-29-63 | 2026-09-29 | codegen | medium | A closure inside a match arm that captures a field binding destructured out of a by-value `Option` param loses the caller's `Drop` body on every compiled surface -- `fn f(p: Option[S]) -> String { match p { Some(S { r, s }) => { let g = |q: i64| q + r.id; f"{g(1)} {s}" } None => "n" } }` prints no `d1` at -O0/-O2, `--interp` prints `d1` | — |
+| B-2026-09-29-47 | 2026-09-29 | codegen | high | A STRUCT DESTRUCTURE WITH `..` AFTER ONE OF ITS FIELDS WAS MOVED OUT READS FREED MEMORY ON EVERY COMPILED SURFACE -- `let x = q.u; let W3 { n, .. } = q;` over `W3 { u: S2, n: i64 }` prints the right text with 1 invalid read at -O0 and an abort in `malloc` under `karac run`; reading the remaining field by projection (`let s = q.s`) is clean | — |
+| B-2026-09-29-48 | 2026-09-29 | interp+codegen | high | A BY-VALUE STRUCT PARAM REBOUND TO A LOCAL AND THEN FIELD-STORED GOES WRONG ON EVERY BACKEND -- in `fn f(q0: W) -> i64 { let mut q = q0; let x = q.u; q.u = mk(8); ... }` the stored value's `dS8` never runs anywhere and compiled leaks its 16 B box; without the move (`let mut q = q0; q.u = mk(8);`) `--interp` runs the displaced `dS9` twice and compiled reads freed memory | — |
 
 ### Relocated
 
@@ -3304,6 +3305,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-15 | interp+codegen | medium | A `match` / `if let` THAT TAKES A BY-VALUE `Option` / `Result` / USER-ENUM PARAM'S PAYLOAD ON ONLY SOME PATHS RUNS NO BODY ON THE OTHERS, ON EVERY SU… | a79ef98fe |
 | B-2026-09-29-17 | codegen | medium | CODEGEN PANICS WHEN A `match` ARM BINDING SHADOWS A `ref` / `mut ref` PARAMETER'S NAME AND THE ARM YIELDS IT -- `fn cp(t: Option[i64], v: mut ref Vec… | 96c13b165 |
 | B-2026-09-29-19 | codegen | high | A FIELD STORE ON A GENERIC STRUCT NEVER RUNS THE DISPLACED VALUE'S `Drop` BODY ON ANY COMPILED SURFACE (corrected from "through a generic `mut ref`":… | 7c254d982 |
+| B-2026-09-29-20 | codegen | high | A NESTED GENERIC STRUCT `Q[Q[S2]]` LEAKS THE INNER VALUE'S `shared` BOX ON EVERY COMPILED SURFACE WITH NO CALL INVOLVED -- `let q = Q { u: Q { u: S2… | 46c083cf4 |
 | B-2026-09-29-18 | codegen+interp | medium | REMAINDER OF B-2026-09-29-10: A PROJECTION OFF A LOCAL VIEW OF A BY-VALUE PARAM (`let O { w, k } = o;` or `let w = o.w;`, then `xs.push(w.r)`) RUNS T… | 69cc50035 |
 | B-2026-09-29-27 | interp+codegen | high | A BY-VALUE `Option` PARAM STORED WHOLE ON ONE PATH AND ITS PAYLOAD TAKEN ON ANOTHER DOUBLE-FREES COMPILED WHEN THE PAYLOAD IS BOXED, AND A THIRD PATH… | 01ab10f45 |
 
