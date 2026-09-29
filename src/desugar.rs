@@ -1623,6 +1623,18 @@ struct WalkCx<'a> {
     /// consumes a CAPTURE, which is a different ownership question, so pass 3
     /// leaves it alone.
     closure_depth: usize,
+    /// B-2026-09-29-40 — how many times the body binds each name, counting
+    /// every binder `bound` records. With `shadow_unwrap_lets`, what admits a
+    /// parameter whose only rebinds are `let t = t.unwrap()`.
+    bind_counts: std::collections::HashMap<String, usize>,
+    /// B-2026-09-29-40 — how many `let t = t.unwrap()`-family statements the
+    /// body holds per name: a plain-binding `let` whose value unwraps an
+    /// identifier of the same name.
+    shadow_unwrap_lets: std::collections::HashMap<String, usize>,
+    /// B-2026-09-29-40 — pass 3 only: the names a `let` has shadowed in the
+    /// blocks enclosing the current position. A parameter named here is not
+    /// the parameter any more, so its `unwrap` is left alone.
+    shadowed: std::collections::HashSet<String>,
 }
 
 impl WalkCx<'_> {
@@ -1635,11 +1647,36 @@ impl WalkCx<'_> {
             saw_unwrap: false,
             unwraps: None,
             closure_depth: 0,
+            bind_counts: std::collections::HashMap::new(),
+            shadow_unwrap_lets: std::collections::HashMap::new(),
+            shadowed: std::collections::HashSet::new(),
         }
     }
 
     fn bind_pattern(&mut self, p: &Pattern) {
-        collect_binding_names(p, &mut self.bound);
+        let mut names = std::collections::HashSet::new();
+        collect_binding_names(p, &mut names);
+        for n in names {
+            self.bind_name(n);
+        }
+    }
+
+    fn bind_name(&mut self, name: String) {
+        *self.bind_counts.entry(name.clone()).or_default() += 1;
+        self.bound.insert(name);
+    }
+
+    /// B-2026-09-29-40 — is `rebound` parameter `name` rebound ONLY by
+    /// `let name = name.unwrap()`-family statements, and never assigned?
+    /// Pass 3 may then rewrite its unwraps wherever no such `let` is in
+    /// scope ([`WalkCx::shadowed`]): every other binder of `name` would have
+    /// to be counted by `bind_counts` and is absent.
+    fn only_shadowed_by_its_unwrap(&self, name: &str) -> bool {
+        !self.assigned.contains(name)
+            && self
+                .shadow_unwrap_lets
+                .get(name)
+                .is_some_and(|n| Some(n) == self.bind_counts.get(name))
     }
 }
 
@@ -1760,8 +1797,14 @@ fn walk_fn_body(
     // (B-2026-09-29-12). Asked BEFORE the parameters join `bound`, since the
     // question is whether the BODY rebinds one of them.
     if cx.saw_unwrap {
-        let rebound: std::collections::HashSet<String> =
-            cx.bound.union(&cx.assigned).cloned().collect();
+        // B-2026-09-29-40 — a parameter rebound only by `let t = t.unwrap()`
+        // is not `rebound`: pass 3 tracks where such a `let` is in scope.
+        let rebound: std::collections::HashSet<String> = cx
+            .bound
+            .union(&cx.assigned)
+            .filter(|n| !cx.only_shadowed_by_its_unwrap(n))
+            .cloned()
+            .collect();
         let uw = param_unwraps(params, uw_types.payloads, &uw_types.generics, &rebound);
         if !uw.is_empty() {
             let mut cx3 = WalkCx::collecting();
@@ -1787,12 +1830,34 @@ fn walk_fn_body(
 }
 
 fn walk_block(block: &mut Block, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
+    // B-2026-09-29-40 — a `let` shadows only to the end of its block.
+    let outer_shadowed = cx.unwraps.map(|_| cx.shadowed.clone());
     for stmt in &mut block.stmts {
         walk_stmt(stmt, ret, cx);
     }
     if let Some(e) = &mut block.final_expr {
         walk_expr(e, ret, cx);
     }
+    if let Some(s) = outer_shadowed {
+        cx.shadowed = s;
+    }
+}
+
+/// B-2026-09-29-40 — `name` when this `let` is `let name = name.unwrap()`
+/// (or `expect` / `unwrap_err` / `expect_err`): a plain binding whose value
+/// unwraps an identifier spelled the same.
+fn self_unwrap_let_name(pattern: &Pattern, value: &Expr) -> Option<String> {
+    let PatternKind::Binding(name) = &pattern.kind else {
+        return None;
+    };
+    let ExprKind::MethodCall { object, method, .. } = &value.kind else {
+        return None;
+    };
+    let is_unwrap = matches!(
+        method.as_str(),
+        "unwrap" | "expect" | "unwrap_err" | "expect_err"
+    );
+    matches!(&object.kind, ExprKind::Identifier(o) if o == name && is_unwrap).then(|| name.clone())
 }
 
 fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
@@ -1801,18 +1866,26 @@ fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
             pattern, ty, value, ..
         } => {
             cx.bind_pattern(pattern);
+            if let Some(n) = self_unwrap_let_name(pattern, value) {
+                *cx.shadow_unwrap_lets.entry(n).or_default() += 1;
+            }
             // Recurse FIRST so a nested `let` inside the value (a closure body,
             // a block expr) is rewritten before this one wraps the value.
             walk_expr(value, ret, cx);
             if matches!(pattern.kind, PatternKind::Binding(_)) {
                 lower_param_unwrap_at(value, cx);
             }
+            // B-2026-09-29-40 — the value above still read the parameter; from
+            // here to the end of the block the name is this binding.
+            if cx.unwraps.is_some() {
+                collect_binding_names(pattern, &mut cx.shadowed);
+            }
             if let Some(ty) = ty {
                 desugar_collect_target(ty, value);
             }
         }
         StmtKind::LetUninit { name, .. } => {
-            cx.bound.insert(name.clone());
+            cx.bind_name(name.clone());
         }
         StmtKind::LetElse {
             pattern,
@@ -1827,7 +1900,7 @@ fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
         StmtKind::Defer { body } => walk_block(body, ret, cx),
         StmtKind::ErrDefer { binding, body } => {
             if let Some(name) = binding {
-                cx.bound.insert(name.clone());
+                cx.bind_name(name.clone());
             }
             walk_block(body, ret, cx);
         }
@@ -2152,7 +2225,7 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
 /// receiver and the interpreter runs a `match` temporary's body twice there.
 fn lower_param_unwrap_at(expr: &mut Expr, cx: &WalkCx<'_>) {
     if let (Some(uw), 0) = (cx.unwraps, cx.closure_depth) {
-        lower_param_unwrap(expr, uw);
+        lower_param_unwrap(expr, uw, &cx.shadowed);
     }
 }
 
@@ -2216,7 +2289,10 @@ fn unwrap_payload_types(program: &Program) -> std::collections::HashSet<String> 
 ///
 /// `rebound` is every name the body binds or assigns: a parameter shadowed or
 /// reassigned anywhere is left alone, since a later `t` may not be the
-/// parameter at all.
+/// parameter at all. The one shadow it omits is `let t = t.unwrap()`
+/// (B-2026-09-29-40): the lowered `match` reads the parameter before the new
+/// binding exists, and pass 3 leaves every `t` inside that binding's scope
+/// alone ([`WalkCx::shadowed`]).
 fn param_unwraps(
     params: &[Param],
     payload_types: &std::collections::HashSet<String>,
@@ -2303,7 +2379,11 @@ fn param_unwraps(
 /// this function's to fix: a take on only SOME paths (`if c { let x =
 /// t.unwrap() }`) runs no body on the others, on every backend. Positions
 /// are limited by [`lower_param_unwrap_at`].
-fn lower_param_unwrap(expr: &mut Expr, uw: &ParamUnwraps) {
+fn lower_param_unwrap(
+    expr: &mut Expr,
+    uw: &ParamUnwraps,
+    shadowed: &std::collections::HashSet<String>,
+) {
     let ExprKind::MethodCall {
         object,
         method,
@@ -2316,7 +2396,7 @@ fn lower_param_unwrap(expr: &mut Expr, uw: &ParamUnwraps) {
     let ExprKind::Identifier(name) = &object.kind else {
         return;
     };
-    let Some(pu) = uw.get(name) else {
+    let Some(pu) = uw.get(name).filter(|_| !shadowed.contains(name)) else {
         return;
     };
     let takes_err = match method.as_str() {

@@ -16239,6 +16239,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if depth == 0 {
             return false;
         }
+        if self.retract_returned_shadow_of_flag_param(name, depth - 1) {
+            return true;
+        }
         let in_enclosing = self.drop_rc.scope_cleanup_actions[..depth - 1]
             .iter()
             .any(|frame| {
@@ -16363,6 +16366,51 @@ impl<'ctx> super::Codegen<'ctx> {
             } => !(binding_name == name && *binding_ptr == newest),
             _ => true,
         });
+    }
+
+    /// B-2026-09-29-40 — `return t` where `t` is a LOCAL in frame `frame`
+    /// that shadows a parameter whose `Drop` a per-path flag owns
+    /// (`cond_store_flag_params`), e.g. `let t = match t { .. }; return t`
+    /// after a take of `t` on another path. The `return` hands that local out
+    /// unconditionally, so its action is retracted here and `true` returned.
+    /// `suppress_user_drop_for_var` cannot do it: it declines the name so the
+    /// param's flag keeps answering for every other move, and the local then
+    /// ran its body beside the value it returned.
+    ///
+    /// A shadow is recognized by slot: the newest action for `name` in this
+    /// frame belongs to the live binding, and an OLDER action for the same
+    /// name, anywhere, belongs to a different slot (the param's).
+    fn retract_returned_shadow_of_flag_param(&mut self, name: &str, frame: usize) -> bool {
+        if !self.drop_rc.cond_store_flag_params.contains(name) {
+            return false;
+        }
+        let Some(live) = self.variables.get(name).map(|v| v.ptr) else {
+            return false;
+        };
+        let slot_of = |a: &CleanupAction<'ctx>| match a {
+            CleanupAction::UserDrop {
+                binding_name,
+                binding_ptr,
+                ..
+            } if binding_name == name => Some(*binding_ptr),
+            _ => None,
+        };
+        let newest_here = self.drop_rc.scope_cleanup_actions[frame]
+            .iter()
+            .rev()
+            .find_map(slot_of);
+        let shadows_older = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .filter_map(slot_of)
+            .any(|p| p != live);
+        if newest_here != Some(live) || !shadows_older {
+            return false;
+        }
+        self.drop_rc.scope_cleanup_actions[frame].retain(|a| slot_of(a) != Some(live));
+        true
     }
 
     pub(super) fn suppress_user_drop_for_var(&mut self, name: &str) {

@@ -267,10 +267,28 @@ impl<'a> super::Interpreter<'a> {
             // B-2026-08-30-51 — snapshot any same-scope binding this statement
             // is about to shadow. It has to happen here: evaluating the `let`
             // overwrites the slot, and the old value is then unreachable.
-            let shadowed_before = self.snapshot_shadowed_bindings(stmt);
+            let mut shadowed_before = self.snapshot_shadowed_bindings(stmt);
             // B-2026-09-16-23 — and the names it shadows from an ENCLOSING
             // block, whose slots this block's cleanup does not hold.
             let outer_shadowed = self.snapshot_outer_shadowed_names(stmt);
+            // B-2026-09-29-40 — with one exception: a function body ADOPTS the
+            // `Drop` slot of a conditionally-owned param (B-2026-08-28-22),
+            // while the binding itself lives in the call frame's scope. A
+            // `let t = ..` that shadows that param at the body's top level
+            // must freeze or retract THAT slot exactly as it would a local's,
+            // or the slot re-reads `t` at exit and runs the new binding's body
+            // a second time (`let t = match t { .. }` after a take of `t` on
+            // another path printed `dS5 dS5`).
+            for n in &outer_shadowed {
+                let adopted = cleanup
+                    .iter()
+                    .any(|a| matches!(a, CleanupAction::Drop { name } if name == n));
+                if adopted {
+                    if let Some(v) = self.env.get(n) {
+                        shadowed_before.push((n.clone(), v));
+                    }
+                }
+            }
             self.let_displaced_moved.clear();
             // B-2026-08-31-7 — the interpreter twin of codegen's
             // `clear_stale_param_view_marks`, and it has to land with it.
