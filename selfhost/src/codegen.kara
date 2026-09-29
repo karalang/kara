@@ -4395,7 +4395,7 @@ impl Emitter {
                     IntPat(pi) => {
                         let PatInt { value, suffix, span: psp } = pi;
                         has_lit = true;
-                        lit = value;
+                        lit = value as i64;
                     }
                     BindingPat(bp) => {
                         let BindingPattern { name: bn, span: bsp } = bp;

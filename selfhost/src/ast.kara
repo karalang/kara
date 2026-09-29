@@ -65,7 +65,8 @@ pub enum UnaryOp {
 // ── Per-variant node structs (each carries its span) ──
 
 pub struct IntLit {
-    pub value: i64,
+    // `i128`, the seed's `ExprKind::Integer` carrier (B-2026-09-19-27/-28).
+    pub value: i128,
     pub suffix: String,
     pub span: Span,
 }
@@ -575,7 +576,7 @@ pub struct BindingPattern {
 // distinct `shared enum`s (`Expr` and `Pattern`) destabilises codegen — the
 // shared monomorphisation corrupted the heap in unrelated (TypeExpr) parses.
 pub struct PatInt {
-    pub value: i64,
+    pub value: i128,
     pub suffix: String,
     pub span: Span,
 }

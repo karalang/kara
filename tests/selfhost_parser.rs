@@ -51,6 +51,31 @@ const CORPUS: &[&str] = &[
     "255u8",
     "1.5f64",
     "10i64",
+    // Magnitudes past i64::MAX (B-2026-09-19-27). The lexer hands these up as
+    // `IntegerOutOfRange`, and the parser decides: the two negated MIN
+    // literals fold into one already-negative node, an unsigned or 128-bit
+    // suffix admits the magnitude on the i128 carrier (wrapped where the
+    // value exceeds the signed half), and the band past u64::MAX under a
+    // 128-bit suffix is a plain `Integer` straight from the lexer
+    // (B-2026-09-19-28). Every entry parses in the seed; the unrepresentable
+    // spellings (an unsuffixed `9223372036854775808`) are parse errors there
+    // and so have no rendering to compare.
+    "-9223372036854775808",
+    "-9223372036854775808i64",
+    "-9223372036854775808i128",
+    "-170141183460469231731687303715884105728i128",
+    "18446744073709551615u64",
+    "9223372036854775808usize",
+    "18446744073709551615u8",
+    "0xFFFFFFFFFFFFFFFFu64",
+    "9223372036854775808i128",
+    "100000000000000000000i128",
+    "170141183460469231731687303715884105728u128",
+    "340282366920938463463374607431768211455u128",
+    "x + 18446744073709551615u64",
+    "1 - -9223372036854775808",
+    "match x { 18446744073709551615u64 => a, _ => b }",
+    "match x { 340282366920938463463374607431768211455u128 => a, 100000000000000000000i128 => b }",
     // Unary.
     "-5",
     "-x",

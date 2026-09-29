@@ -170,6 +170,16 @@ const CORPUS: &[&str] = &[
     // opens it, so these two differ only in the suffix.
     "99999999999999999999999999999999999999999",
     "340282366920938463463374607431768211455u128",
+    // B-2026-09-19-28 — the band between those two: past u64::MAX but inside
+    // i128::MAX under a 128-bit suffix, the seed lexes a plain `Integer`. The
+    // port returned the invalid-literal error there until `Token.Integer`
+    // carried an i128. Both edges, both suffixes, and a hex spelling; the last
+    // entry is one past i128::MAX, where the band hands off to INTRANGE.
+    "18446744073709551616i128",
+    "100000000000000000000u128",
+    "170141183460469231731687303715884105727i128",
+    "0xFFFFFFFFFFFFFFFFFFFFu128",
+    "170141183460469231731687303715884105728i128",
     "0xffu8 0b1010i32 0o17u64 0xdeadi128",
     "1_000i64 1.5e3f64 2e10f32",
     // f16 / bf16 float suffixes (un-reserved in 09a2fc88 / B-2026-07-14-2); `bf16`

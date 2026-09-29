@@ -526,7 +526,7 @@ impl Lexer {
             // digits again, so keep a copy across the match.
             let digits = text.substring(0, text.len());
             match i64.parse(text) {
-                Some(v) => self.make_spanned(Token.Integer(v, sfx)),
+                Some(v) => self.make_spanned(Token.Integer(v as i128, sfx)),
                 None => {
                     let t = out_of_range_int(digits, 10, sfx);
                     self.make_spanned(t)
@@ -547,7 +547,7 @@ impl Lexer {
         let sfx = self.try_int_suffix();
         let digits = text.substring(0, text.len());
         match i64.from_str_radix(text, radix) {
-            Some(v) => self.make_spanned(Token.Integer(v, sfx)),
+            Some(v) => self.make_spanned(Token.Integer(v as i128, sfx)),
             None => {
                 let t = out_of_range_int(digits, radix, sfx);
                 self.make_spanned(t)
@@ -1965,6 +1965,19 @@ fn decimal_le(a: String, b: String) -> bool {
     true
 }
 
+// A normalized decimal magnitude of at most `u128::MAX` digits' worth, read
+// onto the `i128` carrier with WRAPPING arithmetic: exact up to `i128::MAX`,
+// and above it the two's-complement pattern the seed's `m as i128` gives,
+// which is how a `u128` value past `i128::MAX` rides the signed carrier.
+// `pub` because the parser reads `IntegerOutOfRange`'s text back through it.
+pub fn decimal_to_i128(text: String) -> i128 {
+    let mut v: i128 = 0;
+    for c in text.bytes() {
+        v = v.wrapping_mul(10).wrapping_add((c - b'0') as i128);
+    }
+    v
+}
+
 fn invalid_int_literal_msg(radix: i64) -> String {
     if radix == 10 {
         return "Invalid integer literal".to_string();
@@ -1987,15 +2000,13 @@ fn invalid_int_literal_msg(radix: i64) -> String {
 // `i64` (`src/lexer.rs::number` / `hex_number` / … and `int_128_token`):
 //
 //   (i64::MAX, u64::MAX]                    -> IntegerOutOfRange, any suffix
-//   (u64::MAX, i128::MAX]  with i128/u128   -> Integer, which the port CANNOT
-//                                              represent (its carrier is i64)
+//   (u64::MAX, i128::MAX]  with i128/u128   -> Integer
 //   (i128::MAX, u128::MAX] with i128/u128   -> IntegerOutOfRange
 //   anything else                           -> the invalid-literal error
 //
-// The second band is the one gap left: modelling it needs `Token.Integer` to
-// carry more than an i64, which is a wider change than this row. No corpus
-// input reaches it, and one must not be added until the carrier widens — the
-// same rule `b"…"` and this row itself were written under.
+// The second band needed `Token.Integer` to carry an `i128`, which it does
+// since B-2026-09-19-28; before that it returned the invalid-literal error, a
+// different token from the seed's for the same input.
 fn out_of_range_int(text: String, radix: i64, sfx: String) -> Token {
     let mag = radix_to_decimal(text, radix);
     if mag.len() == 0 {
@@ -2008,7 +2019,7 @@ fn out_of_range_int(text: String, radix: i64, sfx: String) -> Token {
     }
     if sfx == "i128" or sfx == "u128" {
         if decimal_le(mag.substring(0, mag.len()), "170141183460469231731687303715884105727") {
-            return Token.Error(invalid_int_literal_msg(radix));
+            return Token.Integer(decimal_to_i128(mag), sfx);
         }
         if decimal_le(mag.substring(0, mag.len()), "340282366920938463463374607431768211455") {
             return Token.IntegerOutOfRange(mag, sfx);

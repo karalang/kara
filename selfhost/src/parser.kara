@@ -94,11 +94,42 @@ import ast.{
     GenericParamNode,
     GenericParamsNode,
 };
-import lexer.lex_all;
+import lexer.{lex_all, decimal_to_i128};
 
 // Duplicate a `String` by value — `.clone()` is unavailable, and `push_str`
 // reads its argument's bytes by borrow, so this is the move-free copy used to
 // keep a loop label both on the `loop_labels` stack and in the AST node.
+// `IntegerOutOfRange`'s decimal magnitude on the `i128` carrier, or `None`
+// where the seed rejects it. Mirrors `parser/exprs.rs`'s literal arm and
+// `parser/patterns.rs::pattern_int_on_carrier` (B-2026-09-19-27):
+//
+//   `i128` suffix                 the magnitude, positively, up to `i128::MAX`
+//   `u128` suffix                 the magnitude; past `i128::MAX` its wrapped bit
+//                                 pattern, which is how the runtime holds it
+//   `u8`/`u16`/`u32`/`u64`/`usize`  the wrapped 64-bit pattern, `m - 2^64`, as
+//                                 the value rides the signed 64-bit carrier
+//   anything else                 rejected: nothing can represent it
+//
+// The lexer only emits the variant for a magnitude up to `u128::MAX`, and past
+// `u64::MAX` only under a 128-bit suffix, so the unsigned 64-bit arm always
+// sees a magnitude in `(i64::MAX, u64::MAX]`.
+fn out_of_range_value(mag: String, sfx: String) -> Option[i128] {
+    let v = decimal_to_i128(mag);
+    if sfx == "i128" {
+        if v >= 0 {
+            return Some(v);
+        }
+        return None;
+    }
+    if sfx == "u128" {
+        return Some(v);
+    }
+    if sfx == "u8" or sfx == "u16" or sfx == "u32" or sfx == "u64" or sfx == "usize" {
+        return Some(v - 18446744073709551616i128);
+    }
+    None
+}
+
 fn dup_str(s: ref String) -> String {
     let mut out = "".to_string();
     out.push_str(s);
@@ -1159,7 +1190,7 @@ impl Parser {
         };
         if is_int {
             let idx = match self.tokens[self.pos].token {
-                Integer(v, _) => v,
+                Integer(v, _) => v as i64,
                 _ => 0,
             };
             self.advance();
@@ -1534,6 +1565,25 @@ impl Parser {
             // Unary operators — all bind at 24 (above multiplicative).
             Minus => {
                 self.advance();
+                // `-9223372036854775808` and `-170141183460469231731687303715884105728i128`
+                // are the two literals whose positive half does not fit its
+                // type, so `Neg(Int(n))` cannot represent them; the seed folds
+                // each into one already-negative `Integer` here, where the
+                // minus is known to be unary (`parser/exprs.rs` `parse_prefix`,
+                // B-2026-08-06-13 and B-2026-08-19-23). The `i128::MIN` fold is
+                // gated on the `i128` suffix: under `u128` the same magnitude
+                // is an ordinary positive value, left to the literal arm.
+                let folded = self.fold_negated_min();
+                match folded {
+                    Some(v) => {
+                        return Expr.Int(IntLit {
+                            value: v.0,
+                            suffix: v.1,
+                            span: self.span_from(start),
+                        });
+                    }
+                    None => {}
+                }
                 let operand = self.parse_expr_bp(24);
                 Expr.Unary(UnaryExpr {
                     op: UnaryOp.Neg,
@@ -1588,6 +1638,22 @@ impl Parser {
                     suffix: sfx,
                     span: self.span_from(start),
                 })
+            }
+            // A magnitude past `i64::MAX` with no unary minus in front of it
+            // (the `Minus` arm folds that case). The seed admits it under an
+            // unsigned or 128-bit suffix and rejects it otherwise
+            // (`parser/exprs.rs`, B-2026-08-06-16 / B-2026-08-19-23); see
+            // `out_of_range_value` for the carrier encoding. B-2026-09-19-27.
+            IntegerOutOfRange(mag, sfx) => {
+                self.advance();
+                match out_of_range_value(mag, sfx.clone()) {
+                    Some(v) => Expr.Int(IntLit {
+                        value: v,
+                        suffix: sfx,
+                        span: self.span_from(start),
+                    }),
+                    None => Expr.Error(SpanNode { span: self.span_from(start) }),
+                }
             }
             Float(v, sfx) => {
                 self.advance();
@@ -1723,6 +1789,34 @@ impl Parser {
                 Expr.Error(SpanNode { span: self.span_from(start) })
             }
         }
+    }
+
+    // The two negated MIN literals (see the `Minus` arm of `parse_prefix`),
+    // called with the `-` already consumed. Consumes the magnitude and returns
+    // the folded value and suffix when the next token is one of them, and
+    // leaves the cursor alone otherwise. `2^63` folds under any suffix (the
+    // seed tests it first, whatever the suffix, and under `i128` the value is
+    // the same); `2^127` folds under `i128` only.
+    fn fold_negated_min(mut ref self) -> Option[(i128, String)] {
+        if self.pos >= self.tokens.len() {
+            return None;
+        }
+        let hit = match self.tokens[self.pos].token {
+            IntegerOutOfRange(mag, sfx) => {
+                if mag == "9223372036854775808" {
+                    Some((0i128 - 9223372036854775807i128 - 1, sfx))
+                } else if mag == "170141183460469231731687303715884105728" and sfx == "i128" {
+                    Some((0i128 - 170141183460469231731687303715884105727i128 - 1, sfx))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if hit.is_some() {
+            self.advance();
+        }
+        hit
     }
 
     // True iff the current token is `.` (a path separator / postfix dot).
@@ -2540,6 +2634,20 @@ impl Parser {
                     suffix: sfx,
                     span: self.span_from(start),
                 })
+            }
+            // The pattern twin of the expression arm, on the same carrier
+            // encoding, so a pattern and its scrutinee compare as the same bits
+            // (`parser/patterns.rs` `pattern_int_on_carrier`, B-2026-08-20-1).
+            IntegerOutOfRange(mag, sfx) => {
+                self.advance();
+                match out_of_range_value(mag, sfx.clone()) {
+                    Some(v) => Pattern.IntPat(PatInt {
+                        value: v,
+                        suffix: sfx,
+                        span: self.span_from(start),
+                    }),
+                    None => Pattern.ErrPat(SpanNode { span: self.span_from(start) }),
+                }
             }
             Float(v, sfx) => {
                 self.advance();
