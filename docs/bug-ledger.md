@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 563 |
+| miscompile | 565 |
 | run-vs-build | 540 |
-| leak | 483 |
+| leak | 484 |
 | double-free | 361 |
 | missing-feature | 214 |
 | codegen-gap | 203 |
@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 112 |
 | crash | 103 |
 | soundness | 97 |
-| use-after-free | 65 |
+| use-after-free | 66 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2373 |
-| interp | 699 |
+| codegen | 2376 |
+| interp | 700 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -431,6 +431,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-70 | 2026-09-29 | codegen | medium | A field binding of a destructured `Option` param rebound as `let mut y = r` (never mutated), or rebound into a name the function binds twice, still loses a fresh temp's `Drop` body on every compiled surface -- the two rebind forms B-2026-09-29-42's fix does not follow | — |
 | B-2026-09-29-71 | 2026-09-29 | interp | medium | The interpreter runs a destructured `Option` param field's `Drop` body TWICE when the field binding comes from `let .. else` and is rebound (`let Some(S { r, s }) = a else { return 0 }; let y = r; y.id` prints `d1 d1 k1` for `f(Some(mks(1)))` and `d2 j2 d2` for a named argument); compiled builds are right | — |
 | B-2026-09-29-72 | 2026-09-29 | interp+codegen | medium | A destructured `Option` param payload (or one of its fields) pushed into a LOCAL `Vec` that dies in the callee runs a named argument's `Drop` body twice on every compiled surface, and both arguments' bodies twice in the interpreter -- `Some(S { r, s }) => { let mut v = Vec.new(); v.push(r); v.len() }` prints `d1 k1 d2 j1 d2` compiled, `d1 d1 k1 d2 j1 d2` interp | — |
+| B-2026-09-29-79 | 2026-09-29 | codegen | high | A BY-VALUE PARAM THAT RETURNS A FIELD MOVED OUT BEFORE A `..` DESTRUCTURE READS FREED MEMORY ON EVERY COMPILED SURFACE -- `fn f(q: W3) -> S2 { let x = q.u; let W3 { n, .. } = q; return x }` over `W3 { u: S2, n: i64 }`, called as `let s = f(W3 { u: mk(9), n: 2 }); println(f"r{s.id}")`, prints the right text with 2 valgrind errors (invalid read and write of size 8 into a freed 16-byte block) at -O0 and aborts `malloc(): unaligned tcache chunk detected` under `karac run`; the interpreter is right | — |
+| B-2026-09-29-80 | 2026-09-29 | codegen | medium | A GENERIC BY-VALUE PARAM WITH A FIELD MOVED OUT BEFORE A `..` DESTRUCTURE RUNS NO `Drop` BODY AND LEAKS 16 B ON EVERY COMPILED SURFACE -- `fn f[U](q: Q[U]) -> i64 { let x = q.u; let Q { n, .. } = q; return n }` over `struct Q[U] { u: U, n: i64 }`, called as `f(Q { u: mk(9), n: 2 })`, prints `r2 end` compiled where the interpreter prints `dS9 r2 end`, with 16 B definitely lost at -O0 | — |
+| B-2026-09-29-81 | 2026-09-29 | interp | medium | THE INTERPRETER RUNS A MOVED-OUT FIELD'S `Drop` BODY AT A `..` DESTRUCTURE OF AN OWNED `self`, WHILE THE VALUE IS STILL LIVE, AND AGAIN IN THE CALLER -- `impl W3 { fn go(self) -> i64 { let x = self.u; let W3 { n, .. } = self; println(f"x{x.id}"); return n } }` prints `dS9 x9 r2 dS9` for a named receiver (`let w = ..; w.go()`) and `dS8 x8 r3` for a temporary one; the compiled surfaces print `x9 r2 dS9` and `x8 dS8 r3` | — |
+| B-2026-09-29-82 | 2026-09-29 | codegen | medium | A `..` DESTRUCTURE THAT BINDS A `Vec` FIELD AFTER ANOTHER FIELD WAS MOVED OUT RUNS THE VEC ELEMENT'S `Drop` BODY BEFORE THE VEC IS READ ON EVERY COMPILED SURFACE -- `let q = W3 { u: mk(9), v: [mk(5)], n: 2 }; let x = q.u; let W3 { v, .. } = q; println(f"x{x.id}{v.len()}")` prints `dS5 x91 dS9` compiled where the interpreter prints `x91 dS5 dS9` | — |
 
 ### Relocated
 
