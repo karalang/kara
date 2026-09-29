@@ -16380,9 +16380,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // printed the six cells before it.
         //
         // The chain arm is ENTERED ONLY WHEN THE FINAL FIELD'S ENUM BOXES IN
-        // THIS INSTANTIATION, answered by a pure walk that emits no IR. That
-        // is deliberate and not tidiness: every chained place that does not
-        // box takes the same early return it took before, so -20-13's
+        // THIS INSTANTIATION, answered by a pure walk that emits no IR, or
+        // (B-2026-09-20-3) when it is owned by transfer, the one-hop arm's own
+        // fallback. That is deliberate and not tidiness: every other chained
+        // place takes the same early return it took before, so -20-13's
         // "measured unchanged" holds for exactly the shapes it was measured
         // on.
         //
@@ -16430,13 +16431,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 let Some((final_name, inst_fte)) = self.chained_field_inst_te(object, field) else {
                     return;
                 };
-                if self.user_enum_boxed_payload_variants(&inst_fte).is_empty() {
-                    return;
+                // B-2026-09-20-3 — or when the field's enum is owned by
+                // TRANSFER, the question the one-hop arm falls back to below.
+                // A NON-generic `enum Eb { A(Array[String, 2]), B }` boxes its
+                // payload too, but `declarations.rs` classifies that variant
+                // `BoxedArray` and its drop switch owns the box, so it is never
+                // in `user_enum_boxed_payload_variants`. The chain arm asked
+                // only that list and returned, leaving `eatb(k.h.g)` with the
+                // callee and the holder both freeing the box.
+                let boxes = !self.user_enum_boxed_payload_variants(&inst_fte).is_empty();
+                if !boxes {
+                    let TypeKind::Path(ip) = &inst_fte.kind else {
+                        return;
+                    };
+                    let Some(iname) = ip.segments.last() else {
+                        return;
+                    };
+                    if !self.enum_param_owned_by_transfer(iname) {
+                        return;
+                    }
                 }
                 let Some((ptr, ty)) = self.gep_owned_struct_field_chain(object) else {
                     return;
                 };
-                chain_boxed = Some(inst_fte);
+                if boxes {
+                    chain_boxed = Some(inst_fte);
+                }
                 (ty, ptr, final_name)
             }
             _ => return,
