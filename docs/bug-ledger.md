@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 537 |
 | miscompile | 533 |
 | leak | 466 |
-| double-free | 352 |
+| double-free | 353 |
 | missing-feature | 213 |
 | codegen-gap | 203 |
 | other | 155 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2311 |
-| interp | 668 |
+| codegen | 2312 |
+| interp | 669 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-29). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -415,6 +415,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-77 | 2026-09-28 | interp+codegen | medium | AN `Option` ARM THAT REBINDS ITS PAYLOAD INTO A LOCAL AND THEN PUSHES OR REBINDS IT AGAIN RUNS A `Drop` BODY TWICE -- `fn g(x: Option[S], v: mut ref Vec[S]) { match x { Some(y) => { let z = y; v.push(z) }, None => println("n") } }` prints `d2 n2 d1 d2 end` compiled (the named argument's body doubled) and `d1 d2 n2 d1 d2 end` under `--interp` (the temporary's doubled too) for `g(Some(mk(1)), mut v); let b = Some(mk(2)); g(b, mut v)`, owing `n2 d1 d2 end` | — |
 | B-2026-09-28-78 | 2026-09-28 | interp | medium | `--interp` RUNS A TEMPORARY `Option` / `Result` ARGUMENT'S `Drop` BODY TWICE WHEN A `ref self` METHOD'S ARM REBINDS THE PAYLOAD INTO A LOCAL -- `impl H { fn g(ref self, x: Option[S]) { match x { Some(y) => { let z = y; println(f"z{z.r.id}") }, None => println("n") }; println("post") } }` prints `z1 d1 post d1` for `h.g(Some(mk(1)))` against the compiled surfaces' `z1 post d1` | — |
 | B-2026-09-28-80 | 2026-09-28 | interp+codegen | high | A BY-VALUE PARAM HANDED TO A STORING FUNCTION FROM INSIDE A BRANCH LOSES ITS `Drop` BODY ON THE PATH THAT SKIPS THE CALL, ON EVERY SURFACE, AND A BOXED `Option` PAYLOAD CRASHES THE COMPILED ONES -- `fn csf(t: S, v: mut ref Vec[S], c: bool) { if c { skeep(t, v) } }` over `fn skeep(t: S, v: mut ref Vec[S]) { v.push(t) }` prints `n1 dS2 end` for `csf(mks(1), mut u, false); csf(mks(2), mut u, true)`, due `dS1 n1 dS2 end` | — |
+| B-2026-09-29-1 | 2026-09-29 | codegen+interp | high | REMAINDER OF B-2026-09-19-22/-23: A BOXED GENERIC ENUM PARAM THE CALLEE MAY HAND BACK STILL MISBEHAVES WHEN THE CALLEE TOUCHES IT ON THE OTHER LEG -- a fresh temp handed to `fn pk[T](g: G1[T], c: bool) -> G1[T] { if c { return g } eat(g); return G1.N }` double-frees at -O0; a callee that `match`es the param on that leg loses the payload body compiled; `--interp` loses the body of a param forwarded to `eat`; a `G1[Sh]` (`shared struct`) payload leaks 49 B compiled; a box returned inside `H[T] { g: G1[T] }` runs no body and leaks | — |
 
 ### Relocated
 
