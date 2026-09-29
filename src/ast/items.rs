@@ -10556,6 +10556,43 @@ fn branch_handover_tally(
     fn mentions(e: &Expr, name: &str) -> bool {
         crate::deque_head::expr_mentions_name_deep(e, name)
     }
+    /// B-2026-09-29-9 — does `e` mention the parameter other than through a
+    /// variant test (`t.is_some()`, `t.is_none()`, `t.is_ok()`, `t.is_err()`)?
+    /// Those only read the tag, so `if t.is_some() { v.push(t) }` is still a
+    /// store on some paths with nothing else done to the value. Any other
+    /// method (`t.unwrap()` consumes it) or position still counts.
+    fn mentions_beyond_tag_test(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if matches!(&object.kind, ExprKind::Identifier(n) if n == name)
+                && matches!(method.as_str(), "is_some" | "is_none" | "is_ok" | "is_err") =>
+            {
+                args.iter().any(|a| mentions(&a.value, name))
+            }
+            ExprKind::Binary { left, right, .. } => {
+                mentions_beyond_tag_test(left, name) || mentions_beyond_tag_test(right, name)
+            }
+            ExprKind::Unary { operand, .. } => mentions_beyond_tag_test(operand, name),
+            ExprKind::InterpolatedStringLit(parts) => parts.iter().any(|p| match p {
+                crate::ast::ParsedInterpolationPart::Text(_) => false,
+                crate::ast::ParsedInterpolationPart::Expr(x, _) => {
+                    mentions_beyond_tag_test(x, name)
+                }
+            }),
+            ExprKind::Call { callee, args } => {
+                mentions(callee, name)
+                    || args.iter().any(|a| {
+                        outliving_store::is_bare(&a.value, name)
+                            || mentions_beyond_tag_test(&a.value, name)
+                    })
+            }
+            _ => mentions(e, name),
+        }
+    }
     /// Exactly one argument is the bare parameter, and no other argument
     /// mentions it.
     fn sole_bare_arg(args: &[crate::ast::CallArg], name: &str) -> Option<usize> {
@@ -10614,7 +10651,7 @@ fn branch_handover_tally(
                 then_block,
                 else_branch,
             } => {
-                w.t.other |= mentions(condition, w.name);
+                w.t.other |= mentions_beyond_tag_test(condition, w.name);
                 w.depth += 1;
                 walk(then_block, w);
                 if let Some(x) = else_branch.as_deref() {
@@ -10631,7 +10668,7 @@ fn branch_handover_tally(
                 }
                 w.depth -= 1;
             }
-            _ => w.t.other |= mentions(e, w.name),
+            _ => w.t.other |= mentions_beyond_tag_test(e, w.name),
         }
     }
     fn walk<'a>(b: &'a Block, w: &mut W<'a, '_>) {

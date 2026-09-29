@@ -1,0 +1,44 @@
+//! B-2026-09-29-9: a boxed Option/Result param stored on only some paths after a variant test of it.
+
+use super::*;
+
+/// B-2026-09-29-9 — a boxed `Option` / `Result` param stored on some paths
+/// after a variant test of it (`if t.is_some() { v.push(t) }`): the test only
+/// reads the tag, so the callee still owns the value per path and the box
+/// moves to it.
+#[test]
+fn e2e_boxed_optres_param_stored_after_a_variant_test_runs_its_body_once() {
+    let Some(out) = run_program(
+        r#"struct S { id: i64, s: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+struct W { id: i64, a: String, b: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
+fn mkw(i: i64) -> W { return W { id: i, a: f"a-heap-string-longer-than-sso-{i}", b: f"b-heap-string-{i}" } }
+fn crd(t: Option[S], v: mut ref Vec[Option[S]]) { if t.is_some() { v.push(t) } }
+fn cnn(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c and not t.is_none() { v.push(t) } else { println(f"skip {t.is_some()}") } }
+fn crs(t: Result[W, i64], v: mut ref Vec[Result[W, i64]]) { if t.is_ok() { v.push(t) } else { println("err") } }
+fn main() {
+    let mut u: Vec[Option[S]] = Vec.new();
+    crd(Option.Some(mks(1)), mut u);
+    crd(Option.None, mut u);
+    let a = Option.Some(mks(2));
+    crd(a, mut u);
+    cnn(Option.Some(mks(3)), mut u, false);
+    cnn(Option.Some(mks(4)), mut u, true);
+    println(f"n{u.len()}");
+    let mut z: Vec[Result[W, i64]] = Vec.new();
+    crs(Result.Ok(mkw(5)), mut z);
+    crs(Result.Err(0), mut z);
+    println(f"k{z.len()}");
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(
+        out, "skip true\ndS3\nn3\ndS1\ndS2\ndS4\nerr\nk1\ndW5\nend\n",
+        "got:\n{out}"
+    );
+}
