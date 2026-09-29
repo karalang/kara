@@ -1,0 +1,45 @@
+//! B-2026-09-29-19 -- a field store on a generic struct runs the displaced
+//! value's `Drop` body.
+
+use super::*;
+
+/// B-2026-09-29-19 — a field store on a GENERIC struct (`q.u = mk(2)` over
+/// `Q[S2]`, `self.u = v` in `impl[U] Q[U]`, `q.u = v` through a `mut ref
+/// Q[U]` param) freed the displaced value's memory and never ran its `Drop`
+/// body on any compiled surface. The displaced-field body walk declined every
+/// generic root. Covers an owned local, a typed local assigned twice, a
+/// generic method, a generic free fn, a concrete fn over `mut ref Q[S2]`, a
+/// generic root with its own `Drop`, an enum field, a loop, and a `String`
+/// field that has no body to run.
+#[test]
+fn e2e_generic_struct_field_store_runs_displaced_drop_body() {
+    let Some(out) = run_program(
+        r#"shared struct Sh { k: i64 }
+struct S2 { h: Sh, id: i64 }
+impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+enum E { A(S2), B }
+struct Q[U] { u: U }
+impl[U] Q[U] { fn wr(mut ref self, v: U) { self.u = v; } }
+struct D[U] { u: U, n: i64 }
+impl[U] Drop for D[U] { fn drop(mut ref self) { println(f"dD{self.n}") } }
+fn mq[U](q: mut ref Q[U], v: U) { q.u = v; }
+fn mc(q: mut ref Q[S2]) { q.u = mk(5); }
+fn mk(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
+fn main() {
+    { let mut q = Q { u: mk(1) }; q.u = mk(2); println(f"a{q.u.id}") }
+    { let mut z: Q[S2] = Q { u: mk(3) }; z.u = mk(4); z.u = mk(6); println(f"b{z.u.id}") }
+    { let mut q = Q { u: mk(7) }; q.wr(mk(8)); println(f"c{q.u.id}") }
+    { let mut q = Q { u: mk(10) }; mq(mut q, mk(11)); println(f"d{q.u.id}") }
+    { let mut q = Q { u: mk(12) }; mc(mut q); println(f"e{q.u.id}") }
+    { let mut d = D { u: mk(13), n: 14 }; d.u = mk(15); println(f"f{d.u.id}") }
+    { let mut q = Q { u: E.A(mk(16)) }; q.u = E.B; println("g") }
+    { let mut q = Q { u: mk(19) }; let mut i = 0; while i < 2 { q.u = mk(20 + i); i = i + 1; } println(f"i{q.u.id}") }
+    { let mut s: Q[String] = Q { u: f"a" }; s.u = f"b"; println(f"j{s.u}") }
+    println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "dS1\na2\ndS2\ndS3\ndS4\nb6\ndS6\ndS7\nc8\ndS8\ndS10\nd11\ndS11\ndS12\ne5\ndS5\ndS13\nf15\ndD14\ndS15\ndS16\ng\ndS19\ndS20\ni21\ndS21\njb\nend\n", "got:\n{out}");
+}

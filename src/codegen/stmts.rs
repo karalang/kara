@@ -25021,13 +25021,20 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(root_tn) = self.var_types.var_type_names.get(base.as_str()).cloned() else {
             return;
         };
+        // B-2026-09-29-19 — a GENERIC root (`Q[U] { u: U }`) is admitted at
+        // depth 1, its field resolved through the instantiation below. It
+        // used to decline outright, so `q.u = S2 { .. }` over `Q[S2]` (and
+        // `self.u = v` in `impl[U] Q[U]`) freed the displaced value's memory
+        // through `drop_old_plain_struct_field`, which resolves the field,
+        // and never ran its `Drop` body.
+        let generic_root = self
+            .type_decls
+            .struct_generic_params
+            .get(&root_tn)
+            .is_some_and(|ps| !ps.is_empty());
         if !self.type_decls.struct_types.contains_key(&root_tn)
             || self.type_decls.shared_types.contains_key(&root_tn)
-            || self
-                .type_decls
-                .struct_generic_params
-                .get(&root_tn)
-                .is_some_and(|ps| !ps.is_empty())
+            || (generic_root && !middles.is_empty())
         {
             return;
         }
@@ -25115,14 +25122,34 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
-        let Some(Some(ftn)) = self
-            .type_decls
-            .struct_field_type_names
-            .get(&base_tn)
-            .and_then(|v| v.get(idx))
-            .cloned()
-        else {
-            return;
+        let ftn = if generic_root {
+            let Some(field_te) = self
+                .type_decls
+                .struct_field_type_exprs
+                .get(&base_tn)
+                .and_then(|v| v.get(idx))
+                .cloned()
+            else {
+                return;
+            };
+            let resolved = self.resolve_generic_field_te(object, &base_tn, &field_te);
+            match &resolved.kind {
+                TypeKind::Path(p) if p.generic_args.is_none() && p.segments.len() == 1 => {
+                    p.segments[0].clone()
+                }
+                _ => return,
+            }
+        } else {
+            let Some(Some(ftn)) = self
+                .type_decls
+                .struct_field_type_names
+                .get(&base_tn)
+                .and_then(|v| v.get(idx))
+                .cloned()
+            else {
+                return;
+            };
+            ftn
         };
         if self.type_decls.shared_types.contains_key(&ftn)
             || self
@@ -25308,10 +25335,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // be the without-field-bodies replacement a field move-out left.
         // (The registered action lives on the root binding's slot with the
         // root type's wrapper — nested parents have no action of their own.)
-        let without = if self
-            .program_snapshot
-            .as_deref()
-            .is_some_and(|p| p.drop_method_keys.contains_key(root_tn.as_str()))
+        let without = if !generic_root
+            && self
+                .program_snapshot
+                .as_deref()
+                .is_some_and(|p| p.drop_method_keys.contains_key(root_tn.as_str()))
         {
             self.emit_user_drop_wrapper_without_field_bodies(&root_tn, &Default::default())
         } else {
@@ -25327,8 +25355,24 @@ impl<'ctx> super::Codegen<'ctx> {
         if !full_armed && !base_is_ref_view {
             return;
         }
-        let Some(st_ty) = self.type_decls.struct_types.get(&base_tn).copied() else {
-            return;
+        // A generic root's layout is the INSTANTIATION's, which the binding's
+        // own slot type (or the `ref` param's recorded pointee) carries; the
+        // name-keyed `struct_types` entry is the erased one.
+        let st_ty = if generic_root {
+            let inst_ty = if base_is_ref_view {
+                self.borrow_vars.ref_params.get(base.as_str()).copied()
+            } else {
+                Some(slot.ty)
+            };
+            match inst_ty {
+                Some(BasicTypeEnum::StructType(st)) => st,
+                _ => return,
+            }
+        } else {
+            let Some(st_ty) = self.type_decls.struct_types.get(&base_tn).copied() else {
+                return;
+            };
+            st_ty
         };
         let Ok(fptr) = self
             .builder
