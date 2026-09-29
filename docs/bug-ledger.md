@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 543 |
+| miscompile | 544 |
 | run-vs-build | 537 |
 | leak | 470 |
 | double-free | 356 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2332 |
-| interp | 677 |
+| codegen | 2333 |
+| interp | 678 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -414,8 +414,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-6 | 2026-09-29 | interp+codegen | medium | A `shared enum`'s TUPLE OR `Option` PAYLOAD LOSES ITS `Drop` BODY -- `G[(R, i64)]` prints no `dR9` under `--interp` (compiled runs it), a plain `shared enum T2 { Y((R, i64)), N }` prints none on ANY surface, and `G[Option[R]]` prints none anywhere and leaks 32 B compiled | — |
 | B-2026-09-29-7 | 2026-09-29 | codegen | medium | `let ... else` OVER A `shared enum` RELEASES THE OBJECT AT THE `let` AND RUNS THE PAYLOAD'S `Drop` BODY BEFORE LATER READS OF THE BINDING, AND THE PLAIN-ENUM SPELLING ICEs NONDETERMINISTICALLY -- `let G.Y(x) = g else { return }; println(f"{x.id}");` prints `dR1 1 end` compiled where `--interp` prints `1 dR1 end`; over a monomorphic `shared enum M` the build panics at pattern_binding.rs `GEPIndex` on some runs | — |
 | B-2026-09-29-8 | 2026-09-29 | codegen | low | `for g in v` OVER A `Vec[G[R]]` OF GENERIC `shared enum`s RUNS EACH PAYLOAD'S `Drop` BODY AT THE `Vec`'s DEATH INSTEAD OF AT THE END OF ITS ITERATION -- `let v: Vec[G[R]] = [G.Y(mk(1))]; for g in v { match g { .. } }` prints `1 end dR1` compiled where `--interp` and the monomorphic `Vec[M]` twin print `1 dR1 end` | — |
-| B-2026-09-29-10 | 2026-09-29 | codegen+interp | medium | A FIELD OR ELEMENT OF A BY-VALUE PARAM PUSHED DIRECTLY INTO A `mut ref` CONTAINER (`xs.push(w.r)`, `xs.push(t.0)`) RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- once in the callee and once when the container dies, unconditionally or on the pushing path, while a push into a LOCAL container and the `let r = w.r; xs.push(r)` spelling run it once | — |
-| B-2026-09-29-11 | 2026-09-29 | codegen | medium | A FIELD MOVED OUT OF A LOCAL THAT IS ITSELF A FIELD OF A BY-VALUE PARAM (`let w = o.w; let r = w.r;`, or `let O { w, k } = o; let r = w.r;`) LEAKS THE FIELD'S HEAP ON THE COMPILED BACKENDS -- 2 B in 1 block at -O0 whether or not `r` is ever handed over, while `let r = o.w.r;` and `let W { r, .. } = w;` are clean | — |
 | B-2026-09-29-13 | 2026-09-29 | codegen | medium | A `let` THAT SHADOWS AN `Option` PARAM WITH A VALUE OF ANOTHER TYPE PRINTS AS THE PARAM'S TYPE ON EVERY COMPILED SURFACE -- `fn s2(t: Option[i64]) { let t = 3; println(f"s2 {t}") }` prints `s2 None` at -O0 and -O2 for `s2(Option.Some(7))`, against `--interp`'s correct `s2 3` | — |
 | B-2026-09-29-16 | 2026-09-29 | interp+codegen | high | `t.unwrap()` ON A BY-VALUE `Option` PARAM AS A PROJECTION RECEIVER STILL RUNS THE BODY TWICE UNDER `--interp` AND CRASHES COMPILED, the spelling B-2026-09-29-12's lowering leaves alone -- `fn cu(t: Option[S]) { println(f"u{t.unwrap().id}") }` prints `u1 dS1 dS1 end` under `--interp`, segfaults at -O0 and double-frees at -O2; a GENERIC `fn ge[T](t: Option[T]) -> T { return t.unwrap() }` still runs the body twice under `--interp` (`dS3 g3 dS3`), compiled right | — |
 | B-2026-09-29-20 | 2026-09-29 | codegen | high | A NESTED GENERIC STRUCT `Q[Q[S2]]` LEAKS THE INNER VALUE'S `shared` BOX ON EVERY COMPILED SURFACE WITH NO CALL INVOLVED -- `let q = Q { u: Q { u: S2 { h: Sh { .. }, id: 9 } } }; println("x")` runs `dS9` on every surface but loses 16 B in 1 block at -O0 compiled; the non-generic `P2 { u: P { u: S2 } }` twin is clean | — |
@@ -3272,11 +3270,14 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-79 | codegen | high | A PAYLOAD THAT DECLARES ITS OWN `Drop`, REBOUND WHOLE INTO A READING LOCAL IN AN `Option` / `Result` ARM, IS FREED TWICE AT `-O0` ON EVERY COMPILED S… | e27077edc |
 | B-2026-09-28-80 | interp+codegen | high | A BY-VALUE PARAM HANDED TO A STORING FUNCTION FROM INSIDE A BRANCH LOSES ITS `Drop` BODY ON THE PATH THAT SKIPS THE CALL, ON EVERY SURFACE, AND A BOX… | 0fe540aaf |
 | B-2026-09-29-9 | codegen | high | A BOXED `Option` PARAM STORED ON ONLY SOME PATHS AFTER A READ OF THE PARAM STILL CRASHES ON EVERY COMPILED SURFACE -- `fn crd(t: Option[S], v: mut re… | d6b73360c |
+| B-2026-09-29-10 | codegen+interp | medium | A FIELD OR ELEMENT OF A BY-VALUE PARAM PUSHED DIRECTLY INTO A `mut ref` CONTAINER (`xs.push(w.r)`, `xs.push(t.0)`) RUNS ITS `Drop` BODY TWICE ON EVER… | 69dad69c9 |
+| B-2026-09-29-11 | codegen | medium | A FIELD MOVED OUT OF A LOCAL THAT IS ITSELF A FIELD OF A BY-VALUE PARAM (`let w = o.w; let r = w.r;`, or `let O { w, k } = o; let r = w.r;`) LEAKS TH… | c73854a44 |
 | B-2026-09-29-12 | interp+codegen | high | `unwrap()` ON A BY-VALUE `Option`/`Result` PARAM RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND CRASHES COMPILED WHEN THE `Option` IS BOXE… | 44543f732 |
 | B-2026-09-29-14 | codegen | high | A GENERIC STRUCT PASSED BY `ref` TO A GENERIC CALLEE NEVER RUNS ITS FIELD'S `Drop` BODY AND LEAKS THE FIELD'S `shared` BOX ON EVERY COMPILED SURFACE… | e67856506 |
 | B-2026-09-29-15 | interp+codegen | medium | A `match` / `if let` THAT TAKES A BY-VALUE `Option` / `Result` / USER-ENUM PARAM'S PAYLOAD ON ONLY SOME PATHS RUNS NO BODY ON THE OTHERS, ON EVERY SU… | a79ef98fe |
 | B-2026-09-29-17 | codegen | medium | CODEGEN PANICS WHEN A `match` ARM BINDING SHADOWS A `ref` / `mut ref` PARAMETER'S NAME AND THE ARM YIELDS IT -- `fn cp(t: Option[i64], v: mut ref Vec… | 96c13b165 |
 | B-2026-09-29-19 | codegen | high | A FIELD STORE ON A GENERIC STRUCT NEVER RUNS THE DISPLACED VALUE'S `Drop` BODY ON ANY COMPILED SURFACE (corrected from "through a generic `mut ref`":… | 7c254d982 |
+| B-2026-09-29-18 | codegen+interp | medium | REMAINDER OF B-2026-09-29-10: A PROJECTION OFF A LOCAL VIEW OF A BY-VALUE PARAM (`let O { w, k } = o;` or `let w = o.w;`, then `xs.push(w.r)`) RUNS T… | 69cc50035 |
 
 </details>
 
