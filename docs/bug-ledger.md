@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2323 |
-| interp | 673 |
+| interp | 674 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -418,7 +418,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-9 | 2026-09-29 | codegen | high | A BOXED `Option` PARAM STORED ON ONLY SOME PATHS AFTER A READ OF THE PARAM STILL CRASHES ON EVERY COMPILED SURFACE -- `fn crd(t: Option[S], v: mut ref Vec[Option[S]]) { if t.is_some() { v.push(t) } }` prints nothing for `crd(Option.Some(mks(1)), mut u); crd(Option.None, mut u)` on the JIT, -O0 and -O2 (vg=5), against `--interp`'s correct `n1 dS1 end` | — |
 | B-2026-09-29-10 | 2026-09-29 | codegen+interp | medium | A FIELD OR ELEMENT OF A BY-VALUE PARAM PUSHED DIRECTLY INTO A `mut ref` CONTAINER (`xs.push(w.r)`, `xs.push(t.0)`) RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- once in the callee and once when the container dies, unconditionally or on the pushing path, while a push into a LOCAL container and the `let r = w.r; xs.push(r)` spelling run it once | — |
 | B-2026-09-29-11 | 2026-09-29 | codegen | medium | A FIELD MOVED OUT OF A LOCAL THAT IS ITSELF A FIELD OF A BY-VALUE PARAM (`let w = o.w; let r = w.r;`, or `let O { w, k } = o; let r = w.r;`) LEAKS THE FIELD'S HEAP ON THE COMPILED BACKENDS -- 2 B in 1 block at -O0 whether or not `r` is ever handed over, while `let r = o.w.r;` and `let W { r, .. } = w;` are clean | — |
-| B-2026-09-29-12 | 2026-09-29 | codegen | high | A BOXED `Option` PARAM STORED ON ONE PATH AND CONSUMED BY `unwrap()` ON THE OTHER STILL CRASHES COMPILED -- `fn cun(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t) } else { let x = t.unwrap(); println(f"u{x.id}") } }` segfaults at -O0 and -O2 for `cun(Some(mks(6)), mut q, false); cun(Some(mks(7)), mut q, true)`, against `--interp`'s correct `u6 dS6 q1 dS7 end` | — |
+| B-2026-09-29-12 | 2026-09-29 | interp+codegen | high | `unwrap()` ON A BY-VALUE `Option`/`Result` PARAM RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND CRASHES COMPILED WHEN THE `Option` IS BOXED, with no store anywhere -- `fn cu(t: Option[S]) { let x = t.unwrap(); println(f"u{x.id}") }` over `cu(Option.Some(mks(1)))` prints `u1 dS1 dS1 end` under `--interp`, segfaults at -O0 and double-frees at -O2, against the correct `u1 dS1 end`. CORRECTION: filed as a store-on-one-path / unwrap-on-the-other remainder of B-2026-09-29-9; the store is irrelevant, the unwrap alone is the fault | — |
 
 ### Relocated
 
