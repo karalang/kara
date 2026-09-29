@@ -1536,6 +1536,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // with the binding of that name here.
         self.drop_rc.loop_decl_rearm_anchors.clear();
         self.drop_rc.cond_store_flag_params.clear();
+        self.drop_rc.cond_take_box_params.clear();
         self.drop_rc.pending_part_aliases.clear();
         self.drop_rc.pending_view_repoints.clear();
         self.drop_rc.cond_part_aliases.clear();
@@ -4086,13 +4087,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // memory, as it does for the conditional hand-back.
                 if func.generic_params.is_none()
                     && !self.is_coroutine_compiled(&func.name)
-                    && (crate::ast::fn_conditionally_stores_param(func, i)
+                    && (((crate::ast::fn_conditionally_stores_param(func, i)
                         // B-2026-09-28-80 — or handed to a storing callee
                         // from inside a branch.
                         || self.program_snapshot.as_deref().is_some_and(|p| {
                             crate::ast::fn_branch_hands_param_to_storer(p, func, i)
                         }))
-                    && !crate::ast::fn_matches_on_bare_param(func, &param_name)
+                        && !crate::ast::fn_matches_on_bare_param(func, &param_name))
+                        // B-2026-09-29-27 — or an `Option` stored on some paths and
+                        // payload-taken on others: the take clears the flag
+                        // as the store does (`is_param_payload_take`), and
+                        // `None` has no payload for the take to leave behind.
+                        || (crate::ast::fn_branch_stores_and_takes_param(func, i)
+                            && matches!(&param.ty.kind, TypeKind::Path(p)
+                                if p.segments.len() == 1 && p.segments[0] == "Option")))
                     && matches!(&param.ty.kind, TypeKind::Path(p)
                         if p.segments.len() == 1
                             && matches!(p.segments[0].as_str(), "Option" | "Result"))
@@ -4131,9 +4139,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     && (crate::ast::fn_branch_stores_param_whole(func, i)
                         // B-2026-09-28-80 — or handed from inside a branch to
                         // a callee that takes the box over whole.
-                        || self.fn_branch_hands_param_whole(func, i))
+                        || self.fn_branch_hands_param_whole(func, i)
+                        // B-2026-09-29-27 — or stored on some paths and payload-taken on
+                        // the others: the taking statement frees the husk box.
+                        || self.fn_branch_stores_and_takes_boxed_option(func, i))
                     && !self.boxed_enum_payload_variants(&param.ty).is_empty()
                 {
+                    if self.fn_branch_stores_and_takes_boxed_option(func, i) {
+                        self.drop_rc.cond_take_box_params.insert(param_name.clone());
+                    }
                     if let Some(whole) = self.emit_optres_param_whole_drop_fn(&param.ty) {
                         self.track_user_drop_var_with_fn(
                             "",

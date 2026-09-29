@@ -4292,7 +4292,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if f.generic_params.is_none()
             && !self.is_coroutine_compiled(&f.name)
             && (crate::ast::fn_branch_stores_param_whole(f, ast_i)
-                || self.fn_branch_hands_param_whole(f, ast_i))
+                || self.fn_branch_hands_param_whole(f, ast_i)
+                || self.fn_branch_stores_and_takes_boxed_option(f, ast_i))
         {
             return true;
         }
@@ -4308,6 +4309,29 @@ impl<'ctx> super::Codegen<'ctx> {
         super::declarations::find_function_ast(program, next)
             .filter(|g| g.self_param.is_none())
             .is_some_and(|g| self.fn_stores_param_whole_through_forwards(g, j, depth - 1))
+    }
+
+    /// B-2026-09-29-27 — does `f` store by-value `Option` param `ast_i` whole on some
+    /// paths and bind its payload out on others
+    /// ([`crate::ast::fn_branch_stores_and_takes_param`]), with that payload
+    /// HEAP-BOXED? The frame then owns the whole value on every path (the
+    /// container's drop frees the box on the storing path, the taking
+    /// statement frees the husk box on the other), so the caller hands the
+    /// box over as it does for a branch store. `Option` only: its one payload
+    /// variant is the one the take binds, so the husk free needs no
+    /// per-variant question.
+    pub(super) fn fn_branch_stores_and_takes_boxed_option(
+        &self,
+        f: &Function,
+        ast_i: usize,
+    ) -> bool {
+        f.generic_params.is_none()
+            && f.params.get(ast_i).is_some_and(|p| {
+                matches!(&p.ty.kind, TypeKind::Path(pp)
+                    if pp.segments.len() == 1 && pp.segments[0] == "Option")
+                    && !self.boxed_enum_payload_variants(&p.ty).is_empty()
+            })
+            && crate::ast::fn_branch_stores_and_takes_param(f, ast_i)
     }
 
     /// The caller-side owner of a fresh-temp argument's heap-boxed `Option` /

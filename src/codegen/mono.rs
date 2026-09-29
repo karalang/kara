@@ -4384,6 +4384,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let saved_optres_bodies_flags =
                 std::mem::take(&mut self.drop_rc.optres_payload_bodies_flags);
             let saved_cond_store_params = std::mem::take(&mut self.drop_rc.cond_store_flag_params);
+            let saved_cond_take_box_params = std::mem::take(&mut self.drop_rc.cond_take_box_params);
             let saved_cond_returned_body_params =
                 std::mem::take(&mut self.drop_rc.cond_returned_body_params);
             let saved_cond_returned_owned_params =
@@ -4422,6 +4423,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.cond_move_mem_drop_flags = saved_cond_move_mem_flags;
             self.drop_rc.optres_payload_bodies_flags = saved_optres_bodies_flags;
             self.drop_rc.cond_store_flag_params = saved_cond_store_params;
+            self.drop_rc.cond_take_box_params = saved_cond_take_box_params;
             self.drop_rc.cond_returned_body_params = saved_cond_returned_body_params;
             self.drop_rc.cond_returned_owned_params = saved_cond_returned_owned_params;
             self.drop_rc.mono_taken_forward_params = saved_mono_taken_forward_params;
@@ -5303,6 +5305,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_optres_bodies_flags =
             std::mem::take(&mut self.drop_rc.optres_payload_bodies_flags);
         let saved_cond_store_params = std::mem::take(&mut self.drop_rc.cond_store_flag_params);
+        let saved_cond_take_box_params = std::mem::take(&mut self.drop_rc.cond_take_box_params);
         let saved_cond_returned_body_params =
             std::mem::take(&mut self.drop_rc.cond_returned_body_params);
         let saved_cond_returned_owned_params =
@@ -5321,6 +5324,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.cond_move_mem_drop_flags = saved_cond_move_mem_flags;
         self.drop_rc.optres_payload_bodies_flags = saved_optres_bodies_flags;
         self.drop_rc.cond_store_flag_params = saved_cond_store_params;
+        self.drop_rc.cond_take_box_params = saved_cond_take_box_params;
         self.drop_rc.cond_returned_body_params = saved_cond_returned_body_params;
         self.drop_rc.cond_returned_owned_params = saved_cond_returned_owned_params;
         self.drop_rc.mono_taken_forward_params = saved_mono_taken_forward_params;
@@ -5673,6 +5677,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.cond_move_mem_drop_flags.clear();
         self.drop_rc.optres_payload_bodies_flags.clear();
         self.drop_rc.cond_store_flag_params.clear();
+        self.drop_rc.cond_take_box_params.clear();
         self.drop_rc.pending_part_aliases.clear();
         self.drop_rc.pending_view_repoints.clear();
         self.drop_rc.cond_part_aliases.clear();

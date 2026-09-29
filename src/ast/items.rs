@@ -10542,6 +10542,24 @@ pub fn fn_branch_takes_param_payload(f: &Function, arg_index: usize) -> bool {
     })
 }
 
+/// B-2026-09-29-27 — the MIX of [`fn_branch_stores_param_whole`] and
+/// [`fn_branch_takes_param_payload`]: does `f` store by-value parameter
+/// `arg_index` whole on some paths and bind its payload out on others, with no
+/// other mention (`if c { v.push(t) } else { let y = match t { .. }; }`)?
+///
+/// Each sibling declines the other's shape, so for a HEAP-BOXED `Option`
+/// payload the caller kept the box beside the container the storing path put
+/// it in, and freed it twice. Codegen answers this for a boxed `Option` only
+/// (`fn_branch_stores_and_takes_boxed_option`): the frame takes the whole
+/// value over as for a branch store and frees the husk box after the take.
+pub fn fn_branch_stores_and_takes_param(f: &Function, arg_index: usize) -> bool {
+    if fn_stores_param_whole_into_container(f, arg_index) {
+        return false;
+    }
+    branch_handover_tally(f, arg_index, None)
+        .is_some_and(|t| t.stores > 0 && t.payload_takes > 0 && t.calls == 0 && !t.other)
+}
+
 /// B-2026-09-29-15 — is `value` a `match` / `if let` on the bare parameter
 /// `name` that hands a payload binding out as its value, with no other mention
 /// of `name` inside it? The shape [`fn_branch_takes_param_payload`] counts and

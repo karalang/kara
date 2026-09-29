@@ -4472,7 +4472,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.drop_rc.assign_ident_target = Some(n.clone());
             }
         }
+        // B-2026-09-29-27 — a taking statement's husk box, freed once it has compiled.
+        let saved_take_boxes = std::mem::take(&mut self.drop_rc.pending_take_box_frees);
         let result = self.compile_stmt_inner(stmt);
+        let take_boxes =
+            std::mem::replace(&mut self.drop_rc.pending_take_box_frees, saved_take_boxes);
+        for (slot, st) in take_boxes {
+            self.emit_take_husk_box_free(slot, st);
+        }
         self.drop_rc.assign_ident_target = saved;
         result
     }

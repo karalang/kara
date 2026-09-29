@@ -279,6 +279,16 @@ pub(crate) struct DropRc<'ctx> {
     /// ones this row's registration created, so no pre-existing retraction
     /// changes behaviour.
     pub(crate) cond_store_flag_params: std::collections::HashSet<String>,
+    /// B-2026-09-29-27 — the subset of `cond_store_flag_params` stored whole on some
+    /// paths and payload-taken on others (`fn_branch_stores_and_takes_param`)
+    /// with a heap-boxed `Option` payload. The frame owns the box on every
+    /// path, so a taking statement leaves a husk box behind that it frees.
+    pub(crate) cond_take_box_params: HashSet<String>,
+    /// B-2026-09-29-27 — `(slot, type)` of such a param at the taking statement that
+    /// disarmed it, freed once that statement has compiled (it reads the box
+    /// first). Saved and restored around each statement, so a nested body's
+    /// statements never drain an outer one's.
+    pub(crate) pending_take_box_frees: Vec<(PointerValue<'ctx>, StructType<'ctx>)>,
     /// B-2026-09-27-105 — `(local, part)` for a `let local = w.r;` of an
     /// adopted param part, awaiting the local's slot: the statement AFTER the
     /// `let` re-points the part's per-path walk onto it (see

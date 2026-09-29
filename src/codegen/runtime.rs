@@ -15700,6 +15700,80 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `;` left the flag armed on the storing path and the callee ran the
     /// bodies the container was about to run too. Same shapes as the
     /// `StmtKind::Expr` arm of [`Self::arm_conditional_store_flag`].
+    /// B-2026-09-29-27 — free the husk box a taking statement left in `slot` (an
+    /// `Option` param whose heap-boxed payload it bound out), on the `Some`
+    /// path only. Emitted AFTER the statement: the take reads the payload out
+    /// of this box, and moves out of it, before the box is dead.
+    pub(super) fn emit_take_husk_box_free(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        st: inkwell::types::StructType<'ctx>,
+    ) {
+        let Some(fn_val) = self
+            .builder
+            .get_insert_block()
+            .filter(|bb| bb.get_terminator().is_none())
+            .and_then(|bb| bb.get_parent())
+        else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let some_tag = self
+            .type_decls
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("Some").copied())
+            .unwrap_or(1);
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(st, slot, 0, "takebox.tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "takebox.tag")
+            .unwrap()
+            .into_int_value();
+        let is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(some_tag, false),
+                "takebox.some",
+            )
+            .unwrap();
+        let free_bb = self.context.append_basic_block(fn_val, "takebox.free");
+        let join_bb = self.context.append_basic_block(fn_val, "takebox.join");
+        self.builder
+            .build_conditional_branch(is_some, free_bb, join_bb)
+            .unwrap();
+        self.builder.position_at_end(free_bb);
+        let w_ptr = self
+            .builder
+            .build_struct_gep(st, slot, 1, "takebox.w.p")
+            .unwrap();
+        let w = self
+            .builder
+            .build_load(i64_t, w_ptr, "takebox.w")
+            .unwrap()
+            .into_int_value();
+        let box_ptr = self
+            .builder
+            .build_int_to_ptr(w, ptr_ty, "takebox.p")
+            .unwrap();
+        let free_fn = self.module.get_function("free").unwrap_or_else(|| {
+            let free_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+            self.module
+                .add_function("free", free_ty, Some(inkwell::module::Linkage::External))
+        });
+        self.builder
+            .build_call(free_fn, &[box_ptr.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
+    }
+
     pub(super) fn arm_conditional_store_flag_for_tail(&mut self, expr: &Expr) {
         self.repoint_pending_part_aliases();
         let handed = match &expr.kind {
@@ -16023,6 +16097,19 @@ impl<'ctx> super::Codegen<'ctx> {
             .filter(|n| crate::ast::is_param_payload_take(handed, n))
             .cloned()
             .collect();
+        // B-2026-09-29-27 — a take of a param the frame also stores on another path
+        // owns the box as well as the payload: the statement frees the husk
+        // box once it has read the payload out of it.
+        for n in &takes {
+            if !self.drop_rc.cond_take_box_params.contains(n.as_str()) {
+                continue;
+            }
+            if let Some(v) = self.variables.get(n.as_str()) {
+                if let inkwell::types::BasicTypeEnum::StructType(st) = v.ty {
+                    self.drop_rc.pending_take_box_frees.push((v.ptr, st));
+                }
+            }
+        }
         let names: Vec<String> = names.into_iter().chain(takes).collect();
         let bool_t = self.context.bool_type();
         for n in names {

@@ -2957,7 +2957,19 @@ impl<'a> super::Interpreter<'a> {
             // `compile_function`'s parameter loop.
             let cond_taken =
                 f.generic_params.is_none() && crate::ast::fn_branch_takes_param_payload(f, i);
-            if !cond_returned && !cond_stored && !cond_taken {
+            // B-2026-09-29-27 — or stored whole on some paths and its payload taken on
+            // others: `fn_matches_on_bare_param` holds for the take, so the
+            // store arm below declined it and the path that did neither ran
+            // no payload body. The take moves the value out of this frame, so
+            // the claim needs no disarm of its own on that path.
+            // `Option` only, as codegen: a `Result` take can leave the other
+            // side's payload bound and unreturned, which codegen's disarm of
+            // the whole claim does not yet separate.
+            let cond_mixed = f.generic_params.is_none()
+                && matches!(&p.ty.kind, crate::ast::TypeKind::Path(tp)
+                    if tp.segments.len() == 1 && tp.segments[0] == "Option")
+                && crate::ast::fn_branch_stores_and_takes_param(f, i);
+            if !cond_returned && !cond_stored && !cond_taken && !cond_mixed {
                 continue;
             }
             match self.env.get(name) {
@@ -3018,6 +3030,7 @@ impl<'a> super::Interpreter<'a> {
                 // payload body on any surface.
                 Some(v @ Value::EnumVariant { .. })
                     if (cond_returned
+                        || cond_mixed
                         || (cond_stored
                             && f.generic_params.is_none()
                             && !crate::ast::fn_matches_on_bare_param(f, name)))
