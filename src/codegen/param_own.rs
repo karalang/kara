@@ -8563,6 +8563,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // other container movers reach this helper rather than that one, so the
         // hand-off has to be recognised in both.
         self.suppress_boxed_array_payload_alias_move(&root);
+        // B-2026-09-19-60 — a consuming arm's binding over a seeded fresh-temp
+        // scrutinee owns nothing in this frame; the NAMED local handed to the
+        // constructor does. `v.push(x)` moves that local's buffers into the
+        // container, so retract ITS slot, as `w.push(a)` would.
+        if let Some(src) = self
+            .payload_vars
+            .arm_array_payload_seed_source
+            .remove(root.as_str())
+        {
+            self.suppress_array_local_move_into_ctor(&src);
+        }
         let Some(slot) = self.variables.get(root.as_str()).copied() else {
             return;
         };
@@ -8801,6 +8812,42 @@ impl<'ctx> super::Codegen<'ctx> {
     /// nothing over, so its source keeps its owner.
     pub(super) fn suppress_array_binding_move_into_aggregate(&mut self, arg: &Expr) {
         self.suppress_array_binding_move(arg, ArrayMoveDest::AggregateField);
+    }
+
+    /// B-2026-09-19-60 — when `arg` names a consuming arm's binding over a
+    /// seeded fresh-temp scrutinee (`PayloadVars::arm_array_payload_seed_source`),
+    /// hand the move on to the NAMED local the constructor was given, whose
+    /// `StructDrop` is the only action over those element buffers in this
+    /// frame. The same `dest` decides, so a callee that does not take
+    /// ownership leaves the source armed exactly as it would for the source
+    /// itself. The entry goes with the move: the value has one new owner.
+    pub(super) fn stand_down_arm_array_seed_source(&mut self, arg: &Expr, dest: ArrayMoveDest) {
+        // A value-position tail hands the binding on just as the bare name
+        // does: `let k = match Option.Some(a) { Option.Some(v) => v, .. }`.
+        let name = match &arg.kind {
+            ExprKind::Identifier(name) => name,
+            ExprKind::Block(b) => {
+                if let Some(t) = b.final_expr.as_deref() {
+                    self.stand_down_arm_array_seed_source(t, dest);
+                }
+                return;
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.stand_down_arm_array_seed_source(&arm.body, dest);
+                }
+                return;
+            }
+            _ => return,
+        };
+        let Some(src) = self
+            .payload_vars
+            .arm_array_payload_seed_source
+            .remove(name.as_str())
+        else {
+            return;
+        };
+        self.suppress_array_binding_move(&src, dest);
     }
 
     /// B-2026-09-19-61 — does a seeded scrutinee's `Array` payload argument
@@ -9063,6 +9110,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // them, which is also what keeps the read-only and rebind arms out of
         // it: neither reaches a hand-off at all.
         self.suppress_boxed_array_payload_alias_move(&root);
+        // B-2026-09-19-60 — a consuming arm's seeded binding owns no action of
+        // its own; the one to retract is its named source's.
+        self.stand_down_arm_array_seed_source(arg, dest);
         // B-2026-09-14-25 — decline where the CALLEE does not take ownership.
         // Membership alone is not the question: `make_array_param_callee_owned`
         // is also the `let`-local registrar, so a plain local sits in this map

@@ -445,6 +445,16 @@ pub(crate) struct PayloadVars<'ctx> {
     /// Cleared per function with its siblings; a later `let` of the same name
     /// that is not such a rebind removes it.
     pub(crate) caller_retained_array_views: std::collections::HashSet<String>,
+    /// B-2026-09-19-60 — a CONSUMING arm's binding over a seeded fresh-temp
+    /// scrutinee (`match Option.Some(a) { Some(v) => { let u = v; .. } }`),
+    /// mapped to the NAMED local the constructor was handed. The box withholds
+    /// its interior from such an arm (`arm_array_payload_unowned_interior`), so
+    /// whichever destination takes `v`'s memory is the new owner, and `a`'s own
+    /// `StructDrop` -- queued at its `let` and never retracted, because the
+    /// `Option` temp is fresh -- has to stand down with it. Without that, the
+    /// destination and `a` both freed the element buffers: `free(): double free
+    /// detected in tcache 2` at `-O0`. Cleared per function with its siblings.
+    pub(crate) arm_array_payload_seed_source: HashMap<String, crate::ast::Expr>,
     /// B-2026-09-17-5 — `match` arm bindings that name the WHOLE payload of a
     /// by-value `Option`/`Result` param in `callee_owned_payload_bodies_params`,
     /// and locals rebound from one. The place keeps its payload walk armed for

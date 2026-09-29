@@ -184,6 +184,7 @@ pub(super) struct SavedVarSideTables<'ctx> {
     boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
     arm_array_payload_unowned_interior: std::collections::HashSet<String>,
     caller_retained_array_views: std::collections::HashSet<String>,
+    arm_array_payload_seed_source: HashMap<String, crate::ast::Expr>,
     param_payload_arm_views: std::collections::HashSet<String>,
     cond_handback_array_params: std::collections::HashSet<String>,
     cond_handback_optres_params: std::collections::HashSet<String>,
@@ -1700,6 +1701,9 @@ impl<'ctx> super::Codegen<'ctx> {
             caller_retained_array_views: std::mem::take(
                 &mut self.payload_vars.caller_retained_array_views,
             ),
+            arm_array_payload_seed_source: std::mem::take(
+                &mut self.payload_vars.arm_array_payload_seed_source,
+            ),
             param_payload_arm_views: std::mem::take(&mut self.payload_vars.param_payload_arm_views),
             cond_handback_array_params: std::mem::take(
                 &mut self.payload_vars.cond_handback_array_params,
@@ -1764,6 +1768,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.arm_array_payload_unowned_interior =
             saved.arm_array_payload_unowned_interior;
         self.payload_vars.caller_retained_array_views = saved.caller_retained_array_views;
+        self.payload_vars.arm_array_payload_seed_source = saved.arm_array_payload_seed_source;
         self.payload_vars.param_payload_arm_views = saved.param_payload_arm_views;
         self.payload_vars.cond_handback_array_params = saved.cond_handback_array_params;
         self.payload_vars.cond_handback_optres_params = saved.cond_handback_optres_params;
@@ -5617,6 +5622,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.boxed_optres_payload_view_vars.clear();
         self.payload_vars.arm_array_payload_unowned_interior.clear();
         self.payload_vars.caller_retained_array_views.clear();
+        self.payload_vars.arm_array_payload_seed_source.clear();
         self.payload_vars.param_payload_arm_views.clear();
         self.payload_vars.cond_handback_array_params.clear();
         self.payload_vars.cond_handback_optres_params.clear();

@@ -10642,13 +10642,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                 } else if let Some((elem_te, n)) = arr_parts.clone() {
                                     if !rebind_of_live_array_owner {
                                         let elem_ty = self.llvm_type_for_type_expr(&elem_te);
-                                        self.make_array_param_callee_owned(
+                                        let owns = self.make_array_param_callee_owned(
                                             var_name.as_str(),
                                             &elem_te,
                                             n,
                                             elem_ty,
                                             slot.ptr,
                                         );
+                                        // B-2026-09-19-60 — the new owner of a
+                                        // consuming arm's seeded payload: its
+                                        // named source stands down.
+                                        if owns {
+                                            self.stand_down_arm_array_seed_source(
+                                                value,
+                                                super::param_own::ArrayMoveDest::AggregateField,
+                                            );
+                                        }
                                     }
                                 }
                                 // B-2026-09-23-36 — a shadowed generation: the

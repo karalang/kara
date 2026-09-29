@@ -1583,6 +1583,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.boxed_optres_payload_view_vars.clear();
         self.payload_vars.arm_array_payload_unowned_interior.clear();
         self.payload_vars.caller_retained_array_views.clear();
+        self.payload_vars.arm_array_payload_seed_source.clear();
         self.payload_vars.param_payload_arm_views.clear();
         self.payload_vars.cond_handback_array_params.clear();
         self.payload_vars.cond_handback_optres_params.clear();

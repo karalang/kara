@@ -23477,6 +23477,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-09-19-60 — and name the seeded source that still holds the
+            // memory, so the destination that takes it can stand the source
+            // down (`PayloadVars::arm_array_payload_seed_source`). Only a
+            // NAMED local this frame owns: a caller-retained param is excluded
+            // above, and a fresh-temp argument has no drop of its own.
+            let seed_source =
+                (!scrutinee_is_borrow && !array_arm_owns_interior && !payload_stays_with_caller)
+                    .then(|| Self::seeded_variant_arg_payload(scrutinee))
+                    .flatten()
+                    .filter(|(cv, parg)| {
+                        *cv == variant
+                            && matches!(&parg.kind, ExprKind::Identifier(n)
+                            if self.borrow_vars.owned_array_params.contains_key(n.as_str()))
+                    })
+                    .map(|(_, parg)| parg.clone());
+            for b in Self::variant_arm_binds(pat) {
+                match &seed_source {
+                    Some(src) => {
+                        self.payload_vars
+                            .arm_array_payload_seed_source
+                            .insert(b, src.clone());
+                    }
+                    None => {
+                        self.payload_vars.arm_array_payload_seed_source.remove(&b);
+                    }
+                }
+            }
             if !scrutinee_is_borrow && array_arm_owns_interior {
                 if let Some(pte) = self.optres_scrutinee_payload_te_for(scrutinee, &variant) {
                     if self.array_elem_and_len(&pte).is_some() {

@@ -6525,6 +6525,7 @@ impl<'ctx> Codegen<'ctx> {
                 boxed_array_view_moved_by_scrutinee: HashMap::new(),
                 arm_array_payload_unowned_interior: std::collections::HashSet::new(),
                 caller_retained_array_views: std::collections::HashSet::new(),
+                arm_array_payload_seed_source: HashMap::new(),
                 param_payload_arm_views: std::collections::HashSet::new(),
                 cond_handback_array_params: std::collections::HashSet::new(),
                 cond_handback_optres_params: std::collections::HashSet::new(),
