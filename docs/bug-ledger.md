@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 565 |
+| miscompile | 568 |
 | run-vs-build | 540 |
 | leak | 484 |
 | double-free | 361 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2376 |
-| interp | 700 |
+| codegen | 2379 |
+| interp | 703 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -423,7 +423,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-50 | 2026-09-29 | codegen | medium | A CLOSURE CAPTURE OR A `let ... else` BINDING OF A HEAP-BOXED GENERIC `Array` PAYLOAD LEAKS EVERY ELEMENT BUFFER ON EVERY COMPILED SURFACE -- `match g { G.Y(x) => { let c = || x[0].len(); return c(); } .. }` and `let G.Y(x) = g else { return 0 }; return x[0].len();` over `G[Array[String, 2]]` lose both strings at `-O0`, with output correct everywhere | — |
 | B-2026-09-29-75 | 2026-09-29 | interp+codegen | medium | A BY-VALUE ENUM PARAM USED AS THE RECEIVER OF AN OWNED-`self` METHOD THAT MATCHES `self` RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY SURFACE -- with `fn m2(self) -> i64 { match self { E.A(s) => s.id, E.B(n) => n } }`, `fn p2(t: E) -> i64 { let x = t.m2(); println(f"p2 {x}"); return x }` at `p2(E.A(mks(2)))` prints `dS2 p2 2 dS2`, where `let t = E.A(mks(2)); t.m2()` on a local prints one body | — |
 | B-2026-09-29-76 | 2026-09-29 | interp | medium | A NESTED `let t = t.m1()` THAT SHADOWS AN ENCLOSING LOCAL ENUM, WHERE `m1` IS AN OWNED-`self` METHOD MATCHING `self`, RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` ONLY -- `fn v1(c: bool) -> i64 { let t = E.A(mks(6)); if c { let t = t.m1(); return t }; return 0 }` at `v1(true)` prints `dS6 dS6` under `--interp` and `dS6` at -O2 and -O0 | — |
-| B-2026-09-29-77 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` METHOD THAT MATCHES `self` ON ONLY SOME PATHS LOSES THE RECEIVER'S PAYLOAD `Drop` BODY ON THE PATHS THAT DO NOT, ON EVERY SURFACE -- `fn t1(self, c: bool) -> i64 { if c { match self { E.A(s) => s.id, E.B(n) => n } } else { 0 } }` at `let a = E.A(mks(1)); a.t1(false)` prints no `dS1`; since 64dadf0a1 the `if c { return match self { .. } }; return 0` spelling does too | — |
 | B-2026-09-29-73 | 2026-09-29 | codegen | medium | A NAMED `Option[Array[R, N]]` LOCAL WHOSE ELEMENT RUNS A USER `Drop` DOUBLE-FREES WHEN A `match` ARM PUSHES ITS BINDING INTO A `Vec` OR STORES IT IN A STRUCT LITERAL -- `let o: Option[Array[R, 2]] = Option.Some(mka()); match o { Option.Some(v) => { w.push(v) } .. }` aborts with `free(): double free detected in tcache 2` at `-O0` and `-O2` against a correct `--interp`, because the `Option`'s own element walk still runs after the arm moved the elements out | — |
 | B-2026-09-29-66 | 2026-09-29 | codegen | medium | MOVING AN `Option` FIELD OUT AND THEN STORING INTO IT LEAKS 16 B ON EVERY COMPILED SURFACE -- `let t = o.u; o.u = Some(mk(8));` over `struct O { u: Option[S2] }` prints the right text everywhere and valgrind reports `definitely lost: 16 bytes in 1 blocks` at -O0; the conditional-move spelling leaks the same | — |
 | B-2026-09-29-67 | 2026-09-29 | codegen | high | A GENERIC STRUCT LOCAL INSTANTIATED AT `Option[S]` OR `Result[S, E]` RUNS NO PAYLOAD `Drop` BODY AT SCOPE EXIT AND LEAKS 16 B ON EVERY COMPILED SURFACE -- `let q: Q[Option[S2]] = Q { u: Some(mk(9)) };` over `struct Q[U] { u: U }` prints `xtrue end` compiled where `--interp` prints `xtrue dS9 end` | — |
@@ -435,6 +434,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-80 | 2026-09-29 | codegen | medium | A GENERIC BY-VALUE PARAM WITH A FIELD MOVED OUT BEFORE A `..` DESTRUCTURE RUNS NO `Drop` BODY AND LEAKS 16 B ON EVERY COMPILED SURFACE -- `fn f[U](q: Q[U]) -> i64 { let x = q.u; let Q { n, .. } = q; return n }` over `struct Q[U] { u: U, n: i64 }`, called as `f(Q { u: mk(9), n: 2 })`, prints `r2 end` compiled where the interpreter prints `dS9 r2 end`, with 16 B definitely lost at -O0 | — |
 | B-2026-09-29-81 | 2026-09-29 | interp | medium | THE INTERPRETER RUNS A MOVED-OUT FIELD'S `Drop` BODY AT A `..` DESTRUCTURE OF AN OWNED `self`, WHILE THE VALUE IS STILL LIVE, AND AGAIN IN THE CALLER -- `impl W3 { fn go(self) -> i64 { let x = self.u; let W3 { n, .. } = self; println(f"x{x.id}"); return n } }` prints `dS9 x9 r2 dS9` for a named receiver (`let w = ..; w.go()`) and `dS8 x8 r3` for a temporary one; the compiled surfaces print `x9 r2 dS9` and `x8 dS8 r3` | — |
 | B-2026-09-29-82 | 2026-09-29 | codegen | medium | A `..` DESTRUCTURE THAT BINDS A `Vec` FIELD AFTER ANOTHER FIELD WAS MOVED OUT RUNS THE VEC ELEMENT'S `Drop` BODY BEFORE THE VEC IS READ ON EVERY COMPILED SURFACE -- `let q = W3 { u: mk(9), v: [mk(5)], n: 2 }; let x = q.u; let W3 { v, .. } = q; println(f"x{x.id}{v.len()}")` prints `dS5 x91 dS9` compiled where the interpreter prints `x91 dS5 dS9` | — |
+| B-2026-09-29-83 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` ENUM METHOD CALLED ON A STRUCT FIELD RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY SURFACE -- with `struct W { e: E, k: i64 }` and `fn m(self) -> i64 { match self { E.A(s) => s.id, E.B(n) => n } }`, `let w1 = W { e: E.A(mks(1)), k: 0 }; println(f"m {w1.e.m()}")` prints `dS1 m 1 dS1` | — |
+| B-2026-09-29-84 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` ENUM METHOD WHOSE `match` / `if let` DOES NOT BIND THE LIVE VARIANT'S PAYLOAD LOSES THAT PAYLOAD'S `Drop` BODY ON EVERY SURFACE -- with `enum E { A(S), B(i64), C(S) }`, `fn k(self) -> i64 { match self { E.A(s) => s.id, _ => 0 } }` at `let b = E.C(mks(3)); b.k()` prints no `dS3`, and `fn g(self) -> i64 { if let E.A(s) = self { return s.id }; return 0 }` at `E.C(mks(2))` none either | — |
+| B-2026-09-29-91 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` ENUM METHOD THAT MATCHES ON `self` AND HANDS `self` TO A BY-VALUE FREE FUNCTION ON ANOTHER PATH LOSES THE PAYLOAD'S `Drop` BODY ON THAT PATH, ON EVERY SURFACE -- with `fn eat(e: E) -> i64 { match e { E.A(s) => s.id, .. } }`, `fn h1(self, c: bool) -> i64 { if c { return eat(self) }; match self { .. } }` at `let z = E.A(mks(23)); z.h1(true)` prints no `dS23` | — |
 
 ### Relocated
 
@@ -3327,6 +3329,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-42 | codegen | medium | A FIELD BINDING OF A DESTRUCTURED `Option` PARAM PAYLOAD REBOUND INSIDE THE CALLEE (`Some(S { r, s }) => { let y = r; y.id }`) LOSES A FRESH-TEMP ARG… | 08f35bf2f |
 | B-2026-09-29-64 | interp+codegen | medium | AN OWNED-`self` METHOD THAT RETURNS `match self { . | 64dadf0a1 |
 | B-2026-09-29-74 | interp+codegen | medium | AN ASSIGNMENT THROUGH A `mut ref` PARAM (`fn gm(x: mut ref Option[R]) -> i64 { x = Some(mk(99, f"z")); 5 }`) NEVER RUNS THE DISPLACED VALUE'S `Drop`… | a6e088d76 |
+| B-2026-09-29-77 | interp+codegen | medium | AN OWNED-`self` METHOD THAT MATCHES `self` ON ONLY SOME PATHS LOSES THE RECEIVER'S PAYLOAD `Drop` BODY ON THE PATHS THAT DO NOT, ON EVERY SURFACE --… | d8f9f2bf5 |
 
 </details>
 
