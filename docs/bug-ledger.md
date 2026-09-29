@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 570 |
+| miscompile | 571 |
 | run-vs-build | 540 |
 | leak | 485 |
 | double-free | 362 |
@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 113 |
 | crash | 103 |
 | soundness | 97 |
-| use-after-free | 66 |
+| use-after-free | 68 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2383 |
-| interp | 704 |
+| codegen | 2386 |
+| interp | 705 |
 | typecheck | 315 |
 | other | 112 |
 | ownership | 79 |
@@ -412,7 +412,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-61 | 2026-09-29 | interp+codegen | medium | A top-level `let` that SHADOWS a by-value parameter's name loses the caller's `Drop` body for that parameter, on BOTH backends (`fn f(s: S) -> i64 { let s = 5; s }` prints no `d1`; the interpreter agrees with codegen, so the oracle is wrong too) | — |
 | B-2026-09-29-62 | 2026-09-29 | interp | medium | The interpreter runs a `Drop` body TWICE when a pattern binding shadows its own identifier scrutinee and the value is used -- `let s = Some(mks(1)); match s { Some(S { r, s }) => r.id, .. }` prints `d1 d1`, and `fn f(s: Option[S]) -> T { match s { Some(S { r, s }) => T { r, s }, .. } }` prints an extra `d1` before returning; compiled builds are right | — |
 | B-2026-09-29-63 | 2026-09-29 | codegen | medium | A closure inside a match arm that captures a field binding destructured out of a by-value `Option` param loses the caller's `Drop` body on every compiled surface -- `fn f(p: Option[S]) -> String { match p { Some(S { r, s }) => { let g = |q: i64| q + r.id; f"{g(1)} {s}" } None => "n" } }` prints no `d1` at -O0/-O2, `--interp` prints `d1` | — |
-| B-2026-09-29-47 | 2026-09-29 | codegen | high | A STRUCT DESTRUCTURE WITH `..` AFTER ONE OF ITS FIELDS WAS MOVED OUT READS FREED MEMORY ON EVERY COMPILED SURFACE -- `let x = q.u; let W3 { n, .. } = q;` over `W3 { u: S2, n: i64 }` prints the right text with 1 invalid read at -O0 and an abort in `malloc` under `karac run`; reading the remaining field by projection (`let s = q.s`) is clean | — |
 | B-2026-09-29-48 | 2026-09-29 | interp+codegen | high | A BY-VALUE STRUCT PARAM REBOUND TO A LOCAL AND THEN FIELD-STORED GOES WRONG ON EVERY BACKEND -- in `fn f(q0: W) -> i64 { let mut q = q0; let x = q.u; q.u = mk(8); ... }` the stored value's `dS8` never runs anywhere and compiled leaks its 16 B box; without the move (`let mut q = q0; q.u = mk(8);`) `--interp` runs the displaced `dS9` twice and compiled reads freed memory | — |
 | B-2026-09-29-49 | 2026-09-29 | codegen | medium | AN `Array` ENUM PAYLOAD WHOSE ELEMENT IS A `shared enum` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND AND LEAKS 58 B COMPILED -- `enum Hsh { P(Array[Sm, 1]), Q }` over `shared enum Sm { P(R), Q }` prints no `dR` on `--interp`, the JIT, -O0 or -O2, and valgrind at -O0 reports `58 (48 direct, 10 indirect) bytes in 1 blocks definitely lost` | — |
 | B-2026-09-29-65 | 2026-09-29 | interp+codegen | medium | A BY-VALUE `Option` PARAM TAKEN ON ONE PATH AND SHADOWED BY AN UNRELATED VALUE ON THE OTHER LOSES ITS PAYLOAD'S `Drop` BODY ON EVERY SURFACE -- `fn q1(t: Option[S], c: bool) -> i64 { if c { let u = match t { Option.Some(v) => v, n => n.unwrap() }; return u.id }; let t = Option.Some(mks(99)); println("q1"); return 1 }` at `q1(Option.Some(mks(7)), false)` prints `q1 dS99` where `dS7` is also due | — |
@@ -425,7 +424,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-70 | 2026-09-29 | codegen | medium | A field binding of a destructured `Option` param rebound as `let mut y = r` (never mutated), or rebound into a name the function binds twice, still loses a fresh temp's `Drop` body on every compiled surface -- the two rebind forms B-2026-09-29-42's fix does not follow | — |
 | B-2026-09-29-71 | 2026-09-29 | interp | medium | The interpreter runs a destructured `Option` param field's `Drop` body TWICE when the field binding comes from `let .. else` and is rebound (`let Some(S { r, s }) = a else { return 0 }; let y = r; y.id` prints `d1 d1 k1` for `f(Some(mks(1)))` and `d2 j2 d2` for a named argument); compiled builds are right | — |
 | B-2026-09-29-72 | 2026-09-29 | interp+codegen | medium | A destructured `Option` param payload (or one of its fields) pushed into a LOCAL `Vec` that dies in the callee runs a named argument's `Drop` body twice on every compiled surface, and both arguments' bodies twice in the interpreter -- `Some(S { r, s }) => { let mut v = Vec.new(); v.push(r); v.len() }` prints `d1 k1 d2 j1 d2` compiled, `d1 d1 k1 d2 j1 d2` interp | — |
-| B-2026-09-29-79 | 2026-09-29 | codegen | high | A BY-VALUE PARAM THAT RETURNS A FIELD MOVED OUT BEFORE A `..` DESTRUCTURE READS FREED MEMORY ON EVERY COMPILED SURFACE -- `fn f(q: W3) -> S2 { let x = q.u; let W3 { n, .. } = q; return x }` over `W3 { u: S2, n: i64 }`, called as `let s = f(W3 { u: mk(9), n: 2 }); println(f"r{s.id}")`, prints the right text with 2 valgrind errors (invalid read and write of size 8 into a freed 16-byte block) at -O0 and aborts `malloc(): unaligned tcache chunk detected` under `karac run`; the interpreter is right | — |
 | B-2026-09-29-80 | 2026-09-29 | codegen | medium | A GENERIC BY-VALUE PARAM WITH A FIELD MOVED OUT BEFORE A `..` DESTRUCTURE RUNS NO `Drop` BODY AND LEAKS 16 B ON EVERY COMPILED SURFACE -- `fn f[U](q: Q[U]) -> i64 { let x = q.u; let Q { n, .. } = q; return n }` over `struct Q[U] { u: U, n: i64 }`, called as `f(Q { u: mk(9), n: 2 })`, prints `r2 end` compiled where the interpreter prints `dS9 r2 end`, with 16 B definitely lost at -O0 | — |
 | B-2026-09-29-81 | 2026-09-29 | interp | medium | THE INTERPRETER RUNS A MOVED-OUT FIELD'S `Drop` BODY AT A `..` DESTRUCTURE OF AN OWNED `self`, WHILE THE VALUE IS STILL LIVE, AND AGAIN IN THE CALLER -- `impl W3 { fn go(self) -> i64 { let x = self.u; let W3 { n, .. } = self; println(f"x{x.id}"); return n } }` prints `dS9 x9 r2 dS9` for a named receiver (`let w = ..; w.go()`) and `dS8 x8 r3` for a temporary one; the compiled surfaces print `x9 r2 dS9` and `x8 dS8 r3` | — |
 | B-2026-09-29-82 | 2026-09-29 | codegen | medium | A `..` DESTRUCTURE THAT BINDS A `Vec` FIELD AFTER ANOTHER FIELD WAS MOVED OUT RUNS THE VEC ELEMENT'S `Drop` BODY BEFORE THE VEC IS READ ON EVERY COMPILED SURFACE -- `let q = W3 { u: mk(9), v: [mk(5)], n: 2 }; let x = q.u; let W3 { v, .. } = q; println(f"x{x.id}{v.len()}")` prints `dS5 x91 dS9` compiled where the interpreter prints `x91 dS5 dS9` | — |
@@ -436,6 +434,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-93 | 2026-09-29 | codegen | low | A CONCRETE STRUCT HOLDING A GENERIC ENUM FIELD WHOSE PAYLOAD IS HEAP-BOXED LEAKS THE PAYLOAD'S OWN HEAP AT SCOPE EXIT, with no call anywhere -- `let h = Hb { g: G.Y(f"aaaaaaaa-1") };` over `struct Hb { g: G[String] }` loses the 10-byte String, `G[Array[String, 2]]` loses both 10-byte elements (20 B in 2 blocks) and `G[Vec[String]]` leaks as well, at `-O0`, while `let g = G.Y([..])` alone is clean | — |
 | B-2026-09-29-94 | 2026-09-29 | typecheck | low | A NEGATED SUFFIXLESS LITERAL IS NOT WIDTH-POLYMORPHIC THE WAY A POSITIVE ONE IS -- `a + -1` over `a: i32` is rejected with "cannot mix integer types 'i32' and 'i64'", and so are `a.min(-1)` and `a.wrapping_add(-1)`, and `b * -1` / `b - -1` over `b: i128`, while `a + 1`, `a.min(1)`, `a.wrapping_add(1)` and `let x: i32 = -1` are all accepted | — |
 | B-2026-09-29-96 | 2026-09-29 | interp+codegen | medium | REMAINDER OF B-2026-09-29-75: A BY-VALUE ENUM PARAM HANDED TO AN OWNED-`self` METHOD THAT TAKES ITS PAYLOAD STILL RUNS THE PAYLOAD'S `Drop` BODY TWICE, ON EVERY SURFACE, WHEN THE CALL IS ON SOME PATHS ONLY, THE CALLEE IS GENERIC, THE ENUM HAS ITS OWN `Drop`, OR THE METHOD RETURNS THE ENUM -- `fn p8(t: E, c: bool) -> i64 { if c { return t.m2() }; .. }` at `p8(E.A(mks(7)), true)` prints `dS7 dS7` | — |
+| B-2026-09-29-101 | 2026-09-29 | codegen | high | REMAINDER OF B-2026-09-29-79: A NESTED STRUCT FIELD OF A BY-VALUE PARAM THAT HOLDS A `shared` VALUE, PASSED TO A BY-VALUE CALLEE THAT HANDS IT BACK, ALIASES THE CALLER'S ARGUMENT -- `return keep(q.u)`, `let k = keep(q.u); return k` and `let x = q.u; return keep(x)` over `fn keep(s: S2) -> S2 { return s }` print a garbage `h.k` with 3 valgrind errors at -O0 and abort in `malloc` under `karac run`; the same with a conditional hand-back fails on the handing path only | — |
+| B-2026-09-29-102 | 2026-09-29 | interp+codegen | medium | A FIELD OF A BY-VALUE STRUCT PARAM MOVED DIRECTLY INTO A STRUCT LITERAL OR `Some` THAT IS BOUND TO A LOCAL RUNS ITS `Drop` BODY TWICE ON EVERY BACKEND, INTERPRETER INCLUDED -- `fn f(q: Wq) -> i64 { let k = Kq { s: q.u }; return k.s.id }` over `struct P { id: i64 }` with a `Drop` prints `dP9 dP9 r9` for `dP9 r9`, with no `shared` value anywhere | — |
 
 ### Relocated
 
@@ -3330,11 +3330,14 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-51 | codegen | medium | A LOCAL THAT SHADOWS AN `Option` PARAM BY NAME RUNS NO `Drop` BODY FOR ITS OWN PAYLOAD WHEN A PATTERN BINDS OUT OF IT, ON EVERY COMPILED SURFACE -- `… | ca0a6d82e |
 | B-2026-09-29-41 | codegen | high | A STRUCT SUB-PATTERN FIELD BINDING THAT SHADOWS ITS OWN BY-VALUE `Option` PARAM (`fn f(s: Option[S]) { match s { Some(S { r, s }) => r.id, . | 064821fc6 |
 | B-2026-09-29-42 | codegen | medium | A FIELD BINDING OF A DESTRUCTURED `Option` PARAM PAYLOAD REBOUND INSIDE THE CALLEE (`Some(S { r, s }) => { let y = r; y.id }`) LOSES A FRESH-TEMP ARG… | 08f35bf2f |
+| B-2026-09-29-47 | codegen | high | A STRUCT DESTRUCTURE WITH `..` AFTER ONE OF ITS FIELDS WAS MOVED OUT READS FREED MEMORY ON EVERY COMPILED SURFACE -- `let x = q.u; let W3 { n, . | 00db9b945 |
 | B-2026-09-29-64 | interp+codegen | medium | AN OWNED-`self` METHOD THAT RETURNS `match self { . | 64dadf0a1 |
 | B-2026-09-29-74 | interp+codegen | medium | AN ASSIGNMENT THROUGH A `mut ref` PARAM (`fn gm(x: mut ref Option[R]) -> i64 { x = Some(mk(99, f"z")); 5 }`) NEVER RUNS THE DISPLACED VALUE'S `Drop`… | a6e088d76 |
 | B-2026-09-29-75 | interp+codegen | medium | A BY-VALUE ENUM PARAM USED AS THE RECEIVER OF AN OWNED-`self` METHOD THAT MATCHES `self` RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY SURFACE -- wit… | efe14e6b9 |
 | B-2026-09-29-77 | interp+codegen | medium | AN OWNED-`self` METHOD THAT MATCHES `self` ON ONLY SOME PATHS LOSES THE RECEIVER'S PAYLOAD `Drop` BODY ON THE PATHS THAT DO NOT, ON EVERY SURFACE --… | d8f9f2bf5 |
+| B-2026-09-29-79 | codegen | high | A NESTED STRUCT FIELD RETURNED OUT OF A BY-VALUE PARAM THAT HOLDS A `shared` VALUE READS FREED MEMORY ON EVERY COMPILED SURFACE (TITLE CORRECTED AT C… | 8b58e6865 |
 | B-2026-09-29-78 | codegen | high | `i128` / `u128` ARITHMETIC BESIDE A SUFFIXLESS LITERAL IS COMPUTED AT 64 BITS WHEN COMPILED -- `b + 1` over `b: i128 = 100000000000000000000i128` pri… | be94bca62 |
+| B-2026-09-29-100 | codegen | high | REMAINDER OF B-2026-09-29-79: A LOCAL BOUND STRAIGHT FROM A NESTED STRUCT FIELD OF A BY-VALUE PARAM THAT HOLDS A `shared` VALUE STILL ALIASES THE CAL… | dbf3f7187 |
 
 </details>
 
