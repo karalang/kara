@@ -68,6 +68,7 @@ pub(crate) fn binding_only_borrowed_with(
         free_fn_arg_transfers: false,
         callee_owns_arg: &|_, _| false,
         follow_let_rebinds: false,
+        follow_typed_rebinds: false,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -93,6 +94,7 @@ pub(crate) fn binding_only_borrowed_escape_with(
         free_fn_arg_transfers: false,
         callee_owns_arg: &capitalized_callee_constructs,
         follow_let_rebinds,
+        follow_typed_rebinds: false,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -110,6 +112,7 @@ pub(crate) fn binding_only_borrowed_block_escape_with(
         free_fn_arg_transfers: false,
         callee_owns_arg: &capitalized_callee_constructs,
         follow_let_rebinds,
+        follow_typed_rebinds: false,
     };
     !block_consumes(&c, b)
 }
@@ -142,8 +145,62 @@ pub(crate) fn binding_only_borrowed_with_callee_owns(
         free_fn_arg_transfers: false,
         callee_owns_arg,
         follow_let_rebinds: false,
+        follow_typed_rebinds: false,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
+}
+
+/// B-2026-09-19-54 — [`binding_only_borrowed_with`] for the boxed-payload
+/// RESIDENCY question: does an arm binding that registers no drop of its own
+/// leave the payload where it is, in the box? A whole immutable rebind
+/// (`let y = x;`, typed or not) makes a second name for the same bits, and it
+/// registers no drop either, so the payload stays put unless the NEW name is
+/// consumed. Scoring the rebind itself as the transfer retracted the box's
+/// interior walk while nobody took it up: `G.Y(x) => { let y = x; .. }` over a
+/// boxed `Array[String, 2]` leaked both element buffers on every compiled
+/// surface, where `G.Y(x) => { x[0].len() }` is clean.
+///
+/// `callee_owns_arg` is [`binding_only_borrowed_with_callee_owns`]'s knob, so
+/// handing the rebound name to a callee that frees it still transfers; and, as
+/// for the escape question, a constructor argument (`Some(y)`) transfers too.
+/// The syntactic walk models `Some(x)` as an entry copy, which kept the box's
+/// interior walk under `G.Y(x) => { return Some(x); }` while the returned
+/// `Option` owned the same buffers: `free(): double free detected`, exit 134.
+#[cfg(feature = "llvm")]
+pub(crate) fn binding_only_borrowed_following_rebinds_with(
+    name: &str,
+    e: &Expr,
+    copy_read: &dyn Fn(&Expr) -> bool,
+    callee_owns_arg: &dyn Fn(&str, usize) -> bool,
+) -> bool {
+    let c = Ctx {
+        name,
+        copy_read,
+        free_fn_arg_transfers: false,
+        callee_owns_arg: &|c, i| capitalized_callee_constructs(c, i) || callee_owns_arg(c, i),
+        follow_let_rebinds: true,
+        follow_typed_rebinds: true,
+    };
+    !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
+}
+
+/// Block sibling of [`binding_only_borrowed_following_rebinds_with`].
+#[cfg(feature = "llvm")]
+pub(crate) fn binding_only_borrowed_block_following_rebinds_with(
+    name: &str,
+    b: &crate::ast::Block,
+    copy_read: &dyn Fn(&Expr) -> bool,
+    callee_owns_arg: &dyn Fn(&str, usize) -> bool,
+) -> bool {
+    let c = Ctx {
+        name,
+        copy_read,
+        free_fn_arg_transfers: false,
+        callee_owns_arg: &|c, i| capitalized_callee_constructs(c, i) || callee_owns_arg(c, i),
+        follow_let_rebinds: true,
+        follow_typed_rebinds: true,
+    };
+    !block_consumes(&c, b)
 }
 
 /// Block sibling of [`binding_only_borrowed_with`].
@@ -158,6 +215,7 @@ pub(crate) fn binding_only_borrowed_block_with(
         free_fn_arg_transfers: false,
         callee_owns_arg: &|_, _| false,
         follow_let_rebinds: false,
+        follow_typed_rebinds: false,
     };
     !block_consumes(&c, b)
 }
@@ -204,6 +262,7 @@ pub(crate) fn binding_materialized(
         free_fn_arg_transfers: true,
         callee_owns_arg: &|_, _| false,
         follow_let_rebinds: false,
+        follow_typed_rebinds: false,
     };
     value_derived_from(&c, e) || has_consuming_sink(&c, e)
 }
@@ -221,6 +280,7 @@ pub(crate) fn binding_materialized_block(
         free_fn_arg_transfers: true,
         callee_owns_arg: &|_, _| false,
         follow_let_rebinds: false,
+        follow_typed_rebinds: false,
     };
     block_consumes(&c, b)
 }
@@ -277,7 +337,15 @@ struct Ctx<'a> {
     /// own for one variant and armed one at the local's NLL point for the
     /// other. Every other question keeps the syntactic "a move-binding
     /// transfers", which is the right answer for a drop DISARM.
+    ///
+    /// B-2026-09-19-54 — the boxed-payload RESIDENCY question
+    /// ([`binding_only_borrowed_following_rebinds_with`]) sets it as well.
     follow_let_rebinds: bool,
+    /// B-2026-09-19-54 — with `follow_let_rebinds`, also follow a TYPED
+    /// immutable rebind (`let z: T = y;`). Only the residency question sets
+    /// it: there the annotation changes nothing about who holds the value,
+    /// whereas the escape question was written and measured without it.
+    follow_typed_rebinds: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -288,6 +356,7 @@ impl<'a> Ctx<'a> {
             free_fn_arg_transfers: false,
             callee_owns_arg: &|_, _| false,
             follow_let_rebinds: false,
+            follow_typed_rebinds: false,
         }
     }
 }
@@ -528,6 +597,7 @@ fn stmts_have_sink(
                 free_fn_arg_transfers: c.free_fn_arg_transfers,
                 callee_owns_arg: c.callee_owns_arg,
                 follow_let_rebinds: true,
+                follow_typed_rebinds: c.follow_typed_rebinds,
             };
             return stmts_have_sink(&wc, &stmts[i + 1..], final_expr, true);
         }
@@ -539,8 +609,9 @@ fn stmts_have_sink(
 }
 
 /// The name an immutable `let <w> = <tracked name>;` binds, when `c` follows
-/// rebinds. A projection, a typed or mutable binding, or a destructure is not
-/// a whole rebind and keeps the syntactic answer.
+/// rebinds. A projection, a mutable binding, or a destructure is not a whole
+/// rebind and keeps the syntactic answer; so is a typed one unless `c` follows
+/// typed rebinds too.
 fn whole_rebind_target<'b>(c: &Ctx<'_>, s: &'b Stmt) -> Option<&'b str> {
     if !c.follow_let_rebinds {
         return None;
@@ -548,12 +619,15 @@ fn whole_rebind_target<'b>(c: &Ctx<'_>, s: &'b Stmt) -> Option<&'b str> {
     let StmtKind::Let {
         is_mut: false,
         pattern,
-        ty: None,
+        ty,
         value,
     } = &s.kind
     else {
         return None;
     };
+    if ty.is_some() && !c.follow_typed_rebinds {
+        return None;
+    }
     let ExprKind::Identifier(src) = &value.kind else {
         return None;
     };

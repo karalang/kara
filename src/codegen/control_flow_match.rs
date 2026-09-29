@@ -11699,10 +11699,58 @@ impl<'ctx> super::Codegen<'ctx> {
             // `match mkh(s) { Ho.Full(x) => println(x.id), .. }`). Read-only
             // is the leaf-aware verdict: a primitive projection keeps the box
             // the owner, anything that could move a piece out still retracts.
+            // B-2026-09-19-54 — and through a whole REBIND of an `Array`
+            // payload. The syntactic verdict above scores `let y = x;` as the
+            // transfer, but an `Array` payload's arm binding registers no drop
+            // (`interior_arm_owned` is false for it) and neither does `y`, so
+            // retracting handed the element buffers to nobody: 6 B leaked on
+            // `G.Y(x) => { let y = x; return y[0].len(); }` over a boxed
+            // `Array[String, 2]`, on every compiled surface, where the
+            // read-only spelling is clean. So an `Array` payload follows the
+            // rebind and retracts only when the NEW name is consumed, with a
+            // constructor argument (`Some(x)`) counted as the consumption it
+            // is -- the syntactic verdict read `return Some(x);` as a borrow,
+            // kept the interior walk, and double-freed. Limited
+            // to `Array` because a tuple or generic-struct rebind registers a
+            // drop of its own (those spellings are clean with the retraction),
+            // and not asked for `let … else`, whose binding outlives the
+            // scrutinee's drop.
+            let arm_payload_is_array = !arm_binds.is_empty() && {
+                let tes = self.arm_consumed_payload_inst_tes(scrut_name, &enum_name, pattern, true);
+                !tes.is_empty() && tes.iter().all(|te| self.array_elem_and_len(te).is_some())
+            };
+            let arm_array_payload_stays = arm_payload_is_array && {
+                let callee_owns =
+                    |c: &str, i: usize| self.free_fn_param_is_callee_owned_array(c, i);
+                let no_copy = |_: &Expr| false;
+                arm_binds.iter().all(|v| match (body, &arm_scope) {
+                    (Some(b), _) => {
+                        super::consume_class::binding_only_borrowed_following_rebinds_with(
+                            v,
+                            b,
+                            &no_copy,
+                            &callee_owns,
+                        )
+                    }
+                    (None, Some(ArmScope::Block(b))) => {
+                        super::consume_class::binding_only_borrowed_block_following_rebinds_with(
+                            v,
+                            b,
+                            &no_copy,
+                            &callee_owns,
+                        )
+                    }
+                    _ => false,
+                })
+            };
             if !arm_leaves_payload_with_box {
                 self.clear_boxed_enum_inner_drop(
                     scrut_name,
-                    arm_reads_only && !arm_hands_to_callee_owned_array,
+                    if arm_payload_is_array {
+                        arm_array_payload_stays
+                    } else {
+                        arm_reads_only && !arm_hands_to_callee_owned_array
+                    },
                 );
             }
         }
