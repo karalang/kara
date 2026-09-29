@@ -8927,6 +8927,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     // original, so a callee that takes the value gets a copy.
                     let val =
                         self.clone_rc_fallback_optres_handback_arg(&qualified, pidx, &a.value, val);
+                    // B-2026-09-29-101 — the method twin of the free-fn site:
+                    // a caller-retained param's struct field handed to a
+                    // method that returns that param on every path is cloned.
+                    let val = if self
+                        .callee_param_ast(&qualified, pidx)
+                        .is_some_and(|(_, ai)| self.callee_always_returns_arg(&qualified, ai))
+                    {
+                        self.clone_caller_retained_struct_field_for_return(&a.value, val)
+                    } else {
+                        val
+                    };
                     let val =
                         self.coerce_call_arg_scalar(fn_val, compiled_args.len(), val, &a.value);
                     compiled_args.push(val.into());

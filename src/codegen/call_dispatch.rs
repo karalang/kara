@@ -2178,6 +2178,25 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 self.clone_rc_fallback_optres_handback_arg(&name, i, &a.value, val)
             };
+            // B-2026-09-29-101 — a caller-retained param's nested struct field
+            // (`q.u`, or a `let x = q.u;` view of it) handed to a callee that
+            // may return that parameter (`fn keep(s: S) -> S { s }`): the
+            // result would be the field's own words, and the caller frees its
+            // argument whole, so both released one heap. Such a callee owns the
+            // argument on every path (it returns it or drops it), so it gets a
+            // clone, exactly as a `return` of the field does. A callee that
+            // never returns the param (`eat(q.u)`) keeps receiving the view.
+            //
+            // ALL paths, not some: a callee that returns the param on one path
+            // only (`if b { return s } mk(0)`) runs just the BODIES on the other
+            // and leaves the memory to this frame, which frees its argument and
+            // not a clone, so a clone there leaked its retained `shared` box
+            // (16 B at -O0). That conditional shape is still open.
+            let val = if borrow_skip || !self.callee_always_returns_arg(&name, i) {
+                val
+            } else {
+                self.clone_caller_retained_struct_field_for_return(&a.value, val)
+            };
             // Widen a narrow scalar to the callee's declared param width HERE,
             // where the argument expression is still in hand to say whether the
             // extension is signed or zero (B-2026-08-13-15). The boundary sweep
@@ -7724,6 +7743,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// again. The named-binding gate below had the same hole. Both now ask this,
     /// exactly as the other two legs do, and resolve through `find_function_ast`
     /// so a free function and a `Type.method` key answer by one route.
+    /// B-2026-09-29-101 — does `callee_name` hand argument `arg_index` back on
+    /// EVERY path (`fn_always_returns_param`)? The strict half of
+    /// [`Self::callee_hands_arg_off`], for a caller that must know the result
+    /// always owns what it passed.
+    pub(super) fn callee_always_returns_arg(&self, callee_name: &str, arg_index: usize) -> bool {
+        self.program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, callee_name))
+            .is_some_and(|f| {
+                crate::ast::fn_always_returns_param(self.program_snapshot.as_deref(), f, arg_index)
+            })
+    }
+
     pub(super) fn callee_hands_arg_off(&self, callee_name: &str, arg_index: usize) -> bool {
         self.program_snapshot
             .as_deref()
