@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 559 |
+| miscompile | 560 |
 | run-vs-build | 540 |
-| leak | 481 |
+| leak | 483 |
 | double-free | 361 |
 | missing-feature | 214 |
 | codegen-gap | 203 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2368 |
-| interp | 696 |
+| codegen | 2371 |
+| interp | 697 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -396,7 +396,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-7 | 2026-09-29 | codegen | medium | `let ... else` OVER A `shared enum` RELEASES THE OBJECT AT THE `let` AND RUNS THE PAYLOAD'S `Drop` BODY BEFORE LATER READS OF THE BINDING, AND THE PLAIN-ENUM SPELLING ICEs NONDETERMINISTICALLY -- `let G.Y(x) = g else { return }; println(f"{x.id}");` prints `dR1 1 end` compiled where `--interp` prints `1 dR1 end`; over a monomorphic `shared enum M` the build panics at pattern_binding.rs `GEPIndex` on some runs | — |
 | B-2026-09-29-8 | 2026-09-29 | codegen | low | `for g in v` OVER A `Vec[G[R]]` OF GENERIC `shared enum`s RUNS EACH PAYLOAD'S `Drop` BODY AT THE `Vec`'s DEATH INSTEAD OF AT THE END OF ITS ITERATION -- `let v: Vec[G[R]] = [G.Y(mk(1))]; for g in v { match g { .. } }` prints `1 end dR1` compiled where `--interp` and the monomorphic `Vec[M]` twin print `1 dR1 end` | — |
 | B-2026-09-29-16 | 2026-09-29 | interp+codegen | high | `t.unwrap()` ON A BY-VALUE `Option` PARAM AS A PROJECTION RECEIVER STILL RUNS THE BODY TWICE UNDER `--interp` AND CRASHES COMPILED, the spelling B-2026-09-29-12's lowering leaves alone -- `fn cu(t: Option[S]) { println(f"u{t.unwrap().id}") }` prints `u1 dS1 dS1 end` under `--interp`, segfaults at -O0 and double-frees at -O2; a GENERIC `fn ge[T](t: Option[T]) -> T { return t.unwrap() }` still runs the body twice under `--interp` (`dS3 g3 dS3`), compiled right | — |
-| B-2026-09-29-21 | 2026-09-29 | codegen | high | MOVING A FIELD OUT OF A GENERIC STRUCT LOCAL AND THEN STORING INTO IT READS FREED MEMORY ON EVERY COMPILED SURFACE -- `let mut q = Q { u: mk(9) }; let x = q.u; q.u = mk(8);` over `Q[S2]` prints `x8 9 dS9 end` (the new value's `dS8` lost) against `--interp`'s `x8 9 dS9 dS8 end`, with 1 invalid read at -O0 and an abort in `malloc` under `karac run`; the conditional-move spelling reads freed memory too | — |
 | B-2026-09-29-22 | 2026-09-29 | interp+codegen | high | ASSIGNING TO AN `Option[S]` FIELD NEVER RUNS THE DISPLACED `Some` PAYLOAD'S `Drop` BODY ON ANY BACKEND, THE INTERPRETER INCLUDED -- `let mut o = O { u: Some(mk(9)) }; o.u = None;` over `struct O { u: Option[S2] }` prints `x end` everywhere where `dS9 x end` is due, as a plain `S2` field or an enum field runs it; valgrind clean, so only the body is lost; the generic `Q[Option[S2]]` spelling agrees | — |
 | B-2026-09-29-23 | 2026-09-29 | codegen+interp | high | REMAINDER OF B-2026-09-19-22/-23: A BOXED GENERIC ENUM PARAM THE CALLEE MAY HAND BACK STILL MISBEHAVES WHEN THE CALLEE TOUCHES IT ON THE OTHER LEG -- a fresh temp handed to `fn pk[T](g: G1[T], c: bool) -> G1[T] { if c { return g } eat(g); return G1.N }` double-frees at -O0; a callee that `match`es the param on that leg loses the payload body compiled; `--interp` loses the body of a param forwarded to `eat`; a `G1[Sh]` (`shared struct`) payload leaks 49 B compiled; a box returned inside `H[T] { g: G1[T] }` runs no body and leaks | — |
 | B-2026-09-29-24 | 2026-09-29 | codegen+interp | medium | REMAINDER OF B-2026-09-19-38 / B-2026-09-28-62: A FRESH `shared enum` STILL HAS NO OWNER AS AN ASSOCIATED-FN RESULT ARGUMENT, A GENERIC `T` ARGUMENT, AN `if let` SCRUTINEE, OR A DISCARDED / SCRUTINISED STRUCT-VARIANT CONSTRUCTOR -- `take(Obj.mk(1))`, `gn(mkf())` and `if let U.A = mkf()` run no `Drop` body and leak 16 B per evaluation compiled where `--interp` runs it; `Hd.Y { r: R { id: 3 } };` and a `match` over the same constructor diverge on both backends | — |
@@ -428,6 +427,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-76 | 2026-09-29 | interp | medium | A NESTED `let t = t.m1()` THAT SHADOWS AN ENCLOSING LOCAL ENUM, WHERE `m1` IS AN OWNED-`self` METHOD MATCHING `self`, RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` ONLY -- `fn v1(c: bool) -> i64 { let t = E.A(mks(6)); if c { let t = t.m1(); return t }; return 0 }` at `v1(true)` prints `dS6 dS6` under `--interp` and `dS6` at -O2 and -O0 | — |
 | B-2026-09-29-77 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` METHOD THAT MATCHES `self` ON ONLY SOME PATHS LOSES THE RECEIVER'S PAYLOAD `Drop` BODY ON THE PATHS THAT DO NOT, ON EVERY SURFACE -- `fn t1(self, c: bool) -> i64 { if c { match self { E.A(s) => s.id, E.B(n) => n } } else { 0 } }` at `let a = E.A(mks(1)); a.t1(false)` prints no `dS1`; since 64dadf0a1 the `if c { return match self { .. } }; return 0` spelling does too | — |
 | B-2026-09-29-73 | 2026-09-29 | codegen | medium | A NAMED `Option[Array[R, N]]` LOCAL WHOSE ELEMENT RUNS A USER `Drop` DOUBLE-FREES WHEN A `match` ARM PUSHES ITS BINDING INTO A `Vec` OR STORES IT IN A STRUCT LITERAL -- `let o: Option[Array[R, 2]] = Option.Some(mka()); match o { Option.Some(v) => { w.push(v) } .. }` aborts with `free(): double free detected in tcache 2` at `-O0` and `-O2` against a correct `--interp`, because the `Option`'s own element walk still runs after the arm moved the elements out | — |
+| B-2026-09-29-66 | 2026-09-29 | codegen | medium | MOVING AN `Option` FIELD OUT AND THEN STORING INTO IT LEAKS 16 B ON EVERY COMPILED SURFACE -- `let t = o.u; o.u = Some(mk(8));` over `struct O { u: Option[S2] }` prints the right text everywhere and valgrind reports `definitely lost: 16 bytes in 1 blocks` at -O0; the conditional-move spelling leaks the same | — |
+| B-2026-09-29-67 | 2026-09-29 | codegen | high | A GENERIC STRUCT LOCAL INSTANTIATED AT `Option[S]` OR `Result[S, E]` RUNS NO PAYLOAD `Drop` BODY AT SCOPE EXIT AND LEAKS 16 B ON EVERY COMPILED SURFACE -- `let q: Q[Option[S2]] = Q { u: Some(mk(9)) };` over `struct Q[U] { u: U }` prints `xtrue end` compiled where `--interp` prints `xtrue dS9 end` | — |
+| B-2026-09-29-68 | 2026-09-29 | interp+codegen | medium | STORING INTO A FIELD OF AN INDEXED ELEMENT (`v[0].u = mk(8)`) NEVER RUNS THE DISPLACED VALUE'S `Drop` BODY ON ANY BACKEND, THE INTERPRETER INCLUDED -- over `[W { u: mk(9) }]` with `struct W { u: S2 }` every surface prints `dS8 x end` where `dS9 dS8 x end` or `dS9 x dS8 end` is due; valgrind clean, so only the body is lost | — |
 
 ### Relocated
 
@@ -3307,6 +3309,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-17 | codegen | medium | CODEGEN PANICS WHEN A `match` ARM BINDING SHADOWS A `ref` / `mut ref` PARAMETER'S NAME AND THE ARM YIELDS IT -- `fn cp(t: Option[i64], v: mut ref Vec… | 96c13b165 |
 | B-2026-09-29-19 | codegen | high | A FIELD STORE ON A GENERIC STRUCT NEVER RUNS THE DISPLACED VALUE'S `Drop` BODY ON ANY COMPILED SURFACE (corrected from "through a generic `mut ref`":… | 7c254d982 |
 | B-2026-09-29-20 | codegen | high | A NESTED GENERIC STRUCT `Q[Q[S2]]` LEAKS THE INNER VALUE'S `shared` BOX ON EVERY COMPILED SURFACE WITH NO CALL INVOLVED -- `let q = Q { u: Q { u: S2… | 46c083cf4 |
+| B-2026-09-29-21 | codegen | high | MOVING A FIELD OUT OF A GENERIC STRUCT LOCAL AND THEN STORING INTO IT READS FREED MEMORY ON EVERY COMPILED SURFACE -- `let mut q = Q { u: mk(9) }; le… | 0e5158540 |
 | B-2026-09-29-18 | codegen+interp | medium | REMAINDER OF B-2026-09-29-10: A PROJECTION OFF A LOCAL VIEW OF A BY-VALUE PARAM (`let O { w, k } = o;` or `let w = o.w;`, then `xs.push(w.r)`) RUNS T… | 69cc50035 |
 | B-2026-09-29-27 | interp+codegen | high | A BY-VALUE `Option` PARAM STORED WHOLE ON ONE PATH AND ITS PAYLOAD TAKEN ON ANOTHER DOUBLE-FREES COMPILED WHEN THE PAYLOAD IS BOXED, AND A THIRD PATH… | 01ab10f45 |
 | B-2026-09-29-29 | codegen | high | A TAKE THAT REBINDS THE PARAM'S OWN NAME (`let t = match t { . | 2d1219d49 |
