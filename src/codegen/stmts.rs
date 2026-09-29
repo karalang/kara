@@ -6667,6 +6667,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.forget_var_metadata(n);
                     self.restore_var_metadata(n, new_meta);
                 }
+                // B-2026-09-29-51 — a `let` that SHADOWS a parameter binds a
+                // fresh local: every later use of the name means the local, so
+                // the name stops answering "is a parameter" (whose payload is
+                // the caller's). Without this `let x = Some(mk(11)); match x {
+                // Some(r) => .. }` over a param `x` read the arm's binding as a
+                // view of the param, and the local's `Drop` body ran on no
+                // compiled surface. The block snapshot gives the name back at
+                // the block's exit. Only when the value does not mention the
+                // name: a rebind of the param through itself (`let x = x`,
+                // `let x = f(x)`) keeps the param-view machinery it has.
+                if let Some(n) = shadow_name.as_ref() {
+                    if self.fn_ctx.current_fn_param_names.contains(n)
+                        && !crate::deque_head::expr_mentions_name_deep(value, n)
+                    {
+                        self.fn_ctx.current_fn_param_names.remove(n);
+                    }
+                }
                 self.var_types.pending_let_elem_type = saved_pending_let_elem;
                 self.var_types.pending_let_elem_type_expr = saved_pending_let_elem_te;
                 self.var_types.pending_let_tuple_te = saved_pending_let_tuple_te;

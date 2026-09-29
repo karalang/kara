@@ -108,8 +108,8 @@ pub(crate) struct PayloadEscapeFrame {
     pub(crate) borrowed: std::collections::HashSet<String>,
     /// B-2026-09-29-44 — params a `let` of the same name has shadowed in this
     /// frame; the name no longer denotes the param (see
-    /// `names_borrowed_param`). Never cleared, so a shadow scoped to an inner
-    /// block keeps the pre-fix (owning) answer after that block — conservative.
+    /// `names_borrowed_param`). The shadowing block's exit takes the name back
+    /// out (`param_shadow_restore`, B-2026-09-29-51).
     pub(crate) shadowed: std::collections::HashSet<String>,
 }
 
@@ -862,6 +862,14 @@ pub struct Interpreter<'a> {
     /// re-inserting at block exit restores "moved" to the binding that is live
     /// again once the block ends, before its slot in the enclosing block fires.
     pub(crate) outer_shadow_moved_restore: Vec<Vec<String>>,
+    /// B-2026-09-29-51 — per block, the PARAMETERS a `let` in this block
+    /// shadowed: `(name, was an owned-param view)`. A shadow ends with its
+    /// block, so the exit gives the name back its param-ness — the owned-param
+    /// view mark and the frame's `shadowed` entry alike. Without it
+    /// `if c { let x = .. } match x { Some(r) => .. }` over an owned param `x`
+    /// read the param as a local after the block and ran its payload's body in
+    /// the callee as well as the caller.
+    pub(crate) param_shadow_restore: Vec<Vec<(String, bool)>>,
     /// B-2026-08-28-51 — spans (`(offset, length)`, the shape every other span
     /// table here uses) of expressions known to sit in an ESCAPING position:
     /// one whose value is handed to an owner rather than discarded. Seeded at
@@ -1417,6 +1425,7 @@ impl<'a> Interpreter<'a> {
             moved_out_user_drop_bindings: HashSet::new(),
             let_displaced_moved: Vec::new(),
             outer_shadow_moved_restore: Vec::new(),
+            param_shadow_restore: Vec::new(),
             cond_move_escaping_sites: HashSet::new(),
             cond_move_call_arg_sites: HashSet::new(),
             seeding_call_arg_sites: false,

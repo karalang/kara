@@ -105,9 +105,21 @@ impl<'a> super::Interpreter<'a> {
         // record has to be back before the enclosing block's slot for that
         // binding fires, and that slot fires only after this call returns.
         self.outer_shadow_moved_restore.push(Vec::new());
+        self.param_shadow_restore.push(Vec::new());
         let result = self.eval_block_scope(block);
         for name in self.outer_shadow_moved_restore.pop().unwrap_or_default() {
             self.moved_out_user_drop_bindings.insert(name);
+        }
+        // B-2026-09-29-51 — see the field.
+        for (name, was_owned) in self.param_shadow_restore.pop().unwrap_or_default() {
+            if was_owned {
+                if let Some(top) = self.owned_param_names_stack.last_mut() {
+                    top.insert(name.clone());
+                }
+            }
+            if let Some(frame) = self.payload_escape_frames.last_mut() {
+                frame.shadowed.remove(&name);
+            }
         }
         result
     }
@@ -4449,9 +4461,33 @@ impl<'a> super::Interpreter<'a> {
         if names.is_empty() {
             return;
         }
+        let mut was_owned: Vec<bool> = Vec::with_capacity(names.len());
         if let Some(top) = self.owned_param_names_stack.last_mut() {
             for n in &names {
-                top.remove(n);
+                was_owned.push(top.remove(n));
+            }
+        }
+        // B-2026-09-29-51 — a shadowed PARAMETER gets its param-ness back when
+        // the shadowing block ends (`param_shadow_restore`); other view marks
+        // stay cleared, as B-2026-08-31-7 left them.
+        let frame_params: Vec<String> = self
+            .payload_escape_frames
+            .last()
+            .map(|f| f.params.clone())
+            .unwrap_or_default();
+        for (i, n) in names.iter().enumerate() {
+            if !frame_params.iter().any(|p| p == n) {
+                continue;
+            }
+            let newly_shadowed = self
+                .payload_escape_frames
+                .last()
+                .is_some_and(|f| !f.shadowed.contains(n));
+            let owned = was_owned.get(i).copied().unwrap_or(false);
+            if newly_shadowed || owned {
+                if let Some(top) = self.param_shadow_restore.last_mut() {
+                    top.push((n.clone(), owned));
+                }
             }
         }
         if let Some(frame) = self.payload_escape_frames.last_mut() {

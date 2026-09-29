@@ -452,6 +452,9 @@ impl<'ctx> super::Codegen<'ctx> {
 /// entry past the scope.
 pub(super) struct VarEnvSnapshot<'ctx> {
     variables: HashMap<String, VarSlot<'ctx>>,
+    /// B-2026-09-29-51 — a `let` that shadows a parameter takes the name out
+    /// of `current_fn_param_names`; the block's exit gives it back.
+    current_fn_param_names: HashSet<String>,
     owned_vecstr_params: HashSet<String>,
     for_loop_borrow_vars: HashSet<String>,
     var_type_names: HashMap<String, String>,
@@ -501,6 +504,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn snapshot_var_env(&self) -> VarEnvSnapshot<'ctx> {
         VarEnvSnapshot {
             variables: self.variables.clone(),
+            current_fn_param_names: self.fn_ctx.current_fn_param_names.clone(),
             owned_vecstr_params: self.borrow_vars.owned_vecstr_params.clone(),
             for_loop_borrow_vars: self.borrow_vars.for_loop_borrow_vars.clone(),
             var_type_names: self.var_types.var_type_names.clone(),
@@ -629,5 +633,6 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.boxed_optres_payload_view_vars = snap.boxed_optres_payload_view_vars;
         self.drop_rc.rc_fallback_heap_types = snap.rc_fallback_heap_types;
         self.var_types.range_let_bindings = snap.range_let_bindings;
+        self.fn_ctx.current_fn_param_names = snap.current_fn_param_names;
     }
 }
