@@ -3309,6 +3309,27 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// A value no unit-variant pattern can match: plain data whose type owns no
+    /// variants. Anything else (an enum, a borrow) keeps the old answer.
+    fn value_cannot_be_an_enum(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Int(_)
+                | Value::Float(_)
+                | Value::Bool(_)
+                | Value::Char(_)
+                | Value::String(_)
+                | Value::CStr(_)
+                | Value::CString(_)
+                | Value::Unit
+                | Value::Tuple(_)
+                | Value::Array(_)
+                | Value::Vector(_)
+                | Value::Struct { .. }
+                | Value::SharedStruct(_)
+        )
+    }
+
     pub(crate) fn bind_pattern(&mut self, pattern: &Pattern, value: Value) {
         match &pattern.kind {
             PatternKind::Wildcard => {}
@@ -3316,7 +3337,19 @@ impl<'a> super::Interpreter<'a> {
                 // Don't create a binding for a unit-variant pattern — the
                 // same [`Self::binding_is_unit_variant`] predicate
                 // `try_match_pattern` uses, so the two can never drift.
-                if self.binding_is_unit_variant(name, &value) {
+                //
+                // B-2026-09-19-37 — except over a value no variant can match.
+                // `let Uc = 7` over a unit variant `Uc` binds on every compiled
+                // surface (the typechecker's `let` binds it, because an `i64`
+                // owns no variant), but the global-table test bound nothing
+                // here and the later `Uc` read built the VARIANT: `nUc`
+                // against `n7`, plus a `Drop` body on a `shared enum` that no
+                // compiled surface ran. Only the binding half moves: a `match`
+                // arm spelled that way is still a variant test that misses,
+                // which is the typechecker's answer there.
+                if !Self::value_cannot_be_an_enum(&value)
+                    && self.binding_is_unit_variant(name, &value)
+                {
                     return;
                 }
                 self.env.define(name.clone(), value);
