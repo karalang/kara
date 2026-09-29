@@ -4350,6 +4350,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // body and restore below, like `variables` — see the matching note
             // in `ensure_layout_mono_generated`.
             let saved_ref_params = std::mem::take(&mut self.borrow_vars.ref_params);
+            let saved_mut_ref_param_tes = std::mem::take(&mut self.borrow_vars.mut_ref_param_tes);
             let saved_signature_ref_params =
                 std::mem::take(&mut self.borrow_vars.signature_ref_params);
             // B-2026-09-03-23 — the mono body now builds its own param-ownership
@@ -4437,6 +4438,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.accel.soa_return_locals = saved_soa_return_locals;
             self.var_types.binding_layouts = saved_binding_layouts;
             self.borrow_vars.ref_params = saved_ref_params;
+            self.borrow_vars.mut_ref_param_tes = saved_mut_ref_param_tes;
             self.borrow_vars.signature_ref_params = saved_signature_ref_params;
             self.fn_ctx.current_fn_param_names = saved_fn_param_names;
             self.fn_ctx.self_arms_bind_views = saved_self_arms_bind_views;
@@ -5280,6 +5282,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // mirroring the `variables` save/restore above. Without this a mono's
         // ref param would mark a same-named caller binding as a borrow.
         let saved_ref_params = std::mem::take(&mut self.borrow_vars.ref_params);
+        let saved_mut_ref_param_tes = std::mem::take(&mut self.borrow_vars.mut_ref_param_tes);
         let saved_signature_ref_params = std::mem::take(&mut self.borrow_vars.signature_ref_params);
         // B-2026-09-03-23 — see the twin in `compile_generic_call`.
         let saved_fn_param_names = std::mem::take(&mut self.fn_ctx.current_fn_param_names);
@@ -5338,6 +5341,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.accel.soa_return_locals = saved_soa_return_locals;
         self.var_types.binding_layouts = saved_binding_layouts;
         self.borrow_vars.ref_params = saved_ref_params;
+        self.borrow_vars.mut_ref_param_tes = saved_mut_ref_param_tes;
         self.borrow_vars.signature_ref_params = saved_signature_ref_params;
         self.fn_ctx.current_fn_param_names = saved_fn_param_names;
         self.fn_ctx.self_arms_bind_views = saved_self_arms_bind_views;
@@ -5769,6 +5773,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.borrow_vars
                     .signature_ref_params
                     .insert(param_name.clone());
+                if let TypeKind::MutRef(inner) = &param.ty.kind {
+                    let te = self.subst_monomorph_type_params(inner);
+                    self.borrow_vars
+                        .mut_ref_param_tes
+                        .insert(param_name.clone(), te);
+                }
             }
             // B-2026-09-10-34 — the monomorph's own copy of the owned
             // by-value `Array[T, N]` param drop, the array peer of the box

@@ -11497,6 +11497,21 @@ impl<'a> super::Interpreter<'a> {
                                 // The own body respects the same disarm sets
                                 // the payload walk checks internally: a
                                 // moved-out value runs nothing.
+                                // B-2026-09-29-74 — a `mut ref` PARAM (the only borrowed param a store
+                                // can target) holding an
+                                // `Option`/`Result`: the binding-keyed payload walk
+                                // below finds no registration for a param (the
+                                // caller owns the value), so `x = Some(..)` through
+                                // `x: mut ref Option[R]` ran no displaced body. The
+                                // store displaces the caller's value outright, so
+                                // walk the old value's payload directly.
+                                Value::EnumVariant { enum_name, .. }
+                                    if (enum_name == "Option" || enum_name == "Result")
+                                        && self.names_borrowed_param(t) =>
+                                {
+                                    let old = old.clone();
+                                    self.run_optres_payload_user_drops_value(&old);
+                                }
                                 Value::EnumVariant { enum_name, .. } => {
                                     let t = t.clone();
                                     let old = old.clone();

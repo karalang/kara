@@ -33,6 +33,11 @@ pub(crate) struct BorrowVars<'ctx> {
     /// B-2026-07-17-20 LSan test). Mirrors `ref_params`' lifecycle: cleared
     /// at function entry, swapped around mono bodies, shadow-danced per name.
     pub(crate) signature_ref_params: std::collections::HashSet<String>,
+    /// B-2026-09-29-74 — the declared POINTEE type of each signature `mut ref`
+    /// param (`x: mut ref Option[R]` -> `Option[R]`), so a whole-value store
+    /// through it (`x = Some(..)`) can run the displaced value's `Drop` bodies
+    /// and free it by type. Same lifecycle as `signature_ref_params`.
+    pub(crate) mut_ref_param_tes: HashMap<String, crate::ast::TypeExpr>,
     /// B-2026-09-23-31 — bindings that alias a CONTAINER ELEMENT the
     /// container still owns, and that no other copy machinery covers for a
     /// projected field: the `let r = ref v[i]` element shim, and a `for`

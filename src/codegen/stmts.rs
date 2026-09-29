@@ -460,6 +460,74 @@ impl<'ctx> super::Codegen<'ctx> {
             && result.get_type() == self.vec_struct_type().into()
     }
 
+    /// B-2026-09-29-74 — the declared pointee type of the signature `mut ref`
+    /// param `name`, when the store about to go through it displaces a value
+    /// this frame may walk: the name must still denote the signature param (a
+    /// pattern shim or a shadowing local re-registers `ref_params` under the
+    /// same name with its own type, hence the layout check), and the RHS must
+    /// not mention it, since an RHS that reads the old value (`x = f(x)`) may
+    /// have moved parts of it out already.
+    fn displaced_mut_ref_param_te(
+        &self,
+        name: &str,
+        inner_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        value: &Expr,
+    ) -> Option<TypeExpr> {
+        if !self.borrow_vars.signature_ref_params.contains(name)
+            || crate::deque_head::expr_mentions_name_deep(value, name)
+        {
+            return None;
+        }
+        let te = self.borrow_vars.mut_ref_param_tes.get(name)?.clone();
+        (self.llvm_type_for_type_expr(&te) == inner_ty).then_some(te)
+    }
+
+    /// B-2026-09-29-74 — a whole-value store through a `mut ref` param
+    /// (`x = Some(mk(99))` over `x: mut ref Option[R]`) displaces the caller's
+    /// value, which has no other owner once the store lands: the caller's
+    /// binding runs the bodies of whatever its storage holds at ITS scope exit,
+    /// which is the new value. So the old value's `Drop` bodies run here, before
+    /// the store and before `reclaim_displaced_ref_param_pointee` frees it — the
+    /// bodies-then-memory order every displacement site keeps. An `Option` /
+    /// `Result` pointee is freed here too, by its declared type, because
+    /// `reclaim_displaced_ref_param_pointee` only knows String/Vec buffers and
+    /// plain structs (measured: `x = Some(..)` / `x = Err(4)` / `x = None`
+    /// each lost the displaced payload).
+    fn run_displaced_mut_ref_param_bodies(
+        &mut self,
+        name: &str,
+        inner_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        ptr: PointerValue<'ctx>,
+        value: &Expr,
+    ) {
+        let Some(te) = self.displaced_mut_ref_param_te(name, inner_ty, value) else {
+            return;
+        };
+        self.emit_slot_drop_bodies_at(ptr, &te);
+        // A non-shared user ENUM pointee is in the same position: the reclaim
+        // below answers only for structs and String/Vec, so `x = E.A(..)` lost
+        // the displaced variant's payload too.
+        let frees_here = match &te.kind {
+            TypeKind::Path(p) => match p.segments.first().map(String::as_str) {
+                Some("Option" | "Result") => true,
+                Some(head) => {
+                    p.generic_args.is_none()
+                        && self
+                            .type_decls
+                            .enum_layouts
+                            .get(head)
+                            .is_some_and(|l| !l.is_shared)
+                }
+                None => false,
+            },
+            _ => false,
+        };
+        if frees_here {
+            let f = self.emit_drop_fn_for_type_expr(&te);
+            self.builder.build_call(f, &[ptr.into()], "").unwrap();
+        }
+    }
+
     fn reclaim_displaced_ref_param_pointee(
         &mut self,
         name: &str,
@@ -14098,6 +14166,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let rhs_is_self =
                                 matches!(&value.kind, ExprKind::Identifier(r) if r == name);
                             if !rhs_is_self {
+                                self.run_displaced_mut_ref_param_bodies(name, inner_ty, ptr, value);
                                 self.reclaim_displaced_ref_param_pointee(name, inner_ty, ptr);
                             }
                             self.builder.build_store(ptr, val).unwrap();

@@ -6962,6 +6962,7 @@ impl<'ctx> Codegen<'ctx> {
             borrow_vars: BorrowVars {
                 ref_params: HashMap::new(),
                 signature_ref_params: std::collections::HashSet::new(),
+                mut_ref_param_tes: HashMap::new(),
                 elem_borrow_roots: std::collections::HashSet::new(),
                 entry_slot_ref_vars: HashMap::new(),
                 owned_vecstr_params: HashSet::new(),

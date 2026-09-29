@@ -1641,6 +1641,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .clear();
         self.borrow_vars.ref_params.clear();
         self.borrow_vars.signature_ref_params.clear();
+        self.borrow_vars.mut_ref_param_tes.clear();
         self.borrow_vars.entry_slot_ref_vars.clear();
         // Head-index deque slots are per-function (B-2026-07-30-5). Cleared
         // here for the same name-collision reason as `variables`: the table is
@@ -2232,6 +2233,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.borrow_vars
                         .signature_ref_params
                         .insert(param_name.clone());
+                    if let TypeKind::MutRef(inner) = &param.ty.kind {
+                        self.borrow_vars
+                            .mut_ref_param_tes
+                            .insert(param_name.clone(), inner.as_ref().clone());
+                    }
                 }
                 // `mut ref Option[shared T]` param: record the inner shared heap
                 // layout so an in-callee reassignment (`prev = Some(n)`) routes

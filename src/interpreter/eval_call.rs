@@ -2588,6 +2588,13 @@ impl<'a> super::Interpreter<'a> {
                 // chain and matches codegen's full aliasing semantics.
                 let param_mut_ref = self.fn_param_mut_ref_flags(&fn_name);
                 let mut writebacks: Vec<(Expr, Value)> = Vec::new();
+                // B-2026-09-29-74 — a FRESH TEMP lent `mut` (`hm(mut mk(4))`)
+                // has no place to write back to, but it still dies at the end
+                // of the call holding what the callee LEFT in it: the callee's
+                // `x = mk(98)` already ran the displaced value's body, so the
+                // temp's own drop below must see the stored value, not the
+                // pre-call one (which ran `dR4` twice and lost `dR98`).
+                let mut temp_post_vals: Vec<(usize, Value)> = Vec::new();
                 for (i, arg) in args.iter().enumerate() {
                     let param_is_mut_ref = param_mut_ref
                         .as_ref()
@@ -2598,6 +2605,13 @@ impl<'a> super::Interpreter<'a> {
                         continue;
                     }
                     if !Self::place_is_writeback_safe(&arg.value) {
+                        if let Some(crate::ast::PatternKind::Binding(param_name)) =
+                            param_patterns.get(i).map(|p| &p.kind)
+                        {
+                            if let Some(val) = self.env.get(param_name) {
+                                temp_post_vals.push((i, val));
+                            }
+                        }
                         continue;
                     }
                     if let Some(pat) = param_patterns.get(i) {
@@ -2648,11 +2662,24 @@ impl<'a> super::Interpreter<'a> {
                 // `method_call.rs` passes its receiver type. Resolution-only:
                 // `CalleeOwner::Assoc` leaves the receiver-shaped guard off.
                 self.pending_call_payload_escapes = call_payload_escapes;
+                let post_arg_vals;
+                let drop_arg_vals = if temp_post_vals.is_empty() {
+                    &arg_vals
+                } else {
+                    let mut v = arg_vals.clone();
+                    for (i, val) in temp_post_vals {
+                        if let Some(slot) = v.get_mut(i) {
+                            *slot = val;
+                        }
+                    }
+                    post_arg_vals = v;
+                    &post_arg_vals
+                };
                 self.run_fresh_temp_arg_drops(
                     &fn_name,
                     assoc_owner.map(CalleeOwner::Assoc),
                     args,
-                    &arg_vals,
+                    drop_arg_vals,
                 );
                 // B-2026-08-02-23 leg 2 — the IDENTIFIER-arg sibling of the
                 // guard above: `run_fresh_temp_arg_drops` skips named bindings
