@@ -683,6 +683,7 @@ fn encode_value(v: &Value, out: &mut Vec<u8>) {
             enum_name,
             variant,
             data,
+            ..
         } => {
             out.push(tag::ENUM);
             push_bytes(out, enum_name.as_bytes());

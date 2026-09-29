@@ -124,6 +124,7 @@ fn result_ok(v: Value) -> Value {
         enum_name: "Result".to_string(),
         variant: "Ok".to_string(),
         data: EnumData::Tuple(vec![v]),
+        rc: None,
     }
 }
 
@@ -132,6 +133,7 @@ fn result_err(v: Value) -> Value {
         enum_name: "Result".to_string(),
         variant: "Err".to_string(),
         data: EnumData::Tuple(vec![v]),
+        rc: None,
     }
 }
 
@@ -140,6 +142,7 @@ fn channel_error(variant: &str) -> Value {
         enum_name: "ChannelError".to_string(),
         variant: variant.to_string(),
         data: EnumData::Unit,
+        rc: None,
     }
 }
 
@@ -148,6 +151,7 @@ fn option_some(v: Value) -> Value {
         enum_name: "Option".to_string(),
         variant: "Some".to_string(),
         data: EnumData::Tuple(vec![v]),
+        rc: None,
     }
 }
 
@@ -156,5 +160,6 @@ fn option_none() -> Value {
         enum_name: "Option".to_string(),
         variant: "None".to_string(),
         data: EnumData::Unit,
+        rc: None,
     }
 }

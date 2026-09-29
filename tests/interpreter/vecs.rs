@@ -2108,6 +2108,13 @@ fn test_nested_container_in_a_vec_field_runs_its_innermost_drop_bodies() {
 /// prints `d2:9` — the `Mono` element's own `R2` payload body, one level in —
 /// on `--interp`, the JIT and AOT at both opt levels. The agreed gap this
 /// cell pinned is gone; the AGREEMENT is not.
+///
+/// B-2026-09-19-29 MOVED `gensh` ON THIS BACKEND ONLY, DELIBERATELY. A
+/// `shared enum` value now carries a refcount here, and its payload body runs
+/// when the last reference goes, so this cell prints the body the language
+/// owes. Every compiled surface still prints none and leaks the payload
+/// (valgrind at -O0), which is B-2026-09-29-99. The codegen twin keeps the
+/// compiled output until that row is fixed, and then the two agree again.
 #[test]
 fn test_declared_vec_enum_payload_runs_element_drop_bodies() {
     let out = run(r#"struct R2 { s: String, t: String, u: String }
@@ -2138,7 +2145,7 @@ fn main() {
     println("end")
 }
 "#);
-    assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  d2:9\n  x\ngenvec\n  d2:9\n  x\ngensh\n  x\nend\n", "got:\n{out}");
+    assert_eq!(out, "vecenum\n  d2:9\n  x\nvecstruct\n  dS7\n  dS8\n  x\nvecmixed\n  dS9\n  x\nvecempty\n  x\nunitvar\n  x\narray\n  dS1\n  dS2\n  x\nstruct\n  d2:9\n  x\nsharedec\n  d2:9\n  x\ngenvec\n  d2:9\n  x\ngensh\n  d2:9\n  x\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-20-45 — a generic enum whose payload instantiates to

@@ -81,12 +81,14 @@ impl<'a> super::Interpreter<'a> {
                                                 name: "Match".to_string(),
                                                 fields: mf,
                                             }]),
+                                            rc: None,
                                         }
                                     }
                                     None => Value::EnumVariant {
                                         enum_name: "Option".to_string(),
                                         variant: "None".to_string(),
                                         data: EnumData::Unit,
+                                        rc: None,
                                     },
                                 });
                             }

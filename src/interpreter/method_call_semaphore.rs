@@ -118,6 +118,7 @@ fn result_ok(v: Value) -> Value {
         enum_name: "Result".to_string(),
         variant: "Ok".to_string(),
         data: EnumData::Tuple(vec![v]),
+        rc: None,
     }
 }
 
@@ -126,6 +127,7 @@ fn result_err(v: Value) -> Value {
         enum_name: "Result".to_string(),
         variant: "Err".to_string(),
         data: EnumData::Tuple(vec![v]),
+        rc: None,
     }
 }
 
@@ -134,5 +136,6 @@ fn semaphore_error(variant: &str) -> Value {
         enum_name: "SemaphoreError".to_string(),
         variant: variant.to_string(),
         data: EnumData::Unit,
+        rc: None,
     }
 }

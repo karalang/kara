@@ -249,6 +249,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name,
                         variant,
                         data: EnumData::Tuple(vals),
+                        ..
                     } if variant == "Some" || variant == "Ok" => {
                         let payload = vals.first().cloned().unwrap_or(Value::Unit);
                         let mapped = self.invoke_function_value(f, vec![payload]);
@@ -256,6 +257,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: enum_name.clone(),
                             variant: variant.clone(),
                             data: EnumData::Tuple(vec![mapped]),
+                            rc: None,
                         }
                     }
                     // `None` / `Err(e)` — unchanged (the mapper never runs).
@@ -286,12 +288,14 @@ impl<'a> super::Interpreter<'a> {
                                     .first()
                                     .cloned()
                                     .unwrap_or(Value::Unit)]),
+                                rc: None,
                             }
                         } else {
                             Value::EnumVariant {
                                 enum_name: "Option".to_string(),
                                 variant: "None".to_string(),
                                 data: EnumData::Unit,
+                                rc: None,
                             }
                         });
                     }
@@ -327,6 +331,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Result".to_string(),
                             variant: "Ok".to_string(),
                             data: EnumData::Tuple(vec![payload]),
+                            rc: None,
                         });
                     } else if variant == "None" {
                         let e = args
@@ -337,6 +342,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Result".to_string(),
                             variant: "Err".to_string(),
                             data: EnumData::Tuple(vec![e]),
+                            rc: None,
                         });
                     }
                 }
@@ -354,6 +360,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         };
                         self.assign_to_place(object, none, None);
                         return Some(taken);
@@ -379,6 +386,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![v.clone()]),
+                            rc: None,
                         };
                         self.assign_to_place(object, some, None);
                         return Some(v);
@@ -395,6 +403,7 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "None".to_string(),
                                 data: EnumData::Unit,
+                                rc: None,
                             }));
                         }
                     } else if variant == "None" {
@@ -476,6 +485,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name,
                     variant,
                     data: EnumData::Tuple(vals),
+                    ..
                 } = obj
                 {
                     if variant == "Ok" {
@@ -488,6 +498,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: enum_name.clone(),
                             variant: "Err".to_string(),
                             data: EnumData::Tuple(vec![mapped]),
+                            rc: None,
                         });
                     }
                 }
@@ -552,12 +563,14 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
                                 data: EnumData::Tuple(vec![payload]),
+                                rc: None,
                             }
                         } else {
                             Value::EnumVariant {
                                 enum_name: "Option".to_string(),
                                 variant: "None".to_string(),
                                 data: EnumData::Unit,
+                                rc: None,
                             }
                         });
                     } else if variant == "None" {
@@ -751,6 +764,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Result".to_string(),
                         variant: if swapped { "Ok" } else { "Err" }.to_string(),
                         data: EnumData::Tuple(vec![current]),
+                        rc: None,
                     });
                 }
             }

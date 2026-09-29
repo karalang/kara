@@ -20,11 +20,13 @@ fn option_of(payload: Option<Value>) -> Value {
             enum_name: "Option".to_string(),
             variant: "Some".to_string(),
             data: EnumData::Tuple(vec![v]),
+            rc: None,
         },
         None => Value::EnumVariant {
             enum_name: "Option".to_string(),
             variant: "None".to_string(),
             data: EnumData::Unit,
+            rc: None,
         },
     }
 }

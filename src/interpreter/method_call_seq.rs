@@ -39,6 +39,7 @@ fn found_map_value_to_option(v: &Value) -> Value {
         enum_name: "Option".to_string(),
         variant: "Some".to_string(),
         data: EnumData::Tuple(vec![v.clone()]),
+        rc: None,
     }
 }
 
@@ -362,11 +363,13 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
                                 data: EnumData::Tuple(vec![Value::Char(c)]),
+                                rc: None,
                             },
                             None => Value::EnumVariant {
                                 enum_name: "Option".to_string(),
                                 variant: "None".to_string(),
                                 data: EnumData::Unit,
+                                rc: None,
                             },
                         });
                     }
@@ -390,11 +393,13 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
                                 data: EnumData::Tuple(vec![Value::Int((b as i64).into())]),
+                                rc: None,
                             },
                             None => Value::EnumVariant {
                                 enum_name: "Option".to_string(),
                                 variant: "None".to_string(),
                                 data: EnumData::Unit,
+                                rc: None,
                             },
                         });
                     }
@@ -420,11 +425,13 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
                                 data: EnumData::Tuple(vec![Value::String(rest.to_string())]),
+                                rc: None,
                             },
                             None => Value::EnumVariant {
                                 enum_name: "Option".to_string(),
                                 variant: "None".to_string(),
                                 data: EnumData::Unit,
+                                rc: None,
                             },
                         });
                     }
@@ -983,11 +990,13 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "Some".to_string(),
                         data: EnumData::Tuple(vec![v]),
+                        rc: None,
                     },
                     None => Value::EnumVariant {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     },
                 });
             }
@@ -1043,11 +1052,13 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "Some".to_string(),
                         data: EnumData::Tuple(vec![v]),
+                        rc: None,
                     },
                     None => Value::EnumVariant {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     },
                 });
             }
@@ -1112,12 +1123,14 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
                                 data: EnumData::Tuple(vec![v[i].clone()]),
+                                rc: None,
                             }
                         } else {
                             Value::EnumVariant {
                                 enum_name: "Option".to_string(),
                                 variant: "None".to_string(),
                                 data: EnumData::Unit,
+                                rc: None,
                             }
                         }
                     } else {
@@ -1134,6 +1147,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         },
                     };
                     self.run_owed_lookup_key_user_drops(key, owes);
@@ -1147,6 +1161,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         },
                     };
                     self.run_owed_lookup_key_user_drops(key, owes);
@@ -1295,11 +1310,13 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![Value::Int((i as i64).into())]),
+                            rc: None,
                         },
                         Err(_) => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         },
                     });
                 }

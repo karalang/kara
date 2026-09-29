@@ -349,6 +349,7 @@ impl<'a> super::Interpreter<'a> {
                                             data: EnumData::Tuple(vec![Value::String(
                                                 v_str.clone(),
                                             )]),
+                                            rc: None,
                                         });
                                     }
                                 }
@@ -358,6 +359,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         });
                     }
                     // Request side mirrors the path/method/body convention:
@@ -375,6 +377,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         });
                     }
                 }

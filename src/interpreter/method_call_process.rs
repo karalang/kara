@@ -398,6 +398,7 @@ fn result_ok(v: Value) -> Value {
         enum_name: "Result".to_string(),
         variant: "Ok".to_string(),
         data: EnumData::Tuple(vec![v]),
+        rc: None,
     }
 }
 
@@ -406,6 +407,7 @@ fn result_err(v: Value) -> Value {
         enum_name: "Result".to_string(),
         variant: "Err".to_string(),
         data: EnumData::Tuple(vec![v]),
+        rc: None,
     }
 }
 
@@ -414,6 +416,7 @@ fn option_some(v: Value) -> Value {
         enum_name: "Option".to_string(),
         variant: "Some".to_string(),
         data: EnumData::Tuple(vec![v]),
+        rc: None,
     }
 }
 
@@ -422,6 +425,7 @@ fn option_none() -> Value {
         enum_name: "Option".to_string(),
         variant: "None".to_string(),
         data: EnumData::Unit,
+        rc: None,
     }
 }
 
@@ -430,6 +434,7 @@ fn io_not_found() -> Value {
         enum_name: "IoError".to_string(),
         variant: "NotFound".to_string(),
         data: EnumData::Unit,
+        rc: None,
     }
 }
 
@@ -454,6 +459,7 @@ fn io_error_variant_from(e: &std::io::Error) -> Value {
             Some(p) => EnumData::Tuple(vec![p]),
             None => EnumData::Unit,
         },
+        rc: None,
     }
 }
 

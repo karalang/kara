@@ -385,6 +385,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: segments[0].clone(),
                             variant: variant.clone(),
                             data: EnumData::Unit,
+                            rc: None,
                         }),
                         None => Value::EnumVariant {
                             enum_name: "Result".to_string(),
@@ -397,7 +398,9 @@ impl<'a> super::Interpreter<'a> {
                                         .into_iter()
                                         .collect(),
                                 ),
+                                rc: None,
                             }]),
+                            rc: None,
                         },
                     };
                 }
@@ -521,6 +524,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     };
                     if let Some(arg) = args.first() {
                         if let Value::String(s) = self.eval_expr_inner(&arg.value) {
@@ -530,6 +534,7 @@ impl<'a> super::Interpreter<'a> {
                                         enum_name: "Option".to_string(),
                                         variant: "Some".to_string(),
                                         data: EnumData::Tuple(vec![Value::Int(n.into())]),
+                                        rc: None,
                                     },
                                     Err(_) => none(),
                                 };
@@ -539,6 +544,7 @@ impl<'a> super::Interpreter<'a> {
                                     enum_name: "Option".to_string(),
                                     variant: "Some".to_string(),
                                     data: EnumData::Tuple(vec![Value::Float(v)]),
+                                    rc: None,
                                 },
                                 Err(_) => none(),
                             };
@@ -618,11 +624,13 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Result".to_string(),
                             variant: "Ok".to_string(),
                             data: EnumData::Tuple(vec![serde_json_to_kara_json(&v)]),
+                            rc: None,
                         },
                         Err(e) => Value::EnumVariant {
                             enum_name: "Result".to_string(),
                             variant: "Err".to_string(),
                             data: EnumData::Tuple(vec![make_json_error(&e)]),
+                            rc: None,
                         },
                     };
                 }
@@ -1069,6 +1077,7 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Result".to_string(),
                                 variant: "Ok".to_string(),
                                 data: EnumData::Tuple(vec![regex_val]),
+                                rc: None,
                             };
                         }
                         Err(e) => {
@@ -1082,6 +1091,7 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Result".to_string(),
                                 variant: "Err".to_string(),
                                 data: EnumData::Tuple(vec![err_val]),
+                                rc: None,
                             };
                         }
                     }
@@ -1293,6 +1303,7 @@ impl<'a> super::Interpreter<'a> {
                             data: crate::interpreter::value::EnumData::Tuple(vec![Value::String(
                                 msg,
                             )]),
+                            rc: None,
                         }),
                     };
                 }
@@ -1523,6 +1534,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Result".to_string(),
                             variant: "Ok".to_string(),
                             data: EnumData::Tuple(vec![Value::String(s.to_string())]),
+                            rc: None,
                         },
                         Err(e) => {
                             let variant = match e.error_len() {
@@ -1536,7 +1548,9 @@ impl<'a> super::Interpreter<'a> {
                                     enum_name: "Utf8Error".to_string(),
                                     variant: variant.to_string(),
                                     data: EnumData::Unit,
+                                    rc: None,
                                 }]),
+                                rc: None,
                             }
                         }
                     };
@@ -1698,6 +1712,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: segments[0].clone(),
                             variant: segments[1].clone(),
                             data: EnumData::Unit,
+                            rc: None,
                         };
                     }
                     // Slice F (`std.json`): qualified `Json.Variant(args)`
@@ -1724,6 +1739,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Json".to_string(),
                             variant,
                             data,
+                            rc: None,
                         };
                     }
                     // Numeric primitive From conversion: `T.from(x)` for
@@ -1813,6 +1829,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![val]),
+                            rc: None,
                         };
                     }
                     "Ok" => {
@@ -1828,6 +1845,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Result".to_string(),
                             variant: "Ok".to_string(),
                             data: EnumData::Tuple(vec![val]),
+                            rc: None,
                         };
                     }
                     "Err" => {
@@ -1843,6 +1861,7 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Result".to_string(),
                             variant: "Err".to_string(),
                             data: EnumData::Tuple(vec![val]),
+                            rc: None,
                         };
                     }
                     "print" | "println" | "eprintln" => {
@@ -2041,11 +2060,12 @@ impl<'a> super::Interpreter<'a> {
                     // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
                     self.record_ctor_arg_moves(args);
                     self.consume_freshtemp_ctor_args(args);
-                    return Value::EnumVariant {
+                    return self.stamp_shared_enum(Value::EnumVariant {
                         enum_name,
                         variant: name.clone(),
                         data: EnumData::Tuple(arg_vals),
-                    };
+                        rc: None,
+                    });
                 }
                 // Distinct-type constructor: `UserId(value)` is a zero-cost
                 // wrap — the runtime value IS the base value. For the combined
@@ -2094,11 +2114,12 @@ impl<'a> super::Interpreter<'a> {
                         self.consume_freshtemp_ctor_args(args);
                         EnumData::Tuple(arg_vals)
                     };
-                    return Value::EnumVariant {
+                    return self.stamp_shared_enum(Value::EnumVariant {
                         enum_name: segments[0].clone(),
                         variant: segments[1].clone(),
                         data,
-                    };
+                        rc: None,
+                    });
                 }
             }
         }
@@ -2711,11 +2732,12 @@ impl<'a> super::Interpreter<'a> {
                     // Ctor-arg move (B-2026-07-30-11 Option/Result leg).
                     self.record_ctor_arg_moves(args);
                     self.consume_freshtemp_ctor_args(args);
-                    return Value::EnumVariant {
+                    return self.stamp_shared_enum(Value::EnumVariant {
                         enum_name,
                         variant: variant_name,
                         data: EnumData::Tuple(arg_vals),
-                    };
+                        rc: None,
+                    });
                 }
                 unreachable!(
                     "call target at {}:{} was Value::{} (not Function, not an enum-variant \
@@ -4359,6 +4381,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name,
                     variant,
                     data,
+                    rc,
                 } => {
                     let data = match data {
                         super::value::EnumData::Unit => super::value::EnumData::Unit,
@@ -4376,6 +4399,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: enum_name.clone(),
                         variant: variant.clone(),
                         data,
+                        rc: rc.clone(),
                     }
                 }
                 other => other.clone(),
@@ -4780,6 +4804,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name,
                     variant,
                     data: arg_payload_data,
+                    ..
                 }) = arg_vals.get(i)
                 {
                     if enum_name == "Option" || enum_name == "Result" {

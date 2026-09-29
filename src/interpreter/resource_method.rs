@@ -256,6 +256,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Result".to_string(),
                         variant: "Ok".to_string(),
                         data: EnumData::Tuple(vec![Value::String(v)]),
+                        rc: None,
                     },
                     Err(_) => Value::EnumVariant {
                         enum_name: "Result".to_string(),
@@ -264,7 +265,9 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "VarError".to_string(),
                             variant: "NotPresent".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         }]),
+                        rc: None,
                     },
                 }
             }

@@ -610,6 +610,10 @@ pub struct Interpreter<'a> {
     /// every entry at or below its own depth, which is exactly this block's
     /// and any deeper one a drop body opened.
     pub(crate) pending_shared_releases: Vec<(usize, PendingRelease)>,
+    /// B-2026-09-19-29 — `shared enum` values whose last reference has gone,
+    /// pushed by [`value::SharedEnumToken`]'s `drop` and drained at statement
+    /// and scope boundaries by `drain_shared_enum_releases`.
+    pub(crate) shared_enum_releases: Arc<std::sync::Mutex<Vec<Value>>>,
     /// B-2026-08-29-33, tuple leg — `(variable, element index)` pairs whose ENUM
     /// element's PAYLOAD bodies such an arm took, with the element's own body
     /// still owed. The tuple sibling of the set above; codegen's twin is
@@ -1408,6 +1412,7 @@ impl<'a> Interpreter<'a> {
             moved_out_struct_field_payload_bodies: HashSet::new(),
             moved_out_nested_field_bodies: HashSet::new(),
             pending_shared_releases: Vec::new(),
+            shared_enum_releases: Arc::new(std::sync::Mutex::new(Vec::new())),
             moved_out_tuple_elem_payload_bodies: HashSet::new(),
             pending_payload_masked_fields: None,
             freshtemp_field_obj: None,
@@ -2263,6 +2268,10 @@ impl<'a> Interpreter<'a> {
         // Look for main()
         if self.env.get("main").is_some() {
             let result = self.call_function("main", &[]);
+            // B-2026-09-19-29 — `main`'s frame is gone; release what it held.
+            if self.pending_cf.is_none() {
+                self.drain_shared_enum_releases();
+            }
             // Handle ExitUnwind from process::exit(). Runtime errors also
             // drain pending_cf here; the errors themselves are in
             // `self.runtime_errors` for callers to inspect.
@@ -2290,6 +2299,7 @@ impl<'a> Interpreter<'a> {
                 enum_name: "Option".to_string(),
                 variant: "None".to_string(),
                 data: EnumData::Unit,
+                rc: None,
             },
         );
 
@@ -2327,6 +2337,7 @@ impl<'a> Interpreter<'a> {
                     enum_name: enum_name.to_string(),
                     variant: (*variant).to_string(),
                     data: EnumData::Unit,
+                    rc: None,
                 };
                 self.env
                     .define(format!("{}.{}", enum_name, variant), value.clone());
@@ -2426,6 +2437,7 @@ impl<'a> Interpreter<'a> {
                                     enum_name: e.name.clone(),
                                     variant: variant.name.clone(),
                                     data: EnumData::Unit,
+                                    rc: None,
                                 },
                             );
                         }
@@ -2469,6 +2481,7 @@ impl<'a> Interpreter<'a> {
                                     enum_name: e.name.clone(),
                                     variant: variant.name.clone(),
                                     data: EnumData::Unit,
+                                    rc: None,
                                 };
                                 // B-2026-08-19-16 — bind the QUALIFIED name as
                                 // well as the bare one. `eval_expr`'s Path arm
@@ -3306,11 +3319,12 @@ impl<'a> Interpreter<'a> {
                     let v = field_vals.remove(&fname).unwrap_or(Value::Unit);
                     data_fields.insert(fname, v);
                 }
-                return Value::EnumVariant {
+                return self.stamp_shared_enum(Value::EnumVariant {
                     enum_name: enum_name.clone(),
                     variant: name,
                     data: EnumData::Struct(data_fields),
-                };
+                    rc: None,
+                });
             }
         }
         // Unqualified struct-variant construction `Variant { field: val, ... }`:
@@ -3333,11 +3347,12 @@ impl<'a> Interpreter<'a> {
                         let v = field_vals.remove(&fname).unwrap_or(Value::Unit);
                         data_fields.insert(fname, v);
                     }
-                    return Value::EnumVariant {
+                    return self.stamp_shared_enum(Value::EnumVariant {
                         enum_name,
                         variant: name,
                         data: EnumData::Struct(data_fields),
-                    };
+                        rc: None,
+                    });
                 }
             }
         }
@@ -3394,6 +3409,7 @@ impl<'a> Interpreter<'a> {
                                 enum_name,
                                 variant,
                                 data,
+                                ..
                             } if enum_name == "Option" => match (variant.as_str(), data) {
                                 ("None", _) => std::sync::Weak::new(),
                                 ("Some", EnumData::Tuple(vs))
@@ -3771,6 +3787,7 @@ impl<'a> Interpreter<'a> {
                     enum_name,
                     variant,
                     data,
+                    ..
                 } if enum_name == "Option" => match (variant.as_str(), data) {
                     ("Some", EnumData::Tuple(vs)) => match vs.first() {
                         Some(Value::SharedStruct(arc)) => Arc::downgrade(arc),
@@ -4146,6 +4163,7 @@ mod cleanup_tests {
                 enum_name,
                 variant,
                 data,
+                ..
             }) => {
                 assert_eq!(enum_name, "Cancelled");
                 assert_eq!(variant, "Cancelled");

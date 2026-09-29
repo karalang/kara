@@ -50,6 +50,7 @@ impl<'a> super::Interpreter<'a> {
             enum_name,
             variant,
             data: EnumData::Unit,
+            ..
         } = &v
         else {
             return v;
@@ -119,6 +120,7 @@ impl<'a> super::Interpreter<'a> {
             enum_name: want.clone(),
             variant: variant.clone(),
             data: EnumData::Unit,
+            rc: None,
         }
     }
 
@@ -1084,12 +1086,14 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![data.read().unwrap()[i].clone()]),
+                            rc: None,
                         }
                     } else {
                         Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         }
                     };
                 }
@@ -2598,6 +2602,7 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Result".to_string(),
                                 variant: "Err".to_string(),
                                 data: EnumData::Tuple(vec![converted]),
+                                rc: None,
                             }
                         } else {
                             val

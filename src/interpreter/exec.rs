@@ -368,6 +368,7 @@ pub(crate) fn coerce_int_value_to_declared_float_elems(
                 enum_name,
                 variant,
                 data,
+                ..
             } = val
             else {
                 unreachable!()
@@ -389,6 +390,7 @@ pub(crate) fn coerce_int_value_to_declared_float_elems(
                 enum_name,
                 variant,
                 data,
+                rc: None,
             }
         }
         // `let m: Map[i64, f64] = …` — the VALUE half only; a key is the first
@@ -508,6 +510,7 @@ pub(crate) fn deep_clone_value(v: &Value) -> Value {
             enum_name,
             variant,
             data,
+            rc,
         } => Value::EnumVariant {
             enum_name: enum_name.clone(),
             variant: variant.clone(),
@@ -523,6 +526,7 @@ pub(crate) fn deep_clone_value(v: &Value) -> Value {
                         .collect(),
                 ),
             },
+            rc: rc.clone(),
         },
         // Primitives, String, SortedSet (primitive-keyed), and the
         // reference-semantics types (SharedStruct, Sender, Receiver,
@@ -569,11 +573,13 @@ pub(crate) fn option_value_from(v: Option<Value>) -> Value {
             enum_name: "Option".to_string(),
             variant: "Some".to_string(),
             data: EnumData::Tuple(vec![inner]),
+            rc: None,
         },
         None => Value::EnumVariant {
             enum_name: "Option".to_string(),
             variant: "None".to_string(),
             data: EnumData::Unit,
+            rc: None,
         },
     }
 }
@@ -588,6 +594,7 @@ pub(crate) fn cancelled_sentinel() -> Value {
         enum_name: "Cancelled".to_string(),
         variant: "Cancelled".to_string(),
         data: EnumData::Unit,
+        rc: None,
     }
 }
 

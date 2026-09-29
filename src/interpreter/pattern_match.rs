@@ -3080,6 +3080,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name,
                     variant,
                     data: EnumData::Tuple(vals),
+                    rc,
                 },
             ) => {
                 let mut new_vals = vals.clone();
@@ -3099,6 +3100,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name: enum_name.clone(),
                     variant: variant.clone(),
                     data: EnumData::Tuple(new_vals),
+                    rc: rc.clone(),
                 })
             }
             (
@@ -3107,6 +3109,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name,
                     variant,
                     data: EnumData::Struct(map),
+                    rc,
                 },
             ) => {
                 let (m, any) = self.patch_struct_fields(fields, map);
@@ -3114,6 +3117,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name: enum_name.clone(),
                     variant: variant.clone(),
                     data: EnumData::Struct(m),
+                    rc: rc.clone(),
                 })
             }
             (PatternKind::Struct { fields, .. }, Value::Struct { name, fields: map }) => {

@@ -1449,6 +1449,7 @@ impl<'a> super::Interpreter<'a> {
             enum_name: "Option".to_string(),
             variant: "Some".to_string(),
             data: EnumData::Tuple(vec![projected]),
+            rc: None,
         }
     }
 

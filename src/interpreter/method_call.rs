@@ -144,6 +144,7 @@ pub(super) fn result_ok(v: Value) -> Value {
         enum_name: "Result".to_string(),
         variant: "Ok".to_string(),
         data: EnumData::Tuple(vec![v]),
+        rc: None,
     }
 }
 
@@ -163,6 +164,7 @@ pub(super) fn numeric_try_from_value(n: i64, target: &str) -> Value {
             enum_name: "Result".to_string(),
             variant: "Err".to_string(),
             data: EnumData::Tuple(vec![Value::String(format!("out of range for {}", target))]),
+            rc: None,
         }
     }
 }
@@ -230,6 +232,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name: "Result".to_string(),
                     variant: "Ok".to_string(),
                     data: EnumData::Tuple(vec![casted]),
+                    rc: None,
                 },
                 _ => Value::EnumVariant {
                     enum_name: "Result".to_string(),
@@ -237,6 +240,7 @@ impl<'a> super::Interpreter<'a> {
                     data: EnumData::Tuple(vec![Value::String(format!(
                         "value does not satisfy refinement `{type_name}`"
                     ))]),
+                    rc: None,
                 },
             },
         )
@@ -1784,6 +1788,7 @@ impl<'a> super::Interpreter<'a> {
                 enum_name: "Option".to_string(),
                 variant: "None".to_string(),
                 data: EnumData::Unit,
+                rc: None,
             };
         }
 
@@ -1806,6 +1811,7 @@ impl<'a> super::Interpreter<'a> {
                 enum_name: "Option".to_string(),
                 variant: "Some".to_string(),
                 data: EnumData::Tuple(vec![Value::Float(r as f64)]),
+                rc: None,
             },
             Some(r) => Value::Float(r as f64),
             // Only the ops that need more than one associative pass land here,
@@ -1860,6 +1866,7 @@ impl<'a> super::Interpreter<'a> {
                 enum_name: "Option".to_string(),
                 variant: "None".to_string(),
                 data: EnumData::Unit,
+                rc: None,
             };
         }
 
@@ -1906,6 +1913,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name: "Option".to_string(),
                     variant: "Some".to_string(),
                     data: EnumData::Tuple(vec![Value::Float(m)]),
+                    rc: None,
                 },
                 // The SUM overflowed, even if the mean would not have. The
                 // price of computing it exactly rather than promoting first.
@@ -1916,6 +1924,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name: "Option".to_string(),
                     variant: "None".to_string(),
                     data: EnumData::Unit,
+                    rc: None,
                 },
             };
         }
@@ -1933,6 +1942,7 @@ impl<'a> super::Interpreter<'a> {
                 enum_name: "Option".to_string(),
                 variant: "Some".to_string(),
                 data: EnumData::Tuple(vec![Value::Int(r)]),
+                rc: None,
             },
             Some(Ok(r)) => Value::Int(r),
             // Kāra traps on integer overflow. Wrapping here would hand back a
@@ -2156,11 +2166,13 @@ impl<'a> super::Interpreter<'a> {
                 enum_name: "Option".to_string(),
                 variant: "Some".to_string(),
                 data: EnumData::Tuple(vec![Value::Float(v as f64)]),
+                rc: None,
             },
             None => Value::EnumVariant {
                 enum_name: "Option".to_string(),
                 variant: "None".to_string(),
                 data: EnumData::Unit,
+                rc: None,
             },
         }
     }
@@ -2452,11 +2464,13 @@ impl<'a> super::Interpreter<'a> {
                 enum_name: "Option".to_string(),
                 variant: "Some".to_string(),
                 data: EnumData::Tuple(vec![Value::Float(v)]),
+                rc: None,
             },
             None => Value::EnumVariant {
                 enum_name: "Option".to_string(),
                 variant: "None".to_string(),
                 data: EnumData::Unit,
+                rc: None,
             },
         }
     }
@@ -2530,11 +2544,13 @@ impl<'a> super::Interpreter<'a> {
                     enum_name: "Option".to_string(),
                     variant: "Some".to_string(),
                     data: EnumData::Tuple(vec![Value::Int(i as i128)]),
+                    rc: None,
                 },
                 None => Value::EnumVariant {
                     enum_name: "Option".to_string(),
                     variant: "None".to_string(),
                     data: EnumData::Unit,
+                    rc: None,
                 },
             };
         }
@@ -2557,12 +2573,14 @@ impl<'a> super::Interpreter<'a> {
                 enum_name: "Option".to_string(),
                 variant: "Some".to_string(),
                 data: EnumData::Tuple(vec![Value::Int(i as i128)]),
+                rc: None,
             },
             // Empty: no extremum. `Stats.argmin` says the same.
             None => Value::EnumVariant {
                 enum_name: "Option".to_string(),
                 variant: "None".to_string(),
                 data: EnumData::Unit,
+                rc: None,
             },
         }
     }
@@ -3233,11 +3251,13 @@ impl<'a> super::Interpreter<'a> {
                                     enum_name: "Option".to_string(),
                                     variant: "Some".to_string(),
                                     data: EnumData::Tuple(vec![Value::Int(n.into())]),
+                                    rc: None,
                                 },
                                 Err(_) => Value::EnumVariant {
                                     enum_name: "Option".to_string(),
                                     variant: "None".to_string(),
                                     data: EnumData::Unit,
+                                    rc: None,
                                 },
                             };
                         }
@@ -3246,6 +3266,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     };
                 }
                 // `f64.parse(s: String) -> Option[f64]`. Float parse via Rust's
@@ -3258,6 +3279,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     };
                     if let Some(arg) = args.first() {
                         let s_val = self.eval_expr_inner(&arg.value);
@@ -3267,6 +3289,7 @@ impl<'a> super::Interpreter<'a> {
                                     enum_name: "Option".to_string(),
                                     variant: "Some".to_string(),
                                     data: EnumData::Tuple(vec![Value::Float(v)]),
+                                    rc: None,
                                 },
                                 Err(_) => make_none(),
                             };
@@ -3295,6 +3318,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     };
                     if args.len() >= 2 {
                         let s_val = self.eval_expr_inner(&args[0].value);
@@ -3306,6 +3330,7 @@ impl<'a> super::Interpreter<'a> {
                                         enum_name: "Option".to_string(),
                                         variant: "Some".to_string(),
                                         data: EnumData::Tuple(vec![Value::Int(n.into())]),
+                                        rc: None,
                                     };
                                 }
                             }
@@ -3335,11 +3360,13 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Result".to_string(),
                             variant: "Ok".to_string(),
                             data: EnumData::Tuple(vec![Value::Char(c)]),
+                            rc: None,
                         },
                         None => Value::EnumVariant {
                             enum_name: "Result".to_string(),
                             variant: "Err".to_string(),
                             data: EnumData::Tuple(vec![Value::Int(cp.into())]),
+                            rc: None,
                         },
                     };
                 }
@@ -3782,7 +3809,9 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "NulError".to_string(),
                             variant: "InteriorNul".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         }]),
+                        rc: None,
                     }
                 } else {
                     Value::EnumVariant {
@@ -3791,6 +3820,7 @@ impl<'a> super::Interpreter<'a> {
                         data: EnumData::Tuple(vec![Value::CString(std::sync::Arc::new(
                             bytes.to_vec(),
                         ))]),
+                        rc: None,
                     }
                 };
             }
@@ -3815,6 +3845,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Result".to_string(),
                         variant: "Ok".to_string(),
                         data: EnumData::Tuple(vec![Value::String(s.to_string())]),
+                        rc: None,
                     },
                     Err(e) => {
                         let variant = match e.error_len() {
@@ -3828,7 +3859,9 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Utf8Error".to_string(),
                                 variant: variant.to_string(),
                                 data: EnumData::Unit,
+                                rc: None,
                             }]),
+                            rc: None,
                         }
                     }
                 };
@@ -3849,6 +3882,7 @@ impl<'a> super::Interpreter<'a> {
                 enum_name,
                 variant,
                 data: EnumData::Unit,
+                ..
             } = &obj
             {
                 let has_display = self
@@ -4130,12 +4164,14 @@ impl<'a> super::Interpreter<'a> {
                     std::cmp::Ordering::Greater => "Greater".to_string(),
                 },
                 data: EnumData::Unit,
+                rc: None,
             };
             if method == "partial_cmp" {
                 return Value::EnumVariant {
                     enum_name: "Option".to_string(),
                     variant: "Some".to_string(),
                     data: EnumData::Tuple(vec![ordering]),
+                    rc: None,
                 };
             }
             return ordering;
@@ -4179,6 +4215,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name: "Option".to_string(),
                     variant: "None".to_string(),
                     data: EnumData::Unit,
+                    rc: None,
                 };
             }
             let ord =
@@ -4194,7 +4231,9 @@ impl<'a> super::Interpreter<'a> {
                         std::cmp::Ordering::Greater => "Greater".to_string(),
                     },
                     data: EnumData::Unit,
+                    rc: None,
                 }]),
+                rc: None,
             };
         }
 
@@ -4283,6 +4322,7 @@ impl<'a> super::Interpreter<'a> {
                         std::cmp::Ordering::Greater => "Greater".to_string(),
                     },
                     data: EnumData::Unit,
+                    rc: None,
                 };
             }
             let bin_op = match method {
@@ -5043,12 +5083,14 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     };
                     return match (family, outcome) {
                         (FloatToIntFamily::Checked, ConvOutcome::Value(v)) => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![Value::Int((v as i64).into())]),
+                            rc: None,
                         },
                         (FloatToIntFamily::Checked, ConvOutcome::None) => make_none(),
                         (_, ConvOutcome::Value(v)) => Value::Int((v as i64).into()),
@@ -5405,6 +5447,7 @@ fn some_int(v: i128) -> Value {
         enum_name: "Option".to_string(),
         variant: "Some".to_string(),
         data: EnumData::Tuple(vec![Value::Int(v)]),
+        rc: None,
     }
 }
 
@@ -5413,6 +5456,7 @@ fn none_value() -> Value {
         enum_name: "Option".to_string(),
         variant: "None".to_string(),
         data: EnumData::Unit,
+        rc: None,
     }
 }
 

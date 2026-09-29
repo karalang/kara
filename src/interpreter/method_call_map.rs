@@ -254,11 +254,13 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![prev]),
+                            rc: None,
                         },
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         },
                     };
                     self.write_back_receiver(object, Value::Map(m));
@@ -281,11 +283,13 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![prev]),
+                            rc: None,
                         },
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         },
                     };
                     self.write_back_receiver(object, Value::SortedMap(m));
@@ -324,6 +328,7 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
                                 data: EnumData::Tuple(vec![v]),
+                                rc: None,
                             },
                         ),
                         None => (
@@ -332,6 +337,7 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "None".to_string(),
                                 data: EnumData::Unit,
+                                rc: None,
                             },
                         ),
                     };
@@ -354,6 +360,7 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
                                 data: EnumData::Tuple(vec![prev]),
+                                rc: None,
                             },
                         ),
                         None => (
@@ -362,6 +369,7 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "None".to_string(),
                                 data: EnumData::Unit,
+                                rc: None,
                             },
                         ),
                     };

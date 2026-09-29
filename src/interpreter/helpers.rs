@@ -290,11 +290,13 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
                 enum_name: an,
                 variant: av,
                 data: ad,
+                ..
             },
             Value::EnumVariant {
                 enum_name: bn,
                 variant: bv,
                 data: bd,
+                ..
             },
         ) => an
             .cmp(bn)
@@ -769,6 +771,7 @@ fn stats_option_some(v: Value) -> Value {
         enum_name: "Option".to_string(),
         variant: "Some".to_string(),
         data: EnumData::Tuple(vec![v]),
+        rc: None,
     }
 }
 
@@ -778,6 +781,7 @@ fn stats_option_none() -> Value {
         enum_name: "Option".to_string(),
         variant: "None".to_string(),
         data: EnumData::Unit,
+        rc: None,
     }
 }
 
@@ -974,6 +978,7 @@ pub(super) fn decode_ok_bytes(bytes: Vec<u8>) -> Value {
         enum_name: "Result".to_string(),
         variant: "Ok".to_string(),
         data: EnumData::Tuple(vec![Value::array_of(arr)]),
+        rc: None,
     }
 }
 
@@ -982,6 +987,7 @@ pub(super) fn decode_ok_string(s: String) -> Value {
         enum_name: "Result".to_string(),
         variant: "Ok".to_string(),
         data: EnumData::Tuple(vec![Value::String(s)]),
+        rc: None,
     }
 }
 
@@ -995,6 +1001,7 @@ pub(super) fn decode_err(message: String) -> Value {
             name: "DecodeError".to_string(),
             fields,
         }]),
+        rc: None,
     }
 }
 
@@ -1005,6 +1012,7 @@ pub(super) fn io_ok(val: Value) -> Value {
         enum_name: "Result".to_string(),
         variant: "Ok".to_string(),
         data: EnumData::Tuple(vec![val]),
+        rc: None,
     }
 }
 
@@ -1013,6 +1021,7 @@ pub(super) fn io_err_value(io_error: Value) -> Value {
         enum_name: "Result".to_string(),
         variant: "Err".to_string(),
         data: EnumData::Tuple(vec![io_error]),
+        rc: None,
     }
 }
 
@@ -1033,6 +1042,7 @@ pub(super) fn io_error_from_std(e: &std::io::Error) -> Value {
             None => EnumData::Unit,
             Some(msg) => EnumData::Tuple(vec![Value::String(msg)]),
         },
+        rc: None,
     }
 }
 
@@ -1078,6 +1088,7 @@ pub(super) fn make_http_error(message: String) -> Value {
             name: "HttpError".to_string(),
             fields,
         }]),
+        rc: None,
     }
 }
 
@@ -1112,6 +1123,7 @@ pub(super) fn wrap_ok_response(resp: ureq::Response) -> Value {
         enum_name: "Result".to_string(),
         variant: "Ok".to_string(),
         data: EnumData::Tuple(vec![make_response(status, body, headers)]),
+        rc: None,
     }
 }
 
@@ -1178,6 +1190,7 @@ pub(super) fn serde_json_to_kara_json(v: &serde_json::Value) -> Value {
         enum_name: "Json".to_string(),
         variant: variant.to_string(),
         data,
+        rc: None,
     }
 }
 
@@ -1192,6 +1205,7 @@ pub(super) fn kara_json_to_serde_json(v: &Value) -> serde_json::Value {
         enum_name,
         variant,
         data,
+        ..
     } = v
     else {
         return serde_json::Value::Null;

@@ -121,6 +121,9 @@ impl<'a> super::Interpreter<'a> {
                 frame.shadowed.remove(&name);
             }
         }
+        // B-2026-09-19-29 — the block's scope has popped, so every slot it
+        // held has let its `shared enum` references go.
+        self.drain_shared_enum_releases();
         result
     }
 
@@ -480,6 +483,9 @@ impl<'a> super::Interpreter<'a> {
             // binding's live-range end, not at lexical scope exit. After
             // `fire_due_drops` so that path's in-flight clone is already gone.
             self.drain_due_shared_releases();
+            // B-2026-09-19-29 — and any `shared enum` whose last holder was
+            // one of the slots `fire_due_drops` just released.
+            self.drain_shared_enum_releases();
         }
         if is_fn_body {
             // B-2026-08-28-51 — the third escaping site: a function (or
@@ -1131,6 +1137,7 @@ impl<'a> super::Interpreter<'a> {
                     // no user `impl Drop`, preserving the
                     // no-impl-Drop behaviour at this drain.
                     self.invoke_user_drop_if_applicable(name);
+                    self.release_shared_enum_slot(name);
                     self.drop_trace.push(name.clone());
                 }
                 // B-2026-08-30-51 — a shadowed binding drops its OWN frozen
@@ -1509,6 +1516,7 @@ impl<'a> super::Interpreter<'a> {
                         // trace record, mirroring the scope-exit drain
                         // arm in `run_cleanup`.
                         self.invoke_user_drop_if_applicable(&name);
+                        self.release_shared_enum_slot(&name);
                         self.drop_trace.push(name);
                     }
                     // B-2026-08-30-51 — value-based, for the reason the variant
@@ -2565,6 +2573,7 @@ impl<'a> super::Interpreter<'a> {
             enum_name,
             variant,
             data,
+            ..
         } = value
         else {
             return;
@@ -2611,6 +2620,7 @@ impl<'a> super::Interpreter<'a> {
                 enum_name,
                 variant,
                 data: EnumData::Tuple(items),
+                rc,
             } = value
             {
                 let mut items = items.clone();
@@ -2623,6 +2633,7 @@ impl<'a> super::Interpreter<'a> {
                     enum_name: enum_name.clone(),
                     variant: variant.clone(),
                     data: EnumData::Tuple(items),
+                    rc: rc.clone(),
                 };
                 self.run_enum_payload_user_drops_value_for(&masked_value, Some(name));
                 return;
@@ -2780,6 +2791,96 @@ impl<'a> super::Interpreter<'a> {
     /// their discard path stays with the value-driven recursion in
     /// `run_discarded_value_user_drops`, twin to codegen's
     /// instantiation-driven optres registrar.
+    /// B-2026-09-19-29 — give a freshly constructed `shared` / `par` enum value
+    /// its [`SharedEnumToken`], when its release runs a body: its own `Drop`, or
+    /// a payload that carries one. Every other value passes through unchanged,
+    /// which keeps a unit variant (registered once in the global env and never
+    /// released) and every non-shared enum on the paths they had.
+    pub(crate) fn stamp_shared_enum(&self, value: Value) -> Value {
+        let Value::EnumVariant {
+            enum_name,
+            variant,
+            data,
+            rc: None,
+        } = value
+        else {
+            return value;
+        };
+        if matches!(data, EnumData::Unit) || !self.shared_enum_release_runs_body(&enum_name) {
+            return Value::EnumVariant {
+                enum_name,
+                variant,
+                data,
+                rc: None,
+            };
+        }
+        let token = super::value::SharedEnumToken {
+            value: Value::EnumVariant {
+                enum_name: enum_name.clone(),
+                variant: variant.clone(),
+                data: data.clone(),
+                rc: None,
+            },
+            releases: Arc::clone(&self.shared_enum_releases),
+        };
+        Value::EnumVariant {
+            enum_name,
+            variant,
+            data,
+            rc: Some(Arc::new(token)),
+        }
+    }
+
+    /// B-2026-09-19-29 — is `enum_name` a `shared` / `par` enum whose release
+    /// runs a user body? The same two questions the holder walks ask of it.
+    fn shared_enum_release_runs_body(&self, enum_name: &str) -> bool {
+        self.enum_is_shared(enum_name)
+            && (self.program.drop_method_keys.contains_key(enum_name)
+                || self.shared_holder_has_drop_bearing_field(enum_name))
+    }
+
+    /// B-2026-09-19-29 — run the bodies of every `shared enum` value whose last
+    /// reference has gone since the previous drain: the enum's own body, then
+    /// its payload's, the order every other enum release uses.
+    ///
+    /// Loops until the queue is empty, because running a release drops that
+    /// value, and a shared enum IT held may reach its own last reference then.
+    pub(crate) fn drain_shared_enum_releases(&mut self) {
+        loop {
+            let batch: Vec<Value> = match self.shared_enum_releases.lock() {
+                Ok(mut q) => std::mem::take(&mut *q),
+                Err(_) => return,
+            };
+            if batch.is_empty() {
+                return;
+            }
+            for v in batch {
+                let Value::EnumVariant { enum_name, .. } = &v else {
+                    continue;
+                };
+                let en = enum_name.clone();
+                if self.program.drop_method_keys.contains_key(&en) {
+                    self.run_user_drop_body_only(&en, v.clone());
+                }
+                self.run_enum_payload_user_drops_value(&v);
+            }
+        }
+    }
+
+    /// B-2026-09-19-29 — a dying binding that holds a [`SharedEnumToken`] lets
+    /// its reference go NOW, at the live-range end the compiled backends'
+    /// `rc_dec` sits at, rather than whenever its scope pops. Without this a
+    /// dead slot keeps the count up and the last holder never reaches zero.
+    pub(crate) fn release_shared_enum_slot(&mut self, name: &str) {
+        let holds = self
+            .env
+            .slot_ref(name)
+            .is_some_and(|v| super::value::value_holds_shared_enum_token(v, 0));
+        if holds {
+            self.env.remove_local(name);
+        }
+    }
+
     pub(super) fn run_enum_payload_user_drops_value(&mut self, value: &Value) {
         self.run_enum_payload_user_drops_value_for(value, None)
     }
@@ -2800,10 +2901,16 @@ impl<'a> super::Interpreter<'a> {
             enum_name,
             variant,
             data,
+            rc,
         } = value
         else {
             return;
         };
+        // B-2026-09-19-29 — a counted shared enum runs its payload bodies once,
+        // from `drain_shared_enum_releases`, never on a holder's death.
+        if rc.is_some() {
+            return;
+        }
         let Some(decls) = self.variant_payload_decls(enum_name, variant) else {
             return;
         };
@@ -3157,6 +3264,13 @@ impl<'a> super::Interpreter<'a> {
             // `d2:9 d2:9` interpreted against a single compiled run TODAY, with
             // no enum holder involved. Filed as its own row rather than
             // answered by keeping this one silent.
+            //
+            // B-2026-09-19-29 answered it: a shared enum value built by a
+            // constructor now carries a `SharedEnumToken`, the payload walkers
+            // decline a counted value, and its bodies run once from
+            // `drain_shared_enum_releases` when the last reference goes. So
+            // for such a value this arm reaches no body; it still serves an
+            // uncounted one (a unit variant, or a value no constructor built).
             let payload_type = match &payload {
                 Value::Struct { name, .. } => name.clone(),
                 Value::EnumVariant { enum_name: pn, .. } => pn.clone(),
@@ -3701,6 +3815,7 @@ impl<'a> super::Interpreter<'a> {
             enum_name,
             variant: bound_variant,
             data: EnumData::Tuple(payloads),
+            ..
         }) = self.env.get(bname)
         else {
             return;
@@ -6656,6 +6771,10 @@ impl<'a> super::Interpreter<'a> {
     /// a field's body without re-entering the walk for that field (which would
     /// visit every grandchild twice).
     pub(crate) fn run_user_drop_body_only(&mut self, type_name: &str, value: Value) {
+        // B-2026-09-19-29 — likewise the counted shared enum's OWN body.
+        if matches!(value, Value::EnumVariant { rc: Some(_), .. }) {
+            return;
+        }
         let method_key = format!("{}.drop", type_name);
         let func = match self.env.get(&method_key) {
             Some(f) => f,
@@ -10546,6 +10665,7 @@ impl<'a> super::Interpreter<'a> {
             enum_name: pn,
             variant: pv,
             data: pdata,
+            ..
         } = payload
         {
             if declared_head.as_deref() != Some(pn.as_str()) {

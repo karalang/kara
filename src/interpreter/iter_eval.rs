@@ -979,11 +979,13 @@ impl<'a> super::Interpreter<'a> {
             enum_name: "Option".to_string(),
             variant: "Some".to_string(),
             data: EnumData::Tuple(vec![v]),
+            rc: None,
         };
         let none = || Value::EnumVariant {
             enum_name: "Option".to_string(),
             variant: "None".to_string(),
             data: EnumData::Unit,
+            rc: None,
         };
         if let Value::Iterator {
             source: IteratorSource::Peekable { buffered, .. },

@@ -5570,6 +5570,13 @@ done
 ///
 /// This pins a KNOWN GAP, not correct behaviour. When the qualified divergence
 /// is fixed, both halves move together and this expectation is what changes.
+///
+/// B-2026-09-19-29 MOVED THIS CELL ON THIS BACKEND ONLY, DELIBERATELY. A
+/// `shared enum` value now carries a refcount here, and its payload body runs
+/// when the last reference goes, so this cell prints the body the language
+/// owes. Every compiled surface still prints none and leaks the payload
+/// (valgrind at -O0), which is B-2026-09-29-99. The codegen twin keeps the
+/// compiled output until that row is fixed, and then the two agree again.
 #[test]
 fn test_bare_shared_enum_tuple_elem_stays_silent() {
     assert_eq!(
@@ -5583,7 +5590,7 @@ fn main() {
     println("done")
 }
 "#),
-        "bare\n  in7\nbare end\ndone\n"
+        "bare\n  in7\ndR1/t1\nbare end\ndone\n"
     );
 }
 
@@ -6183,6 +6190,13 @@ fn main() {
 /// non-shared struct payload, which rides the bodies walker) and `par`
 /// (`shared_types` records `is_par` too, and a fix keyed on `shared` alone
 /// would leave it leaking).
+///
+/// B-2026-09-19-29 MOVED `sharedenum` ON THIS BACKEND ONLY, DELIBERATELY. A
+/// `shared enum` value now carries a refcount here, and its payload body runs
+/// when the last reference goes, so this cell prints the body the language
+/// owes. Every compiled surface still prints none and leaks the payload
+/// (valgrind at -O0), which is B-2026-09-29-99. The codegen twin keeps the
+/// compiled output until that row is fixed, and then the two agree again.
 #[test]
 fn test_generic_enum_shared_payload_is_rc_released() {
     let out = run(r#"shared struct Sh { n: i64 }
@@ -6225,7 +6239,7 @@ fn main() {
     println("end")
 }
 "#);
-    assert_eq!(out, "G-bare\n  x\n  dSh1\nC-bare\n  x\n  dSh1\nG-round\n  x\n  dSh2\nC-round\n  x\n  dSh2\nG-arm\n  got3\n  dSh3\nC-arm\n  got3\n  dSh3\nG-temp\n  eaten\n  x\nC-temp\n  eaten\n  x\nG-named\n  eaten\n  x\n  dSh5\nC-named\n  eaten\n  x\n  dSh5\nG-alias\n  x\n  dSh6\nC-alias\n  x\n  dSh6\npar\n  x\n  dPa7\ntwoparam\n  x\n  dSh8\notherarm\n  x\nunit\n  x\nstring\n  x\nscalar\n  x\nplain\n  dPl13\n  x\nsharedenum\n  x\nend\n", "got:\n{out}");
+    assert_eq!(out, "G-bare\n  x\n  dSh1\nC-bare\n  x\n  dSh1\nG-round\n  x\n  dSh2\nC-round\n  x\n  dSh2\nG-arm\n  got3\n  dSh3\nC-arm\n  got3\n  dSh3\nG-temp\n  eaten\n  x\nC-temp\n  eaten\n  x\nG-named\n  eaten\n  x\n  dSh5\nC-named\n  eaten\n  x\n  dSh5\nG-alias\n  x\n  dSh6\nC-alias\n  x\n  dSh6\npar\n  x\n  dPa7\ntwoparam\n  x\n  dSh8\notherarm\n  x\nunit\n  x\nstring\n  x\nscalar\n  x\nplain\n  dPl13\n  x\nsharedenum\n  dPl14\n  x\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-19-21 — a generic callee that hands its boxed payload back

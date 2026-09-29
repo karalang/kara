@@ -167,11 +167,13 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![val]),
+                            rc: None,
                         },
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         },
                     };
                     self.write_back_receiver(object, iter_val);
@@ -798,11 +800,13 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![v]),
+                            rc: None,
                         },
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         },
                     });
                 }
@@ -841,11 +845,13 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![v]),
+                            rc: None,
                         },
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         },
                     });
                 }
@@ -946,6 +952,7 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
                                 data: EnumData::Tuple(vec![Value::Int(idx.into())]),
+                                rc: None,
                             });
                         }
                         idx += 1;
@@ -954,6 +961,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     });
                 }
             }
@@ -983,6 +991,7 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
                                 data: EnumData::Tuple(vec![item]),
+                                rc: None,
                             });
                         }
                     }
@@ -990,6 +999,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     });
                 }
             }
@@ -1024,6 +1034,7 @@ impl<'a> super::Interpreter<'a> {
                                             enum_name: "Option".to_string(),
                                             variant: "Some".to_string(),
                                             data: EnumData::Tuple(vec![v.clone()]),
+                                            rc: None,
                                         });
                                     }
                                 }
@@ -1034,6 +1045,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     });
                 }
             }
@@ -1051,11 +1063,13 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![v]),
+                            rc: None,
                         },
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         },
                     });
                 }
@@ -1078,6 +1092,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     };
                     if n < 0 {
                         return Some(none);
@@ -1091,6 +1106,7 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
                                 data: EnumData::Tuple(vec![item]),
+                                rc: None,
                             });
                         }
                         idx += 1;

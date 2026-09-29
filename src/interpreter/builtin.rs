@@ -294,6 +294,7 @@ impl<'a> super::Interpreter<'a> {
                 enum_name,
                 variant,
                 data,
+                ..
             } => match data {
                 EnumData::Unit => variant.clone(),
                 EnumData::Tuple(vals) => {

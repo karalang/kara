@@ -616,6 +616,9 @@ pub enum Value {
         enum_name: String,
         variant: String,
         data: EnumData,
+        /// B-2026-09-19-29 — the reference count of a `shared` / `par` enum
+        /// value, `None` for every other enum. See [`SharedEnumToken`].
+        rc: Option<Arc<SharedEnumToken>>,
     },
     Function {
         name: String,
@@ -1006,6 +1009,7 @@ fn hash_value_generic<H: std::hash::Hasher + Default>(v: &Value) -> u64 {
             enum_name,
             variant,
             data,
+            ..
         } => {
             enum_name.hash(&mut h);
             variant.hash(&mut h);
@@ -1543,11 +1547,13 @@ impl PartialEq for Value {
                     enum_name: a1,
                     variant: a2,
                     data: a3,
+                    ..
                 },
                 Value::EnumVariant {
                     enum_name: b1,
                     variant: b2,
                     data: b3,
+                    ..
                 },
             ) => a1 == b1 && a2 == b2 && a3 == b3,
             (
@@ -1683,6 +1689,82 @@ impl PartialEq for Value {
             (Value::Entry { .. }, Value::Entry { .. }) => false,
             _ => false,
         }
+    }
+}
+
+/// B-2026-09-19-29 — the reference count of one `shared` / `par` enum value.
+///
+/// A `shared enum` has reference semantics (design.md § Part 5: Shared Types),
+/// and every compiled backend gives it one allocation behind a refcount. The
+/// interpreter's `Value::EnumVariant` is a plain value whose `clone` deep-copies
+/// the payload, so two holders built from one binding held two payloads, and
+/// each holder's death ran the payload's `Drop` body: `A d2:9 d2:9 ok` against
+/// one body compiled.
+///
+/// The payload stays a value (it has no in-place mutation surface, so a copy is
+/// unobservable) and the SHARING is carried here instead: every alias of one
+/// constructed value clones this `Arc`, so its strong count is the number of
+/// live Rust-level references. When the last one goes, `drop` hands a
+/// token-free copy of the value to the interpreter's release queue, and the
+/// next drain runs the enum's own body and then its payload's — once, where
+/// the compiled backends' `rc_dec` reaches zero. The per-holder walks skip a
+/// value carrying a token, so nothing fires on a holder's death but this.
+///
+/// Stamped only on a tuple or struct variant of a shared enum whose release
+/// runs a body; every other enum value carries `None` and keeps its old path.
+pub struct SharedEnumToken {
+    /// The value this token counts, without its token (a copy that held the
+    /// token would keep itself alive).
+    pub value: Value,
+    /// The owning interpreter's release queue.
+    pub releases: Arc<Mutex<Vec<Value>>>,
+}
+
+impl Drop for SharedEnumToken {
+    fn drop(&mut self) {
+        let v = std::mem::replace(&mut self.value, Value::Unit);
+        if let Ok(mut q) = self.releases.lock() {
+            q.push(v);
+        }
+    }
+}
+
+impl std::fmt::Debug for SharedEnumToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SharedEnumToken")
+    }
+}
+
+/// Does `value` hold a [`SharedEnumToken`] anywhere a holder can, i.e. is its
+/// slot one of the references a token counts? Walks the same positions the
+/// drop walks do; a `shared struct` is its own holder and is not descended.
+pub(crate) fn value_holds_shared_enum_token(value: &Value, depth: u32) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    match value {
+        Value::EnumVariant { rc: Some(_), .. } => true,
+        Value::EnumVariant { data, .. } => match data {
+            EnumData::Unit => false,
+            EnumData::Tuple(vs) => vs
+                .iter()
+                .any(|v| value_holds_shared_enum_token(v, depth + 1)),
+            EnumData::Struct(m) => m
+                .values()
+                .any(|v| value_holds_shared_enum_token(v, depth + 1)),
+        },
+        Value::Struct { fields, .. } => fields
+            .values()
+            .any(|v| value_holds_shared_enum_token(v, depth + 1)),
+        Value::Tuple(vs) => vs
+            .iter()
+            .any(|v| value_holds_shared_enum_token(v, depth + 1)),
+        Value::Array(cell) => cell.read().is_ok_and(|items| {
+            items
+                .iter()
+                .any(|v| value_holds_shared_enum_token(v, depth + 1))
+        }),
+        _ => false,
     }
 }
 
@@ -2263,6 +2345,7 @@ pub(crate) fn primitive_const_to_value(cv: &crate::prelude::ConstValue) -> Value
             enum_name: enum_name.clone(),
             variant: variant_name.clone(),
             data: EnumData::Unit,
+            rc: None,
         },
     }
 }
@@ -2328,6 +2411,7 @@ impl Value {
                 enum_name,
                 variant,
                 data: EnumData::Tuple(vs),
+                ..
             } if enum_name == "Result" && variant == "Err" => vs.first(),
             _ => None,
         }
@@ -2549,11 +2633,13 @@ pub(crate) fn upgrade_weak_to_option(weak: &std::sync::Weak<SharedStructInner>) 
             enum_name: "Option".to_string(),
             variant: "Some".to_string(),
             data: EnumData::Tuple(vec![Value::SharedStruct(arc)]),
+            rc: None,
         },
         None => Value::EnumVariant {
             enum_name: "Option".to_string(),
             variant: "None".to_string(),
             data: EnumData::Unit,
+            rc: None,
         },
     }
 }
@@ -2608,11 +2694,13 @@ mod map_data_tests {
                     enum_name: "Option".into(),
                     variant: "Some".into(),
                     data: EnumData::Tuple(vec![Value::Int(3)]),
+                    rc: None,
                 },
                 Value::EnumVariant {
                     enum_name: "Option".into(),
                     variant: "Some".into(),
                     data: EnumData::Tuple(vec![Value::Int(3)]),
+                    rc: None,
                 },
             ),
             (
@@ -2620,11 +2708,13 @@ mod map_data_tests {
                     enum_name: "Option".into(),
                     variant: "None".into(),
                     data: EnumData::Unit,
+                    rc: None,
                 },
                 Value::EnumVariant {
                     enum_name: "Option".into(),
                     variant: "None".into(),
                     data: EnumData::Unit,
+                    rc: None,
                 },
             ),
             (

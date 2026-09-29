@@ -63,6 +63,7 @@ fn some_value(v: Value) -> Value {
         enum_name: "Option".to_string(),
         variant: "Some".to_string(),
         data: EnumData::Tuple(vec![v]),
+        rc: None,
     }
 }
 
@@ -71,6 +72,7 @@ fn none_value() -> Value {
         enum_name: "Option".to_string(),
         variant: "None".to_string(),
         data: EnumData::Unit,
+        rc: None,
     }
 }
 
@@ -696,11 +698,13 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Option".to_string(),
                         variant: "Some".to_string(),
                         data: EnumData::Tuple(vec![Value::Int((i as i64).into())]),
+                        rc: None,
                     },
                     None => Value::EnumVariant {
                         enum_name: "Option".to_string(),
                         variant: "None".to_string(),
                         data: EnumData::Unit,
+                        rc: None,
                     },
                 })
             }

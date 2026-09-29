@@ -92,7 +92,9 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "SendError".to_string(),
                                 variant: "Closed".to_string(),
                                 data: EnumData::Tuple(vec![val]),
+                                rc: None,
                             }]),
+                            rc: None,
                         });
                     }
                     let mut q = buf.queue.lock().unwrap();
@@ -105,7 +107,9 @@ impl<'a> super::Interpreter<'a> {
                                 enum_name: "SendError".to_string(),
                                 variant: "Full".to_string(),
                                 data: EnumData::Tuple(vec![val]),
+                                rc: None,
                             }]),
+                            rc: None,
                         });
                     }
                     q.push_back(val);
@@ -113,6 +117,7 @@ impl<'a> super::Interpreter<'a> {
                         enum_name: "Result".to_string(),
                         variant: "Ok".to_string(),
                         data: EnumData::Tuple(vec![Value::Unit]),
+                        rc: None,
                     });
                 }
             }
@@ -140,11 +145,13 @@ impl<'a> super::Interpreter<'a> {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![v]),
+                            rc: None,
                         },
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
+                            rc: None,
                         },
                     });
                 }
