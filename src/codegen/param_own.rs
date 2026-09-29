@@ -7310,6 +7310,20 @@ impl<'ctx> super::Codegen<'ctx> {
         obj_name: &str,
         field: &str,
     ) -> Option<TypeExpr> {
+        let resolved = self.field_move_out_resolved_te_by_name(obj_name, field)?;
+        self.is_generic_named_struct_type_expr(&resolved)
+            .then_some(resolved)
+    }
+
+    /// B-2026-09-29-21 — the moved-out field's type through the binding's
+    /// recorded instantiation, whatever its shape (`u: U` over `Q[S2]` gives
+    /// `S2`). `None` for a non-generic binding or one with no recorded
+    /// instantiation.
+    pub(super) fn field_move_out_resolved_te_by_name(
+        &self,
+        obj_name: &str,
+        field: &str,
+    ) -> Option<TypeExpr> {
         let obj_inst = self.type_decls.enum_inst_var_types.get(obj_name)?;
         let TypeKind::Path(op) = &obj_inst.kind else {
             return None;
@@ -7341,9 +7355,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .struct_field_type_exprs
             .get(&obj_struct)?
             .get(field_idx)?;
-        let resolved = crate::codegen::helpers::subst_type_params_in_type_expr(fte, &subst);
-        self.is_generic_named_struct_type_expr(&resolved)
-            .then_some(resolved)
+        Some(crate::codegen::helpers::subst_type_params_in_type_expr(
+            fte, &subst,
+        ))
     }
 
     /// B-2026-09-01-5 — is `value` a source nested inside a DISCARDED aggregate
@@ -7584,6 +7598,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 TypeKind::Path(p) => p.segments.first().cloned(),
                 _ => None,
             });
+        // B-2026-09-29-21 — a bare generic-param field (`u: U` over `Q[S2]`)
+        // is named by the binding's instantiation. Keyed by the declared name
+        // it was `U`, which no arm below recognises, so the source kept the
+        // moved value armed and its drop released a box the moved-out
+        // binding had already released (an invalid read on every compiled
+        // surface for `let x = q.u;` alone).
+        let field_type_name = match field_type_name {
+            Some(n)
+                if self
+                    .type_decls
+                    .struct_generic_params
+                    .get(sname.as_str())
+                    .is_some_and(|ps| ps.contains(&n)) =>
+            {
+                self.field_move_out_resolved_te_by_name(s, field)
+                    .and_then(|te| match &te.kind {
+                        TypeKind::Path(p) => p.segments.first().cloned(),
+                        _ => None,
+                    })
+                    .or(Some(n))
+            }
+            other => other,
+        };
         match field_llvm {
             // Direct Vec/String field → zero its cap (drop's `cap > 0` skips).
             Some(BasicTypeEnum::StructType(fst)) if fst == vec_ty => {

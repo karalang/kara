@@ -17026,10 +17026,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// fixture. Asking whether the action is actually here answers for every
     /// such shape at once, including ones not yet enumerated.
     pub(super) fn var_owns_struct_field_bodies(&self, name: &str) -> bool {
+        // B-2026-09-29-21 — a walker masked down to nothing is kept as the
+        // no-op `__karac_dropbodies_none` only so a later store can re-arm it;
+        // until then the binding owns no field bodies, exactly as when the
+        // walker used to be retracted.
         self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|action| {
-                matches!(action, CleanupAction::UserDrop { binding_name, kind, .. }
-                    if binding_name == name && *kind == UserDropKind::StructFieldBodies)
+                matches!(action, CleanupAction::UserDrop { binding_name, kind, drop_fn, .. }
+                    if binding_name == name
+                        && *kind == UserDropKind::StructFieldBodies
+                        && drop_fn.get_name().to_bytes() != b"__karac_dropbodies_none")
             })
         })
     }

@@ -13155,7 +13155,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 }
             }
-            None => self.suppress_struct_field_bodies_for_var(var_name),
+            // B-2026-09-29-21 — nothing survives the mask: keep the action
+            // with an empty walker instead of retracting it, the rule
+            // `mask_moved_field_in_bodies_walk` states. A retracted walk left
+            // `rearm_reassigned_moved_field` nothing to re-arm, so the value a
+            // later `q.u = ..` stored ran its body nowhere.
+            None => {
+                let empty = self.emit_empty_field_bodies_fn();
+                if !self.replace_user_drop_fn_for_var(
+                    var_name,
+                    UserDropKind::StructFieldBodies,
+                    empty,
+                ) {
+                    self.suppress_struct_field_bodies_for_var(var_name);
+                }
+            }
         }
     }
 

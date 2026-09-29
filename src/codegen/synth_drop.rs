@@ -10596,9 +10596,46 @@ impl<'ctx> super::Codegen<'ctx> {
                 super::state::UserDropKind::StructFieldBodies,
                 bodies,
             ),
-            // Nothing survives the mask — let the caller retract the walk.
-            None => false,
+            // B-2026-09-29-21 — nothing survives the mask, so the walk runs
+            // no body; but the action is KEPT, holding an empty walker, rather
+            // than retracted. `rearm_reassigned_moved_field` finds the base's
+            // walk by that action, so a retracted one made the re-arm decline
+            // and `let x = q.u; q.u = mk(8);` ran the REPLACEMENT's body
+            // nowhere whenever `u` was the struct's only Drop-bearing field
+            // (`dS8` missing on every compiled surface, generic or not). The
+            // empty walker is what the retraction meant, one function call
+            // later.
+            None => {
+                let empty = self.emit_empty_field_bodies_fn();
+                self.replace_user_drop_fn_for_var(
+                    var_name,
+                    super::state::UserDropKind::StructFieldBodies,
+                    empty,
+                )
+            }
         }
+    }
+
+    /// B-2026-09-29-21 — a `StructFieldBodies` walker that runs nothing: the
+    /// stand-in for a walk whose every Drop-bearing field has been moved out.
+    pub(super) fn emit_empty_field_bodies_fn(&mut self) -> FunctionValue<'ctx> {
+        let fn_name = "__karac_dropbodies_none";
+        if let Some(f) = self.module.get_function(fn_name) {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let f = self
+            .module
+            .add_function(fn_name, fn_ty, Some(Linkage::Internal));
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        f
     }
 
     /// B-2026-09-07-63 — the INVERSE of [`Self::mask_moved_field_in_bodies_walk`]:
