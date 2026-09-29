@@ -2757,13 +2757,43 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     None
                 };
+                // B-2026-09-29-103 — substitute the struct's generic params
+                // with the scrutinee's concrete args, as the `match` route
+                // (`check_pattern_against`) does. Without it `let G { v, n } = g`
+                // over a `G[String]` bound `v` at the declared `T`, so `v.len()`
+                // was refused ("no method 'len' on type parameter 'T'") while
+                // `match g { G { v, n } => v.len() }` typechecked. An arity
+                // mismatch leaves the declared types alone, as there.
+                let let_subs: HashMap<String, SubstValue> = match (&field_source_ty, ty) {
+                    (Some(sname), Type::Named { args, .. }) => {
+                        let params = self
+                            .env
+                            .structs
+                            .get(sname)
+                            .map(|info| info.generic_params.clone())
+                            .unwrap_or_default();
+                        if !params.is_empty() && params.len() == args.len() {
+                            params
+                                .into_iter()
+                                .zip(args.iter().cloned().map(SubstValue::Type))
+                                .collect()
+                        } else {
+                            HashMap::new()
+                        }
+                    }
+                    _ => HashMap::new(),
+                };
                 for field in fields {
                     let field_ty = if let Some(ref sname) = field_source_ty {
                         if let Some(info) = self.env.structs.get(sname) {
                             if let Some((_, t, _)) =
                                 info.fields.iter().find(|(n, _, _)| n == &field.name)
                             {
-                                t.clone()
+                                if let_subs.is_empty() {
+                                    t.clone()
+                                } else {
+                                    substitute_type_params(t, &let_subs)
+                                }
                             } else {
                                 self.type_error(
                                     format!(
