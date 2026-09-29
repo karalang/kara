@@ -16463,6 +16463,47 @@ impl<'ctx> super::Codegen<'ctx> {
         true
     }
 
+    /// B-2026-09-26-60 — [`Self::suppress_user_drop_for_var`] for a named
+    /// argument FORWARDED whole into a callee that hands it back or keeps it
+    /// (the object the callee returns IS this binding's, so body and memory
+    /// both leave with it). That removal is all-paths; a call compiled in a
+    /// deeper frame than the binding's own-wrapper action (inside a branch,
+    /// which may not run) clears the binding's per-path flag instead, so the
+    /// path that never called still runs the body and frees the value.
+    /// `if f.id > 5 { let k = keepf(f); }` over a struct with a `shared`
+    /// field lost `f`'s body and leaked it on the untaken path.
+    pub(super) fn suppress_forwarded_arg_user_drop(&mut self, name: &str) {
+        if self.user_drop_wrapper_in_enclosing_frame(name) {
+            if let Some(flag) = self.cond_move_drop_flag_for(name) {
+                let bool_t = self.context.bool_type();
+                if self
+                    .builder
+                    .build_store(flag, bool_t.const_int(0, false))
+                    .is_ok()
+                {
+                    return;
+                }
+            }
+        }
+        self.suppress_user_drop_for_var(name);
+    }
+
+    /// B-2026-09-26-60 — does `name`'s own-wrapper `UserDrop` live in an
+    /// ENCLOSING frame only, i.e. is the code being compiled now nested in a
+    /// scope (a branch, a loop body) the binding outlives?
+    fn user_drop_wrapper_in_enclosing_frame(&self, name: &str) -> bool {
+        let frames = &self.drop_rc.scope_cleanup_actions;
+        let owns = |f: &Vec<CleanupAction<'ctx>>| {
+            f.iter().any(|a| {
+                matches!(a, CleanupAction::UserDrop { binding_name, kind, .. }
+                    if binding_name == name
+                        && *kind == crate::codegen::state::UserDropKind::OwnWrapper)
+            })
+        };
+        let n = frames.len();
+        n >= 2 && !owns(&frames[n - 1]) && frames[..n - 1].iter().any(owns)
+    }
+
     pub(super) fn suppress_user_drop_for_var(&mut self, name: &str) {
         // B-2026-08-30-28 — DECLINE for a parameter whose body is owned by a
         // per-path flag. This removal is all-paths; the flag exists precisely
@@ -16778,6 +16819,30 @@ impl<'ctx> super::Codegen<'ctx> {
             let field_fn = self
                 .emit_vec_elem_struct_with_shared_drop_fn(&type_name)
                 .or_else(|| self.emit_struct_drop_synthesis(&type_name));
+            // B-2026-09-26-60 — the action lives in an ENCLOSING frame, so the
+            // call sits in a branch, a loop body or a statement scope that may
+            // not run (`if d.id > 3 { std(mut v, d); }`). A static downgrade
+            // disarmed the body on the path that never called, and the value
+            // was freed with no body run. Keep the wrapper and clear the
+            // binding's per-path flag here instead; the flag's `false` edge
+            // runs the memory-only drop through `param_view_mem_drops`.
+            if fi + 1 < self.drop_rc.scope_cleanup_actions.len() {
+                if let Some(flag) = self.cond_move_drop_flag_for(name) {
+                    let bool_t = self.context.bool_type();
+                    if self
+                        .builder
+                        .build_store(flag, bool_t.const_int(0, false))
+                        .is_ok()
+                    {
+                        if let Some(mem_fn) = field_fn {
+                            self.drop_rc
+                                .param_view_mem_drops
+                                .insert((name.to_string(), ptr), mem_fn);
+                        }
+                        continue;
+                    }
+                }
+            }
             repl.push((fi, ai, ptr, field_fn));
         }
         // Highest index first, so a removal never shifts a position still to be

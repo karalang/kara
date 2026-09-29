@@ -8149,7 +8149,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // other had taken" — is the same hazard across
                                 // three registrars as across two sites.
                                 if self.arg_var_is_forwarded_not_copied(&var_name) {
-                                    self.suppress_user_drop_for_var(&var_name);
+                                    self.suppress_forwarded_arg_user_drop(&var_name);
                                     // B-2026-09-25-37 — and a Drop-less
                                     // struct's memory-only action; see the
                                     // free leg.

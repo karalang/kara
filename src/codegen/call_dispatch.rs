@@ -2880,7 +2880,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
                             }
                         } else if self.arg_var_is_forwarded_not_copied(&var_name) {
-                            self.suppress_user_drop_for_var(&var_name);
+                            self.suppress_forwarded_arg_user_drop(&var_name);
                             // B-2026-09-25-31 — and the memory-only action a
                             // struct WITHOUT a `Drop` of its own registers,
                             // which the line above does not match: `let t =

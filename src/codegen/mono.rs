@@ -4104,7 +4104,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // every-path predicate is stronger, and it follows a rebind
                     // (`let t = v; return t`) that union does not.
                     let var_name = var_name.clone();
-                    self.suppress_user_drop_for_var(&var_name);
+                    self.suppress_forwarded_arg_user_drop(&var_name);
                     self.suppress_struct_cleanup_for_tail_identifier(&var_name);
                     if let Some(v) = self.variables.get(var_name.as_str()) {
                         self.drop_rc.forwarded_handback_slots.insert(v.ptr);
@@ -4202,7 +4202,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Same memory split as the concrete site.
                     let var_name = var_name.clone();
                     if self.arg_var_is_forwarded_not_copied(&var_name) {
-                        self.suppress_user_drop_for_var(&var_name);
+                        self.suppress_forwarded_arg_user_drop(&var_name);
                         // B-2026-09-25-31 — and the memory-only action of a
                         // struct with no `Drop` of its own, which the line
                         // above does not match, where the push happens on
