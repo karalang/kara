@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 539 |
 | run-vs-build | 537 |
 | leak | 466 |
-| double-free | 353 |
+| double-free | 354 |
 | missing-feature | 214 |
 | codegen-gap | 203 |
 | other | 155 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2319 |
+| codegen | 2320 |
 | interp | 672 |
 | typecheck | 314 |
 | other | 112 |
@@ -419,6 +419,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-6 | 2026-09-29 | interp+codegen | medium | A `shared enum`'s TUPLE OR `Option` PAYLOAD LOSES ITS `Drop` BODY -- `G[(R, i64)]` prints no `dR9` under `--interp` (compiled runs it), a plain `shared enum T2 { Y((R, i64)), N }` prints none on ANY surface, and `G[Option[R]]` prints none anywhere and leaks 32 B compiled | — |
 | B-2026-09-29-7 | 2026-09-29 | codegen | medium | `let ... else` OVER A `shared enum` RELEASES THE OBJECT AT THE `let` AND RUNS THE PAYLOAD'S `Drop` BODY BEFORE LATER READS OF THE BINDING, AND THE PLAIN-ENUM SPELLING ICEs NONDETERMINISTICALLY -- `let G.Y(x) = g else { return }; println(f"{x.id}");` prints `dR1 1 end` compiled where `--interp` prints `1 dR1 end`; over a monomorphic `shared enum M` the build panics at pattern_binding.rs `GEPIndex` on some runs | — |
 | B-2026-09-29-8 | 2026-09-29 | codegen | low | `for g in v` OVER A `Vec[G[R]]` OF GENERIC `shared enum`s RUNS EACH PAYLOAD'S `Drop` BODY AT THE `Vec`'s DEATH INSTEAD OF AT THE END OF ITS ITERATION -- `let v: Vec[G[R]] = [G.Y(mk(1))]; for g in v { match g { .. } }` prints `1 end dR1` compiled where `--interp` and the monomorphic `Vec[M]` twin print `1 dR1 end` | — |
+| B-2026-09-29-9 | 2026-09-29 | codegen | high | A BOXED `Option` PARAM STORED ON ONLY SOME PATHS AFTER A READ OF THE PARAM STILL CRASHES ON EVERY COMPILED SURFACE -- `fn crd(t: Option[S], v: mut ref Vec[Option[S]]) { if t.is_some() { v.push(t) } }` prints nothing for `crd(Option.Some(mks(1)), mut u); crd(Option.None, mut u)` on the JIT, -O0 and -O2 (vg=5), against `--interp`'s correct `n1 dS1 end` | — |
 
 ### Relocated
 
