@@ -6445,9 +6445,30 @@ impl<'ctx> super::Codegen<'ctx> {
             self.projection_leaf_te_through_index(&root, e)
                 .is_some_and(|leaf| !self.elem_te_runs_user_drop(&leaf))
         };
-        !crate::result_escape::optres_payload_escaping_param_variants_with(f, &leaf_is_copy_read)
-            .get(pname)
-            .is_some_and(|vs| vs.contains(variant))
+        // B-2026-09-29-3 — and through a whole immutable rebind of the arm's
+        // binding (`Some(x) => { let y = x; y.r.id }`), exactly where
+        // `optres_payload_escape_map` follows one (B-2026-09-28-48): the
+        // callee lowers that rebind as a view, so a copy read off the new name
+        // is the same read as one off `x`. Asked unfollowed, the rebind scored
+        // as an escape, the caller stood its walk down for a fresh temp and
+        // the arm armed its own, while a NAMED argument's let-site walk stayed
+        // armed beside it and ran every body twice.
+        //
+        // Not for a payload that owns a `shared` field: the callee's rebound
+        // local still releases that handle, so leaving the caller's let-site
+        // walk armed beside it reads the block after the release — the
+        // B-2026-09-27-87 shape, which this would open on the fresh-temp
+        // spelling that is clean today. It stays on the callee-owned route
+        // until -27-87 makes the rebind a true view.
+        let follow_rebinds = self.optres_payload_rebind_is_followed(param_te, Some(variant))
+            && !self.struct_elem_owns_shared_field(&root);
+        !crate::result_escape::optres_payload_escaping_param_variants_with_rebinds(
+            f,
+            &leaf_is_copy_read,
+            follow_rebinds,
+        )
+        .get(pname)
+        .is_some_and(|vs| vs.contains(variant))
     }
 
     /// B-2026-09-19-48 — the STRUCT sibling of [`Self::tuple_payload_arity`]:
