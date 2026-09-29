@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 553 |
+| miscompile | 555 |
 | run-vs-build | 540 |
 | leak | 480 |
 | double-free | 360 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2361 |
-| interp | 690 |
+| codegen | 2363 |
+| interp | 692 |
 | typecheck | 314 |
 | other | 112 |
 | ownership | 79 |
@@ -413,7 +413,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-38 | 2026-09-29 | interp | medium | THE INTERPRETER NEVER RUNS THE `Drop` BODY OF A VALUE POPPED OUT OF A `Vec` OF A GENERIC STRUCT -- `let a = v.pop()` over `[Q { u: mk(1) }, Q { u: mk(2) }]` prints `x1 dS1 end` under `--interp`, never `dS2`, while every compiled surface prints `dS2 x1 dS1 end`; the non-generic `Vec[W]` twin prints `dS2 x1 dS1 end` on all four | — |
 | B-2026-09-29-39 | 2026-09-29 | interp+codegen | medium | A `Map` VALUE THAT IS A GENERIC STRUCT INSTANTIATION RUNS NO `Drop` BODY ON ANY BACKEND -- `m.insert(1, Q { u: mk(1) })` over `Map[i64, Q[S2]]` prints `x1 end` on --interp, JIT, -O0 and -O2 and never `dS1`, while `Map[i64, S2]` and `Map[i64, W]` (`struct W { u: S2 }`) print `x1 dS1 end`; memory is clean | — |
 | B-2026-09-29-28 | 2026-09-29 | interp+codegen | medium | A BY-VALUE `Result` OR USER-ENUM PARAM STORED ON ONE PATH AND PAYLOAD-TAKEN ON ANOTHER RUNS NO BODY ON A THIRD PATH THAT DOES NEITHER, ON EVERY SURFACE -- `fn cp(t: Result[S, i64], v: mut ref Vec[Result[S, i64]], c: i64) -> i64 { if c == 0 { v.push(t) } else if c == 1 { let y = match t { Result.Ok(q) => q, Result.Err(e) => mks(e) }; .. } else { println("nothing") }; return 1 }` called with `Ok(mks(3))` and `c == 2` prints no `dS3`; `enum G { A(S), B(i64) }` the same | — |
-| B-2026-09-29-29 | 2026-09-29 | codegen | high | A TAKE THAT REBINDS THE PARAM'S OWN NAME (`let t = match t { .. }`) KEEPS THE B-2026-09-29-27 DOUBLE FREE COMPILED -- `fn cp(t: Option[S], v: mut ref Vec[Option[S]], c: bool) -> i64 { if c { v.push(t) } else { let t = match t { Option.Some(q) => q, Option.None => mks(0) }; println(f"p{t.id}") }; return 1 }` prints nothing compiled (valgrind at -O0 reports invalid reads of the box main freed); `--interp` prints `p1 dS1 n1 dS2 end` | — |
 | B-2026-09-29-40 | 2026-09-29 | interp+codegen | high | `let t = t.unwrap()` THAT REBINDS A BY-VALUE `Option` PARAM'S OWN NAME RUNS THE PAYLOAD'S BODY TWICE UNDER `--interp` AND DOUBLE-FREES COMPILED -- `fn cu(t: Option[S]) -> i64 { let t = t.unwrap(); println(f"u{t.id}"); return 1 }` prints `u10 dS10 dS10 d1 end` under `--interp` and `free(): double free detected in tcache 2` at -O2; the same inside a branch | — |
 | B-2026-09-29-30 | 2026-09-29 | codegen | high | AN `Option` PARAM'S PAYLOAD BINDING REWRAPPED AND HANDED ON INSIDE THE CALLEE (`eat(Some(x))`) RUNS A NAMED ARGUMENT'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE, IN `match`, `if let` AND `let .. else` ALIKE -- `fn f(a: Option[S]) -> i64 { if let Some(x) = a { eat(Some(x)); 3 } else { 0 } }` over `fn eat(o: Option[S]) { println("eat") }` with a named `a` prints `eat d2 d2 j3` at `-O0` / `-O2` against `--interp`'s `eat d2 j3`; memory clean | — |
 | B-2026-09-29-31 | 2026-09-29 | codegen | medium | A NAMED `Option` ARGUMENT WHOSE PAYLOAD HAS A `shared` FIELD AND A `Drop`-BEARING FIELD RUNS THE BODY INSIDE THE CALLEE WHEN THE CALLEE REBINDS THE ARM BINDING -- `fn f(w: Option[ShD]) -> i64 { if let Some(p) = w { let q = p; return q.n; } return 0; }` over `ShD { r: R, i: ShIn, n }` prints `d2 j2` at `-O0` / `-O2` against `--interp`'s `j2 d2` for `let o = Some(mkd(2)); println(f"j{f(o)}")`; memory clean. The fresh temp is right. B-2026-09-29-3's rebind fix does not reach a payload with a `shared` field | — |
@@ -431,6 +430,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-47 | 2026-09-29 | codegen | high | A STRUCT DESTRUCTURE WITH `..` AFTER ONE OF ITS FIELDS WAS MOVED OUT READS FREED MEMORY ON EVERY COMPILED SURFACE -- `let x = q.u; let W3 { n, .. } = q;` over `W3 { u: S2, n: i64 }` prints the right text with 1 invalid read at -O0 and an abort in `malloc` under `karac run`; reading the remaining field by projection (`let s = q.s`) is clean | — |
 | B-2026-09-29-48 | 2026-09-29 | interp+codegen | high | A BY-VALUE STRUCT PARAM REBOUND TO A LOCAL AND THEN FIELD-STORED GOES WRONG ON EVERY BACKEND -- in `fn f(q0: W) -> i64 { let mut q = q0; let x = q.u; q.u = mk(8); ... }` the stored value's `dS8` never runs anywhere and compiled leaks its 16 B box; without the move (`let mut q = q0; q.u = mk(8);`) `--interp` runs the displaced `dS9` twice and compiled reads freed memory | — |
 | B-2026-09-29-49 | 2026-09-29 | codegen | medium | AN `Array` ENUM PAYLOAD WHOSE ELEMENT IS A `shared enum` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND AND LEAKS 58 B COMPILED -- `enum Hsh { P(Array[Sm, 1]), Q }` over `shared enum Sm { P(R), Q }` prints no `dR` on `--interp`, the JIT, -O0 or -O2, and valgrind at -O0 reports `58 (48 direct, 10 indirect) bytes in 1 blocks definitely lost` | — |
+| B-2026-09-29-64 | 2026-09-29 | interp+codegen | medium | AN OWNED-`self` METHOD THAT RETURNS `match self { .. }` DIRECTLY RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY SURFACE -- `fn n1(self) -> i64 { return match self { E.A(s) => 1, E.B(n) => n } }` called as `let a = E.A(mks(1)); a.n1()` prints `dS1 n1 1 dS1`, where `let r = match self { .. }; return r`, arms that `return` inside a block, a tail `match self { .. }` without `return`, and the free-function `return match e { .. }` all print one body | — |
+| B-2026-09-29-65 | 2026-09-29 | interp+codegen | medium | A BY-VALUE `Option` PARAM TAKEN ON ONE PATH AND SHADOWED BY AN UNRELATED VALUE ON THE OTHER LOSES ITS PAYLOAD'S `Drop` BODY ON EVERY SURFACE -- `fn q1(t: Option[S], c: bool) -> i64 { if c { let u = match t { Option.Some(v) => v, n => n.unwrap() }; return u.id }; let t = Option.Some(mks(99)); println("q1"); return 1 }` at `q1(Option.Some(mks(7)), false)` prints `q1 dS99` where `dS7` is also due | — |
 
 ### Relocated
 
@@ -3309,6 +3310,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-20 | codegen | high | A NESTED GENERIC STRUCT `Q[Q[S2]]` LEAKS THE INNER VALUE'S `shared` BOX ON EVERY COMPILED SURFACE WITH NO CALL INVOLVED -- `let q = Q { u: Q { u: S2… | 46c083cf4 |
 | B-2026-09-29-18 | codegen+interp | medium | REMAINDER OF B-2026-09-29-10: A PROJECTION OFF A LOCAL VIEW OF A BY-VALUE PARAM (`let O { w, k } = o;` or `let w = o.w;`, then `xs.push(w.r)`) RUNS T… | 69cc50035 |
 | B-2026-09-29-27 | interp+codegen | high | A BY-VALUE `Option` PARAM STORED WHOLE ON ONE PATH AND ITS PAYLOAD TAKEN ON ANOTHER DOUBLE-FREES COMPILED WHEN THE PAYLOAD IS BOXED, AND A THIRD PATH… | 01ab10f45 |
+| B-2026-09-29-29 | codegen | high | A TAKE THAT REBINDS THE PARAM'S OWN NAME (`let t = match t { . | 2d1219d49 |
 
 </details>
 
