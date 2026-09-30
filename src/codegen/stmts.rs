@@ -9709,9 +9709,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .param_payload_arm_views
                                         .remove(var_name.as_str());
                                 }
-                                let elem_struct_name =
-                                    elem_struct_name.filter(|_| !param_payload_view);
-                                let elem_te = elem_te.filter(|_| !param_payload_view);
+                                // B-2026-09-29-107 — nor for a whole rebind
+                                // of a by-value PARAM view: a bare `Vec` param
+                                // (`let b = v;`) or a `Vec` leaf destructured
+                                // off one (`let (a, j) = t; let b = a;`). The
+                                // CALLER runs those elements' bodies on its own
+                                // binding after the call (caller-retains, the
+                                // no-rebind spelling measures one body), so
+                                // arming a walker here ran each twice. The
+                                // destination keeps the memory registered above
+                                // and becomes a view itself, as the tuple and
+                                // struct rebind sites already do.
+                                // Not the `let mut c = a; .. c = <new>;` rebind
+                                // B-2026-09-27-50 hands the param over to: the
+                                // caller stands down for it and `c` is the owner.
+                                let param_view_rebind = !param_payload_view
+                                    && self.expr_is_param_view(value)
+                                    && !self.let_is_reassigned_param_rebind(var_name, value);
+                                if param_view_rebind {
+                                    self.payload_vars.param_view_locals.insert(var_name.clone());
+                                }
+                                let elem_struct_name = elem_struct_name
+                                    .filter(|_| !param_payload_view && !param_view_rebind);
+                                let elem_te =
+                                    elem_te.filter(|_| !param_payload_view && !param_view_rebind);
                                 if let Some(en) = elem_struct_name {
                                     // Generic element (B-2026-08-02-14):
                                     // derive the subst from the element's
@@ -19086,16 +19107,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_or_default(),
             _ => std::collections::HashSet::new(),
         };
+        // B-2026-09-29-107 — a `for` loop's TUPLE element (or a `ref v[i]`
+        // shim) is a bit-copy VIEW of a slot the container still owns: the
+        // container frees the element and runs its bodies at its own death.
+        // Its leaves are views of that slot too, so they take neither half.
+        // Taking the memory (the struct / tuple leaf arms, and -53's Vec arm
+        // before `source_owns_memory` fenced it) cap-zeroed only the VIEW's
+        // copy, so the container freed the same buffer again, and a whole
+        // move of a leaf (`let b = a`, `out.push(a)`) gave it a second owner.
+        // The leaves are marked as loop borrows instead, so a consuming use
+        // deep-copies exactly as a consuming use of `p.0` already does.
+        let elem_view_source = !source_owns_memory
+            && Self::place_root_ident(value)
+                .is_some_and(|root| self.borrow_vars.elem_borrow_roots.contains(root));
         self.place_source_tuple_leaf_cleanups(
             pats,
             &elems,
             base_ptr,
             tuple_ty,
-            owner_runs_bodies,
+            owner_runs_bodies || elem_view_source,
             mark_views,
             &view_elems,
             &mut took_bodies,
             source_owns_memory,
+            elem_view_source,
         );
         // B-2026-09-02-43 — when the LEAVES took the bodies, the source must
         // stop running them. `owner_runs_bodies` already says the source is not
@@ -19157,6 +19192,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // because cap-zeroing the view's slot cannot stop the container
         // freeing the same buffer.
         source_owns_memory: bool,
+        // B-2026-09-29-107 — the source is a VIEW of a container element
+        // (see the caller), so every binding leaf is a loop-borrow alias.
+        leaves_alias_container: bool,
     ) {
         for (idx, pat) in pats.iter().enumerate() {
             let Some(te) = elems.get(idx).cloned() else {
@@ -19308,6 +19346,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     &std::collections::HashSet::new(),
                     &mut inner_took,
                     source_owns_memory,
+                    leaves_alias_container,
                 );
                 // B-2026-09-03-14 — the recursion cap-zeroes the inner leaves it
                 // takes, but the OUTER element was never recorded (this call site
@@ -19339,6 +19378,23 @@ impl<'ctx> super::Codegen<'ctx> {
             let PatternKind::Binding(name) = &pat.kind else {
                 continue;
             };
+            // B-2026-09-29-107 — a leaf of a container-element VIEW owns
+            // nothing: record what names its type, mark it a loop borrow (so a
+            // consuming use copies), and take no cleanup and no cap-zero.
+            if leaves_alias_container {
+                if let Some((arr_elem_te, _)) = self.array_elem_and_len(&te) {
+                    self.var_types
+                        .array_elem_type_exprs
+                        .insert(name.clone(), arr_elem_te);
+                } else if matches!(&te.kind, TypeKind::Path(p)
+                    if !matches!(p.segments.last().map(String::as_str),
+                        Some("Vec") | Some("String") | Some("str")))
+                {
+                    self.register_var_from_type_expr(name, &te);
+                }
+                self.mark_for_loop_borrow_if_heap(name, &te);
+                continue;
+            }
             // B-2026-08-28-26 — a TUPLE-TYPED leaf BOUND rather than
             // destructured (`let p = ((R { .. }, 2), 1); let (inner, n) = p;`).
             // It clears the nested-PATTERN recursion above, because it is a
@@ -19557,7 +19613,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // element cap-zeroed so its own drop stands down. Gated on
             // `!owner_runs_bodies` like the array arm: a by-value tuple PARAM
             // source keeps its caller-side owner.
-            if !owner_runs_bodies && source_owns_memory {
+            if source_owns_memory {
                 if let TypeKind::Path(vp) = &te.kind {
                     let head = vp.segments.last().map(String::as_str);
                     if matches!(head, Some("Vec") | Some("String") | Some("str")) {
@@ -19566,8 +19622,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         let elem = self.var_types.vec_elem_types.get(name.as_str()).copied();
                         if let (Some(slot), Some(elem)) = (slot, elem) {
                             if matches!(slot.ty, BasicTypeEnum::StructType(st) if st == vec_ty) {
-                                if self.track_vec_destructure_leaf(name, slot.ptr, elem, true) {
+                                if self.track_vec_destructure_leaf(
+                                    name,
+                                    slot.ptr,
+                                    elem,
+                                    !owner_runs_bodies,
+                                ) {
                                     took_bodies.insert(idx as u32);
+                                }
+                                if leaf_is_view {
+                                    self.payload_vars.param_view_locals.insert(name.clone());
                                 }
                                 self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, idx as u32, &te);
                             }

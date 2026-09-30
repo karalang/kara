@@ -2870,6 +2870,41 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.mark_generic_enum_vec_loop_view(name, &elem_te, source_var);
                 }
             }
+            // B-2026-09-29-107 — `for (a, j) in v` over a `Vec` of TUPLES.
+            // The Map arm below read the WHOLE element type for the second
+            // leaf and nothing for the first, so a heap leaf was never marked
+            // a loop borrow: it is a bit-copy of the container's slot, and a
+            // whole move of it (`let b = a`) became a second owner of a buffer
+            // the container frees -- a double free on every compiled surface.
+            // Each leaf is registered at ITS element's type instead, exactly as
+            // the `let (a, j) = pair` spelling marks the leaves of a loop
+            // element.
+            PatternKind::Tuple(pats)
+                if !self.mapset.map_key_type_exprs.contains_key(source_var)
+                    && self
+                        .var_types
+                        .var_elem_type_exprs
+                        .get(source_var)
+                        .is_some_and(|te| {
+                            matches!(&te.kind,
+                            TypeKind::Tuple(etes) if etes.len() == pats.len())
+                        }) =>
+            {
+                let Some(TypeKind::Tuple(etes)) = self
+                    .var_types
+                    .var_elem_type_exprs
+                    .get(source_var)
+                    .map(|te| te.kind.clone())
+                else {
+                    return;
+                };
+                for (pat, te) in pats.iter().zip(etes.iter()) {
+                    if let PatternKind::Binding(name) = &pat.kind {
+                        self.register_var_from_type_expr(name, te);
+                        self.mark_for_loop_borrow_if_heap(name, te);
+                    }
+                }
+            }
             // `for (k, v) in m` — only legal tuple iteration shape today
             // (Map). `for (a, b) in vec_of_tuples` would fall through; the
             // tuple-element-classification follow-up would extend this arm.
