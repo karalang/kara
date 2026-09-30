@@ -321,6 +321,9 @@ impl<'a> super::Interpreter<'a> {
             // repairing only codegen would have converted an agreed-wrong
             // answer into a fresh divergence, the trade this file's match-arm
             // comment already warns against.
+            // B-2026-09-29-109 — asked before the clear below, which takes a
+            // re-bound name back out of the loop-borrowed set.
+            let loop_view_destructure = self.let_destructures_loop_borrowed_elem(stmt);
             self.clear_stale_param_view_marks(stmt);
             self.freshtemp_read_levels
                 .push(crate::interpreter::FreshTempReadLevel {
@@ -480,6 +483,7 @@ impl<'a> super::Interpreter<'a> {
             let own_body_only_before = self.own_body_only_view_bindings.len();
             if !self.let_destructures_owned_param(stmt)
                 && !Self::let_binds_borrowed_container_elem(stmt)
+                && !loop_view_destructure
                 && !self.let_else_binds_from_borrowed_param(stmt)
             {
                 push_drops_for_stmt_except(stmt, &mut cleanup, &view_leaves);
@@ -1597,7 +1601,6 @@ impl<'a> super::Interpreter<'a> {
     /// The element list is cloned out before the walk so a body that touches
     /// the same container cannot deadlock against a held read guard.
     fn run_array_element_user_drops(&mut self, name: &str) -> bool {
-        let binding_is_tuple = matches!(self.env.get(name), Some(Value::Tuple(_)));
         let elems: Vec<Value> = match self.env.get(name) {
             Some(Value::Array(cell)) => match cell.read() {
                 Ok(g) => g.clone(),
@@ -1698,11 +1701,7 @@ impl<'a> super::Interpreter<'a> {
             // divergence in the silent direction on this side.
             if let Value::Tuple(items) = &e {
                 let items = items.clone();
-                if binding_is_tuple {
-                    self.run_tuple_binding_nested_items(items);
-                } else {
-                    self.run_tuple_item_user_drops(items);
-                }
+                self.run_tuple_binding_nested_items(items);
                 continue;
             }
             // B-2026-08-03-1 — an `Option[P]` / `Result[O, E]` ELEMENT
@@ -4638,6 +4637,14 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::Identifier(src) => Some(src.as_str()),
             _ => None,
         };
+        // B-2026-09-29-109 — a re-bound name no longer denotes the loop's
+        // borrowed element. The self-rebind `let pair = pair` still does, on
+        // every compiled surface as well.
+        for n in pattern.binding_names() {
+            if self_rebind != Some(n.as_str()) {
+                self.unmark_loop_borrowed_elem_name(&n);
+            }
+        }
         let names: Vec<String> = pattern
             .binding_names()
             .into_iter()
@@ -5104,6 +5111,28 @@ impl<'a> super::Interpreter<'a> {
                 .collect(),
             _ => Vec::new(),
         }
+    }
+
+    /// B-2026-09-29-109 — `let (a, j) = pair` inside `for pair in v.iter()`:
+    /// the element is the collection's, which runs its bodies at its own death,
+    /// so every leaf is a view and registers no slot. Codegen's twin is the
+    /// `elem_view_source` arm of `finish_place_source_tuple_destructure`. A
+    /// whole-value `let b = pair` is not a destructure: it copies the element
+    /// on every backend and keeps its slot.
+    fn let_destructures_loop_borrowed_elem(&self, stmt: &Stmt) -> bool {
+        let (pattern, value) = match &stmt.kind {
+            StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } => {
+                (pattern, value)
+            }
+            _ => return false,
+        };
+        if matches!(
+            pattern.kind,
+            PatternKind::Binding(_) | PatternKind::Wildcard | PatternKind::AtBinding { .. }
+        ) {
+            return false;
+        }
+        matches!(&value.kind, ExprKind::Identifier(n) if self.names_loop_borrowed_elem(n))
     }
 
     /// B-2026-09-29-44 — `let Some(r) = x else { … }` where `x` is a BORROWED
@@ -6637,10 +6666,13 @@ impl<'a> super::Interpreter<'a> {
     /// compiled tuple walker runs those elements' bodies at the binding's
     /// death; this side was silent.
     ///
-    /// Tuple bindings only. A `Vec` binding's tuple elements keep the
-    /// array-blind walk: after a consuming `for` over it the elements' inner
-    /// `Vec`s are already owned elsewhere, and walking them here too ran every
-    /// body twice.
+    /// B-2026-09-29-109 — a `Vec` binding's tuple elements too. They were
+    /// left out because a `for` over the `Vec` that destructured each element
+    /// (`let (a, j) = pair`) let the leaf run the inner `Vec`'s bodies, so the
+    /// container walking them as well ran every body twice. That leaf was the
+    /// wrong owner: the loop only borrows the element, and it is a view now
+    /// (`let_destructures_loop_borrowed_elem`), so the container is the one
+    /// owner left and a plain `Vec[(Vec[D], i64)]` runs its bodies again.
     fn run_tuple_binding_nested_items(&mut self, items: Vec<Value>) {
         for it in items {
             match &it {

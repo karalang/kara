@@ -2067,237 +2067,16 @@ impl<'a> super::Interpreter<'a> {
                 label,
                 ..
             } => {
-                // B-2026-07-14-10: `for x in xs.iter_mut()` — yield a MUTABLE
-                // reference to each Vec element so `*x = …` / `*x += 1` write
-                // back. Materialize per-element `VecSlotRef`s over the receiver's
-                // shared element storage; the loop binds each to the pattern like
-                // an ordinary item, and write-throughs via `Env::set` land in the
-                // live Vec. (`iter()` — the immutable form — flows through the
-                // normal value-materializing arms below.)
-                let iter_mut_items: Option<Vec<Value>> = if let ExprKind::MethodCall {
-                    method,
-                    object,
-                    args,
-                    ..
-                } = &iterable.kind
-                {
-                    if method == "iter_mut" && args.is_empty() {
-                        if let Value::Array(rc) = self.eval_expr_inner(object) {
-                            let len = rc.read().unwrap().len();
-                            Some(
-                                (0..len)
-                                    .map(|i| Value::VecSlotRef {
-                                        storage: rc.clone(),
-                                        index: i,
-                                    })
-                                    .collect(),
-                            )
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
+                // B-2026-09-29-109 — see `mark_loop_borrowed_elem_names`.
+                let view_names = if self.for_iterable_borrows_elems(iterable) {
+                    pattern.binding_names()
                 } else {
-                    None
+                    Vec::new()
                 };
-                let items = if let Some(its) = iter_mut_items {
-                    its
-                } else {
-                    let iter_val = self.eval_expr_inner(iterable);
-                    // Iterator: pull LAZILY — one `iterator_step` per loop
-                    // iteration, interleaved with the body. The old eager
-                    // drain-to-Vec HUNG on any infinite iterator
-                    // (`xs.iter().cycle()` with a `break` in the body pulled
-                    // forever before the body ever ran — B-2026-07-14-22) and
-                    // ran all adaptor side effects (`inspect`, stateful
-                    // predicates) BEFORE the first body execution, the
-                    // opposite of the codegen backend's (and Rust's)
-                    // interleaved ordering. Same break/continue/label
-                    // handling as the materialized walk below.
-                    if matches!(iter_val, Value::Iterator { .. }) {
-                        let mut it = iter_val;
-                        loop {
-                            let Some(item) = self.iterator_step(&mut it) else {
-                                return Value::Unit;
-                            };
-                            self.env.push_scope();
-                            self.bind_pattern(pattern, item);
-                            match self.eval_block_inner(body) {
-                                Ok(_) => {}
-                                Err(ControlFlow::Break {
-                                    label: ref bl,
-                                    value: ref v,
-                                }) => {
-                                    self.env.pop_scope();
-                                    if bl.is_none() || bl.as_deref() == label.as_deref() {
-                                        return v.clone().unwrap_or(Value::Unit);
-                                    } else {
-                                        return self.set_cf(ControlFlow::Break {
-                                            label: bl.clone(),
-                                            value: v.clone(),
-                                        });
-                                    }
-                                }
-                                Err(ControlFlow::Continue { label: ref cl }) => {
-                                    self.env.pop_scope();
-                                    if cl.is_none() || cl.as_deref() == label.as_deref() {
-                                        continue;
-                                    } else {
-                                        return self
-                                            .set_cf(ControlFlow::Continue { label: cl.clone() });
-                                    }
-                                }
-                                Err(cf) => {
-                                    self.env.pop_scope();
-                                    return self.set_cf(cf);
-                                }
-                            }
-                            self.env.pop_scope();
-                        }
-                    }
-                    match iter_val {
-                        Value::Array(rc) => match Arc::try_unwrap(rc) {
-                            Ok(cell) => cell.into_inner().unwrap(),
-                            Err(rc) => rc.read().unwrap().clone(),
-                        },
-                        Value::Slice {
-                            storage,
-                            start,
-                            len,
-                            ..
-                        } => storage.read().unwrap()[start..start + len].to_vec(),
-                        Value::Tuple(v) => v,
-                        // SortedSet iterates in ascending key order
-                        Value::SortedSet(s) => s.into_keys().map(|k| k.0).collect(),
-                        // SortedMap iterates as (key, value) tuples in ascending key order
-                        Value::SortedMap(m) => m
-                            .into_iter()
-                            .map(|(k, v)| Value::Tuple(vec![k.0, v]))
-                            .collect(),
-                        // Set / Map iterate in the hash order their own hasher
-                        // gives, NOT insertion order: design.md § Map leaves the
-                        // order unspecified and requires it to vary across
-                        // process runs (B-2026-08-21-6).
-                        Value::Set(s) => s.read().unwrap().iter_observable().cloned().collect(),
-                        Value::Map(m) => m
-                            .read()
-                            .unwrap()
-                            .iter_observable()
-                            .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
-                            .collect(),
-                        // String iterates per Unicode scalar value, matching the
-                        // canonical `s.chars()` surface — design.md § Character
-                        // type (line 2299) pins `for c in s` and `s.chars()` as
-                        // semantic peers.
-                        Value::String(s) => s.chars().map(Value::Char).collect(),
-                        // (`Value::Iterator` is handled by the LAZY pull-loop
-                        // above — it never reaches this materializing match.)
-                        // `LinesIter[R]` (from `BufReader.lines()`) — drain the
-                        // shared reader one line at a time, yielding
-                        // `Result[String, IoError]` per line: `Ok(line)` with the
-                        // trailing `\n` / `\r\n` stripped (matching Rust's
-                        // `BufRead::lines`), `Err` once on a mid-stream read error
-                        // (then terminate), EOF terminates. Eager-materialized like
-                        // the other iterables above; the shared BufReader is left
-                        // at EOF afterward.
-                        Value::LinesIter(rc) => {
-                            use std::io::BufRead;
-                            let mut guard = rc.lock().unwrap();
-                            let mut drained = Vec::new();
-                            loop {
-                                let mut line = String::new();
-                                match guard.read_line(&mut line) {
-                                    Ok(0) => break,
-                                    Ok(_) => {
-                                        if line.ends_with('\n') {
-                                            line.pop();
-                                            if line.ends_with('\r') {
-                                                line.pop();
-                                            }
-                                        }
-                                        drained.push(super::helpers::io_ok(Value::String(line)));
-                                    }
-                                    Err(e) => {
-                                        drained.push(super::helpers::io_err_value(
-                                            super::helpers::io_error_from_std(&e),
-                                        ));
-                                        break;
-                                    }
-                                }
-                            }
-                            drained
-                        }
-                        // `for line in stdin.lines()` — drain standard input a line
-                        // at a time until EOF, yielding `Result[String, IoError]`
-                        // per line (the same Item shape as `LinesIter`, trailing
-                        // `\n`/`\r\n` stripped). `std::io::stdin().read_line`
-                        // returns `Ok(0)` at EOF. Eager-materialized like
-                        // `LinesIter`; over a finite stdin the output is identical
-                        // to the codegen path's per-iteration read.
-                        Value::StdinLines => {
-                            let mut drained = Vec::new();
-                            loop {
-                                let mut line = String::new();
-                                match std::io::stdin().read_line(&mut line) {
-                                    Ok(0) => break,
-                                    Ok(_) => {
-                                        if line.ends_with('\n') {
-                                            line.pop();
-                                            if line.ends_with('\r') {
-                                                line.pop();
-                                            }
-                                        }
-                                        drained.push(super::helpers::io_ok(Value::String(line)));
-                                    }
-                                    Err(e) => {
-                                        drained.push(super::helpers::io_err_value(
-                                            super::helpers::io_error_from_std(&e),
-                                        ));
-                                        break;
-                                    }
-                                }
-                            }
-                            drained
-                        }
-                        _ => vec![iter_val],
-                    }
-                };
-                for item in items {
-                    self.env.push_scope();
-                    self.bind_pattern(pattern, item);
-                    match self.eval_block_inner(body) {
-                        Ok(_) => {}
-                        Err(ControlFlow::Break {
-                            label: ref bl,
-                            value: ref v,
-                        }) => {
-                            self.env.pop_scope();
-                            if bl.is_none() || bl.as_deref() == label.as_deref() {
-                                return v.clone().unwrap_or(Value::Unit);
-                            } else {
-                                return self.set_cf(ControlFlow::Break {
-                                    label: bl.clone(),
-                                    value: v.clone(),
-                                });
-                            }
-                        }
-                        Err(ControlFlow::Continue { label: ref cl }) => {
-                            self.env.pop_scope();
-                            if cl.is_none() || cl.as_deref() == label.as_deref() {
-                                continue;
-                            } else {
-                                return self.set_cf(ControlFlow::Continue { label: cl.clone() });
-                            }
-                        }
-                        Err(cf) => {
-                            self.env.pop_scope();
-                            return self.set_cf(cf);
-                        }
-                    }
-                    self.env.pop_scope();
-                }
-                Value::Unit
+                let saved = self.save_loop_borrowed_elem_names(&view_names);
+                let result = self.eval_for_loop(pattern, iterable, body, label, &view_names);
+                self.restore_loop_borrowed_elem_names(saved);
+                result
             }
 
             // Loop
@@ -2836,6 +2615,251 @@ impl<'a> super::Interpreter<'a> {
                 self.eval_offset_of(ty, field_path, &expr.span)
             }
         }
+    }
+
+    /// The `for` loop proper, split out of `eval_expr_inner_unwrapped` so the
+    /// caller can restore the loop-borrowed element names on every exit path
+    /// (B-2026-09-29-109).
+    fn eval_for_loop(
+        &mut self,
+        pattern: &crate::ast::Pattern,
+        iterable: &Expr,
+        body: &crate::ast::Block,
+        label: &Option<String>,
+        view_names: &[String],
+    ) -> Value {
+        // B-2026-07-14-10: `for x in xs.iter_mut()` — yield a MUTABLE
+        // reference to each Vec element so `*x = …` / `*x += 1` write
+        // back. Materialize per-element `VecSlotRef`s over the receiver's
+        // shared element storage; the loop binds each to the pattern like
+        // an ordinary item, and write-throughs via `Env::set` land in the
+        // live Vec. (`iter()` — the immutable form — flows through the
+        // normal value-materializing arms below.)
+        let iter_mut_items: Option<Vec<Value>> = if let ExprKind::MethodCall {
+            method,
+            object,
+            args,
+            ..
+        } = &iterable.kind
+        {
+            if method == "iter_mut" && args.is_empty() {
+                if let Value::Array(rc) = self.eval_expr_inner(object) {
+                    let len = rc.read().unwrap().len();
+                    Some(
+                        (0..len)
+                            .map(|i| Value::VecSlotRef {
+                                storage: rc.clone(),
+                                index: i,
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let items = if let Some(its) = iter_mut_items {
+            its
+        } else {
+            let iter_val = self.eval_expr_inner(iterable);
+            // Iterator: pull LAZILY — one `iterator_step` per loop
+            // iteration, interleaved with the body. The old eager
+            // drain-to-Vec HUNG on any infinite iterator
+            // (`xs.iter().cycle()` with a `break` in the body pulled
+            // forever before the body ever ran — B-2026-07-14-22) and
+            // ran all adaptor side effects (`inspect`, stateful
+            // predicates) BEFORE the first body execution, the
+            // opposite of the codegen backend's (and Rust's)
+            // interleaved ordering. Same break/continue/label
+            // handling as the materialized walk below.
+            if matches!(iter_val, Value::Iterator { .. }) {
+                let mut it = iter_val;
+                loop {
+                    let Some(item) = self.iterator_step(&mut it) else {
+                        return Value::Unit;
+                    };
+                    self.env.push_scope();
+                    self.mark_loop_borrowed_elem_names(view_names);
+                    self.bind_pattern(pattern, item);
+                    match self.eval_block_inner(body) {
+                        Ok(_) => {}
+                        Err(ControlFlow::Break {
+                            label: ref bl,
+                            value: ref v,
+                        }) => {
+                            self.env.pop_scope();
+                            if bl.is_none() || bl.as_deref() == label.as_deref() {
+                                return v.clone().unwrap_or(Value::Unit);
+                            } else {
+                                return self.set_cf(ControlFlow::Break {
+                                    label: bl.clone(),
+                                    value: v.clone(),
+                                });
+                            }
+                        }
+                        Err(ControlFlow::Continue { label: ref cl }) => {
+                            self.env.pop_scope();
+                            if cl.is_none() || cl.as_deref() == label.as_deref() {
+                                continue;
+                            } else {
+                                return self.set_cf(ControlFlow::Continue { label: cl.clone() });
+                            }
+                        }
+                        Err(cf) => {
+                            self.env.pop_scope();
+                            return self.set_cf(cf);
+                        }
+                    }
+                    self.env.pop_scope();
+                }
+            }
+            match iter_val {
+                Value::Array(rc) => match Arc::try_unwrap(rc) {
+                    Ok(cell) => cell.into_inner().unwrap(),
+                    Err(rc) => rc.read().unwrap().clone(),
+                },
+                Value::Slice {
+                    storage,
+                    start,
+                    len,
+                    ..
+                } => storage.read().unwrap()[start..start + len].to_vec(),
+                Value::Tuple(v) => v,
+                // SortedSet iterates in ascending key order
+                Value::SortedSet(s) => s.into_keys().map(|k| k.0).collect(),
+                // SortedMap iterates as (key, value) tuples in ascending key order
+                Value::SortedMap(m) => m
+                    .into_iter()
+                    .map(|(k, v)| Value::Tuple(vec![k.0, v]))
+                    .collect(),
+                // Set / Map iterate in the hash order their own hasher
+                // gives, NOT insertion order: design.md § Map leaves the
+                // order unspecified and requires it to vary across
+                // process runs (B-2026-08-21-6).
+                Value::Set(s) => s.read().unwrap().iter_observable().cloned().collect(),
+                Value::Map(m) => m
+                    .read()
+                    .unwrap()
+                    .iter_observable()
+                    .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
+                    .collect(),
+                // String iterates per Unicode scalar value, matching the
+                // canonical `s.chars()` surface — design.md § Character
+                // type (line 2299) pins `for c in s` and `s.chars()` as
+                // semantic peers.
+                Value::String(s) => s.chars().map(Value::Char).collect(),
+                // (`Value::Iterator` is handled by the LAZY pull-loop
+                // above — it never reaches this materializing match.)
+                // `LinesIter[R]` (from `BufReader.lines()`) — drain the
+                // shared reader one line at a time, yielding
+                // `Result[String, IoError]` per line: `Ok(line)` with the
+                // trailing `\n` / `\r\n` stripped (matching Rust's
+                // `BufRead::lines`), `Err` once on a mid-stream read error
+                // (then terminate), EOF terminates. Eager-materialized like
+                // the other iterables above; the shared BufReader is left
+                // at EOF afterward.
+                Value::LinesIter(rc) => {
+                    use std::io::BufRead;
+                    let mut guard = rc.lock().unwrap();
+                    let mut drained = Vec::new();
+                    loop {
+                        let mut line = String::new();
+                        match guard.read_line(&mut line) {
+                            Ok(0) => break,
+                            Ok(_) => {
+                                if line.ends_with('\n') {
+                                    line.pop();
+                                    if line.ends_with('\r') {
+                                        line.pop();
+                                    }
+                                }
+                                drained.push(super::helpers::io_ok(Value::String(line)));
+                            }
+                            Err(e) => {
+                                drained.push(super::helpers::io_err_value(
+                                    super::helpers::io_error_from_std(&e),
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                    drained
+                }
+                // `for line in stdin.lines()` — drain standard input a line
+                // at a time until EOF, yielding `Result[String, IoError]`
+                // per line (the same Item shape as `LinesIter`, trailing
+                // `\n`/`\r\n` stripped). `std::io::stdin().read_line`
+                // returns `Ok(0)` at EOF. Eager-materialized like
+                // `LinesIter`; over a finite stdin the output is identical
+                // to the codegen path's per-iteration read.
+                Value::StdinLines => {
+                    let mut drained = Vec::new();
+                    loop {
+                        let mut line = String::new();
+                        match std::io::stdin().read_line(&mut line) {
+                            Ok(0) => break,
+                            Ok(_) => {
+                                if line.ends_with('\n') {
+                                    line.pop();
+                                    if line.ends_with('\r') {
+                                        line.pop();
+                                    }
+                                }
+                                drained.push(super::helpers::io_ok(Value::String(line)));
+                            }
+                            Err(e) => {
+                                drained.push(super::helpers::io_err_value(
+                                    super::helpers::io_error_from_std(&e),
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                    drained
+                }
+                _ => vec![iter_val],
+            }
+        };
+        for item in items {
+            self.env.push_scope();
+            self.mark_loop_borrowed_elem_names(view_names);
+            self.bind_pattern(pattern, item);
+            match self.eval_block_inner(body) {
+                Ok(_) => {}
+                Err(ControlFlow::Break {
+                    label: ref bl,
+                    value: ref v,
+                }) => {
+                    self.env.pop_scope();
+                    if bl.is_none() || bl.as_deref() == label.as_deref() {
+                        return v.clone().unwrap_or(Value::Unit);
+                    } else {
+                        return self.set_cf(ControlFlow::Break {
+                            label: bl.clone(),
+                            value: v.clone(),
+                        });
+                    }
+                }
+                Err(ControlFlow::Continue { label: ref cl }) => {
+                    self.env.pop_scope();
+                    if cl.is_none() || cl.as_deref() == label.as_deref() {
+                        continue;
+                    } else {
+                        return self.set_cf(ControlFlow::Continue { label: cl.clone() });
+                    }
+                }
+                Err(cf) => {
+                    self.env.pop_scope();
+                    return self.set_cf(cf);
+                }
+            }
+            self.env.pop_scope();
+        }
+        Value::Unit
     }
 }
 

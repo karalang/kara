@@ -1602,6 +1602,98 @@ impl<'a> super::Interpreter<'a> {
             .is_some_and(|f| f.borrowed.contains(n) && !f.shadowed.contains(n))
     }
 
+    /// B-2026-09-29-109 — does this `for` iterable LEND the loop its elements?
+    /// A place (`v`, `h.xs`) or its `.iter()` / `.into_iter()`: the collection
+    /// outlives the loop and its own walk runs every element's body, so a leaf
+    /// the body destructures out of the element is a view. `.into_iter()` is
+    /// in the set because it does not consume its receiver on any backend yet
+    /// (B-2026-09-27-76); codegen reaches the same answer through
+    /// `mark_for_loop_borrow_if_heap`. A bare identifier must hold a
+    /// collection, so a bound iterator (`let it = v.into_iter(); for g in it`)
+    /// stays out.
+    pub(super) fn for_iterable_borrows_elems(&self, e: &Expr) -> bool {
+        // Adaptors that only reorder, skip or number the elements lend what
+        // they are lent. `filter` is left out: codegen hands its element's
+        // leaf the bodies, and matching that here is its own row.
+        let mut e = e;
+        while let ExprKind::MethodCall { method, object, .. } = &e.kind {
+            if !matches!(
+                method.as_str(),
+                "enumerate" | "rev" | "skip" | "take" | "step_by"
+            ) {
+                break;
+            }
+            e = object;
+        }
+        let place = match &e.kind {
+            ExprKind::MethodCall {
+                method,
+                object,
+                args,
+                ..
+            } if args.is_empty() && (method == "iter" || method == "into_iter") => object,
+            _ => e,
+        };
+        if !Self::place_walk_is_retractable(place) {
+            return false;
+        }
+        match &place.kind {
+            ExprKind::Identifier(n) => matches!(self.env.get(n), Some(Value::Array(_))),
+            _ => true,
+        }
+    }
+
+    /// B-2026-09-29-109 — the loop-borrowed set of the running frame, or the
+    /// top-level one outside any frame.
+    fn loop_borrowed_set(&self) -> &std::collections::HashSet<String> {
+        match self.payload_escape_frames.last() {
+            Some(f) => &f.loop_borrowed,
+            None => &self.toplevel_loop_borrowed,
+        }
+    }
+
+    fn loop_borrowed_set_mut(&mut self) -> &mut std::collections::HashSet<String> {
+        match self.payload_escape_frames.last_mut() {
+            Some(f) => &mut f.loop_borrowed,
+            None => &mut self.toplevel_loop_borrowed,
+        }
+    }
+
+    /// B-2026-09-29-109 — the loop-borrowed membership of `names` before a
+    /// loop marks them, for [`Self::restore_loop_borrowed_elem_names`].
+    pub(super) fn save_loop_borrowed_elem_names(&self, names: &[String]) -> Vec<(String, bool)> {
+        let set = self.loop_borrowed_set();
+        names.iter().map(|n| (n.clone(), set.contains(n))).collect()
+    }
+
+    pub(super) fn restore_loop_borrowed_elem_names(&mut self, saved: Vec<(String, bool)>) {
+        let set = self.loop_borrowed_set_mut();
+        for (n, was) in saved {
+            if was {
+                set.insert(n);
+            } else {
+                set.remove(&n);
+            }
+        }
+    }
+
+    /// B-2026-09-29-109 — mark a loop's element bindings, once per iteration
+    /// (a `let` of the same name in the previous iteration took them out).
+    pub(super) fn mark_loop_borrowed_elem_names(&mut self, names: &[String]) {
+        if !names.is_empty() {
+            self.loop_borrowed_set_mut().extend(names.iter().cloned());
+        }
+    }
+
+    pub(super) fn names_loop_borrowed_elem(&self, n: &str) -> bool {
+        self.loop_borrowed_set().contains(n)
+    }
+
+    /// B-2026-09-29-109 — a `let` re-binding `n` takes it out of the set.
+    pub(super) fn unmark_loop_borrowed_elem_name(&mut self, n: &str) {
+        self.loop_borrowed_set_mut().remove(n);
+    }
+
     pub(super) fn scrutinee_expr_is_consuming(&self, e: &Expr) -> bool {
         // B-2026-08-29-10 — a method frame's owned-param scrutinee is NOT
         // consuming, and this is the RETRACTION of 57bfb26, which made it so on

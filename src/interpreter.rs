@@ -111,6 +111,10 @@ pub(crate) struct PayloadEscapeFrame {
     /// `names_borrowed_param`). The shadowing block's exit takes the name back
     /// out (`param_shadow_restore`, B-2026-09-29-51).
     pub(crate) shadowed: std::collections::HashSet<String>,
+    /// B-2026-09-29-109 — names bound by an enclosing `for` over a borrowed
+    /// place (`for pair in v.iter()`), whose element the collection still
+    /// owns. A `let` of the same name takes it back out.
+    pub(crate) loop_borrowed: std::collections::HashSet<String>,
 }
 
 pub struct Interpreter<'a> {
@@ -1032,6 +1036,9 @@ pub struct Interpreter<'a> {
     /// through an arm binding of that param's payload. See
     /// [`PayloadEscapeFrame`].
     pub(crate) payload_escape_frames: Vec<PayloadEscapeFrame>,
+    /// B-2026-09-29-109 — `PayloadEscapeFrame::loop_borrowed` for code that
+    /// runs outside any call frame (`main`'s own body has none).
+    pub(crate) toplevel_loop_borrowed: std::collections::HashSet<String>,
     /// B-2026-09-26-37 — the popped frame's escapes, handed from the frame pop
     /// to the caller's post-call argument walk (`run_fresh_temp_arg_drops`),
     /// which is the only reader and takes it.
@@ -1470,6 +1477,7 @@ impl<'a> Interpreter<'a> {
             cond_store_part_aliases: std::collections::HashMap::new(),
             cond_store_view_aliases: std::collections::HashMap::new(),
             payload_escape_frames: Vec::new(),
+            toplevel_loop_borrowed: std::collections::HashSet::new(),
             pending_call_payload_escapes: Vec::new(),
             map_val_bodies_tes: HashMap::new(),
             captured_let_values: HashMap::new(),
