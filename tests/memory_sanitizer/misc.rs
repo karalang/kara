@@ -129,6 +129,8 @@ fn asan_instrumentation_tracks_the_sanitize_address_knob() {
 /// and retracting the local's field walk leaves exactly one owner of the
 /// `String` / `Vec` buffers on every path, frees nothing twice and leaks
 /// nothing on the dies-inside paths.
+/// B-2026-09-30-50 — `fearly/t` pinned a LOST body until that row; `d9`
+/// is owed inside the callee, as in every other dies-inside cell.
 #[test]
 fn asan_param_wrapped_through_local_has_one_owner() {
     assert_clean_asan_run(
@@ -216,6 +218,7 @@ fn asan_param_wrapped_through_local_has_one_owner() {
                 "  C8",
                 "  d8",
                 "fearly/t",
+                "  d9",
                 "  C89",
                 "  d89",
                 "fearly/f",

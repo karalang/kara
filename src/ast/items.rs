@@ -3075,7 +3075,7 @@ pub fn param_wrap_aliases_ex(
     param_name: &str,
     with_ctor: bool,
 ) -> Vec<(String, ParamPath)> {
-    param_wrap_aliases_impl(program, f, param_name, with_ctor, true)
+    param_wrap_aliases_impl(program, f, param_name, with_ctor, true, with_ctor)
 }
 
 /// [`param_wrap_aliases_ex`] with a USER variant constructor optionally left
@@ -3090,6 +3090,7 @@ fn param_wrap_aliases_impl(
     param_name: &str,
     with_ctor: bool,
     user_variants: bool,
+    coll: bool,
 ) -> Vec<(String, ParamPath)> {
     let w = rebind_walk(f);
     let whole = param_whole_aliases(program, f, param_name);
@@ -3129,18 +3130,17 @@ fn param_wrap_aliases_impl(
         )
         // B-2026-09-30-27 — an array / collection literal wraps its elements
         // as an enum constructor wraps its payload, and is asked for on the
-        // same terms: only by the ALL-paths predicates (`with_ctor`), never by
-        // the union, and not by the conditional hand-back (`!user_variants`),
-        // whose per-path carrier walks an `Option` / `Result` wrapper and has
-        // no arm for an array's elements. Without it `let v: Vec[R] = [a, b];
-        // return v` stood no caller down, and `a` and `b` ran their bodies in
-        // the caller AND over the result, on every surface.
-        .chain(
-            w.coll_wraps
-                .iter()
-                .filter(|_| with_ctor && user_variants)
-                .cloned(),
-        )
+        // same terms: only by the ALL-paths predicates, never by the union.
+        // Without it `let v: Vec[R] = [a, b]; return v` stood no caller down,
+        // and `a` and `b` ran their bodies in the caller AND over the result,
+        // on every surface.
+        // B-2026-09-30-50 — and by the conditional hand-back (`coll`) as well,
+        // which needs no carrier for it: the literal's local OWNS the
+        // elements (`literal_elem_is_param_view` on both backends), so the
+        // exit that does not hand it back runs their bodies where it dies.
+        // Left out, `let v = [a]; if f { return v } ...` stood no caller down
+        // and `a` ran its body in the caller AND over the returned `v`.
+        .chain(w.coll_wraps.iter().filter(|_| coll).cloned())
         .collect();
     let mut out: Vec<(String, ParamPath)> = Vec::new();
     loop {
@@ -4508,8 +4508,8 @@ pub fn fn_conditionally_returns_param_bare(
     // wrapper is DESTRUCTURED in place (`if c { return o } match o { Some(x)
     // => .., }`): the compiled arm treats `x` as a view of the caller's value
     // and runs nothing, so the body was lost there.
-    let plain_wraps = param_wrap_aliases_impl(program, f, param_name, false, false);
-    let ctor_wraps = param_wrap_aliases_impl(program, f, param_name, true, false);
+    let plain_wraps = param_wrap_aliases_impl(program, f, param_name, false, false, false);
+    let ctor_wraps = param_wrap_aliases_impl(program, f, param_name, true, false, true);
     let destructured = rebind_walk(f).destructured;
     let wraps = if f.generic_params.is_none()
         && !ctor_wraps

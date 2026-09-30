@@ -10519,7 +10519,8 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::PrefixCollectionLiteral { items, .. } => items,
             _ => return false,
         };
-        !elems.is_empty() && elems.iter().all(|e| self.expr_is_param_view(e))
+        // B-2026-09-30-50 — see `literal_elem_is_param_view`.
+        !elems.is_empty() && elems.iter().all(|e| self.literal_elem_is_param_view(e))
     }
 
     /// B-2026-08-29-19 — does `value` construct `enum_name`'s variant entirely
@@ -10702,7 +10703,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // spread bail.
                 return;
             };
-            if self.expr_is_param_view(&init.value) {
+            if self.literal_elem_is_param_view(&init.value) {
                 views.push(idx);
             }
         }
@@ -10911,6 +10912,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|p| self.expr_is_param_view(p))
     }
 
+    /// B-2026-09-30-50 — [`Self::expr_is_param_view`] for an element of a
+    /// struct or tuple LITERAL bound by a `let`, which is not a view when this
+    /// frame owns the param's body per path (`cond_returned_body_params`):
+    /// `let x = (a, 1); if f { return x } return (mk(90), 1)`. The caller
+    /// stood down for `a`, and the `let` retracts `a`'s own walker, so masking
+    /// the element here left the exit that does not hand `x` back with no
+    /// body at all. `x` owns it instead, exactly as it would a local's. Same
+    /// exception `let_call_result_is_param_view` makes for a call result; the
+    /// interpreter's twin is `literal_elem_is_param_view` in `eval_stmt.rs`.
+    pub(super) fn literal_elem_is_param_view(&self, e: &Expr) -> bool {
+        self.expr_is_param_view(e)
+            && !matches!(&e.kind, ExprKind::Identifier(src)
+                if self.drop_rc.cond_returned_body_params.contains(src.as_str()))
+    }
+
     /// B-2026-08-29-24 — the element indices of a TUPLE LITERAL that were
     /// moved in from a param VIEW. `let t = (r, 5);` is the same caller-retains
     /// move as the struct literal and the variant constructor, through a third
@@ -10930,7 +10946,7 @@ impl<'ctx> super::Codegen<'ctx> {
         elems
             .iter()
             .enumerate()
-            .filter(|(_, e)| self.expr_is_param_view(e))
+            .filter(|(_, e)| self.literal_elem_is_param_view(e))
             .map(|(i, _)| i as u32)
             .collect()
     }

@@ -3629,6 +3629,9 @@ fn test_whole_value_rebind_inherits_the_wrap_mask() {
 /// backend's half of the second leg.
 ///
 /// Twin of `tests/codegen.rs`'s `e2e_param_wrapped_through_local_hands_back_once`, pinned to the same string.
+/// B-2026-09-30-50 — `fearly/t` pinned a LOST body until that row: `p`
+/// wraps the param and is not handed back on that path, so `d9` is owed
+/// inside the callee, as in every other dies-inside cell.
 #[test]
 fn test_param_wrapped_through_local_hands_back_once() {
     assert_eq!(
@@ -3716,6 +3719,7 @@ frebind/f
   C8
   d8
 fearly/t
+  d9
   C89
   d89
 fearly/f

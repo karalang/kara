@@ -3728,6 +3728,20 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// Is an element of a struct or tuple literal bound by a `let` a param
+    /// VIEW, whose body the caller runs? B-2026-09-30-50 — not when this frame
+    /// adopted the param's body per path (`cond_store_param_names`): the
+    /// caller stood down and the `let` hands the param's body over, so the
+    /// masked element ran no body on the exit that does not hand the local
+    /// back. Codegen's twin is `literal_elem_is_param_view` in `runtime.rs`.
+    fn literal_elem_is_param_view(&self, e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::Identifier(src)
+            if self.owned_param_names_stack
+                .last()
+                .is_some_and(|params| params.contains(src.as_str()))
+                && !self.cond_store_param_names.contains(src.as_str()))
+    }
+
     fn mask_param_view_struct_literal_fields(&mut self, stmt: &Stmt) {
         let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
             return;
@@ -3769,10 +3783,7 @@ impl<'a> super::Interpreter<'a> {
                 continue;
             }
             visited += 1;
-            let is_view = matches!(&init.value.kind, ExprKind::Identifier(src)
-                if self.owned_param_names_stack
-                    .last()
-                    .is_some_and(|params| params.contains(src.as_str())));
+            let is_view = self.literal_elem_is_param_view(&init.value);
             if is_view {
                 views.push(init.name.clone());
             }
@@ -4282,12 +4293,9 @@ impl<'a> super::Interpreter<'a> {
         if elems.is_empty() {
             return;
         }
-        let all_views = elems.iter().all(|e| {
-            matches!(&e.kind, ExprKind::Identifier(src)
-                if self.owned_param_names_stack
-                    .last()
-                    .is_some_and(|params| params.contains(src.as_str())))
-        });
+        // B-2026-09-30-50 — through `literal_elem_is_param_view`, so a param
+        // this frame adopted per path is owned by the literal's local.
+        let all_views = elems.iter().all(|e| self.literal_elem_is_param_view(e));
         if !all_views {
             return;
         }
@@ -4322,10 +4330,7 @@ impl<'a> super::Interpreter<'a> {
             if !self.ctor_payload_owes_user_drop(ev) {
                 continue;
             }
-            let is_view = matches!(&e.kind, ExprKind::Identifier(src)
-                if self.owned_param_names_stack
-                    .last()
-                    .is_some_and(|params| params.contains(src.as_str())));
+            let is_view = self.literal_elem_is_param_view(e);
             if is_view {
                 views.push(i);
             }

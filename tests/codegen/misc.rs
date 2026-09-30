@@ -1081,6 +1081,9 @@ fn e2e_whole_value_rebind_inherits_the_wrap_mask() {
 /// hand-back path's body is the result binding's (`C2 d2`).
 ///
 /// Twin of `tests/interpreter.rs`'s `test_param_wrapped_through_local_hands_back_once`, pinned to the same string.
+/// B-2026-09-30-50 — `fearly/t` pinned a LOST body until that row: `p`
+/// wraps the param and is not handed back on that path, so `d9` is owed
+/// inside the callee, as in every other dies-inside cell.
 #[test]
 fn e2e_param_wrapped_through_local_hands_back_once() {
     let Some(out) = run_program(
@@ -1173,6 +1176,7 @@ frebind/f
   C8
   d8
 fearly/t
+  d9
   C89
   d89
 fearly/f

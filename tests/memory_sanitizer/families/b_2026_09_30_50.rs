@@ -1,0 +1,63 @@
+//! B-2026-09-30-50: a param returned through a wrapping local on some paths runs one Drop body per call.
+
+use super::*;
+
+/// B-2026-09-30-50 — a by-value param returned through a WRAPPING local on
+/// only some paths runs its `Drop` body once per call on both paths. The
+/// tuple and struct locals (`let x = (a, 1); if f { return x } ...`) treated
+/// the param's element as a view of the caller's value, while the caller had
+/// stood down, so the exit that did not return `x` ran no body. The array
+/// local (`let v = [a]`) was not seen by the conditional predicate at all, so
+/// the caller never stood down and the returned `v` ran the body a second
+/// time. The literal's local now owns the element on both backends, and the
+/// array wrap is admitted like the others.
+#[test]
+fn asan_param_returned_through_a_wrapping_local_on_some_paths_runs_one_body() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+struct P { r: R, n: i64 }
+struct Q { r: R }
+impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.r.id}") } }
+fn ctl(a: R, f: bool) -> (R, i64) { let x = (a, 1); if f { return x; } return (mk(90), 1); }
+fn cst(a: R, f: bool) -> P { let x = P { r: a, n: 1 }; if f { return x; } return P { r: mk(91), n: 1 }; }
+fn cvl(a: R, f: bool) -> Vec[R] { let v = [a]; if f { return v; } return [mk(92)]; }
+fn g2(a: R, b: R, f: bool) -> (R, R) { let x = (a, b); if f { return x; } return (mk(93), mk(94)); }
+fn g4(a: R, f: bool) -> (P, i64) { let x = P { r: a, n: 1 }; let y = (x, 2); if f { return y; } return (P { r: mk(95), n: 1 }, 2); }
+fn g5(a: R, f: bool) -> Q { let x = Q { r: a }; if f { return x; } return Q { r: mk(96) }; }
+fn g6[T](a: T, f: bool, d: T) -> (T, i64) { let x = (a, 1); if f { return x; } return (d, 1); }
+fn g8(a: R, f: bool) -> Vec[R] { let v: Vec[R] = [a]; if f { return v; } return [mk(97)]; }
+fn g9(a: R, f: bool) -> R { let x = P { r: a, n: 1 }; if f { return x.r; } return mk(98); }
+fn main() {
+  let t1 = ctl(mk(1), true); println(f"r{t1.1}")
+  let t2 = ctl(mk(2), false); println(f"r{t2.1}")
+  let s1 = cst(mk(3), true); println(f"r{s1.n}")
+  let s2 = cst(mk(4), false); println(f"r{s2.n}")
+  let v1 = cvl(mk(5), true); println(f"r{v1.len()}")
+  let v2 = cvl(mk(6), false); println(f"r{v2.len()}")
+  let a1 = g2(mk(7), mk(8), true); println(f"r{a1.0.id}")
+  let a2 = g2(mk(9), mk(10), false); println(f"r{a2.0.id}")
+  let c1 = g4(mk(11), true); println(f"r{c1.1}")
+  let c2 = g4(mk(12), false); println(f"r{c2.1}")
+  let d1 = g5(mk(13), true); println(f"r{d1.r.id}")
+  let d2 = g5(mk(14), false); println(f"r{d2.r.id}")
+  let e1 = g6(mk(15), true, mk(16)); println(f"r{e1.1}")
+  let e2 = g6(mk(17), false, mk(18)); println(f"r{e2.1}")
+  let h1 = g8(mk(19), true); println(f"r{h1.len()}")
+  let h2 = g8(mk(20), false); println(f"r{h2.len()}")
+  let i1 = g9(mk(21), true); println(f"r{i1.id}")
+  let i2 = g9(mk(22), false); println(f"r{i2.id}")
+  println("end")
+}
+"#,
+        &[
+            "r1", "dR1", "dR2", "r1", "dR90", "r1", "dR3", "dR4", "r1", "dR91", "r1", "dR5", "dR6",
+            "r1", "dR92", "r7", "dR7", "dR8", "dR9", "dR10", "r93", "dR93", "dR94", "r2", "dR11",
+            "dR12", "r2", "dR95", "r13", "dQ13", "dR13", "dQ14", "dR14", "r96", "dQ96", "dR96",
+            "dR16", "r1", "dR15", "dR17", "r1", "dR18", "r1", "dR19", "dR20", "r1", "dR97", "r21",
+            "dR21", "dR22", "r98", "dR98", "end",
+        ],
+        "asan_param_returned_through_a_wrapping_local_on_some_paths_runs_one_body",
+    );
+}
