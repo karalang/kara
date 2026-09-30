@@ -606,6 +606,11 @@ impl<'ctx> super::Codegen<'ctx> {
             self.pattern_state
                 .pattern_binding_scrutinee_optres_bodies_are_caller_retained = false;
         }
+        // B-2026-09-30-24 — a struct param the callee owns by TRANSFER is not
+        // a caller-retained view. See `scrutinee_is_transfer_owned_struct_param`.
+        if self.scrutinee_is_transfer_owned_struct_param(scrutinee) {
+            self.pattern_state.pattern_binding_scrutinee_is_owned_param = false;
+        }
         // B-2026-09-19-61 — the same question for a SEEDED ctor temp, which
         // the flag above cannot see because it is keyed by the scrutinee's own
         // name. See the field's doc.
@@ -12261,6 +12266,22 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-30-24 — whether a scope frame holds a drop that frees the
+    /// struct in `slot`: its memory-only `StructDrop`, or its own `impl Drop`
+    /// wrapper, which frees the fields after the body.
+    fn slot_has_struct_memory_drop(&self, slot: PointerValue<'ctx>) -> bool {
+        use crate::codegen::state::{CleanupAction, UserDropKind};
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|a| match a {
+                CleanupAction::StructDrop { struct_alloca, .. } => *struct_alloca == slot,
+                CleanupAction::UserDrop {
+                    binding_ptr, kind, ..
+                } => *binding_ptr == slot && *kind == UserDropKind::OwnWrapper,
+                _ => false,
+            })
+        })
+    }
+
     /// [`Self::suppress_destructured_struct_pattern_cleanup_at`] under the
     /// source's instantiation `inst` (`G[String]` for `struct G[T]`), when the
     /// caller knows it. B-2026-09-30-8: keyed by the bare name, a field
@@ -12406,11 +12427,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => continue,
                     },
                 };
-                let owns = matches!(fname, "Vec" | "VecDeque" | "String")
-                    && self
-                        .variables
-                        .get(leaf)
-                        .is_some_and(|slot| self.slot_has_buffer_free(slot.ptr));
+                // B-2026-09-30-24 — or a plain STRUCT leaf (`G[Rs]`, `Rs { s:
+                // String }`) whose slot holds its own memory drop: the arm now
+                // binds such a leaf as an owner when the source is a param the
+                // callee holds by transfer, so the source's own drop would free
+                // the leaf's buffers a second time.
+                let owns = self.variables.get(leaf).is_some_and(|slot| {
+                    if matches!(fname, "Vec" | "VecDeque" | "String") {
+                        self.slot_has_buffer_free(slot.ptr)
+                    } else {
+                        self.type_decls.struct_types.contains_key(fname)
+                            && !self.type_decls.shared_types.contains_key(fname)
+                            && self.slot_has_struct_memory_drop(slot.ptr)
+                    }
+                });
                 if !owns {
                     continue;
                 }

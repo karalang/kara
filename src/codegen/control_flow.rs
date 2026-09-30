@@ -2028,6 +2028,43 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-30-24 — is this scrutinee a bare by-value STRUCT param that
+    /// the callee owns by TRANSFER, holding its own field-bodies walk?
+    ///
+    /// [`Self::scrutinee_is_owned_param_binding`] answers "the caller retains
+    /// this value", which is right for an entry-copied param: the caller's walk
+    /// over its argument runs the fields' bodies after the call, so a leaf a
+    /// struct pattern binds out of the param is a view and registers memory
+    /// only. A struct whose copy support declines (a generic struct's erased
+    /// `T` field, `G[R]`) is taken by transfer instead
+    /// (`register_transferred_param_field_bodies`): the caller registers no
+    /// walk, and the callee's own walk is the only owner of those bodies. The
+    /// arm's mask (`disarm_arm_destructured_struct_field_bodies`) takes the
+    /// bound field out of that walk, so a leaf bound as a view ran its body
+    /// nowhere -- `fn f(g: G[R]) -> i64 { match g { G { v, n } => n } }`
+    /// printed no `R` body on any compiled surface while the `let G { v, n } =
+    /// g` spelling ran it.
+    ///
+    /// Keyed on the walk being HELD rather than on the type, which is the
+    /// question B-2026-09-27-59 asks of the same params for a returned
+    /// projection: an entry-copied or caller-retained param holds none.
+    pub(super) fn scrutinee_is_transfer_owned_struct_param(&self, e: &Expr) -> bool {
+        let ExprKind::Identifier(n) = &e.kind else {
+            return false;
+        };
+        self.fn_ctx.current_fn_param_names.contains(n.as_str())
+            && !self.borrow_vars.ref_params.contains_key(n.as_str())
+            && self
+                .var_types
+                .var_type_names
+                .get(n.as_str())
+                .is_some_and(|t| {
+                    self.type_decls.struct_types.contains_key(t.as_str())
+                        && !self.type_decls.shared_types.contains_key(t.as_str())
+                })
+            && self.var_owns_struct_field_bodies(n)
+    }
+
     /// B-2026-09-19-31 — is this `match` the one shape
     /// [`crate::ast::fn_destructured_payload_is_callee_owned`] hands to the
     /// callee: a by-value `Option`/`Result` param whose destructured payload
