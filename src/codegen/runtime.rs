@@ -18023,8 +18023,11 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Tuple(_) => {
                 let mut sources = Vec::new();
                 Self::collect_aggregate_literal_sources(value, &mut sources);
+                // B-2026-09-30-95 — per path when the move is nested.
                 for n in sources {
-                    self.suppress_user_drop_for_var(&n);
+                    if !self.guard_user_drop_for_nested_return(&n) {
+                        self.suppress_user_drop_for_var(&n);
+                    }
                 }
             }
             // The STRUCT-literal arm deliberately stays on the container-only

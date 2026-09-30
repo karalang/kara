@@ -12095,8 +12095,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                        // B-2026-09-30-95 — PER PATH when the `let` is nested:
+                        // the static retraction took the source's action off
+                        // every path, so the exit that never built the literal
+                        // ran no body and freed nothing. Same rule as the
+                        // nested whole rebind (B-2026-09-28-49).
                         for source_name in struct_lit_sources {
-                            self.suppress_user_drop_for_var(source_name);
+                            if !self.guard_user_drop_for_nested_return(source_name) {
+                                self.suppress_user_drop_for_var(source_name);
+                            }
                         }
                         // B-2026-08-29-45 — the ARRAY / `Vec`-prefix literal
                         // sibling of the struct-literal loop above. Moving an
@@ -12138,8 +12145,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             } else {
                                 let mut elem_sources = Vec::new();
                                 Self::collect_aggregate_literal_sources(value, &mut elem_sources);
+                                // B-2026-09-30-95 — per path, as above.
                                 for source_name in elem_sources {
-                                    self.suppress_user_drop_for_var(&source_name);
+                                    if !self.guard_user_drop_for_nested_return(&source_name) {
+                                        self.suppress_user_drop_for_var(&source_name);
+                                    }
                                 }
                             }
                         }
