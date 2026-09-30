@@ -27083,6 +27083,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.track_discarded_array_return_bodies(src, val, branch_tails.is_some());
             }
         }
+        // B-2026-09-30-31 — the BODIES half for an aggregate whose elements run
+        // a user `Drop` but own no heap (`mka();` over `fn mka() -> Array[W1, 1]`
+        // with `struct W1 { v: i64 }`). Both arms above register the bodies
+        // only after the MEMORY walk claims the value, and that walk declines
+        // an element with nothing to free, so the bodies ran nowhere compiled
+        // while `--interp` ran each once. Asked only where the memory arm
+        // declined for exactly that reason, so a value it claims is never
+        // walked twice.
+        let others_declined = not_borrow
+            && !handled_option
+            && !handled_result
+            && !handled_option_map
+            && !handled_shared_option
+            && !handled_boxed_result
+            && !handled_boxed_option
+            && !handled_tuple
+            && !handled_array;
+        if others_declined {
+            if let Some(src) = tuple_src.filter(|s| self.discarded_tuple_owns_no_heap(s, val)) {
+                self.track_discarded_tuple_return_bodies(src, val, branch_tails.is_some());
+            } else if let Some(src) = array_src.filter(|s| self.discarded_array_owns_no_heap(s)) {
+                self.track_discarded_array_return_bodies(src, val, branch_tails.is_some());
+            }
+        }
         if !handled_option
             && !handled_result
             && !handled_option_map
@@ -27102,6 +27126,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
             }
         }
+    }
+
+    /// B-2026-09-30-31 — would [`Self::try_track_discarded_tuple_temp`] decline
+    /// `tail` only because no element owns heap? The shape half of its gate
+    /// (a non-`Vec` struct value whose element types resolve) with the heap
+    /// half negated.
+    fn discarded_tuple_owns_no_heap(&self, tail: &Expr, val: BasicValueEnum<'ctx>) -> bool {
+        let BasicValueEnum::StructValue(sv) = val else {
+            return false;
+        };
+        if sv.get_type() == self.vec_struct_type() {
+            return false;
+        }
+        self.tuple_binding_elem_tes(None, tail).is_some_and(|tes| {
+            !tes.iter()
+                .any(|e| self.tuple_elem_needs_deep_drop(e) || self.type_expr_has_drop_heap(e))
+        })
+    }
+
+    /// B-2026-09-30-31 — the array twin: [`Self::try_track_discarded_array_temp`]'s
+    /// shape and ownership gates, with `synthesize_array_drop_fn_te`'s heap
+    /// test negated.
+    fn discarded_array_owns_no_heap(&self, tail: &Expr) -> bool {
+        let Some((elem_te, n)) = self.discarded_call_array_parts(tail) else {
+            return false;
+        };
+        n > 0
+            && self.callee_hands_back_an_owned_array(tail)
+            && !(self.type_expr_has_drop_heap(&elem_te)
+                || self.tuple_elem_needs_deep_drop(&elem_te)
+                || self.nested_array_needs_drop(&elem_te))
     }
 
     /// B-2026-09-09-14 — register the memory walk for a discarded TUPLE temp.
