@@ -18626,6 +18626,45 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some((tn, slot_ptr)) = pending_place_bodies {
                     self.track_destructure_struct_leaf_user_drop(&tn, &name, slot_ptr, false);
                 }
+                // B-2026-09-30-45 — the `Vec` leaf's half of the same hand-off.
+                // The struct-leaf branch above masks the field out of the
+                // source's walk and hands the leaf the body; a `Vec` leaf got
+                // neither, only the buffer. Where the source's walk runs at
+                // the statement (a local, `fire_struct_field_bodies_now`
+                // below) that printed the elements' bodies BEFORE the leaf's
+                // own reads; where it runs at the callee's exit (a by-value
+                // param held by TRANSFER, `G[Vec[R]]`) it walked a buffer the
+                // leaf had already freed — garbage ids, one invalid read.
+                //
+                // Only once the leaf has TAKEN the memory, so the body and the
+                // free move together, and registered after it so the LIFO
+                // drain runs the bodies first. A view leaf keeps its source's
+                // walk (B-2026-09-06-30).
+                if let (Some(src), true, false, None) = (
+                    &place_body_src,
+                    leaf_cleanup_registered,
+                    leaf_is_view_field,
+                    &leaf_struct_name,
+                ) {
+                    if let (Some(elem_te), Some(slot)) = (
+                        super::helpers::vec_inner_type_expr(&field_te),
+                        self.variables.get(&name).copied(),
+                    ) {
+                        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                        if let Some(bodies) = self.arm_vec_payload_elem_bodies_fn(&elem_te, elem_ty)
+                        {
+                            let src = src.clone();
+                            self.disarm_struct_field_bodies_at(&src, idx);
+                            self.track_user_drop_var_with_fn(
+                                "",
+                                &name,
+                                slot.ptr,
+                                bodies,
+                                UserDropKind::ContainerElemBodies,
+                            );
+                        }
+                    }
+                }
             // B-2026-08-28-29 / -50 — `fresh_call`, plus a struct LITERAL whose
             // field the discard walker DECLINED.
             //
