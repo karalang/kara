@@ -4037,13 +4037,59 @@ impl<'ctx> super::Codegen<'ctx> {
         // before this fix and must stay correct after, because the two
         // channels now name the same element and a mask applied twice has to
         // be idempotent rather than additive.
-        let escaping =
-            crate::ast::fn_escaping_param_payload_part_paths(func, ast_i, None).into_iter();
-        for path in escaping.chain(
-            crate::ast::fn_consumed_param_payload_part_paths(func, ast_i, None)
+        let paths: Vec<crate::ast::ParamPath> =
+            crate::ast::fn_escaping_param_payload_part_paths(func, ast_i, None)
                 .into_iter()
-                .map(|(_, path)| path),
-        ) {
+                .chain(
+                    crate::ast::fn_consumed_param_payload_part_paths(func, ast_i, None)
+                        .into_iter()
+                        .map(|(_, path)| path),
+                )
+                .collect();
+        // B-2026-09-20-5 — a path DEEPER than one hop (`return t.0.1`) used to
+        // decline the whole amendment below (`_ => return`), for the flat
+        // mask's reason: a first hop reported for a deeper path would mask
+        // element 0 and lose its other half. Declining left the local's
+        // `let`-site walk running the escapee's body, and the caller's
+        // binding ran it again: `dR5 dR6 got:6 dR6` on every compiled surface
+        // against the interpreter's due `dR5 got:6 dR6`.
+        //
+        // The fresh-temp route has carried a TREE-shaped mask for exactly
+        // this since B-2026-09-19-33 (`optres_payload_skip_tree`), so the
+        // named-local route takes the same tree when every path is
+        // tuple-rooted and one of them crosses a level. The flat route below
+        // is untouched for every other shape, and a flat tree reaches the
+        // identical walker anyway (`PayloadBodiesMask::TupleTree`'s doc).
+        // `insert_tuple_skip_path` drops a path WHOLE the moment a level does
+        // not resolve, never its prefix, so the under-approximating direction
+        // the flat decline protected is kept.
+        if paths.iter().any(|p| p.len() > 1)
+            && paths
+                .iter()
+                .all(|p| matches!(p.first(), Some(crate::ast::ParamPart::TupleIndex(_))))
+        {
+            let Some(payload_te) = Self::sole_tuple_payload_te(&env_te) else {
+                return;
+            };
+            let TypeKind::Tuple(elem_tes) = &payload_te.kind else {
+                return;
+            };
+            let mut tree = super::synth_drop::FieldSkipTree::default();
+            for path in &paths {
+                self.insert_tuple_skip_path(&mut tree, elem_tes, path);
+            }
+            if tree.is_empty() {
+                return;
+            }
+            let key = Self::display_mangle_te(&payload_te);
+            let masked = self.emit_optres_payload_user_drop_bodies_fn_skipping(
+                &env_te,
+                super::synth_drop::PayloadBodiesMask::TupleTree(&key, &tree),
+            );
+            self.amend_named_payload_bodies_walk(arg_name, masked);
+            return;
+        }
+        for path in paths {
             match path.as_slice() {
                 [crate::ast::ParamPart::TupleIndex(n)] => {
                     elems.insert(*n);
@@ -4116,6 +4162,17 @@ impl<'ctx> super::Codegen<'ctx> {
             super::synth_drop::PayloadBodiesMask::TupleElems(&key, &consumed)
         };
         let masked = self.emit_optres_payload_user_drop_bodies_fn_skipping(&env_te, mask);
+        self.amend_named_payload_bodies_walk(arg_name, masked);
+    }
+
+    /// The amending half of [`Self::remask_named_tuple_payload_arg`], shared
+    /// by its flat and tree routes so the two cannot differ in how a masked
+    /// walker replaces the local's registered one.
+    fn amend_named_payload_bodies_walk(
+        &mut self,
+        arg_name: &str,
+        masked: Option<FunctionValue<'ctx>>,
+    ) {
         let mut found = false;
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
             for action in frame.iter_mut() {
