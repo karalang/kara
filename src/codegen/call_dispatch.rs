@@ -9876,6 +9876,139 @@ impl<'ctx> super::Codegen<'ctx> {
         )
     }
 
+    /// B-2026-09-20-24 / B-2026-09-29-108 — is this argument a FRESH nameless
+    /// aggregate: a collection literal whose every item is fresh, or a call
+    /// to a non-generic free function whose declared return type is a tuple,
+    /// an `Array` or a `Vec`? Answers with that declared type for a call and
+    /// with the literal's span record for a literal.
+    ///
+    /// The item test is the tuple-element one, so a literal holding a PLACE
+    /// (`take([w])`) is declined: `w`'s own binding runs that body, which is
+    /// why that spelling was already correct. A generic producer is declined
+    /// because its declared type names `T`, which no walker can resolve here.
+    ///
+    /// Interp twin: `fresh_nameless_container_arg`. The two must answer the
+    /// same shapes or the bodies run on one backend only.
+    pub(super) fn fresh_nameless_container_arg_te(&self, arg: &Expr) -> Option<TypeExpr> {
+        let literal_items = match &arg.kind {
+            ExprKind::ArrayLiteral(items) => Some(items),
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if type_name == "Vec" || type_name == "Array" =>
+            {
+                Some(items)
+            }
+            _ => None,
+        };
+        if let Some(items) = literal_items {
+            if !items
+                .iter()
+                .all(|e| self.discard_tuple_elem_is_fresh_expr(e))
+            {
+                return None;
+            }
+            return self.collection_literal_te(arg);
+        }
+        let ExprKind::Call { callee, .. } = &arg.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(n) = &callee.kind else {
+            return None;
+        };
+        let f = self.fn_sig.fn_asts.get(n.as_str())?;
+        if f.generic_params.is_some() {
+            return None;
+        }
+        let rt = f.return_type.as_ref()?;
+        crate::ast::type_expr_is_nameless_container(rt).then(|| rt.clone())
+    }
+
+    /// B-2026-09-20-24 / B-2026-09-29-108 — run a fresh `Array` / `Vec`
+    /// argument's element `Drop` bodies after the call, as the named-local
+    /// spelling of the same call does.
+    ///
+    /// A by-value param whose elements run a user `Drop` is CALLER-RETAINED
+    /// (`array_param_elem_is_callee_owned` declines it; a `Vec` param is never
+    /// freed by its callee), so the caller owns the bodies, and a `let`-bound
+    /// argument runs them through its binding right after the call. A
+    /// temporary has no binding, so nothing ran them: `take([W1 { v: 40 }])`
+    /// printed `r:40 end` on every surface against a due `dW1_40 r:40 end`.
+    ///
+    /// BODIES under `__disc_tup_arg`, which the statement drain fires at the
+    /// call's return, and for an `Array` whose elements own heap the MEMORY as
+    /// well, pushed first so the LIFO drain frees after the bodies read. A
+    /// `Vec`'s memory is already the caller's `__owned_tmp`
+    /// (`materialize_owned_temp`), so only its bodies are added here.
+    ///
+    /// The layout is read off the VALUE, not the type record: a bare `[..]`
+    /// may be recorded as `Vec[T]` while it lowers to `[N x T]` for an
+    /// `Array` param, and walking one as the other reads garbage
+    /// (B-2026-09-13-26's trap).
+    fn track_fresh_container_arg_elem_bodies(&mut self, val: BasicValueEnum<'ctx>, arg: &Expr) {
+        let Some(te) = self.fresh_nameless_container_arg_te(arg) else {
+            return;
+        };
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let elem_te = match self.array_elem_and_len(&te) {
+            Some((inner, _)) => inner,
+            None => match super::helpers::vec_inner_type_expr(&te) {
+                Some(inner) => inner,
+                None => return,
+            },
+        };
+        if !self.elem_te_runs_user_drop(&elem_te) {
+            return;
+        }
+        match val.get_type() {
+            BasicTypeEnum::ArrayType(at) => {
+                let n = at.len();
+                if n == 0 || self.array_param_elem_is_callee_owned(&elem_te) {
+                    return;
+                }
+                let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                let Some(bodies) = self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem_te, n)
+                else {
+                    return;
+                };
+                let slot = self.create_entry_alloca(cur_fn, "__disc_tup_arg", val.get_type());
+                self.builder.build_store(slot, val).unwrap();
+                if self.array_elem_owns_callee_drop(&elem_te) {
+                    if let Some(drop_fn) = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n) {
+                        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+                            frame.push(super::state::CleanupAction::StructDrop {
+                                struct_alloca: slot,
+                                drop_fn,
+                            });
+                        }
+                    }
+                }
+                self.track_user_drop_var_with_fn(
+                    "",
+                    "__disc_tup_arg",
+                    slot,
+                    bodies,
+                    UserDropKind::ContainerElemBodies,
+                );
+            }
+            ty if self.llvm_ty_is_vec_struct(ty) => {
+                let Some(bodies) = self.emit_nested_vec_elem_bodies_fn(&elem_te) else {
+                    return;
+                };
+                let slot = self.create_entry_alloca(cur_fn, "__disc_tup_arg", ty);
+                self.builder.build_store(slot, val).unwrap();
+                self.track_user_drop_var_with_fn(
+                    "",
+                    "__disc_tup_arg",
+                    slot,
+                    bodies,
+                    UserDropKind::ContainerElemBodies,
+                );
+            }
+            _ => {}
+        }
+    }
+
     /// B-2026-08-28-2 — which top-level PARTS of by-value argument slot
     /// `arg_index` the named callee hands back through its return value. Thin
     /// lookup over [`crate::ast::fn_returns_param_part_paths`]; empty for an unknown
@@ -10692,6 +10825,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // and a TOTAL set is the old stand-down.
         payload_skip: Option<std::collections::BTreeSet<(String, usize)>>,
     ) {
+        // B-2026-09-20-24 / B-2026-09-29-108 — a fresh `Array` / `Vec`
+        // temporary. Both are declined just below (an `Array` is not a
+        // `StructType`, a `Vec` is the vec handle), so asked first; see the
+        // helper for why the caller owns these bodies.
+        if !discarded_temp && !arg_escapes_frame && self.current_fn.is_some() {
+            self.track_fresh_container_arg_elem_bodies(val, arg);
+        }
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             return;
         };
@@ -11751,6 +11891,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         "__disc_tup_arg",
                     );
                 }
+            } else if !arg_escapes_frame
+                && !discarded_temp
+                && self.fresh_nameless_container_arg_te(arg).is_some()
+            {
+                // B-2026-09-20-24 — a tuple a CALL returned (`take(mk())`).
+                // The literal-only rule above was about telling a fresh
+                // element from a place element, and a returned value has no
+                // place elements: every one of them is the result's, so none
+                // has another owner. The element types are the declared ones
+                // `tuple_arg_elem_type_exprs` read off the producer, which is
+                // what makes the walk possible without element expressions.
+                // Interp twin: the producer arm of `run_fresh_temp_arg_drops`.
+                self.track_fresh_tuple_elem_bodies_tes(&elem_tes, val, escaping_paths);
             }
         } else if let Some(name) = self.owned_struct_temp_arg_name(arg) {
             {

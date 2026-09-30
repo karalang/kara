@@ -8888,7 +8888,7 @@ impl<'a> super::Interpreter<'a> {
     /// (they just carry no Drop work); `Identifier` / field / index / any
     /// unknown shape is not. Mirrors `discard_rhs_produces_owned_value`
     /// minus the top-level-only `Identifier` arm.
-    fn discard_tuple_elem_is_fresh(&self, e: &Expr) -> bool {
+    pub(super) fn discard_tuple_elem_is_fresh(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Integer(..)
             | ExprKind::Float(..)
@@ -8898,6 +8898,17 @@ impl<'a> super::Interpreter<'a> {
             | ExprKind::InterpolatedStringLit(_)
             | ExprKind::StructLiteral { .. } => true,
             ExprKind::Tuple(elems) => elems.iter().all(|el| self.discard_tuple_elem_is_fresh(el)),
+            // B-2026-09-29-108 — a collection literal is fresh when every item
+            // is. Codegen twin: the same arms of
+            // `discard_tuple_elem_is_fresh_expr`.
+            ExprKind::ArrayLiteral(items) => {
+                items.iter().all(|el| self.discard_tuple_elem_is_fresh(el))
+            }
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if type_name == "Vec" || type_name == "Array" =>
+            {
+                items.iter().all(|el| self.discard_tuple_elem_is_fresh(el))
+            }
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Path { .. } => true,
                 // B-2026-09-10-25 — a BARE enum-variant constructor

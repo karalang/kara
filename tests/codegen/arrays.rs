@@ -3866,14 +3866,19 @@ fn e2e_boxed_array_payload_runs_its_element_drop_bodies() {
                  fn main() { plainD(Some((Ra { id: 1 }, Ra { id: 2 }))); println(\"end\") }\n",
                 "s\ndRa1\ndRa2\nend\n",
             ),
-            // BOUNDARY — a BARE array as a fresh-temp argument (no envelope)
-            // runs no element body on any backend. An agreed silence, outside
-            // this row, and pinned so a later change has to move both backends.
+            // B-2026-09-20-24 — REPINNED. A BARE array as a fresh-temp
+            // argument (no envelope) ran no element body on any backend, an
+            // agreed silence pinned "so a later change has to move both
+            // backends". That change is B-2026-09-20-24: a fresh nameless
+            // aggregate argument's element bodies run in the caller at the
+            // call's end, the by-value convention, and `--interp`, the JIT and
+            // both AOT modes now print `t:1 dRa1 dRa2 end` (valgrind clean).
+            // The cell keeps its name so the boundary it guarded stays legible.
             (
                 "boundary-bare-array-arg-stays-silent",
                 "fn takeA(x: Array[Ra, 2]) { println(f\"t:{x[0].id}\") }\n\
                  fn main() { takeA([Ra { id: 1 }, Ra { id: 2 }]); println(\"end\") }\n",
-                "t:1\nend\n",
+                "t:1\ndRa1\ndRa2\nend\n",
             ),
             // B-2026-09-12-24 — the MONOMORPHIC user enum at an `Array`
             // payload. Every cell above wraps the array in `Option` / `Result`

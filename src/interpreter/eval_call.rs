@@ -4765,6 +4765,97 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// The per-element walk over a fresh tuple argument, shared by the tuple
+    /// LITERAL (`take((mk(1), 7))`) and, since B-2026-09-20-24, a tuple a CALL
+    /// returned (`take(mk())`), whose elements are all the result's.
+    fn run_fresh_tuple_arg_elem_drops(
+        &mut self,
+        callee_name: &str,
+        method_owner: Option<CalleeOwner<'_>>,
+        i: usize,
+        items: Vec<Value>,
+    ) {
+        // B-2026-08-28-2 — per-ELEMENT, not per-argument. The
+        // whole-param passthrough guard at the top of this loop
+        // only fires when the callee hands `p` back BARE; a
+        // callee that extracts one element and returns THAT
+        // (`fn take(p: (R, i64)) -> R { let (r, n) = p; r }`)
+        // slips past it, so the element's body ran here AND
+        // again at the result's owner. Skipping the whole walk
+        // instead would be a different soundness hole: measured
+        // on `fn take(p: (R, R)) -> R { let (a, b) = p; a }`, it
+        // suppresses element 1's only body. So drop the escaping
+        // elements from the walk and keep the rest.
+        //
+        // Unrolling the tuple here is otherwise identical to the
+        // `Value::Tuple` arm of `run_discarded_value_user_drops`,
+        // which is exactly this loop without the filter.
+        // TOP-LEVEL elements only: a deeper path names
+        // something inside an element, which this walk's
+        // per-element skip cannot express, so it is left at
+        // its pre-existing behaviour (B-2026-08-28-23).
+        // B-2026-09-05-28 / -30 — a match arm's per-element
+        // escapes (a returned element, or one forwarded
+        // through a call that returns it) join the list.
+        let escaping = self.callee_escaping_tuple_elems(callee_name, method_owner, i);
+        // B-2026-09-06-11 — and the parts BELOW the top level
+        // (`p.0.0`, `p.0.r`), masked out of the VALUE before
+        // the walk through the same `mask_struct_fields` the
+        // struct arm uses, whose tuple arm speaks `#<i>`.
+        // Under the same leaf gate as the named arm: the
+        // channel also reports a SCALAR read handed back
+        // (`(r, k) => r.id`), and masking that out of the
+        // value would hand `R`'s own body a hole to read.
+        let whole = Value::Tuple(items.clone());
+        let deep: Vec<Vec<String>> = self
+            .deep_escaping_paths(callee_name, method_owner, i, true)
+            .into_iter()
+            .filter(|names| {
+                Self::value_at_name_path(&whole, names).is_some_and(Self::value_leaf_can_own)
+            })
+            .collect();
+        let masked = Self::mask_struct_fields(&whole, &deep);
+        let Value::Tuple(masked_items) = masked else {
+            return;
+        };
+        for (idx, item) in masked_items.into_iter().enumerate() {
+            if escaping.contains(&idx) {
+                continue;
+            }
+            self.run_discarded_value_user_drops(item);
+        }
+    }
+
+    /// B-2026-09-20-24 / B-2026-09-29-108 — a fresh NAMELESS aggregate
+    /// argument: a collection literal whose every item is fresh, or a call to
+    /// a non-generic free function declaring a tuple, `Array` or `Vec` return.
+    /// Codegen twin: `fresh_nameless_container_arg_te`; the two must admit the
+    /// same shapes or the bodies run on one backend only.
+    fn fresh_nameless_container_arg(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::ArrayLiteral(items) => {
+                items.iter().all(|x| self.discard_tuple_elem_is_fresh(x))
+            }
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if type_name == "Vec" || type_name == "Array" =>
+            {
+                items.iter().all(|x| self.discard_tuple_elem_is_fresh(x))
+            }
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => self.program.items.iter().any(|it| {
+                    matches!(it, crate::ast::Item::Function(f)
+                        if &f.name == n
+                            && f.generic_params.is_none()
+                            && f.return_type
+                                .as_ref()
+                                .is_some_and(crate::ast::type_expr_is_nameless_container))
+                }),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn run_fresh_temp_arg_drops_walk(
         &mut self,
@@ -5195,6 +5286,31 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
             }
+            // B-2026-09-20-24 / B-2026-09-29-108 — a fresh NAMELESS aggregate
+            // a CALL returned (`take(mk())`) or a collection LITERAL minted
+            // (`take([W1 { .. }])`). A by-value param whose elements run a
+            // user `Drop` is caller-retained, so its bodies are this frame's
+            // to run once the call returns -- which is what the NAMED-local
+            // spelling of the same call does through its binding. A temporary
+            // has no binding, so nothing ran them, on either backend. Codegen
+            // twin: `track_fresh_container_arg_elem_bodies` and the producer
+            // arm of the registrar's tuple leg.
+            if !matches!(arg.value.kind, ExprKind::Tuple(_))
+                && self.fresh_nameless_container_arg(&arg.value)
+            {
+                match arg_vals.get(i) {
+                    Some(Value::Tuple(items)) => {
+                        let items = items.clone();
+                        self.run_fresh_tuple_arg_elem_drops(callee_name, method_owner, i, items);
+                        continue;
+                    }
+                    Some(v @ Value::Array(_)) => {
+                        self.run_discarded_value_user_drops(v.clone());
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             // B-2026-07-30-11 (param-tuple leg, the A shape): a tuple
             // LITERAL arg (`take_tuple((Res { id: 41 }, 10))`) moved into
             // the callee's tuple param never ran its Drop-carrying
@@ -5210,57 +5326,8 @@ impl<'a> super::Interpreter<'a> {
                     // wildcard-let widening must not reach here; the full
                     // suite caught the double fire on `take_tuple((h, 20))`).
                     if self.discard_tuple_all_elems_safe(elems, items, false) {
-                        // B-2026-08-28-2 — per-ELEMENT, not per-argument. The
-                        // whole-param passthrough guard at the top of this loop
-                        // only fires when the callee hands `p` back BARE; a
-                        // callee that extracts one element and returns THAT
-                        // (`fn take(p: (R, i64)) -> R { let (r, n) = p; r }`)
-                        // slips past it, so the element's body ran here AND
-                        // again at the result's owner. Skipping the whole walk
-                        // instead would be a different soundness hole: measured
-                        // on `fn take(p: (R, R)) -> R { let (a, b) = p; a }`, it
-                        // suppresses element 1's only body. So drop the escaping
-                        // elements from the walk and keep the rest.
-                        //
-                        // Unrolling the tuple here is otherwise identical to the
-                        // `Value::Tuple` arm of `run_discarded_value_user_drops`,
-                        // which is exactly this loop without the filter.
-                        // TOP-LEVEL elements only: a deeper path names
-                        // something inside an element, which this walk's
-                        // per-element skip cannot express, so it is left at
-                        // its pre-existing behaviour (B-2026-08-28-23).
-                        // B-2026-09-05-28 / -30 — a match arm's per-element
-                        // escapes (a returned element, or one forwarded
-                        // through a call that returns it) join the list.
-                        let escaping =
-                            self.callee_escaping_tuple_elems(callee_name, method_owner, i);
-                        // B-2026-09-06-11 — and the parts BELOW the top level
-                        // (`p.0.0`, `p.0.r`), masked out of the VALUE before
-                        // the walk through the same `mask_struct_fields` the
-                        // struct arm uses, whose tuple arm speaks `#<i>`.
-                        // Under the same leaf gate as the named arm: the
-                        // channel also reports a SCALAR read handed back
-                        // (`(r, k) => r.id`), and masking that out of the
-                        // value would hand `R`'s own body a hole to read.
-                        let whole = Value::Tuple(items.clone());
-                        let deep: Vec<Vec<String>> = self
-                            .deep_escaping_paths(callee_name, method_owner, i, true)
-                            .into_iter()
-                            .filter(|names| {
-                                Self::value_at_name_path(&whole, names)
-                                    .is_some_and(Self::value_leaf_can_own)
-                            })
-                            .collect();
-                        let masked = Self::mask_struct_fields(&whole, &deep);
-                        let Value::Tuple(masked_items) = masked else {
-                            continue;
-                        };
-                        for (idx, item) in masked_items.into_iter().enumerate() {
-                            if escaping.contains(&idx) {
-                                continue;
-                            }
-                            self.run_discarded_value_user_drops(item);
-                        }
+                        let items = items.clone();
+                        self.run_fresh_tuple_arg_elem_drops(callee_name, method_owner, i, items);
                     }
                 }
                 continue;

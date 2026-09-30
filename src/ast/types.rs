@@ -564,3 +564,18 @@ pub struct PathExpr {
     pub generic_args: Option<Vec<GenericArg>>,
     pub span: Span,
 }
+
+/// B-2026-09-20-24 / B-2026-09-29-108 — is this a NAMELESS aggregate type: a
+/// tuple, an `Array[T, N]` (either spelling) or a `Vec[T]`? These are the
+/// parameter types whose temporaries had no owner for their elements' `Drop`
+/// bodies, so both backends ask this one question of a producer's declared
+/// return type and cannot disagree about which calls mint one.
+pub fn type_expr_is_nameless_container(te: &TypeExpr) -> bool {
+    match &te.kind {
+        TypeKind::Tuple(_) | TypeKind::Array { .. } => true,
+        TypeKind::Path(p) => {
+            p.segments.len() == 1 && matches!(p.segments[0].as_str(), "Vec" | "Array")
+        }
+        _ => false,
+    }
+}

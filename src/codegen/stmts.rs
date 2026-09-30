@@ -28400,14 +28400,42 @@ impl<'ctx> super::Codegen<'ctx> {
         tree: &super::synth_drop::FieldSkipTree,
         temp_name: &str,
     ) {
-        let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
-            return;
-        };
         let elem_tes: Vec<crate::ast::TypeExpr> = elems
             .iter()
             .map(|e| self.infer_discard_elem_te(e))
             .collect();
-        let Some(bodies) = self.emit_discarded_tuple_elem_bodies_fn_tree(agg_ty, &elem_tes, tree)
+        self.track_tuple_elem_bodies_tree_tes(&elem_tes, val, tree, temp_name);
+    }
+
+    /// B-2026-09-20-24 — the bodies walk over a tuple a CALL returned, whose
+    /// element types come from the producer's declared return type rather
+    /// than from element expressions it does not have. Same skip tree and
+    /// same argument-temporary name as the literal spelling, so a callee
+    /// that hands one element back leaves that element to the result.
+    pub(super) fn track_fresh_tuple_elem_bodies_tes(
+        &mut self,
+        elem_tes: &[crate::ast::TypeExpr],
+        val: BasicValueEnum<'ctx>,
+        paths: &[crate::ast::ParamPath],
+    ) {
+        let mut tree = super::synth_drop::FieldSkipTree::default();
+        for path in paths {
+            self.insert_tuple_skip_path(&mut tree, elem_tes, path);
+        }
+        self.track_tuple_elem_bodies_tree_tes(elem_tes, val, &tree, "__disc_tup_arg");
+    }
+
+    fn track_tuple_elem_bodies_tree_tes(
+        &mut self,
+        elem_tes: &[crate::ast::TypeExpr],
+        val: BasicValueEnum<'ctx>,
+        tree: &super::synth_drop::FieldSkipTree,
+        temp_name: &str,
+    ) {
+        let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
+            return;
+        };
+        let Some(bodies) = self.emit_discarded_tuple_elem_bodies_fn_tree(agg_ty, elem_tes, tree)
         else {
             return;
         };
@@ -28445,7 +28473,63 @@ impl<'ctx> super::Codegen<'ctx> {
     /// element's body was silently skipped). Borrow-returning callees are
     /// excluded — their result aliases the borrow source, and a body/free
     /// registered on an alias double-fires against the real owner.
+    /// B-2026-09-29-108 — the type a collection LITERAL mints, or `None`
+    /// for any other expression. Lowering keeps a bare `[..]` as an
+    /// `ArrayLiteral` only when it is typed `Array[T, N]` and rewrites it to a
+    /// `Vec[..]` prefix literal otherwise, so the node kind names the
+    /// container and the item count names `N`. The element type comes from
+    /// the first item through [`Self::infer_discard_elem_te`], which is why
+    /// this answers only for literals whose items that derivation resolves
+    /// (fresh ones — the only kind the callers admit). A `Vec` literal falls
+    /// back to its span record, the source a bound one already reads.
+    pub(super) fn collection_literal_te(&self, e: &Expr) -> Option<crate::ast::TypeExpr> {
+        let (is_array, items) = match &e.kind {
+            ExprKind::ArrayLiteral(items) => (true, items),
+            ExprKind::PrefixCollectionLiteral { type_name, items } if type_name == "Array" => {
+                (true, items)
+            }
+            ExprKind::PrefixCollectionLiteral { type_name, items } if type_name == "Vec" => {
+                (false, items)
+            }
+            _ => return None,
+        };
+        let from_item = items.first().map(|it| self.infer_discard_elem_te(it));
+        if is_array {
+            let element = from_item?;
+            return Some(crate::ast::TypeExpr {
+                kind: crate::ast::TypeKind::Array {
+                    element: Box::new(element),
+                    size: Box::new(Expr {
+                        kind: ExprKind::Integer(items.len() as i128, None),
+                        span: e.span,
+                    }),
+                },
+                span: e.span,
+            });
+        }
+        if let Some(te) = self
+            .type_decls
+            .enum_inst_type_exprs
+            .get(&(e.span.offset, e.span.length))
+        {
+            return Some(te.clone());
+        }
+        let element = from_item?;
+        Some(crate::ast::TypeExpr {
+            kind: crate::ast::TypeKind::Path(crate::ast::PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![crate::ast::GenericArg::Type(element)]),
+                span: e.span,
+            }),
+            span: e.span,
+        })
+    }
+
     fn infer_discard_elem_te(&self, e: &Expr) -> crate::ast::TypeExpr {
+        // B-2026-09-29-108 — a collection-literal element (`([mkd(1)], 7)`).
+        if let Some(te) = self.collection_literal_te(e) {
+            return te;
+        }
         if let ExprKind::Tuple(inner) = &e.kind {
             return crate::ast::TypeExpr {
                 kind: crate::ast::TypeKind::Tuple(
@@ -28502,6 +28586,43 @@ impl<'ctx> super::Codegen<'ctx> {
     /// nested tuple recurses into this emitter under it, a struct takes the
     /// masked field walker. Folded into the symbol name so a deep-masked
     /// walker never aliases a flat-masked one.
+    /// B-2026-09-29-108 — the element-bodies walker for an `Array` / `Vec`
+    /// field of a tuple, chosen by the field's LLVM LAYOUT rather than by the
+    /// type expression: a bare `[..]` literal may be recorded as `Vec[T]`
+    /// while it lowers to `[N x T]` in an `Array`-typed slot, and a walker of
+    /// the wrong shape reads garbage (B-2026-09-13-26). `None` for anything
+    /// else, or when the element runs no user `Drop`.
+    fn container_field_elem_bodies_walker(
+        &mut self,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        i: u32,
+        te: &crate::ast::TypeExpr,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let inner = match self.array_elem_and_len(te) {
+            Some((inner, _)) => inner,
+            None => {
+                let crate::ast::TypeKind::Path(p) = &te.kind else {
+                    return None;
+                };
+                if p.segments.first().map(String::as_str) != Some("Vec") {
+                    return None;
+                }
+                super::helpers::vec_inner_type_expr(te)?
+            }
+        };
+        if !self.elem_te_runs_user_drop(&inner) {
+            return None;
+        }
+        match agg_ty.get_field_type_at_index(i)? {
+            inkwell::types::BasicTypeEnum::ArrayType(at) if !at.is_empty() => {
+                let elem_ty = self.llvm_type_for_type_expr(&inner);
+                self.emit_array_elem_user_drop_bodies_fn(elem_ty, &inner, at.len())
+            }
+            ty if self.llvm_ty_is_vec_struct(ty) => self.emit_nested_vec_elem_bodies_fn(&inner),
+            _ => None,
+        }
+    }
+
     fn emit_discarded_tuple_elem_bodies_fn_tree(
         &mut self,
         agg_ty: inkwell::types::StructType<'ctx>,
@@ -28524,6 +28645,13 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             let sub = tree.nested.get(&i).cloned().unwrap_or_default();
             let i = i as u32;
+            // B-2026-09-29-108 — an `Array` / `Vec` element, which no arm
+            // below reaches: `take(([mkd(1)], 7))` ran none of the array's
+            // bodies on any surface.
+            if let Some(w) = self.container_field_elem_bodies_walker(agg_ty, i, te) {
+                work.push((i, ElemWork::Walker(w)));
+                continue;
+            }
             match &te.kind {
                 TypeKind::Tuple(inner) => {
                     let Some(inner_ty) = agg_ty
@@ -28688,6 +28816,20 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Tuple(elems) => elems
                 .iter()
                 .all(|el| self.discard_tuple_elem_is_fresh_expr(el)),
+            // B-2026-09-29-108 — a collection literal is fresh when every item
+            // is, by the same rule a nested tuple gets one line up: it mints
+            // its buffer, and its items are owned by it alone unless one of
+            // them is a place. Interp twin: `discard_tuple_elem_is_fresh`.
+            ExprKind::ArrayLiteral(items) => items
+                .iter()
+                .all(|el| self.discard_tuple_elem_is_fresh_expr(el)),
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if type_name == "Vec" || type_name == "Array" =>
+            {
+                items
+                    .iter()
+                    .all(|el| self.discard_tuple_elem_is_fresh_expr(el))
+            }
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Path { .. } => true,
                 // B-2026-09-10-25 — a BARE enum-variant constructor
