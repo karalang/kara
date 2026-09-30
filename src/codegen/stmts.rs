@@ -1264,6 +1264,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `[N x T]` array value, so an array arm had no owner and
                     // its elements' bodies ran nowhere. Bodies only, so it
                     // cannot collide with either memory leg above.
+                    // B-2026-09-30-32 — and a `Vec` literal arm's buffer, which
+                    // neither memory leg above claims (the first admits only a
+                    // call or a `shared` literal). Pushed first so the bodies
+                    // run before the free.
+                    self.free_discarded_vec_literal_buffer(owned_tail, v);
                     self.track_discarded_array_elem_bodies(owned_tail, v);
                 } else if let Some(v) = result {
                     // B-2026-09-13-28 / B-2026-09-01-17 — the DECLINED literal.
@@ -5010,6 +5015,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.track_discarded_tuple_elem_bodies(&elems, val, &[]);
                     }
                 }
+                // B-2026-09-30-32 — and the `Vec` BUFFER a bare `[..]` literal
+                // lowers to. Pushed before the bodies walk so the bodies, which
+                // read the elements, run first.
+                self.free_discarded_vec_literal_buffer(&tail, val);
                 // B-2026-09-13-26 — the ARRAY peer of the tuple leg above. No
                 // registrar claimed an array literal here, so its elements' Drop
                 // bodies ran nowhere.
@@ -13944,6 +13953,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // LLVM type and declines a Vec handle, so `[mkd(7)];` had no
                     // owner and its element bodies ran nowhere while
                     // `W { r: mkd(7), b: 1 };` and `(mkd(7), 1);` both ran one.
+                    // B-2026-09-30-32 — the bare-statement twin of the
+                    // `let _ =` literal arm's `Vec` buffer free.
+                    self.free_discarded_vec_literal_buffer(lt, val);
                     self.track_discarded_array_elem_bodies(lt, val);
                     self.drain_discard_frame_args_first(b53_arg_mark);
                 }
@@ -28457,6 +28469,29 @@ impl<'ctx> super::Codegen<'ctx> {
             bodies,
             UserDropKind::StructFieldBodies,
         );
+    }
+
+    /// B-2026-09-30-32 — free the buffer of a discarded collection literal
+    /// that lowered to a `Vec` (`let _ = [1, 2];`, `Vec[1, 2];`). Both literal
+    /// arms register the element bodies and the struct/tuple memory, and the
+    /// aggregate registrar declines a `Vec` handle, so the buffer had no owner
+    /// and leaked on every compiled surface while a discarded `Vec` CALL result
+    /// was clean through the generic chokepoint. That chokepoint is the one used
+    /// here, so the two spellings free alike. A fixed `Array` value is not a
+    /// `Vec` handle and never reaches it.
+    pub(super) fn free_discarded_vec_literal_buffer(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let is_collection_literal = match &tail.kind {
+            ExprKind::ArrayLiteral(_) => true,
+            ExprKind::PrefixCollectionLiteral { type_name, .. } => type_name == "Vec",
+            _ => false,
+        };
+        if is_collection_literal && self.llvm_ty_is_vec_struct(val.get_type()) {
+            self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
+        }
     }
 
     /// B-2026-09-13-26 — the ARRAY sibling of

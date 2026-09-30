@@ -1826,6 +1826,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             );
                         }
                         self.track_discarded_arm_owned_aggregate(owned_tail, arm_val);
+                        // B-2026-09-30-32 — a `Vec` literal arm's buffer, which
+                        // neither leg above claims, then its elements' bodies
+                        // (the braced / `if` arm's pair, in the same order so
+                        // the bodies run before the free).
+                        self.free_discarded_vec_literal_buffer(owned_tail, arm_val);
+                        self.track_discarded_array_elem_bodies(owned_tail, arm_val);
                     }
                 }
                 self.drain_top_frame_with_emit();
