@@ -144,6 +144,14 @@ pub(crate) struct DropRc<'ctx> {
     /// exactly as they did before. That is what keeps this slice off the
     /// predicate question the row warns about.
     pub(crate) cond_move_drop_flags: HashMap<String, PointerValue<'ctx>>,
+    /// B-2026-09-29-116 — the `cond_move_drop_flags` bits a whole-value
+    /// hand-off in an enclosing-frame branch cleared
+    /// (`suppress_container_elem_bodies_for_receiver`), by name. A later
+    /// binding of the same name that registers its own payload walk stores
+    /// `true` into the bit again at its registration point, since that bit is
+    /// keyed by NAME and a pattern binding's walk is not told apart by slot.
+    /// Holding the pointer means only the bit that path made is re-armed.
+    pub(crate) handoff_flags: HashMap<String, PointerValue<'ctx>>,
     /// B-2026-09-29-95 — names bound by a `let mut` in the current function.
     /// A reassignment drops the displaced value's payload walk without
     /// consulting a per-path flag, so a name that may be reassigned keeps the

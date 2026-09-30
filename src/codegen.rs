@@ -6564,6 +6564,7 @@ impl<'ctx> Codegen<'ctx> {
                 cond_move_projection_handover_sites: std::collections::HashSet::new(),
                 seeding_call_arg_sites: false,
                 cond_move_drop_flags: HashMap::new(),
+                handoff_flags: HashMap::new(),
                 mut_let_names: std::collections::HashSet::new(),
                 cond_move_drop_flag_slots: HashMap::new(),
                 retracted_live_generations: std::collections::HashSet::new(),

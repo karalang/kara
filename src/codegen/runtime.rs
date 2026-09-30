@@ -13208,6 +13208,15 @@ impl<'ctx> super::Codegen<'ctx> {
         drop_fn: FunctionValue<'ctx>,
         kind: UserDropKind,
     ) {
+        // B-2026-09-29-116 — see `DropRc::handoff_flags`.
+        if kind == UserDropKind::ContainerElemBodies {
+            if let Some(flag) = self.drop_rc.handoff_flags.get(binding_name).copied() {
+                if self.drop_rc.cond_move_drop_flags.get(binding_name) == Some(&flag) {
+                    let bool_t = self.context.bool_type();
+                    let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
+                }
+            }
+        }
         if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::UserDrop {
                 binding_name: binding_name.to_string(),
@@ -17427,6 +17436,26 @@ impl<'ctx> super::Codegen<'ctx> {
         !other && n >= 2 && !owns(&frames[n - 1]) && frames[..n - 1].iter().any(owns)
     }
 
+    /// B-2026-09-29-116 — is `name`'s payload walk registered against its own
+    /// `variables` slot, i.e. a `let` local rather than a pattern binding (whose
+    /// action is not keyed by its slot, so a per-name flag would also guard a
+    /// later binding of the same name)?
+    pub(super) fn container_bodies_owned_by_let_slot(&self, name: &str) -> bool {
+        let Some(slot) = self.variables.get(name).map(|v| v.ptr) else {
+            return false;
+        };
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .any(|a| {
+                matches!(a, CleanupAction::UserDrop { binding_name, binding_ptr, kind, .. }
+                if binding_name == name
+                    && *binding_ptr == slot
+                    && *kind == UserDropKind::ContainerElemBodies)
+            })
+    }
+
     /// B-2026-09-29-95 — [`Self::suppress_container_elem_bodies_for_var`] for
     /// a NAMED receiver of an owned-`self` method whose arm takes the payload.
     /// That retraction is all-paths; a call compiled in a deeper frame than
@@ -17455,6 +17484,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_store(flag, bool_t.const_int(0, false))
                     .is_ok()
                 {
+                    self.drop_rc.handoff_flags.insert(name.to_string(), flag);
                     return;
                 }
             }

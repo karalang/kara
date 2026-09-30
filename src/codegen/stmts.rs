@@ -5151,7 +5151,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     .as_ref()
                     .is_some_and(|(_, src, _)| self.guard_user_drop_for_nested_return(src));
                 if !wildcard_of_local && !per_path_carrier && !handon_per_path {
-                    self.disarm_container_bodies_move_sources(value);
+                    match &value.kind {
+                        ExprKind::Identifier(src) => {
+                            let src = src.clone();
+                            if self.container_bodies_owned_by_let_slot(&src) {
+                                self.suppress_container_elem_bodies_for_receiver(&src)
+                            } else {
+                                self.disarm_container_bodies_move_sources(value)
+                            }
+                        }
+                        _ => self.disarm_container_bodies_move_sources(value),
+                    }
                 }
                 if let Some((dst, _, f)) = optres_handon {
                     self.payload_vars.pending_optres_handon = Some((dst, f));

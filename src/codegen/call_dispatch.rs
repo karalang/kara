@@ -2817,6 +2817,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             let skip = self.enum_payload_skip_for_variants(en, vs);
                             self.mask_enum_payload_bodies_for_var(&var_name, en, &skip);
                         }
+                        // B-2026-09-29-116 — per path for a `let` local
+                        // whose walk an enclosing frame owns.
+                        _ if self.container_bodies_owned_by_let_slot(&var_name) => {
+                            self.suppress_container_elem_bodies_for_receiver(&var_name)
+                        }
                         _ => self.suppress_container_elem_bodies_for_var(&var_name),
                     }
                     // B-2026-08-29-15 / -50 — and the binding's OWN body too,
