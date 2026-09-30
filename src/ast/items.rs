@@ -6252,7 +6252,12 @@ fn part_paths_from_root_mode(
                     yielded(&f.value, aliases, out);
                 }
             }
-            ExprKind::Tuple(elems) => {
+            // B-2026-09-30-17 — an ARRAY literal moves its elements out of the
+            // frame exactly as a tuple literal does. `return [w.q, w.r]` was
+            // missing here, so the caller's walk over `w` ran both fields'
+            // bodies beside the array's owner: `dR1 dR2 dR2 dR1` for one call,
+            // on every backend.
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
                 for el in elems {
                     yielded(el, aliases, out);
                 }
