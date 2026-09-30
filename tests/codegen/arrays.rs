@@ -2112,24 +2112,19 @@ fn e2e_optres_array_payload_scalar_read_runs_the_element_bodies() {
                 "dW4_40\nr:40\nend\n",
             ),
             (
-                // DIVERGENT AND PRE-EXISTING, pinned as it measures and NOT this
-                // row's — B-2026-09-20-23. A NAMED-LOCAL argument's bodies are
-                // retained by the caller's `let` site and drain at ITS scope
-                // exit, so the body runs exactly once but AFTER `end`, where the
-                // interpreter runs it at the callee's arm.
-                //
-                // Pre-existing rather than introduced: the same spelling with a
-                // heap-bearing element (`struct S1 { tag: String }`) printed the
-                // identical late sequence BEFORE this fix, when this cell printed
-                // nothing at all. So the fix moves this cell from a LOSS into an
-                // existing ORDER divergence, which is strictly closer to the due
-                // sequence and valgrind-clean at `-O0` (0 errors, no leak).
-                "array-payload-named-local-argument-runs-the-body-late",
+                // B-2026-09-20-23 — a NAMED-LOCAL argument. Pinned late (after
+                // `end`) until that row's fix: moving `a` into the constructor
+                // retracted `a`'s own walk and shrank the scope frame under the
+                // drain's saved length, so neither the call-return drain nor the
+                // statement drain saw this argument's walk and it ran at the
+                // caller's scope exit. It now drains at the call, as the
+                // fresh-temp spelling above does.
+                "array-payload-named-local-argument-runs-the-body-at-the-call",
                 format!(
                     "{W}fn take(o: Option[Array[W1, 1]]) -> i64 {{ match o {{ Some(x) => {{ return x[0].v }} None => {{ return 0 }} }} }}\n\
                      fn main() {{ let a: Array[W1, 1] = [W1 {{ v: 40 }}]; let r = take(Some(a)); println(f\"r:{{r}}\"); println(\"end\") }}\n"
                 ),
-                "r:40\nend\ndW1_40\n",
+                "dW1_40\nr:40\nend\n",
                 "dW1_40\nr:40\nend\n",
             ),
         ] {

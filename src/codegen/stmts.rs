@@ -658,11 +658,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Statement-end firing for fresh Drop-temps (B-2026-08-01-4):
             // snapshot the scope frame's length so the post-statement drain
             // fires exactly the temp actions this statement registers.
-            let temp_mark = self
-                .drop_rc
-                .scope_cleanup_actions
-                .last()
-                .map_or(0, |f| f.len());
+            let temp_mark = self.temp_frame_mark();
             // Auto-par reduction lowering for NESTED blocks (2026-07-15).
             // `compile_function_body` attempts this for the fn's top-level
             // statements; nested blocks previously compiled every loop
@@ -699,7 +695,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // interpreter fires them as the producing call returns), then
             // the NLL fires for named bindings whose last use was this
             // statement.
-            self.drain_statement_temp_user_drops(temp_mark);
+            self.drain_statement_temp_user_drops(&temp_mark);
             // Fire user-Drop bodies whose binding's last use was this
             // statement (NLL placement; see the map above). Runs only on the
             // fall-through path — a terminated block (return/break in the
@@ -2358,11 +2354,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // lowered; `None` means the analyzer tagged it but the
                 // codegen v1 doesn't yet handle that op/type/shape — fall
                 // through to sequential.
-                let temp_mark = self
-                    .drop_rc
-                    .scope_cleanup_actions
-                    .last()
-                    .map_or(0, |f| f.len());
+                let temp_mark = self.temp_frame_mark();
                 let lowered = match self.try_emit_reduction_lowering(body, i)? {
                     Some(()) => Some(()),
                     // See the sibling call in `compile_block` for why the
@@ -2376,7 +2368,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Fresh-temp bodies at statement end (B-2026-08-01-4), then
                 // the NLL fires — mirroring `compile_block`'s order. Both
                 // self-guard on a terminated insert block.
-                self.drain_statement_temp_user_drops(temp_mark);
+                self.drain_statement_temp_user_drops(&temp_mark);
                 // NLL user-drop placement for SEQUENTIAL top-level statements
                 // (B-2026-07-21-1) — the auto-par body path compiles these
                 // outside `compile_block`, so it needs the same per-statement

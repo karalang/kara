@@ -13430,7 +13430,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// never registered an escaping value (`call_arg_flows_into_return`).
     /// Named-binding actions and memory-channel actions (StructDrop /
     /// EnumDrop / frees) are untouched — only these two temp names drain.
-    pub(super) fn drain_statement_temp_user_drops(&mut self, mark: usize) {
+    pub(super) fn drain_statement_temp_user_drops(&mut self, mark: &TempFrameMark<'ctx>) {
         self.drain_temp_user_drops(mark, false);
     }
 
@@ -13481,8 +13481,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`__freshtemp_enum_scrut`) are deliberately left to the statement drain:
     /// each has its OWN row in the position table with a different end, and
     /// neither is an argument.
-    pub(super) fn drain_call_arg_temp_user_drops(&mut self, mark: (usize, usize, usize)) {
-        let (depth, len, pending) = mark;
+    pub(super) fn drain_call_arg_temp_user_drops(&mut self, mark: CallArgTempMark<'ctx>) {
+        let CallArgTempMark {
+            depth,
+            frame,
+            pending,
+        } = mark;
         self.discard_pending_ref_optres_args(pending);
         // The length half of the mark is an index into ONE PARTICULAR frame --
         // whichever was last when it was taken. An argument containing a
@@ -13497,7 +13501,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.drop_rc.scope_cleanup_actions.len() != depth {
             return;
         }
-        self.drain_temp_user_drops(len, true);
+        self.drain_temp_user_drops(&frame, true);
     }
 
     /// Frame STACK DEPTH plus frame length, to hand back to
@@ -13506,15 +13510,55 @@ impl<'ctx> super::Codegen<'ctx> {
     /// window spans exactly this call's own argument temporaries. The depth
     /// travels with the length because the length alone is meaningless against
     /// a different frame; see the drain for what that would do.
-    pub(super) fn call_arg_temp_mark(&self) -> (usize, usize, usize) {
-        (
-            self.drop_rc.scope_cleanup_actions.len(),
-            self.drop_rc
-                .scope_cleanup_actions
-                .last()
-                .map_or(0, |f| f.len()),
-            self.drop_rc.pending_ref_optres_arg_discards.len(),
-        )
+    pub(super) fn call_arg_temp_mark(&self) -> CallArgTempMark<'ctx> {
+        CallArgTempMark {
+            depth: self.drop_rc.scope_cleanup_actions.len(),
+            frame: self.temp_frame_mark(),
+            pending: self.drop_rc.pending_ref_optres_arg_discards.len(),
+        }
+    }
+
+    /// B-2026-09-20-23 — the innermost scope frame's drainable entries as they
+    /// stand before a statement or a call's arguments lower, for
+    /// [`Self::drain_temp_user_drops`] to tell the temps registered DURING it
+    /// from the ones already there.
+    ///
+    /// This used to be the frame's LENGTH, read back as an index to split the
+    /// frame at. That is only sound while nothing below the index leaves the
+    /// frame, and lowering an argument routinely retracts an entry registered
+    /// by an EARLIER statement: `take(Some(a))` moves the named local `a` into
+    /// the constructor and retracts `a`'s element-bodies walk. The frame then
+    /// shrank under the mark, the argument's own `__optres_arg_bodies_tmp` walk
+    /// landed at an index BELOW it, and both drains skipped it, so the body ran
+    /// at the caller's scope exit: `r:40 end dW1_40` against the interpreter's
+    /// `dW1_40 r:40 end`, while the fresh-temp spelling (`take(Some([..]))`),
+    /// which retracts nothing, drained at the call.
+    ///
+    /// So the mark records WHICH entries were there, by the slot each drainable
+    /// kind carries, rather than how many. A multiset, because a slot can carry
+    /// two entries (a bodies walk and its memory drop).
+    pub(super) fn temp_frame_mark(&self) -> TempFrameMark<'ctx> {
+        let mut pre: std::collections::HashMap<PointerValue<'ctx>, usize> =
+            std::collections::HashMap::new();
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last() {
+            for a in frame {
+                if let Some(k) = Self::temp_drain_key(a) {
+                    *pre.entry(k).or_insert(0) += 1;
+                }
+            }
+        }
+        TempFrameMark { pre }
+    }
+
+    /// The slot [`Self::temp_frame_mark`] identifies an entry by: one for each
+    /// kind [`Self::drain_temp_user_drops`] can fire, `None` for the rest.
+    fn temp_drain_key(a: &CleanupAction<'ctx>) -> Option<PointerValue<'ctx>> {
+        match a {
+            CleanupAction::UserDrop { binding_ptr, .. } => Some(*binding_ptr),
+            CleanupAction::StructDrop { struct_alloca, .. } => Some(*struct_alloca),
+            CleanupAction::RcDec { ptr, .. } => Some(*ptr),
+            _ => None,
+        }
     }
 
     /// B-2026-09-29-45 — retire the borrowed `Option`/`Result` argument temps
@@ -13551,7 +13595,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    fn drain_temp_user_drops(&mut self, mark: usize, call_return_only: bool) {
+    fn drain_temp_user_drops(&mut self, mark: &TempFrameMark<'ctx>, call_return_only: bool) {
         if self
             .builder
             .get_insert_block()
@@ -13579,12 +13623,19 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() else {
                 return;
             };
-            if frame.len() <= mark {
-                return;
-            }
-            let tail = frame.split_off(mark);
+            // B-2026-09-20-23 — every entry the mark saw stays put, wherever
+            // it now sits; see `temp_frame_mark` for why this is not an index.
+            let mut pre = mark.pre.clone();
+            let all = std::mem::take(frame);
             let mut fired = Vec::new();
-            for action in tail {
+            for action in all {
+                if let Some(n) = Self::temp_drain_key(&action).and_then(|k| pre.get_mut(&k)) {
+                    if *n > 0 {
+                        *n -= 1;
+                        frame.push(action);
+                        continue;
+                    }
+                }
                 match action {
                     CleanupAction::UserDrop {
                         ref binding_name,
@@ -23652,3 +23703,16 @@ type FieldViewFlags<'a, 'ctx> = (
     &'a [(String, usize, PointerValue<'ctx>)],
     &'a [(Vec<usize>, PointerValue<'ctx>)],
 );
+
+/// B-2026-09-20-23 — see [`super::Codegen::temp_frame_mark`].
+pub(crate) struct TempFrameMark<'ctx> {
+    pre: std::collections::HashMap<PointerValue<'ctx>, usize>,
+}
+
+/// [`super::Codegen::call_arg_temp_mark`]'s mark: the frame stack's depth, the
+/// innermost frame's entries, and the pending borrowed-argument discards.
+pub(crate) struct CallArgTempMark<'ctx> {
+    depth: usize,
+    frame: TempFrameMark<'ctx>,
+    pending: usize,
+}
