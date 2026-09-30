@@ -13242,6 +13242,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
             }
         }
+        self.save_shadowed_move_flag(binding_name, binding_ptr);
         if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::UserDrop {
                 binding_name: binding_name.to_string(),
@@ -13251,6 +13252,86 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind,
             });
         }
+    }
+
+    /// B-2026-09-30-19 — see `DropRc::shadow_flag_saves`. Called as a binding
+    /// registers its `UserDrop` action: when a live action of the same name
+    /// belongs to a DIFFERENT slot, this binding shadows it, so the name's bit
+    /// is saved and re-armed for the inner binding.
+    fn save_shadowed_move_flag(&mut self, name: &str, ptr: PointerValue<'ctx>) {
+        if self.drop_rc.pattern_bind_depth == 0
+            || self.drop_rc.shadow_flag_saves.contains_key(&ptr)
+            || self.drop_rc.cond_store_flag_params.contains(name)
+        {
+            return;
+        }
+        let shadows_live = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .any(|a| {
+                matches!(a, CleanupAction::UserDrop { binding_name: b, binding_ptr: p, .. }
+                if b == name && *p != ptr)
+            });
+        let open_block = self
+            .builder
+            .get_insert_block()
+            .is_some_and(|b| b.get_terminator().is_none());
+        if !shadows_live || !open_block {
+            return;
+        }
+        let saved = match self.drop_rc.cond_move_drop_flags.get(name).copied() {
+            None => None,
+            Some(flag) => {
+                let Some(entry) = self.current_fn.and_then(|f| f.get_first_basic_block()) else {
+                    return;
+                };
+                let b = self.context.create_builder();
+                match entry.get_terminator() {
+                    Some(term) => b.position_before(&term),
+                    None => b.position_at_end(entry),
+                }
+                let bool_t = self.context.bool_type();
+                let Ok(slot) = b.build_alloca(bool_t, &format!("cmflag.{name}.outer")) else {
+                    return;
+                };
+                let Ok(cur) = self.builder.build_load(bool_t, flag, "cmflag.outer.save") else {
+                    return;
+                };
+                let _ = self.builder.build_store(slot, cur);
+                let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
+                Some(slot)
+            }
+        };
+        self.drop_rc.shadow_flag_saves.insert(ptr, saved);
+    }
+
+    /// B-2026-09-30-19 — hand the name's bit back to the binding a shadowing
+    /// one covered, right after the shadowing binding's drop was emitted.
+    fn restore_shadowed_move_flag(&self, name: &str, ptr: PointerValue<'ctx>) {
+        let Some(saved) = self.drop_rc.shadow_flag_saves.get(&ptr).copied() else {
+            return;
+        };
+        let Some(flag) = self.drop_rc.cond_move_drop_flags.get(name).copied() else {
+            return;
+        };
+        let open_block = self
+            .builder
+            .get_insert_block()
+            .is_some_and(|b| b.get_terminator().is_none());
+        if !open_block {
+            return;
+        }
+        let bool_t = self.context.bool_type();
+        let v = match saved {
+            Some(slot) => match self.builder.build_load(bool_t, slot, "cmflag.outer.back") {
+                Ok(v) => v.into_int_value(),
+                Err(_) => return,
+            },
+            None => bool_t.const_int(1, false),
+        };
+        let _ = self.builder.build_store(flag, v);
     }
 
     /// B-2026-08-29-33 — swap the walker function of `name`'s live `UserDrop`
@@ -15079,6 +15160,27 @@ impl<'ctx> super::Codegen<'ctx> {
     /// per-binding guard — the pre-fix behaviour, which is over-suppression
     /// rather than a double fire, so the fallback stays on the safe side.
     pub(super) fn emit_user_drop_bodies_call_field_view_selected(
+        &mut self,
+        binding_name: &str,
+        type_name: &str,
+        kind: UserDropKind,
+        drop_fn: FunctionValue<'ctx>,
+        ptr: PointerValue<'ctx>,
+        call_name: &str,
+    ) {
+        self.emit_user_drop_bodies_call_field_view_selected_inner(
+            binding_name,
+            type_name,
+            kind,
+            drop_fn,
+            ptr,
+            call_name,
+        );
+        // B-2026-09-30-19 — see `DropRc::shadow_flag_saves`.
+        self.restore_shadowed_move_flag(binding_name, ptr);
+    }
+
+    fn emit_user_drop_bodies_call_field_view_selected_inner(
         &mut self,
         binding_name: &str,
         type_name: &str,

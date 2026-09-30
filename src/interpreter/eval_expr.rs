@@ -1428,6 +1428,9 @@ impl<'a> super::Interpreter<'a> {
                     };
                     let optres_val = matches!(&val, Value::EnumVariant { enum_name, .. }
                         if enum_name == "Option" || enum_name == "Result");
+                    // B-2026-09-30-19 — see `snapshot_shadowed_moved_records`.
+                    let shadow_saved =
+                        self.snapshot_shadowed_moved_records(&pattern.binding_names(), Some(value));
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
                     // B-2026-08-29-17, `if let` leg — propagate the view-ness of a
@@ -1527,6 +1530,7 @@ impl<'a> super::Interpreter<'a> {
                         self.run_unbound_struct_field_drops(&sv, &taken, owes_own_body);
                     }
                     self.env.pop_scope();
+                    self.restore_shadowed_moved_records(shadow_saved);
                     match result {
                         Ok(v) => v,
                         Err(cf) => self.set_cf(cf),

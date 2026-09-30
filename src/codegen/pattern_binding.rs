@@ -224,6 +224,18 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
         scrut: BasicValueEnum<'ctx>,
     ) -> Result<(), String> {
+        // B-2026-09-30-19 — see `DropRc::pattern_bind_depth`.
+        self.drop_rc.pattern_bind_depth += 1;
+        let r = self.bind_pattern_values_impl(pattern, scrut);
+        self.drop_rc.pattern_bind_depth -= 1;
+        r
+    }
+
+    fn bind_pattern_values_impl(
+        &mut self,
+        pattern: &Pattern,
+        scrut: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
         match &pattern.kind {
             PatternKind::Binding(name) => {
                 // Skip binding if this is a unit enum variant pattern.
@@ -2971,6 +2983,19 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   at-bindings, literals): return `None`, defer to the existing
     ///   value-source pipeline.
     pub(super) fn bind_pattern_values_via_ptr(
+        &mut self,
+        pattern: &Pattern,
+        scrut_ptr: PointerValue<'ctx>,
+        pointee_ty: StructType<'ctx>,
+    ) -> Result<Option<()>, String> {
+        // B-2026-09-30-19 — see `DropRc::pattern_bind_depth`.
+        self.drop_rc.pattern_bind_depth += 1;
+        let r = self.bind_pattern_values_via_ptr_impl(pattern, scrut_ptr, pointee_ty);
+        self.drop_rc.pattern_bind_depth -= 1;
+        r
+    }
+
+    fn bind_pattern_values_via_ptr_impl(
         &mut self,
         pattern: &Pattern,
         scrut_ptr: PointerValue<'ctx>,

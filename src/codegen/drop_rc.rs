@@ -160,6 +160,21 @@ pub(crate) struct DropRc<'ctx> {
     /// and a sibling block's later `let t = S1 { .. }` ran no body because its
     /// scope-exit drop is guarded on that same NAME-keyed bit.
     pub(crate) user_drop_slots: HashMap<String, PointerValue<'ctx>>,
+    /// B-2026-09-30-19 — for a binding that SHADOWS a live binding of the
+    /// same name (a `match` / `if let` arm's `t` inside the scope of a `let
+    /// t`), the name's `cond_move_drop_flags` bit as it stood at the inner
+    /// binding's registration (`None` when no bit existed yet, i.e. the outer
+    /// binding was still armed). Keyed by the inner binding's slot. The bit is
+    /// keyed by NAME, so the inner binding's move cleared the OUTER binding's
+    /// bit and its scope-exit drop ran no body; the saved value is stored back
+    /// right after the inner binding's own drop is emitted, on every path.
+    pub(crate) shadow_flag_saves: HashMap<PointerValue<'ctx>, Option<PointerValue<'ctx>>>,
+    /// B-2026-09-30-19 — nonzero while a PATTERN binds (`bind_pattern_values`
+    /// and its via-pointer twin). `shadow_flag_saves` applies only to a
+    /// binding registered then: a plain `let q = q` registers the new `q`
+    /// BEFORE the rebind clears the outer `q`'s bit, so saving at its
+    /// registration and restoring at its drop would re-arm a moved value.
+    pub(crate) pattern_bind_depth: u32,
     /// B-2026-09-29-95 — names bound by a `let mut` in the current function.
     /// A reassignment drops the displaced value's payload walk without
     /// consulting a per-path flag, so a name that may be reassigned keeps the

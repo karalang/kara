@@ -9617,6 +9617,100 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-30-19 — the move-out records of each pattern binding in
+    /// `names` that SHADOWS a binding still in scope, taken before the arm or
+    /// `if let` binds. The records are keyed by NAME alone, so a move of the
+    /// arm's own `t` (`Hr.P(t) => { let u = t; .. }`) was left on the name
+    /// when the arm ended, and the enclosing `t` then read as moved and ran no
+    /// `Drop` body. `restore_shadowed_moved_records` puts them back once the
+    /// arm's scope has popped.
+    ///
+    /// A binding that shadows the SCRUTINEE's own root (`match s { S { r, s }
+    /// => .. }`) is left out: the destructure records its move-out on that
+    /// name during the bind, and the record belongs to the scrutinee.
+    pub(super) fn snapshot_shadowed_moved_records(
+        &self,
+        names: &[String],
+        scrutinee: Option<&Expr>,
+    ) -> Vec<(String, MovedNameRecords)> {
+        let mut root = scrutinee;
+        while let Some(ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. }) =
+            root.map(|e| &e.kind)
+        {
+            root = Some(object);
+        }
+        let root = match root.map(|e| &e.kind) {
+            Some(ExprKind::Identifier(n)) => Some(n.as_str()),
+            _ => None,
+        };
+        names
+            .iter()
+            .filter(|n| Some(n.as_str()) != root && self.env.get(n).is_some())
+            .map(|n| {
+                let recs = MovedNameRecords {
+                    user_drop: self.moved_out_user_drop_bindings.contains(n),
+                    container_bodies: self.moved_out_container_bodies_bindings.contains(n),
+                    drop_field: self.moved_out_drop_field_bindings.contains(n),
+                    enum_payload: self.moved_out_enum_payload_bindings.contains(n),
+                    tuple_elem_bodies: keyed(&self.moved_out_tuple_elem_bodies, n),
+                    tuple_elem_payload_bodies: keyed(&self.moved_out_tuple_elem_payload_bodies, n),
+                    enum_payload_slots: keyed(&self.moved_out_enum_payload_slots, n),
+                    struct_field_bodies: keyed(&self.moved_out_struct_field_bodies, n),
+                    nested_field_bodies: keyed(&self.moved_out_nested_field_bodies, n),
+                    struct_field_payload_bodies: keyed(
+                        &self.moved_out_struct_field_payload_bodies,
+                        n,
+                    ),
+                    optres_payload_bodies: keyed(&self.moved_out_optres_payload_bodies, n),
+                    enum_payload_body_slots: self
+                        .moved_out_enum_payload_body_slots
+                        .iter()
+                        .filter(|(m, _, _)| m == n)
+                        .cloned()
+                        .collect(),
+                };
+                (n.clone(), recs)
+            })
+            .collect()
+    }
+
+    /// B-2026-09-30-19 — see `snapshot_shadowed_moved_records`.
+    pub(super) fn restore_shadowed_moved_records(
+        &mut self,
+        saved: Vec<(String, MovedNameRecords)>,
+    ) {
+        for (n, r) in saved {
+            self.rearm_container_bodies_for_name(&n);
+            if r.user_drop {
+                self.moved_out_user_drop_bindings.insert(n.clone());
+            }
+            if r.container_bodies {
+                self.moved_out_container_bodies_bindings.insert(n.clone());
+            }
+            if r.drop_field {
+                self.moved_out_drop_field_bindings.insert(n.clone());
+            }
+            if r.enum_payload {
+                self.moved_out_enum_payload_bindings.insert(n.clone());
+            }
+            self.moved_out_tuple_elem_bodies.extend(r.tuple_elem_bodies);
+            self.moved_out_tuple_elem_payload_bodies
+                .extend(r.tuple_elem_payload_bodies);
+            self.moved_out_enum_payload_slots
+                .extend(r.enum_payload_slots);
+            self.moved_out_struct_field_bodies
+                .extend(r.struct_field_bodies);
+            self.moved_out_nested_field_bodies
+                .extend(r.nested_field_bodies);
+            self.moved_out_struct_field_payload_bodies
+                .extend(r.struct_field_payload_bodies);
+            self.moved_out_optres_payload_bodies
+                .extend(r.optres_payload_bodies);
+            self.moved_out_enum_payload_body_slots
+                .extend(r.enum_payload_body_slots);
+        }
+    }
+
     /// Re-arm a name that just received a FRESH value (a new `let` binding or
     /// an assignment target): stale move-out records from a previous binding
     /// of the same name must not silence the new value's walks.
@@ -13023,4 +13117,25 @@ impl<'a> super::Interpreter<'a> {
 enum FirstHop<'a> {
     Field(&'a str),
     Elem(usize),
+}
+
+/// B-2026-09-30-19 — one name's entries in every name-keyed move-out record,
+/// saved across a pattern binding that shadows it.
+pub(crate) struct MovedNameRecords {
+    user_drop: bool,
+    container_bodies: bool,
+    drop_field: bool,
+    enum_payload: bool,
+    tuple_elem_bodies: Vec<(String, usize)>,
+    tuple_elem_payload_bodies: Vec<(String, usize)>,
+    enum_payload_slots: Vec<(String, usize)>,
+    struct_field_bodies: Vec<(String, String)>,
+    nested_field_bodies: Vec<(String, Vec<String>)>,
+    struct_field_payload_bodies: Vec<(String, Vec<String>)>,
+    optres_payload_bodies: Vec<(String, Vec<String>)>,
+    enum_payload_body_slots: Vec<(String, String, usize)>,
+}
+
+fn keyed<T: Clone>(set: &std::collections::HashSet<(String, T)>, name: &str) -> Vec<(String, T)> {
+    set.iter().filter(|(n, _)| n == name).cloned().collect()
 }

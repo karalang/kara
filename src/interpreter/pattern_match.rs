@@ -154,6 +154,9 @@ impl<'a> super::Interpreter<'a> {
                         std::slice::from_ref(arm),
                     );
                 }
+                // B-2026-09-30-19 — see `snapshot_shadowed_moved_records`.
+                let shadow_saved = self
+                    .snapshot_shadowed_moved_records(&arm.pattern.binding_names(), scrutinee_place);
                 self.env.push_scope();
                 // B-2026-08-29-31 — record which arm ran, for the discard
                 // gates; see `taken_branch_tail`. Written before the body so a
@@ -767,6 +770,7 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
                 self.env.pop_scope();
+                self.restore_shadowed_moved_records(shadow_saved);
                 return result;
             }
         }
