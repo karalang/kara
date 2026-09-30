@@ -13217,6 +13217,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // B-2026-09-29-25 — see `DropRc::user_drop_slots`.
+        let prev_slot = self
+            .drop_rc
+            .user_drop_slots
+            .insert(binding_name.to_string(), binding_ptr);
+        if let (Some(prev), Some(flag)) = (
+            prev_slot,
+            self.drop_rc.cond_move_drop_flags.get(binding_name).copied(),
+        ) {
+            let name_live = self.drop_rc.scope_cleanup_actions.iter().flatten().any(|a| {
+                matches!(a, CleanupAction::UserDrop { binding_name: b, .. } if b == binding_name)
+            });
+            let open_block = self
+                .builder
+                .get_insert_block()
+                .is_some_and(|b| b.get_terminator().is_none());
+            if prev != binding_ptr
+                && !name_live
+                && open_block
+                && !self.drop_rc.cond_store_flag_params.contains(binding_name)
+            {
+                let bool_t = self.context.bool_type();
+                let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
+            }
+        }
         if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::UserDrop {
                 binding_name: binding_name.to_string(),

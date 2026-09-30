@@ -4163,14 +4163,13 @@ fn main() {
 /// `env.args().len()`, so no arm can be folded away.
 #[test]
 fn asan_braced_arm_yielding_boxed_payload_is_owned_once() {
-    // A and B each keep a payload alive to a binding, one body apiece.
-    // Arm C contributes NONE: a discarded match result inside a loop runs
-    // no body on ANY backend — measured identical before and after this
-    // fix and identical across interp / LLJIT / AOT, so it is a
-    // pre-existing backend-AGREED gap, not this row. C earns its place by
-    // pinning the `branch_value_is_owned` guard's MEMORY claim, which is
-    // the half that regressed without it.
-    let expected: Vec<&str> = vec!["dtrue"; 16];
+    // A, B and C each run one body per iteration. Arm C (a discarded match
+    // result) ran NONE on the compiled backends until B-2026-09-29-25: its
+    // arm binding `r` shares a name with A's, and A's move cleared the
+    // name-keyed drop flag that C's binding then reused. The interpreter
+    // prints 24 as well. C also pins the `branch_value_is_owned` guard's
+    // MEMORY claim, which is the half that regressed without it.
+    let expected: Vec<&str> = vec!["dtrue"; 24];
     assert_clean_asan_run_min_allocs(
         r#"
 struct R { id: i64, name: String }
@@ -7819,7 +7818,11 @@ fn main() {
     println(f"other {n.id}");
 }
 "#,
-        &["kept 1", "dR1", "other 7", "dR7"],
+        // `dR5` is the CONTROL arm's unyielded payload. It was missing on the
+        // compiled backends until B-2026-09-29-25 (the second `r` reused the
+        // name-keyed drop flag the first arm's move had cleared); the
+        // interpreter always printed it.
+        &["kept 1", "dR1", "dR5", "other 7", "dR7"],
         "consuming-arm-boxed-payload-handed-on",
     );
 }

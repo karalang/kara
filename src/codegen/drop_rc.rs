@@ -152,6 +152,14 @@ pub(crate) struct DropRc<'ctx> {
     /// keyed by NAME and a pattern binding's walk is not told apart by slot.
     /// Holding the pointer means only the bit that path made is re-armed.
     pub(crate) handoff_flags: HashMap<String, PointerValue<'ctx>>,
+    /// B-2026-09-29-25 — the slot of the binding each name last registered a
+    /// `UserDrop` action against, in the current function. A registration for
+    /// a DIFFERENT slot of a name whose `cond_move_drop_flags` bit exists, with
+    /// no action of that name still live, is a new binding the bit was never
+    /// cleared for: `match h { Hr.P(t) => { let u = t } .. }` cleared `t`'s bit,
+    /// and a sibling block's later `let t = S1 { .. }` ran no body because its
+    /// scope-exit drop is guarded on that same NAME-keyed bit.
+    pub(crate) user_drop_slots: HashMap<String, PointerValue<'ctx>>,
     /// B-2026-09-29-95 — names bound by a `let mut` in the current function.
     /// A reassignment drops the displaced value's payload walk without
     /// consulting a per-path flag, so a name that may be reassigned keeps the
