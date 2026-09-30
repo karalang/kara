@@ -14281,7 +14281,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let obj_ty = if path.is_empty() {
             self.var_types.var_type_names.get(root.as_str())?.clone()
         } else {
-            self.place_chain_type_name(object)?
+            // B-2026-09-29-104 — a level typed by a generic param (`v: T`
+            // inside `g: G[O2]`) names no struct by its declared type; resolve
+            // it under the root's instantiation instead.
+            match self.place_chain_type_name(object) {
+                Some(n) if self.type_decls.struct_field_names.contains_key(n.as_str()) => n,
+                _ => self.projection_walk_types(&root, &path)?.1,
+            }
         };
         let idx = self
             .type_decls

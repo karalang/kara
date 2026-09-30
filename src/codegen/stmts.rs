@@ -17046,6 +17046,24 @@ impl<'ctx> super::Codegen<'ctx> {
         value: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> Result<(), String> {
+        self.finish_owned_struct_destructure_inst(pattern, value, val, None)
+    }
+
+    /// [`Self::finish_owned_struct_destructure`] with the source's
+    /// instantiation supplied by the caller. B-2026-09-29-104: the nested
+    /// recursion's source is a projection (`g.v`), and a `FieldAccess` shares
+    /// its object's span, so the span-keyed lookup answered `g`'s own
+    /// `G[G[String]]` for `g.v`. Under that answer the inner leaf `v` read as
+    /// `G[String]` rather than `String`, and handing it back freed its buffer
+    /// here and again in `g`'s drop. The enclosing destructure already holds
+    /// the field's resolved type, so it passes that instead.
+    fn finish_owned_struct_destructure_inst(
+        &mut self,
+        pattern: &Pattern,
+        value: &Expr,
+        val: BasicValueEnum<'ctx>,
+        inst_override: Option<TypeExpr>,
+    ) -> Result<(), String> {
         let PatternKind::Struct {
             path,
             fields,
@@ -17105,10 +17123,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // trailing `subst_monomorph_type_params` folds the fn-level
         // substitution over whatever that leaves (`Gd[U]` at `U = R`). A
         // concrete struct is untouched: neither step finds a param to bind.
+        let override_subst = inst_override
+            .as_ref()
+            .map(|inst| self.generic_struct_subst_from_inst(&struct_name, inst));
         let field_tes: Vec<TypeExpr> = field_tes
             .iter()
             .map(|te| {
-                let te = self.resolve_generic_field_te(value, &struct_name, te);
+                let te = match &override_subst {
+                    Some(subst) => super::helpers::subst_type_params_in_type_expr(te, subst),
+                    None => self.resolve_generic_field_te(value, &struct_name, te),
+                };
                 self.subst_monomorph_type_params(&te)
             })
             .collect();
@@ -17117,8 +17141,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // `mono_struct_type_from_active_subst`, which resolves only a struct
         // param spelled like the fn's, else the base layout. `sv`'s own type
         // is the layout the value was built with, on every path.
-        let src_inst: Option<TypeExpr> = self
-            .receiver_struct_inst(value)
+        let src_inst: Option<TypeExpr> = inst_override
+            .clone()
+            .or_else(|| self.receiver_struct_inst(value))
             .map(|t| self.subst_monomorph_type_params(&t));
         let src_st = sv.get_type();
         // B-2026-08-04-10 — `let S { a, b } = f()?;`. A `?` is not a `Call`, so
@@ -17640,11 +17665,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .and_then(|f| f.pattern.as_ref())
             {
                 if matches!(&p.kind, PatternKind::Struct { .. }) {
-                    if let TypeKind::Path(tp) = &field_te.kind {
-                        if let Some(nested) = tp.segments.last().cloned() {
-                            self.register_struct_pattern_dispatch(&nested, p);
-                        }
-                    }
+                    self.register_struct_pattern_dispatch(&field_te, p);
                     // B-2026-09-28-63 — a CALLEE-OWNED source (a by-value
                     // param or receiver, entry-copied with its own
                     // `StructDrop`) hands its nested leaves over exactly as
@@ -17670,7 +17691,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.builder
                                 .build_extract_value(sv, idx as u32, "sfield.nested")
                         {
-                            self.finish_owned_struct_destructure(p, &sub_src, sub_val)?;
+                            self.finish_owned_struct_destructure_inst(
+                                p,
+                                &sub_src,
+                                sub_val,
+                                Some(field_te.clone()),
+                            )?;
                         }
                     }
                 }
@@ -20641,24 +20667,62 @@ impl<'ctx> super::Codegen<'ctx> {
 
     fn projection_place_ptr(&self, root: &str, path: &[usize]) -> Option<PointerValue<'ctx>> {
         let mut ptr = self.variables.get(root)?.ptr;
-        let mut sname = self.var_types.var_type_names.get(root)?.clone();
-        for &idx in path {
-            let st = *self.type_decls.struct_types.get(sname.as_str())?;
+        let (layouts, _) = self.projection_walk_types(root, path)?;
+        for (&idx, st) in path.iter().zip(layouts) {
             ptr = self
                 .builder
                 .build_struct_gep(st, ptr, idx as u32, "proj.place")
                 .ok()?;
+        }
+        Some(ptr)
+    }
+
+    /// The struct layout each hop of `root.<path>` GEPs through, and the type
+    /// name the walk ends on. B-2026-09-29-104 — each level is resolved under
+    /// its INSTANTIATION. Keyed by the bare name, a generic level (`g: G[O2]`
+    /// with `v: T`) GEP'd through the base layout and then read its field's
+    /// type as `T`, which names no struct, so a two-step projection (`g.v.v`)
+    /// had no place and the nested destructure's leaf took no transfer: it
+    /// and `g`'s drop both freed the buffer.
+    pub(super) fn projection_walk_types(
+        &self,
+        root: &str,
+        path: &[usize],
+    ) -> Option<(Vec<StructType<'ctx>>, String)> {
+        let mut sname = self.var_types.var_type_names.get(root)?.clone();
+        let mut inst: Option<TypeExpr> = self
+            .type_decls
+            .enum_inst_var_types
+            .get(root)
+            .map(|t| self.subst_monomorph_type_params(t));
+        let mut layouts = Vec::with_capacity(path.len());
+        for &idx in path {
+            let subst = inst
+                .as_ref()
+                .map(|t| self.generic_struct_subst_from_inst(&sname, t))
+                .unwrap_or_default();
+            let st = match self.mono_struct_type_from_subst(sname.as_str(), &subst) {
+                Some(mono) => mono,
+                None => *self.type_decls.struct_types.get(sname.as_str())?,
+            };
+            layouts.push(st);
             let fte = self
                 .type_decls
                 .struct_field_type_exprs
                 .get(sname.as_str())?
                 .get(idx)?;
+            let fte = if subst.is_empty() {
+                fte.clone()
+            } else {
+                super::helpers::subst_type_params_in_type_expr(fte, &subst)
+            };
             let TypeKind::Path(p) = &fte.kind else {
                 return None;
             };
             sname = p.segments.last()?.clone();
+            inst = Some(fte);
         }
-        Some(ptr)
+        Some((layouts, sname))
     }
 
     fn track_destructure_struct_leaf_user_drop(
@@ -21044,21 +21108,40 @@ impl<'ctx> super::Codegen<'ctx> {
     /// stays a tracked narrow leak (the enclosing field frees its heap as one
     /// unit). Tuple / enum sub-patterns inside a struct field are not walked
     /// here (separate follow-ups) — only struct-in-struct nesting.
-    fn register_struct_pattern_dispatch(&mut self, struct_name: &str, pattern: &Pattern) {
+    ///
+    /// `struct_te` is the field's type as the ENCLOSING struct instantiates
+    /// it, and the nested struct's own params are substituted through its
+    /// generic args before any leaf is registered. B-2026-09-29-104: keyed by
+    /// the nested struct's bare name, `let G { v: G { v, n }, n: m } = g` over
+    /// `g: G[G[String]]` registered the leaf `v` as the declared `T`, and
+    /// `v.len()` failed with "no handler for method 'len'".
+    fn register_struct_pattern_dispatch(&mut self, struct_te: &TypeExpr, pattern: &Pattern) {
         let PatternKind::Struct { fields, .. } = &pattern.kind else {
             return;
         };
-        let Some(field_names) = self.type_decls.struct_field_names.get(struct_name).cloned() else {
+        let TypeKind::Path(tp) = &struct_te.kind else {
+            return;
+        };
+        let Some(struct_name) = tp.segments.last().cloned() else {
+            return;
+        };
+        let Some(field_names) = self
+            .type_decls
+            .struct_field_names
+            .get(&struct_name)
+            .cloned()
+        else {
             return;
         };
         let Some(field_tes) = self
             .type_decls
             .struct_field_type_exprs
-            .get(struct_name)
+            .get(&struct_name)
             .cloned()
         else {
             return;
         };
+        let subst = self.generic_struct_subst_from_inst(&struct_name, struct_te);
         for f in fields {
             let Some(idx) = field_names.iter().position(|n| n == &f.name) else {
                 continue;
@@ -21066,6 +21149,12 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(field_te) = field_tes.get(idx).cloned() else {
                 continue;
             };
+            let field_te = if subst.is_empty() {
+                field_te
+            } else {
+                super::helpers::subst_type_params_in_type_expr(&field_te, &subst)
+            };
+            let field_te = self.subst_monomorph_type_params(&field_te);
             match &f.pattern {
                 // Shorthand leaf (`Inner { data }`): the field name is the var.
                 None => self.register_var_from_type_expr(&f.name, &field_te),
@@ -21077,11 +21166,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     // Deeper struct nesting — recurse.
                     PatternKind::Struct { .. } => {
-                        if let TypeKind::Path(tp) = &field_te.kind {
-                            if let Some(nested) = tp.segments.last().cloned() {
-                                self.register_struct_pattern_dispatch(&nested, p);
-                            }
-                        }
+                        self.register_struct_pattern_dispatch(&field_te, p);
                     }
                     // Wildcard / other — no dispatchable binding.
                     _ => {}

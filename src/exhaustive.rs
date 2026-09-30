@@ -753,10 +753,18 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
             {
                 if let Some(info) = env.enums.get(type_name) {
                     if let Some((_, vinfo)) = info.variants.iter().find(|(v, _)| v == &name) {
-                        let field_decls: Vec<(String, Type)> = match vinfo {
+                        let mut field_decls: Vec<(String, Type)> = match vinfo {
                             VariantTypeInfo::Struct(decls) => decls.clone(),
                             _ => vec![],
                         };
+                        // Instantiated field types, as for a plain struct
+                        // (`struct_field_decls`, B-2026-09-29-104).
+                        let tys = variant_payload_types(scrut_type, &name, env);
+                        if tys.len() == field_decls.len() {
+                            for ((_, t), inst) in field_decls.iter_mut().zip(tys) {
+                                *t = inst;
+                            }
+                        }
                         let args = lower_struct_fields(&field_decls, fields, env);
                         return Pat::Ctor {
                             ctor: PatCtor::Variant(name),
@@ -765,16 +773,7 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
                     }
                 }
             }
-            let field_decls: Vec<(String, Type)> = env
-                .structs
-                .get(&name)
-                .map(|info| {
-                    info.fields
-                        .iter()
-                        .map(|(n, t, _)| (n.clone(), t.clone()))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let field_decls = struct_field_decls(&name, scrut_type, env);
             let args = lower_struct_fields(&field_decls, fields, env);
             Pat::Ctor {
                 ctor: PatCtor::Struct(name),
@@ -918,6 +917,36 @@ fn lower_struct_fields(
                 None => Pat::Wildcard,
             },
         )
+        .collect()
+}
+
+/// A struct's `(field, type)` list with its generic params substituted by
+/// `parent_ty`'s instantiated args, as `variant_payload_types` does for an
+/// enum payload. B-2026-09-29-104: the declared types left a nested pattern
+/// over `G[G[String]]`'s `v` judged against an open `TypeParam("T")` column,
+/// so `let G { v: G { v, n }, n: m } = g` read as refutable.
+fn struct_field_decls(name: &str, parent_ty: &Type, env: &TypeEnv) -> Vec<(String, Type)> {
+    let Some(info) = env.structs.get(name) else {
+        return vec![];
+    };
+    let raw = info.fields.iter().map(|(n, t, _)| (n.clone(), t.clone()));
+    let args = match peel_borrow(parent_ty) {
+        Type::Named {
+            name: ty_name,
+            args,
+        } if ty_name == name => args,
+        _ => return raw.collect(),
+    };
+    if info.generic_params.is_empty() || args.is_empty() {
+        return raw.collect();
+    }
+    let subs: std::collections::HashMap<String, Type> = info
+        .generic_params
+        .iter()
+        .cloned()
+        .zip(args.iter().cloned())
+        .collect();
+    raw.map(|(n, t)| (n, subst_type_params(&t, &subs)))
         .collect()
 }
 
@@ -1402,11 +1431,10 @@ fn ctor_field_types(ctor: &PatCtor, parent_ty: &Type, env: &TypeEnv) -> Vec<Type
             Type::Tuple(elems) => elems.clone(),
             _ => vec![],
         },
-        PatCtor::Struct(name) => env
-            .structs
-            .get(name)
-            .map(|info| info.fields.iter().map(|(_, t, _)| t.clone()).collect())
-            .unwrap_or_default(),
+        PatCtor::Struct(name) => struct_field_decls(name, parent_ty, env)
+            .into_iter()
+            .map(|(_, t)| t)
+            .collect(),
         PatCtor::Array(n) => {
             let element = array_or_collection_element(parent_ty);
             vec![element; *n]
