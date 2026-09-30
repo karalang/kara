@@ -7910,6 +7910,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // flag cannot change what this action does; `true` is the
                 // pre-existing retraction behaviour.
                 interior_arm_owned: true,
+                inner_drop_flag: None,
                 enum_slot: slot,
                 enum_ty: slot_ty,
                 inner_drop_fn: None,
@@ -20410,6 +20411,11 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        // B-2026-09-30-48 — per path when the arm is nested in a scope the
+        // scrutinee outlives.
+        if self.clear_boxed_interior_on_this_path(slot) {
+            return;
+        }
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
             for action in frame.iter_mut() {
                 if let super::state::CleanupAction::BoxedEnumDrop {

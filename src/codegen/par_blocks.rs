@@ -749,6 +749,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // re-deriving it here could disagree with the site that knew
                 // the payload type.
                 interior_arm_owned,
+                inner_drop_flag: None,
                 payload_field_index,
                 deeper_tags: deeper_tags.clone(),
             },

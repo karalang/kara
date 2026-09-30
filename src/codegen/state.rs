@@ -1218,6 +1218,12 @@ pub(crate) enum CleanupAction<'ctx> {
         /// payload type this box was installed for, and the retraction site
         /// has the binding name but not the instantiated payload type.
         interior_arm_owned: bool,
+        /// B-2026-09-30-48 — a per-path bit guarding `inner_drop_fn`, made
+        /// when a consuming arm nested in a scope this binding outlives takes
+        /// the interior: the arm's own edge clears it, so a path that never
+        /// ran the arm still frees the interior with the box. `None` keeps
+        /// the unconditional call.
+        inner_drop_flag: Option<PointerValue<'ctx>>,
         /// B-2026-09-15-18 — the enum-struct FIELD INDEX holding this box's
         /// pointer word: `1 + field_word_offsets[variant][fi].0`, the `1`
         /// being the enum's own tag at field 0.

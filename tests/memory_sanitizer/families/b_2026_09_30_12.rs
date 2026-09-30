@@ -10,9 +10,9 @@ use super::*;
 /// arm that takes every field of its variant now clears the local's per-path
 /// bit instead, like B-2026-09-29-116's `let` move.
 ///
-/// The `Option` cell of the codegen twin (`a7`) is left out here: it prints
-/// the right output but loses 2 B per call at `c = false`, on the tree before
-/// this fix as on this one. That leak is B-2026-09-30-48.
+/// The `Option` cell of the codegen twin (`a7`) is left out here: it leaked
+/// 2 B per call at `c = false` before and after this row's fix. That leak was
+/// B-2026-09-30-48, and `families/b_2026_09_30_48.rs` covers the cell.
 #[test]
 fn asan_payload_binding_match_in_untaken_branch_leaves_the_local_its_body() {
     assert_clean_asan_run(

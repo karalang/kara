@@ -3461,6 +3461,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 inner_drop_fn,
                 some_tag,
                 interior_arm_owned,
+                inner_drop_flag: None,
                 payload_field_index,
                 deeper_tags,
             });
@@ -17397,12 +17398,15 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn boxed_enum_drop_owns_interior(&self, name: &str) -> bool {
         self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|a| {
-                matches!(a, CleanupAction::BoxedEnumDrop { name: n, inner_drop_fn: Some(_), .. } if n == name)
+                matches!(a, CleanupAction::BoxedEnumDrop { name: n, inner_drop_fn: Some(_), inner_drop_flag: None, .. } if n == name)
             })
         })
     }
 
     pub(super) fn clear_boxed_enum_inner_drop(&mut self, name: &str, arm_only_borrows: bool) {
+        if self.clear_boxed_enum_inner_drop_on_this_path(name, arm_only_borrows) {
+            return;
+        }
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             for action in frame.iter_mut() {
                 if let CleanupAction::BoxedEnumDrop {
@@ -17418,6 +17422,121 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+    }
+
+    /// B-2026-09-30-48 — the per-path form of the retraction above, for a
+    /// `let` binding whose box action lives in an ENCLOSING frame only (the
+    /// arm is nested in a scope the binding outlives, e.g. inside an `if`):
+    /// clear a bit on this path instead of the interior drop on every path,
+    /// so `let t: Option[S] = Some(..); if c { match t { Some(s) => { let k
+    /// = s; .. } .. } }` still frees the interior at `c = false`. A binding
+    /// that can be reassigned (`let mut`) or is a parameter keeps the
+    /// all-paths retraction, since nothing would re-arm the bit.
+    fn clear_boxed_enum_inner_drop_on_this_path(
+        &mut self,
+        name: &str,
+        arm_only_borrows: bool,
+    ) -> bool {
+        let slot = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .find_map(|a| match a {
+                CleanupAction::BoxedEnumDrop {
+                    name: nm,
+                    enum_slot,
+                    interior_arm_owned,
+                    ..
+                } if nm == name && (*interior_arm_owned || !arm_only_borrows) => Some(*enum_slot),
+                _ => None,
+            });
+        slot.is_some_and(|s| self.clear_boxed_interior_on_this_path(s))
+    }
+
+    /// [`Self::clear_boxed_enum_inner_drop_on_this_path`] keyed by the box
+    /// action's slot, for the sites that find it that way.
+    pub(super) fn clear_boxed_interior_on_this_path(&mut self, slot: PointerValue<'ctx>) -> bool {
+        let is_it = |a: &CleanupAction<'ctx>| matches!(a, CleanupAction::BoxedEnumDrop { enum_slot, .. } if *enum_slot == slot);
+        let frames = &self.drop_rc.scope_cleanup_actions;
+        let mut hits = frames.iter().flatten().filter(|a| is_it(a));
+        let Some(CleanupAction::BoxedEnumDrop {
+            name,
+            inner_drop_fn,
+            deeper_tags,
+            inner_drop_flag,
+            ..
+        }) = hits.next()
+        else {
+            return false;
+        };
+        if hits.next().is_some() || inner_drop_fn.is_none() || !deeper_tags.is_empty() {
+            return false;
+        }
+        let existing = *inner_drop_flag;
+        let name = name.clone();
+        if self.drop_rc.mut_let_names.contains(&name)
+            || self.fn_ctx.current_fn_param_names.contains(&name)
+            || self.variables.get(&name).map(|v| v.ptr) != Some(slot)
+        {
+            return false;
+        }
+        let n = frames.len();
+        if n < 2 || frames[n - 1].iter().any(is_it) || !frames[..n - 1].iter().flatten().any(is_it)
+        {
+            return false;
+        }
+        if self
+            .builder
+            .get_insert_block()
+            .is_none_or(|b| b.get_terminator().is_some())
+        {
+            return false;
+        }
+        let bool_t = self.context.bool_type();
+        let flag = match existing {
+            Some(f) => f,
+            None => {
+                let Some(fn_val) = self.current_fn else {
+                    return false;
+                };
+                let Some(entry) = fn_val.get_first_basic_block() else {
+                    return false;
+                };
+                let b = self.context.create_builder();
+                match entry.get_terminator() {
+                    Some(term) => b.position_before(&term),
+                    None => b.position_at_end(entry),
+                }
+                let Ok(f) = b.build_alloca(bool_t, &format!("boxflag.{name}")) else {
+                    return false;
+                };
+                if b.build_store(f, bool_t.const_int(1, false)).is_err() {
+                    return false;
+                }
+                f
+            }
+        };
+        if self
+            .builder
+            .build_store(flag, bool_t.const_int(0, false))
+            .is_err()
+        {
+            return false;
+        }
+        for action in self.drop_rc.scope_cleanup_actions.iter_mut().flatten() {
+            if let CleanupAction::BoxedEnumDrop {
+                enum_slot,
+                inner_drop_flag,
+                ..
+            } = action
+            {
+                if *enum_slot == slot {
+                    *inner_drop_flag = Some(flag);
+                }
+            }
+        }
+        true
     }
 
     /// Retract the `__karac_dropbodies_*` field-bodies action for `name`,
@@ -20735,6 +20854,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the time cleanup is emitted the retraction has already
                 // decided whether `inner_drop_fn` survives.
                 interior_arm_owned: _,
+                inner_drop_flag,
                 payload_field_index,
                 deeper_tags,
             } => {
@@ -20820,9 +20940,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // The box points directly at `T`; run its field cleanup
                     // before releasing the box (no-op when `T` is all-inline).
                     if let Some(drop_fn) = inner_drop_fn {
+                        // B-2026-09-30-48 — only on the paths no nested arm
+                        // took the interior on.
+                        let guard = inner_drop_flag.and_then(|f| self.open_guard_on_flag(f));
                         self.builder
                             .build_call(*drop_fn, &[box_ptr.into()], "")
                             .unwrap();
+                        self.close_cond_move_guard(guard);
                     }
                     self.builder
                         .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
