@@ -262,6 +262,18 @@ pub(crate) fn optres_arm_moved_tuple_paths(
     pruned
 }
 
+/// B-2026-09-20-19 — how many times `name` appears in `body` as a bare VALUE
+/// rather than as the base of a read (`name.f`, `name.0`, `name.m()`).
+/// A capture counts as unbounded: it takes the binding however it is spelled.
+pub(crate) fn bare_value_mentions(name: &str, body: &Expr) -> usize {
+    let mut t = Tally::default();
+    walk_expr(Target::Bare(name), body, &mut t);
+    if t.captured {
+        return usize::MAX;
+    }
+    t.mentions - t.read_through
+}
+
 /// B-2026-09-20-17 — can a place taken off a REBIND of an arm binding (`let u
 /// = t; return u.0`) be masked out of the payload walk for every path out of
 /// the arm, as far as the arm's EXITS go?

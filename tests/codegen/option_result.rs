@@ -3494,11 +3494,9 @@ fn e2e_optres_arg_payload_projection_runs_each_part_body_once() {
                 // returns one. Repaired by the same narrowing -- pre-fix AOT was
                 // `n:7 dH7 dH5 dH6 dH7 got:6 dH6 end`, doubling BOTH inner bodies.
                 //
-                // THE INTERPRETER IS STILL WRONG HERE and is pinned as such
-                // (B-2026-09-20-19): it prints an extra `dH6` for the part moved into
-                // the local. The two expectations differ on purpose and the AOT one is
-                // the correct sequence, which is the reverse of the usual reading in
-                // this test.
+                // The interpreter printed an extra `dH6` for the part moved into the
+                // local until B-2026-09-20-19 taught its caller mask that a local of
+                // the arm's own, handed out as the arm's last act, yields that part.
                 "boxed-projection-consumed-into-frame-nested",
                 format!(
                     "{R}struct H {{ id: i64, s: String }}\n\
@@ -3507,7 +3505,7 @@ fn e2e_optres_arg_payload_projection_runs_each_part_body_once() {
                      fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, (H {{ id: 6, s: \"bbbbbbbbbbbb\" }}, H {{ id: 7, s: \"cccccccccccc\" }})))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
                 ),
                 "n:7\ndH7\ndH5\ngot:6\ndH6\nend\n",
-                "n:7\ndH7\ndH5\ndH6\ngot:6\ndH6\nend\n",
+                "n:7\ndH7\ndH5\ngot:6\ndH6\nend\n",
             ),
             (
                 // CONTROL for B-2026-09-19-34, pinning the boundary the narrowing must

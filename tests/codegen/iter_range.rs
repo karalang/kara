@@ -236,11 +236,11 @@ fn e2e_optres_payload_part_consumed_in_frame_drops_at_its_own_live_range_end() {
                      fn main() {{ let g = eat(Some((R {{ id: 5 }}, 9i64))); println(f\"got:{{g.id}}\"); println(\"end\") }}\n"
                 ),
                 "mid\ngot:5\ndR5\nend\n",
-                // B-2026-09-13-5's ALIAS spelling: the escape predicate reads
-                // `return <local>`, not `return t.0`, so the interpreter still
-                // doubles here. Pinned, not repaired -- this row's channel must
-                // decline the shape, and that it does is what this cell proves.
-                "mid\ndR5\ngot:5\ndR5\nend\n",
+                // B-2026-09-13-5's ALIAS spelling, which this cell pinned as an
+                // interpreter double while the escape predicate read only
+                // `return t.0`. B-2026-09-20-19 taught it `let x = t.0; ..
+                // return x`, so both halves now read the same.
+                "mid\ngot:5\ndR5\nend\n",
             ),
             (
                 "control: the name-keyed mask does not leak into a deeper frame",

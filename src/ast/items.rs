@@ -3335,6 +3335,77 @@ pub fn expr_rebind_aliases(body: &Expr, seed: &str) -> Vec<String> {
     close_rebind_aliases(&w, seed)
 }
 
+/// B-2026-09-20-19 — the payload part an arm hands out THROUGH A LOCAL of its
+/// own frame: `Some(t) => { let x = t.0; println("mid"); return x; }` yields
+/// `t.0` exactly as `return t.0` does, one `let` later.
+///
+/// `roots` are the arm binding and its whole rebinds. Answers only the
+/// straight-line shape, where the local's hand-out is the arm's last act and
+/// no path can leave without it: the arm's one exit is that final `return`
+/// (or its tail, when `tail` says the arm's value is the function's), `x` is
+/// an immutable top-level `let` of a projection off a root, bound once in the
+/// arm, and mentioned nowhere else except as the base of a read. Anything else
+/// answers nothing and keeps its pre-existing behaviour.
+fn arm_local_part_yield(body: &Expr, roots: &[String], tail: bool) -> Vec<ParamPath> {
+    let ExprKind::Block(b) = &body.kind else {
+        return Vec::new();
+    };
+    let returned = |e: &Expr| match &e.kind {
+        ExprKind::Return(Some(inner)) => match &inner.kind {
+            ExprKind::Identifier(x) => Some(x.clone()),
+            _ => None,
+        },
+        ExprKind::Identifier(x) if tail => Some(x.clone()),
+        _ => None,
+    };
+    let x = match (b.final_expr.as_deref(), b.stmts.last()) {
+        (Some(fe), _) => returned(fe),
+        (None, Some(st)) => match &st.kind {
+            StmtKind::Expr(e) if matches!(e.kind, ExprKind::Return(_)) => returned(e),
+            _ => None,
+        },
+        (None, None) => None,
+    };
+    let Some(x) = x else {
+        return Vec::new();
+    };
+    if !crate::binding_use::optres_arm_exits_only_at_its_end(body) {
+        return Vec::new();
+    }
+    let path = b.stmts.iter().find_map(|st| match &st.kind {
+        StmtKind::Let {
+            is_mut: false,
+            pattern,
+            value,
+            ..
+        } if matches!(&pattern.kind, PatternKind::Binding(n) if *n == x) => roots
+            .iter()
+            .find_map(|r| optres_part_denote(value, r))
+            .filter(|p| !p.is_empty()),
+        _ => None,
+    });
+    let Some(path) = path else {
+        return Vec::new();
+    };
+    let mut w = RebindWalk {
+        rebinds: Vec::new(),
+        mut_rebinds: Vec::new(),
+        wraps: Vec::new(),
+        ctor_wraps: Vec::new(),
+        coll_wraps: Vec::new(),
+        proj_rebinds: Vec::new(),
+        call_rebinds: Vec::new(),
+        destructured: Vec::new(),
+        bound: std::collections::HashMap::new(),
+    };
+    w.expr(body);
+    if w.bound.get(x.as_str()) != Some(&1) || crate::binding_use::bare_value_mentions(&x, body) != 1
+    {
+        return Vec::new();
+    }
+    vec![path]
+}
+
 /// B-2026-09-28-4 — is `ty` spelled as an `Option[..]` / `Result[..]`
 /// envelope? A generic parameter answers `false`, like
 /// [`type_expr_is_owned_scalar`].
@@ -8149,6 +8220,11 @@ fn escaping_param_payload_part_paths_impl(
                         let mut roots = expr_rebind_aliases(&a.body, bind);
                         if !crate::binding_use::optres_arm_exits_only_at_its_end(&a.body) {
                             roots.truncate(1);
+                        }
+                        for path in arm_local_part_yield(&a.body, &roots, tail) {
+                            if !out.contains(&path) {
+                                out.push(path);
+                            }
                         }
                         for root in roots {
                             returns_in(&a.body, &root, out, whole, true, tail, any_path);
