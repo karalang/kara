@@ -12572,17 +12572,16 @@ impl<'a> super::Interpreter<'a> {
                                 // memory-only fix in place and pinned the parity in
                                 // `asan_discarded_tuple_temp_frees_its_interior`.
                                 //
-                                // B-2026-09-16-37 — ...but NOT for a generic
-                                // callee. Gating on the value alone fires here
-                                // where codegen structurally cannot: it resolves
-                                // the shape from the DECLARED element types and
-                                // an erased `T` yields no walker, so
-                                // `fn fgen[T](t: T) -> (T, i64)` discarded
-                                // printed `dR` under `--interp` against nothing
-                                // compiled. See `user_fn_is_generic`.
-                                if !self.user_fn_is_generic(fn_name) {
-                                    self.run_discarded_value_user_drops(discarded);
-                                }
+                                // B-2026-09-27-71 — generic callees included.
+                                // B-2026-09-16-37 declined them here because
+                                // codegen resolved the shape from the DECLARED
+                                // element types, where `T` is erased, and could
+                                // register no walker; it now binds `T` for the
+                                // call (`call_return_te_bound`), so
+                                // `g(mk(3));` over `fn g[T](t: T) -> (T, i64)`
+                                // runs `dR3` on every backend instead of on
+                                // none.
+                                self.run_discarded_value_user_drops(discarded);
                             } else if let Some(tn) = self.user_fn_return_type_name(fn_name) {
                                 // B-2026-09-06-1 — a GENERIC callee's declared
                                 // return is its own parameter; the value says

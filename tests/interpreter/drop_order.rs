@@ -1433,19 +1433,17 @@ fn test_discarded_tuple_return_runs_its_element_drop_body() {
         "dR21\nok\n"
     );
 
-    // 3b -- B-2026-09-16-37, A REGRESSION THIS FIX INTRODUCED AND A FOLLOW-UP
-    //       REMOVED. A GENERIC callee is declined, and that is PARITY rather
-    //       than conservatism: codegen resolves this shape from the DECLARED
-    //       element types, so an erased `T` yields no walker, while the
-    //       interpreter reads the runtime value and knows it is an `R`. Gating
-    //       on the value alone printed `dR31` here against nothing compiled.
-    //       The erased-generic tuple discard stays an AGREED gap.
+    // 3b -- B-2026-09-16-37 declined a GENERIC callee here for parity:
+    //       codegen resolved this shape from the DECLARED element types, so an
+    //       erased `T` yielded no walker. B-2026-09-27-71 binds `T` for the
+    //       call on the codegen side, so the gate is gone and the element runs
+    //       its body once on both backends.
     assert_eq!(
         run(&format!(
             "{prelude}fn fgen[T](t: T) -> (T, i64) {{ return (t, 5); }}\n\
              fn main() {{ fgen(mk(31)); println(\"ok\"); }}\n"
         )),
-        "ok\n"
+        "dR31\nok\n"
     );
 
     // 3c -- B-2026-09-16-37, the other half. A METHOD callee is declined for

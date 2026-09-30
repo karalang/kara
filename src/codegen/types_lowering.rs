@@ -1346,8 +1346,51 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => return None,
         };
-        let ret = self.fn_sig.fn_return_type_exprs.get(key.as_str())?;
-        super::helpers::array_inner_type_expr(ret)
+        let ret = self.call_return_te_bound(&key, &expr.span)?;
+        super::helpers::array_inner_type_expr(&ret)
+    }
+
+    /// B-2026-09-30-23 — a call's DECLARED return type with the callee's own
+    /// type parameters bound for THIS call.
+    ///
+    /// A GENERIC callee is never `declare_function`'d (only its monomorphs
+    /// are), so it has no `fn_return_type_exprs` entry at all, and every
+    /// let-site resolver that asked only that table recorded nothing for an
+    /// unannotated `let e = arrg(mk(1), mk(2))` over
+    /// `fn arrg[T](a: T, b: T) -> Array[T, 2]` (or the `-> (T, T)` spelling).
+    /// The binding then owned nothing codegen could walk: no element body on
+    /// any compiled surface, and for the array every element's heap leaked,
+    /// where the annotated spelling and `--interp` were right. The callee's
+    /// AST return is read instead and `T` bound through the typechecker's
+    /// per-call solution, the table `compile_generic_call` monomorphises by
+    /// (the propagated form, so a call inside a monomorph that hands its own
+    /// `T` on binds too).
+    ///
+    /// FAIL-CLOSED: a return that still names one of the callee's type
+    /// parameters after binding answers `None`, so an element this cannot
+    /// name keeps the old silence rather than resolving `T` to a wrong layout.
+    /// A concrete callee keeps its table entry and is returned unchanged.
+    pub(super) fn call_return_te_bound(
+        &self,
+        key: &str,
+        call_span: &crate::token::Span,
+    ) -> Option<TypeExpr> {
+        if let Some(ret) = self.fn_sig.fn_return_type_exprs.get(key) {
+            return Some(ret.clone());
+        }
+        let program = self.program_snapshot.as_deref()?;
+        let f = super::declarations::find_function_ast(program, key)?;
+        let ret = f.return_type.as_ref()?;
+        let bound = self.callee_param_te_for_call_propagated(ret, call_span);
+        let params: Vec<String> = f
+            .generic_params
+            .iter()
+            .flat_map(|g| g.params.iter().map(|p| p.name.clone()))
+            .collect();
+        if Self::type_expr_mentions_param(&bound, &params) {
+            return None;
+        }
+        Some(bound)
     }
 
     /// Does this name identify a type codegen has a layout for?

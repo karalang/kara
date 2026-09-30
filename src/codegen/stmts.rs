@@ -22111,14 +22111,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // enums. A method-call RHS (`let p = obj.split()`) is the deferred narrow
         // tail (methods aren't keyed in `fn_return_type_exprs`); it leaks but
         // never double-frees, matching the boxed-enum spike's method-call defer.
+        //
+        // B-2026-09-30-23 — a GENERIC callee (`fn tupg[T](a: T, b: T) -> (T, T)`)
+        // has no `fn_return_type_exprs` entry, so `let t = tupg(mk(3), mk(4))`
+        // got no bodies walker and ran no element body compiled, where
+        // `--interp` ran each once. `call_return_te_bound` reads the callee's
+        // AST return with `T` bound for this call, and declines when it
+        // cannot bind, so an unbindable element keeps the old silence.
         if let ExprKind::Call { callee, .. } = &value.kind {
             if let ExprKind::Identifier(name) = &callee.kind {
                 if let Some(TypeExpr {
                     kind: TypeKind::Tuple(elems),
                     ..
-                }) = self.fn_sig.fn_return_type_exprs.get(name)
+                }) = self.call_return_te_bound(name, &value.span)
                 {
-                    return Some(elems.clone());
+                    return Some(elems);
                 }
             }
         }
@@ -27856,7 +27863,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 return;
             };
             let declared = match &callee.kind {
-                ExprKind::Identifier(name) => self.fn_sig.fn_return_type_exprs.get(name).cloned(),
+                // B-2026-09-27-71 — bound for this call, so a GENERIC callee
+                // (`ga(mk(5));` over `fn ga[T](x: T) -> Array[T, 1]`) is
+                // admitted too; it has no `fn_return_type_exprs` entry and
+                // declined here, running no body where `--interp` now does.
+                ExprKind::Identifier(name) => self.call_return_te_bound(name, &tail.span),
                 // B-2026-09-30-18 — an associated function, as for the tuple
                 // twin above.
                 ExprKind::Path { .. } => self

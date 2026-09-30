@@ -1678,9 +1678,10 @@ fn e2e_discarded_tuple_return_runs_its_element_drop_body() {
     };
     assert_eq!(out, "dR21\nok\n");
 
-    // 3b — B-2026-09-16-37: a GENERIC callee is declined, because codegen
-    //      resolves this shape from the DECLARED element types and an
-    //      erased `T` yields no walker. Agreed gap, both backends silent.
+    // 3b — B-2026-09-16-37 declined a GENERIC callee here, because codegen
+    //      resolved this shape from the DECLARED element types and an erased
+    //      `T` yielded no walker. B-2026-09-27-71 binds `T` for the call, so
+    //      the element runs its body once on both backends.
     let Some(out) = run_program(
         "struct R { id: i64, name: String }\n\
              impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
@@ -1691,7 +1692,7 @@ fn e2e_discarded_tuple_return_runs_its_element_drop_body() {
     ) else {
         return;
     };
-    assert_eq!(out, "ok\n");
+    assert_eq!(out, "dR31\nok\n");
 
     // 3c — B-2026-09-16-37: THE CELL THAT CATCHES THE DOUBLE. A method
     //      callee is declined; the receiver's own walk owns the element.
