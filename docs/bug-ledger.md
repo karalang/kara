@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 597 |
-| run-vs-build | 555 |
+| run-vs-build | 557 |
 | leak | 501 |
 | double-free | 376 |
 | missing-feature | 215 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2464 |
-| interp | 736 |
+| codegen | 2465 |
+| interp | 737 |
 | typecheck | 319 |
 | other | 112 |
 | ownership | 79 |
@@ -131,8 +131,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-09-20-18 | 2026-09-20 | codegen+interp | medium | TWO GUARDED `Some` ARMS OVER ONE SCRUTINEE, EACH TAKING A DIFFERENT PAYLOAD ELEMENT, ARE WRONG ON EVERY SURFACE AND THE PAYLOAD'S WIDTH PICKS THE DIRECTION -- at the INLINE width all four lose the untaken sibling's body (`got:5 dR5 end` against a due `dR6 got:5 dR5 end`, an AGREED fault); at the BOXED width the interpreter loses it while the three compiled surfaces DOUBLE the taken one, so neither backend is an oracle; every consumer of an arm's take rewrites state that is not edge-sensitive, so the last arm to write decides, and B-2026-09-19-34's narrowing declines here deliberately because masking one arm's element would LOSE the other's | — |
-| B-2026-09-20-20 | 2026-09-20 | codegen | medium | A CALL RESULT THAT RETURNS THE WHOLE `Option` DOUBLES THE MOVED-OUT FIELD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `take(mkq())` over `fn mkq() -> Option[Q]` and `fn take(o: Option[Q]) { match o { Some(t) => { let x = t.r; .. } .. } }` prints `r:50s:60 dR5 dR6 dR5` on jit / `karac build` / `-O0` / `-O2` against the interpreter's correct `r:50s:60 dR5 dR6`, where the same callee at NAMED-LOCAL and FRESH-TEMP provenance is correct and the TUPLE payload's twin `ttake(mkt())` is correct too, so the trigger is the CALL-RESULT provenance of a named-struct payload and not the move-out | — |
-| B-2026-09-20-22 | 2026-09-20 | codegen | medium | A `shared`-FIELD STRUCT WITH AN `impl Drop` RUNS ITS BODY TWICE ON THE VALUE AN ASSIGNMENT MOVES IN, when the RHS is a match-arm binding -- `out = w` over `struct Wsh { h: Sh }` prints `dWsh-OUT dWsh-PAY dWsh-PAY` on all three compiled surfaces against `--interp`'s correct two, so the moved-in value is destroyed at the assignment and again at the destination's scope exit; the plain-`String` twin of the same statement and the same statement with an inline-literal RHS are correct on every surface, and memory is clean (37 allocs / 37 frees, 0 valgrind errors) because the body only prints -- a body that released a handle would release it twice, and no sanitizer leg in the tree can see it | — |
 | B-2026-09-20-23 | 2026-09-20 | codegen | medium | A NAMED-LOCAL `Option`/`Result` ARGUMENT'S PAYLOAD `Drop` BODIES DRAIN AT THE CALLER'S SCOPE EXIT RATHER THAN AT THE CALLEE'S ARM -- `let a = [W1 { v: 40 }]; take(Some(a))` prints `r:40 end dW1_40` on all three compiled surfaces against the interpreter's due `dW1_40 r:40 end`, while the FRESH-TEMP spelling of the identical call is correct on all four since B-2026-09-20-9, so PROVENANCE is the axis; the count is right and valgrind is clean at -O0, so only a due-sequence oracle sees it, and the open question is which provenance is wrong -- the site's own model says the caller RETAINS these bodies, but the two provenances now drain at different points for the same value | — |
 | B-2026-09-20-25 | 2026-09-20 | codegen | medium | A STRUCT FIELD READ THROUGH AN ARRAY OR `Vec` INDEX INSIDE A TUPLE ELEMENT NEVER LOWERS -- `a.0[0].n` over `(Array[P, 1], i64)` passes `karac check`, runs correctly under `--interp`, and fails `karac build` with `cannot resolve field 'n' on this receiver (its type was not recorded for codegen)`; naming the field instead of indexing the tuple builds, a tuple holding a plain struct builds, and a bare array of the same struct builds, so it is the TUPLE-INDEX-then-CONTAINER-INDEX composition alone; B-2026-08-28-34 fixed the same pair in the OTHER ORDER (`v[0].0.id`) and every other member of that family is closed | — |
 | B-2026-09-20-26 | 2026-09-20 | codegen+interp | medium | REBINDING A USER ENUM'S CONTAINER PAYLOAD INTO A LOCAL INSIDE THE ARM RUNS EVERY ELEMENT'S `Drop` BODY TWICE, AND MOVING THE SAME BINDING INTO A CALL DOES NOT -- `match e { EArr.A(v) => { let u = v; .. } }` over `enum EArr { A(Array[R, 2]), B }` prints `dR1 dR2 dR1 dR2` on ALL FOUR SURFACES at a let-bound scrutinee, where `eat(v)` over the identical binding is correct everywhere; the `Vec` spelling doubles on the INTERPRETER only, and at a BY-VALUE PARAM scrutinee the same shapes double on the COMPILED side instead, so the wrong backend is selected by the scrutinee position rather than the payload; a plain-struct payload is correct at every position, a second rebind still fires exactly twice, and memory is clean under valgrind at -O0 with the doubled body reading its `String` correctly both times, so it is the bodies channel alone and neither ASAN ratchet can see it | — |
@@ -465,6 +463,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-64 | 2026-09-30 | interp+codegen | medium | A FIELD READ THROUGH AN INDEX OF AN `Array` HANDED BACK BY AN ASSOCIATED FUNCTION OR A CLOSURE FAILS TO COMPILE -- `let r = Z.pa([w]); r[0].v` and `let r = f([w]); r[0].v` (with `f = |x: Array[W1, 1]| x`) both stop codegen with `cannot resolve field 'v' on this receiver (its type was not recorded for codegen)`; the closure spelling ALSO runs `w`'s `Drop` body twice under `--interp` (`dW1_71 r:71 dW1_71 end`) | — |
 | B-2026-09-30-65 | 2026-09-30 | codegen | low | A METHOD THAT CONDITIONALLY HANDS BACK AN `Array` LITERAL ARGUMENT WRAPPED IN `Some` LEAKS ONE BLOCK WHEN THE HAND-BACK BRANCH IS TAKEN -- `k.pc([w], true)` over `fn pc(ref self, x: Array[W1, 1], c: bool) -> Option[Array[W1, 1]] { if c { return Some(x) } return None }` prints the right bodies on every surface and valgrind reports 1 block lost; the free-function twin is clean | — |
 | B-2026-09-30-66 | 2026-09-30 | codegen | high | A `match` PAYLOAD BINDING MOVED INTO AN `Array` LITERAL ARGUMENT THAT THE CALLEE HANDS BACK DOUBLE-FREES UNDER THE JIT AND RUNS ITS `Drop` BODY TWICE COMPILED -- `match o { Some(x) => { let z = pass([x]); .. } }` prints `free(): double free detected` under `karac run` and `.. z:56 dW1_56 dW1_56 end` from both builds, against `--interp`'s single `dW1_56` | — |
+| B-2026-09-30-62 | 2026-09-30 | interp | medium | A PART OF AN `Option` TUPLE PAYLOAD HANDED OUT INSIDE A CONSTRUCTOR (`return Option.Some(t.0)`) RUNS ITS `Drop` BODY TWICE INTERPRETED -- `fn ct(o: Option[(R, R)]) -> Option[R]` prints `dR5 dR6 dR5 got` on `--interp` against the compiled side's correct `dR6 dR5 got`, at fresh-temp and named-local arguments alike; the GENERIC twin with a named argument doubles on BOTH backends | — |
+| B-2026-09-30-63 | 2026-09-30 | codegen | medium | A GENERIC CALLEE THAT HANDS ONE PART OF A FRESH `Option[(T, T)]` ARGUMENT OUT INSIDE A CONSTRUCTOR LOSES THE OTHER PART'S `Drop` BODY COMPILED -- `gt(Option.Some((mkr(5), mkr(6))))` over `fn gt[T](o: Option[(T, T)]) -> Option[T] { .. return Option.Some(t.0) .. }` prints `dR5 got end` at `build -O0`, element 1's body never running, where the concrete twin is correct | — |
 
 ### Relocated
 
@@ -3096,7 +3096,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-20-16 | codegen | medium | A WHOLE-VALUE BINDING OF A **BOXED** `Option` TUPLE PAYLOAD RETURNED OUT OF ITS ARM RUNS BOTH PARTS' `Drop` BODIES TWICE ON EVERY COMPILED BACKEND --… | acd81db20 |
 | B-2026-09-20-17 | codegen+interp | medium | REBINDING A BOXED `Option` TUPLE PAYLOAD BEFORE PROJECTING OUT OF IT RUNS THE ESCAPING PART'S `Drop` BODY TWICE ON ALL FOUR SURFACES AT ONCE -- `Some… | 85d93393e |
 | B-2026-09-20-19 | interp+codegen | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR THE PART A CONSUMING ARM MOVES INTO ITS OWN FRAME, AT BOTH PAYLOAD WIDTHS -- `Some(t) => { let x = t.0;… | 3f73e7ee8 |
+| B-2026-09-20-20 | codegen | medium | A CALL RESULT THAT RETURNS THE WHOLE `Option` DOUBLES THE MOVED-OUT FIELD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `take(mkq())` over `fn mkq() ->… | 05343f465 |
 | B-2026-09-20-21 | codegen | high | COMPOSITION CHANGES THE ANSWER IN THE `Drop`-BODY-OWNERSHIP FAMILY: a boxed TUPLE `Option` payload's surviving element runs its `Drop` body twice and… | 24b0a92f6 |
+| B-2026-09-20-22 | codegen | medium | A `shared`-FIELD STRUCT WITH AN `impl Drop` RUNS ITS BODY TWICE ON THE VALUE AN ASSIGNMENT MOVES IN, when the RHS is a match-arm binding -- `out = w`… | 36753943a |
 | B-2026-09-20-24 | codegen+interp | medium | AN OWNED PARAMETER OF A NAMELESS AGGREGATE TYPE -- A TUPLE, AN `Array[T, N]` OR A `Vec[T]` -- RUNS NONE OF ITS ELEMENTS' USER `Drop` BODIES WHEN THE… | 6ec7eb903 |
 | B-2026-09-20-29 | codegen | medium | `expr_cannot_carry_container_heap` IS MISSING TWO ARMS AND ENDS IN `_ => false`, SO AN INDEX STORE WHOSE RHS MENTIONS ITS OWN CONTAINER LEAKS THE DIS… | 6e342a3 |
 | B-2026-09-20-38 | codegen | high | A BOXED GENERIC-ENUM PAYLOAD FORWARDED THROUGH A GENERIC MIDDLE FUNCTION IS FREED BY THE INNER MONOMORPH WHILE THE CALLER STILL OWNS IT -- `fn gfwd[T… | caffdbba3 |
