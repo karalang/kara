@@ -7772,8 +7772,14 @@ impl<'a> super::Interpreter<'a> {
             StmtKind::Expr(e) => Self::arm_tail_expr(e),
             _ => return,
         };
-        let ExprKind::Tuple(elems) = &value.kind else {
-            return;
+        // B-2026-09-30-59 — and an ARRAY / `Vec`-prefix literal, which the
+        // discard walk admits on the tuple arm's terms (`allow_moved_place`).
+        // Left out, the bare `[w];` fired `w`'s own slot AND the walk: two
+        // bodies, against one for `let _ = [w];` and on every compiled surface.
+        let elems: &[Expr] = match &value.kind {
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems,
+            ExprKind::PrefixCollectionLiteral { items, .. } => items,
+            _ => return,
         };
         for e in elems {
             let ExprKind::Identifier(n) = &e.kind else {
@@ -8564,13 +8570,12 @@ impl<'a> super::Interpreter<'a> {
             // which is what pins the array wrapper as the axis rather than the
             // discard or the branch.
             //
-            // The all-fresh requirement is the tuple arm's and is carried over
-            // for its reason, not by analogy: a Drop-carrying PLACE element
-            // (`let _ = [r]`) moves a binding whose own Drop slot stays armed,
-            // and firing the walk here would double its body. Codegen twin: the
-            // array arms of `discarded_literal_tail_inner`, which apply the same
-            // freshness rule and likewise omit the tuple arm's movable-place
-            // hatch.
+            // A Drop-carrying PLACE element (`let _ = [r]`) is admitted on the
+            // tuple arm's terms: its source's own slot is retracted at the
+            // statement (`suppress_discarded_tuple_moved_elem_user_drops`), so
+            // this walk is the single owner. Codegen twin: the array arms of
+            // `discarded_literal_tail_inner`, which admit the same place
+            // through `array_item_is_movable_local` (B-2026-09-30-59).
             ExprKind::ArrayLiteral(elems)
             | ExprKind::PrefixCollectionLiteral { items: elems, .. } => {
                 !elems.is_empty()

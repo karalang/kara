@@ -1266,7 +1266,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // run before the free.
                     self.free_discarded_vec_literal_buffer(owned_tail, v);
                     self.track_discarded_array_elem_bodies(owned_tail, v);
-                    self.track_discarded_fixed_array_literal(owned_tail, v);
+                    self.track_discarded_fixed_array_literal(owned_tail, v, false);
                 } else if let Some(v) = result {
                     // B-2026-09-13-28 / B-2026-09-01-17 — the DECLINED literal.
                     //
@@ -5017,7 +5017,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // bodies ran nowhere.
                 self.track_discarded_array_elem_bodies(&tail, val);
                 // B-2026-09-30-60 — and an `Array[..]` literal's `[N x T]` value.
-                self.track_discarded_fixed_array_literal(&tail, val);
+                self.track_discarded_fixed_array_literal(&tail, val, true);
                 self.drain_discard_frame_args_first(b53_arg_mark);
                 Ok(())
             }
@@ -14084,7 +14084,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `let _ =` literal arm's `Vec` buffer free.
                     self.free_discarded_vec_literal_buffer(lt, val);
                     self.track_discarded_array_elem_bodies(lt, val);
-                    self.track_discarded_fixed_array_literal(lt, val);
+                    self.track_discarded_fixed_array_literal(lt, val, true);
                     self.drain_discard_frame_args_first(b53_arg_mark);
                 }
                 Ok(())
@@ -28603,19 +28603,27 @@ impl<'ctx> super::Codegen<'ctx> {
             // at all; the bodies walk itself is registered beside the aggregate
             // leg, since that leg keys off a struct LLVM type and declines an
             // `[N x T]` value.
+            //
+            // B-2026-09-30-59 — the hatch IS admitted where the caller retracts
+            // (`allow_movable_place`, the `let _ =` site), on the same terms the
+            // struct arm above takes it: `let _ = [w];` moved `w` into a buffer
+            // no registrar claimed, so the buffer and the String it now held
+            // leaked while `w`'s own drop ran over the zeroed slot.
             ExprKind::ArrayLiteral(elems)
                 if !elems.is_empty()
-                    && elems
-                        .iter()
-                        .all(|e| self.discard_tuple_elem_is_fresh_expr(e)) =>
+                    && elems.iter().all(|e| {
+                        self.discard_tuple_elem_is_fresh_expr(e)
+                            || (allow_movable_place && self.array_item_is_movable_local(e))
+                    }) =>
             {
                 Some(expr)
             }
             ExprKind::PrefixCollectionLiteral { items, .. }
                 if !items.is_empty()
-                    && items
-                        .iter()
-                        .all(|e| self.discard_tuple_elem_is_fresh_expr(e)) =>
+                    && items.iter().all(|e| {
+                        self.discard_tuple_elem_is_fresh_expr(e)
+                            || (allow_movable_place && self.array_item_is_movable_local(e))
+                    }) =>
             {
                 Some(expr)
             }
@@ -28630,6 +28638,34 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-30-59 — the movable-place test the ARRAY arms of
+    /// [`Self::discarded_literal_tail_inner`] use: the tuple/struct test, and
+    /// additionally a binding whose own `Drop` action is ARMED in this frame
+    /// stack when its type runs a body. A by-value PARAM carries none — its body runs in the caller at
+    /// the end of the call — so the statement site's retraction has nothing to
+    /// retract and a literal owner would run the body a second time. Measured:
+    /// `fn mkw(w: W1) { let _ = [w]; println("in") }` printed
+    /// `dW1_7 in dW1_7` on every surface with this admitted. The tuple and
+    /// struct spellings of that shape already double; that is B-2026-09-25-33's
+    /// family, not something to extend here.
+    fn array_item_is_movable_local(&self, e: &Expr) -> bool {
+        let ExprKind::Identifier(n) = &e.kind else {
+            return false;
+        };
+        if !self.tuple_elem_is_movable_drop_struct_place(e) {
+            return false;
+        }
+        // A heap-only struct (no user `Drop`) has no body to double: its move
+        // zeroes the source, whose memory drop then frees nothing, exactly as
+        // the tuple arm's `let _ = (h, 1);` already relies on.
+        let runs_body = self
+            .var_types
+            .var_type_names
+            .get(n.as_str())
+            .is_some_and(|tn| self.type_runs_user_drop(tn.as_str(), &mut Vec::new()));
+        !runs_body || self.has_armed_own_user_drop(n)
+    }
+
     /// B-2026-09-01-21 — every source a DISCARDED literal moves that the
     /// statement site must retract: the tuple arm's movable places, and now a
     /// struct literal's movable-place FIELDS. Their move has no owning
@@ -28640,6 +28676,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let values: Vec<&Expr> = match &tail.kind {
             ExprKind::Tuple(elems) => elems.iter().collect(),
             ExprKind::StructLiteral { fields, .. } => fields.iter().map(|f| &f.value).collect(),
+            // B-2026-09-30-59 — an array / `Vec`-prefix literal's items, now
+            // that the movable tail predicate admits them.
+            ExprKind::ArrayLiteral(items) | ExprKind::PrefixCollectionLiteral { items, .. } => {
+                items.iter().collect()
+            }
             _ => return Vec::new(),
         };
         values
@@ -28756,10 +28797,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// live fields before the free. ALL-FRESH items only: an item naming a
     /// place moved its value in, and whose drop that becomes is the question
     /// B-2026-09-30-59 carries for the bare spelling.
+    ///
+    /// `places_retracted` — B-2026-09-30-59: the caller is a statement-discard
+    /// site that retracted every movable place the literal consumed
+    /// (`discarded_literal_moved_place_sources`), so such an item's value is
+    /// this walk's to own too. False at the arm sites, which retract nothing.
     pub(super) fn track_discarded_fixed_array_literal(
         &mut self,
         tail: &Expr,
         val: BasicValueEnum<'ctx>,
+        places_retracted: bool,
     ) {
         let items: &[Expr] = match &tail.kind {
             ExprKind::ArrayLiteral(items) => items,
@@ -28773,10 +28820,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if n == 0 || items.len() != n as usize {
             return;
         }
-        if !items
-            .iter()
-            .all(|it| self.discarded_array_item_is_fresh(it))
-        {
+        if !items.iter().all(|it| {
+            self.discarded_array_item_is_fresh(it)
+                || (places_retracted && self.tuple_elem_is_movable_drop_struct_place(it))
+        }) {
             return;
         }
         // The literal's own instantiation when the typechecker recorded one,
