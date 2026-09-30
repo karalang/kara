@@ -148,6 +148,45 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_generic_enum_payload_user_drop_bodies_fn(&te)
     }
 
+    /// B-2026-09-30-14 — the owning surface a `let` binding typed by a bare
+    /// generic parameter has in the ACTIVE monomorph: `("String", None)` or
+    /// `("Vec", Some(elem))`, and `None` for anything else (outside a
+    /// monomorph, a parameter this instantiation does not bind, or a concrete
+    /// type the String / Vec arms below do not own).
+    fn mono_let_param_owning_surface(
+        &self,
+        surface: &str,
+        span: crate::token::Span,
+    ) -> Option<(String, Option<TypeExpr>)> {
+        if !(self.mono_state.type_subst_names.contains_key(surface)
+            || self.mono_state.type_subst_type_exprs.contains_key(surface)
+            || self.mono_state.type_subst_call_te.contains_key(surface))
+        {
+            return None;
+        }
+        let param_te = TypeExpr {
+            kind: TypeKind::Path(crate::ast::PathExpr {
+                segments: vec![surface.to_string()],
+                generic_args: None,
+                span,
+            }),
+            span,
+        };
+        let TypeKind::Path(p) = self.subst_monomorph_type_params(&param_te).kind else {
+            return None;
+        };
+        let head = match p.segments.last()?.as_str() {
+            "str" | "String" => return Some(("String".to_string(), None)),
+            h @ ("Vec" | "VecDeque") => h.to_string(),
+            _ => return None,
+        };
+        let elem = p.generic_args.as_ref()?.first().and_then(|g| match g {
+            crate::ast::GenericArg::Type(t) => Some(t.clone()),
+            _ => None,
+        })?;
+        Some((head, Some(elem)))
+    }
+
     /// B-2026-09-20-13 — record which MONOMORPH an enum binding holds, from the
     /// same two sources and in the same order as the walker above.
     ///
@@ -6072,12 +6111,25 @@ impl<'ctx> super::Codegen<'ctx> {
                             // register `string_vars` / `vec_elem_types` and
                             // method dispatch sees the base (phase-9 step 5a).
                             let surface = self.type_alias_base_name(&surface);
+                            // B-2026-09-30-14 — a binding typed by a bare
+                            // generic parameter records the parameter's NAME
+                            // (`bind_pattern_types`), which names nothing
+                            // below. Inside a monomorph it names the String or
+                            // Vec the binding owns, so resolve it, or `let w =
+                            // v` over a `T = String` value takes `v`'s buffer
+                            // (disarming `v`) and registers no free of its own.
+                            let (surface, mono_elem_te) =
+                                match self.mono_let_param_owning_surface(&surface, pattern.span) {
+                                    Some((head, elem)) => (head, elem),
+                                    None => (surface, None),
+                                };
                             if surface == "Vec" || surface == "VecDeque" {
                                 if let Some(elem_te) = self
                                     .pattern_state
                                     .pattern_binding_inner_types
                                     .get(&key)
                                     .cloned()
+                                    .or(mono_elem_te)
                                 {
                                     let elem_ty = self.llvm_type_for_type_expr(&elem_te);
                                     self.var_types

@@ -1289,6 +1289,26 @@ impl<'a> super::TypeChecker<'a> {
                             };
                             self.check_pattern_against(&synthetic, &field_ty, mode);
                         }
+                        // B-2026-09-30-14 — a struct-pattern LEAF typed by a
+                        // bare generic parameter (`v` in `G { v, .. }` over
+                        // `G[T]` inside `fn f[T]`) records the parameter
+                        // itself, as the tuple leaf below does (B-2026-09-17-24),
+                        // so the monomorph can substitute it. Nothing else
+                        // recorded a type for it, so at `T = String` the leaf
+                        // registered no buffer free, the match cleanup could
+                        // not disarm the source for it, and handing the leaf
+                        // back freed the buffer twice.
+                        let leaf_span = match &field.pattern {
+                            None => Some(field.span),
+                            Some(p) if matches!(p.kind, PatternKind::Binding(_)) => Some(p.span),
+                            Some(_) => None,
+                        };
+                        if let (Some(span), Type::TypeParam(_)) = (leaf_span, &field_ty) {
+                            self.pattern_binding_inner_types.insert(
+                                SpanKey::from_span(&span),
+                                Self::type_to_type_expr(&field_ty),
+                            );
+                        }
                     }
                 }
             }
