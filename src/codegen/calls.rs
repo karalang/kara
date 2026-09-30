@@ -3386,7 +3386,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(recv_struct, 3, "map.w2")
                 .map_err(|e| format!("codegen: map payload w2: {:?}", e))?
                 .into_int_value();
-            let payload = self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?;
+            let payload = self.rebuild_optres_payload_words(inner_ll, recv_struct, w0, w1, w2)?;
             let x_name = "__karac_map_x";
             let alloca = self.create_entry_alloca(fn_val, x_name, payload.get_type());
             // `create_entry_alloca` moves the builder to the entry block; re-anchor.
@@ -3521,7 +3521,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_extract_value(recv_struct, 3, "optelse.w2")
                         .map_err(|e| format!("codegen: optelse w2: {:?}", e))?
                         .into_int_value();
-                    let payload = self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?;
+                    let payload =
+                        self.rebuild_optres_payload_words(inner_ll, recv_struct, w0, w1, w2)?;
                     if method == "map_or_else" {
                         // `map_or_else(default_fn, f)` — the mapper is arg 1.
                         let mapper = &args
@@ -3566,7 +3567,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_extract_value(recv_struct, 3, "optelse.ew2")
                     .map_err(|e| format!("codegen: optelse ew2: {:?}", e))?
                     .into_int_value();
-                let e_val = self.rebuild_value_from_payload_words(err_ll, ew0, ew1, ew2)?;
+                let e_val =
+                    self.rebuild_optres_payload_words(err_ll, recv_struct, ew0, ew1, ew2)?;
                 self.compile_optres_closure_on(none_closure, e_val, call_span)?
             } else {
                 self.compile_optres_closure_noarg(none_closure, call_span)?
@@ -3631,7 +3633,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(recv_struct, 3, "maperr.w2")
                 .map_err(|e| format!("codegen: map_err w2: {:?}", e))?
                 .into_int_value();
-            let e_val = self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?;
+            let e_val = self.rebuild_optres_payload_words(inner_ll, recv_struct, w0, w1, w2)?;
             let closure = &args
                 .first()
                 .ok_or_else(|| "codegen: Result.map_err missing closure arg".to_string())?
@@ -3704,7 +3706,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(recv_struct, 3, "combi.w2")
                 .map_err(|e| format!("codegen: combinator w2: {:?}", e))?
                 .into_int_value();
-            let payload = self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?;
+            let payload = self.rebuild_optres_payload_words(inner_ll, recv_struct, w0, w1, w2)?;
             // The closure arg: `map_or(default, f)` has it at index 1, the
             // others at index 0.
             let closure_idx = if method == "map_or" { 1 } else { 0 };
@@ -4107,7 +4109,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_extract_value(recv_struct, 3, "goi.w2")
                         .map_err(|e| format!("codegen: get_or_insert w2: {:?}", e))?
                         .into_int_value();
-                    let existing = self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?;
+                    let existing =
+                        self.rebuild_optres_payload_words(inner_ll, recv_struct, w0, w1, w2)?;
                     let some_end = self.builder.get_insert_block().unwrap();
                     self.builder.build_unconditional_branch(merge_bb).unwrap();
 
@@ -4338,7 +4341,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(cont_bb);
                 loaded
             } else {
-                self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?
+                self.rebuild_optres_payload_words(inner_ll, recv_struct, w0, w1, w2)?
             };
             // B-2026-08-11-11 — a BORROW-returning receiver (`m.get(k)`) hands
             // back an Option whose payload words ALIAS the map's stored value.
@@ -4475,7 +4478,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_extract_value(recv_struct, 3, "uo.err.w2")
                         .map_err(|e| format!("codegen: extract unwrap_or err w2: {:?}", e))?
                         .into_int_value();
-                    let err_val = self.rebuild_value_from_payload_words(err_ll, ew0, ew1, ew2)?;
+                    let err_val =
+                        self.rebuild_optres_payload_words(err_ll, recv_struct, ew0, ew1, ew2)?;
                     self.free_str_vec_buffer_if_heap(err_val);
                 }
             }
@@ -4700,7 +4704,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(cont_bb);
             loaded
         } else {
-            self.rebuild_value_from_payload_words(inner_ll, w0, w1, w2)?
+            self.rebuild_optres_payload_words(inner_ll, recv_struct, w0, w1, w2)?
         };
         // B-2026-07-15-26: `map.get(k).unwrap()` on a NON-shared heap value
         // (`Map[K, String]` / `Map[K, Vec[..]]`) packs a BORROW of the bucket's
@@ -4872,6 +4876,39 @@ impl<'ctx> super::Codegen<'ctx> {
             span: *call_span,
         };
         self.compile_expr(&call)
+    }
+
+    /// B-2026-09-30-86 — [`Self::rebuild_value_from_payload_words`] for a
+    /// consumer that holds the whole `Option`/`Result` aggregate: the three
+    /// overlay words PLUS every further payload word it carries.
+    ///
+    /// B-2026-08-23-20 made the core width-general and left the three-word
+    /// form as a delegation "so every existing caller keeps its exact previous
+    /// behaviour" -- which for a `Result` (a five-word payload area) is the
+    /// bug. `r.unwrap()` over `Result[S, i64]` with `S { v: String, n: i64 }`
+    /// rebuilt `n` from nothing: 0 at -O0, garbage at -O2, while `match` on
+    /// the same value was right. That row's completeness sweep found no
+    /// under-supplied caller because nothing in the corpus unwrapped a wide
+    /// payload; every method-call consumer here was one. For an `Option`
+    /// (three-word area) this is exactly the three-word form.
+    pub(super) fn rebuild_optres_payload_words(
+        &self,
+        target_ty: BasicTypeEnum<'ctx>,
+        recv_struct: inkwell::values::StructValue<'ctx>,
+        w0: inkwell::values::IntValue<'ctx>,
+        w1: inkwell::values::IntValue<'ctx>,
+        w2: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let mut words = vec![w0, w1, w2];
+        for i in 4..recv_struct.get_type().count_fields() {
+            words.push(
+                self.builder
+                    .build_extract_value(recv_struct, i, "optres.wn")
+                    .map_err(|e| format!("codegen: extract payload word {i}: {e:?}"))?
+                    .into_int_value(),
+            );
+        }
+        self.rebuild_value_from_payload_word_slice(target_ty, &words)
     }
 
     /// Slice OR helper: reconstitute a value of the requested LLVM type

@@ -2590,26 +2590,28 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // The converted TARGET error value (`Target.from(source)`), or `None`
         // when this `?` needs no cross-error conversion.
-        let converted_err: Option<BasicValueEnum<'ctx>> =
-            if let Some(target) = self.span_tables.question_conversions.get(&key).cloned() {
-                let qualified = format!("{}.from", target);
-                self.module.get_function(&qualified).map(|from_fn| {
-                    // Reconstruct the SOURCE error at `from`'s param type from
-                    // ALL its words (a `String` param is the 3-word
-                    // `{ptr,len,cap}`, not a single `i64`), then convert.
-                    let arg_ty = from_fn.get_nth_param(0).unwrap().get_type();
-                    let arg = self
-                        .rebuild_value_from_payload_words(arg_ty, w0_i, w1_i, w2_i)
-                        .unwrap_or(w0);
-                    self.builder
-                        .build_call(from_fn, &[arg.into()], "q_from")
-                        .unwrap()
-                        .try_as_basic_value()
-                        .unwrap_basic()
-                })
-            } else {
-                None
-            };
+        let converted_err: Option<BasicValueEnum<'ctx>> = if let Some(target) =
+            self.span_tables.question_conversions.get(&key).cloned()
+        {
+            let qualified = format!("{}.from", target);
+            self.module.get_function(&qualified).map(|from_fn| {
+                // Reconstruct the SOURCE error at `from`'s param type from
+                // ALL its words (a `String` param is the 3-word
+                // `{ptr,len,cap}`, not a single `i64`), then convert.
+                let arg_ty = from_fn.get_nth_param(0).unwrap().get_type();
+                // B-2026-09-30-86 — and every word past the third.
+                let arg = self
+                    .rebuild_optres_payload_words(arg_ty, val.into_struct_value(), w0_i, w1_i, w2_i)
+                    .unwrap_or(w0);
+                self.builder
+                    .build_call(from_fn, &[arg.into()], "q_from")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+            })
+        } else {
+            None
+        };
 
         // Payload words to write into the returned Err slot. The number of slots
         // is the OUTER return enum's payload word count.
