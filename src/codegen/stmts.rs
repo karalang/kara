@@ -24274,32 +24274,20 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::Seq(b)
             | ExprKind::Unsafe(b)
             | ExprKind::LabeledBlock { body: b, .. } => {
-                let Some(tail) = b.final_expr.as_deref() else {
-                    return BranchTailClass::No;
-                };
-                let direct = self.branch_tail_class(tail, block_local_tail_ok);
-                if direct != BranchTailClass::No {
-                    return direct;
-                }
-                if block_local_tail_ok {
-                    if let Some(rhs) = self.block_local_binding_tail_rhs(b, tail) {
-                        return self.branch_tail_class(rhs, true);
-                    }
-                }
-                BranchTailClass::No
+                self.block_tail_class(b, block_local_tail_ok)
             }
             ExprKind::If {
                 then_block,
                 else_branch,
                 ..
             } => {
-                let (Some(else_branch), Some(then_tail)) =
+                let (Some(else_branch), Some(_)) =
                     (else_branch.as_deref(), then_block.final_expr.as_deref())
                 else {
                     return BranchTailClass::No;
                 };
                 BranchTailClass::combine(
-                    self.branch_tail_class(then_tail, block_local_tail_ok),
+                    self.block_tail_class(then_block, block_local_tail_ok),
                     self.branch_tail_class(else_branch, block_local_tail_ok),
                 )
             }
@@ -24313,13 +24301,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 else_branch,
                 ..
             } => {
-                let (Some(else_branch), Some(then_tail)) =
+                let (Some(else_branch), Some(_)) =
                     (else_branch.as_deref(), then_block.final_expr.as_deref())
                 else {
                     return BranchTailClass::No;
                 };
                 BranchTailClass::combine(
-                    self.branch_tail_class(then_tail, block_local_tail_ok),
+                    self.block_tail_class(then_block, block_local_tail_ok),
                     self.branch_tail_class(else_branch, block_local_tail_ok),
                 )
             }
@@ -24376,6 +24364,7 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => {
                 if self.expr_yields_fresh_owned_temp(e)
                     || (block_local_tail_ok && self.arg_producer_mints_fresh_owned_temp(e))
+                    || (block_local_tail_ok && self.scalar_collection_literal_mints(e))
                     || self.arm_tail_consumes_freshtemp_projection(e)
                 {
                     BranchTailClass::Mints
@@ -24383,6 +24372,91 @@ impl<'ctx> super::Codegen<'ctx> {
                     BranchTailClass::No
                 }
             }
+        }
+    }
+
+    /// A block's tail, classified: the tail expression itself, or, under the
+    /// `_local` rule, the `let` RHS that produced a block-local binding tail.
+    ///
+    /// B-2026-09-30-58 — an `if`/`if let` THEN arm is a `Block` the branch
+    /// node holds directly rather than an `ExprKind::Block`, so it used to be
+    /// classified by its bare tail and never reached the block-local lookup:
+    /// `vl(if c { let t = mk(1); t } else { mk(2) })` declined as a whole and
+    /// the taken arm's buffer was owned by nobody (1 block lost per call). The
+    /// `else` branch and every `match` arm body already came through here.
+    fn block_tail_class(
+        &self,
+        b: &crate::ast::Block,
+        block_local_tail_ok: bool,
+    ) -> BranchTailClass {
+        let Some(tail) = b.final_expr.as_deref() else {
+            return BranchTailClass::No;
+        };
+        let direct = self.branch_tail_class(tail, block_local_tail_ok);
+        if direct != BranchTailClass::No {
+            return direct;
+        }
+        if block_local_tail_ok {
+            if let Some(rhs) = self.block_local_binding_tail_rhs(b, tail) {
+                return self.branch_tail_class(rhs, true);
+            }
+        }
+        BranchTailClass::No
+    }
+
+    /// B-2026-09-30-58 — a collection-literal arm tail (`[1]`, `Vec[2, 3]`,
+    /// `[0; 4]`) mints a fresh owned buffer just as `mk(1)` does, and a
+    /// DIRECT literal argument is already freed caller-side
+    /// (`is_collection_literal_arg`). As a branch tail it declined, so
+    /// `vl(if c { [1] } else { [2, 3] })` and its `match` spelling leaked the
+    /// taken arm's buffer on every compiled surface.
+    ///
+    /// Admitted only when every item is a SCALAR the literal cannot own
+    /// anything through: a numeric/bool/char literal, a binding whose slot is
+    /// an integer or float, or pure scalar arithmetic over those. An item that
+    /// names a heap place or a Drop value moves it into the literal, and
+    /// whether a use-site free then owns that element is a separate question
+    /// (B-2026-09-30-56/-57 answer it for the direct literal only), so those
+    /// stay a leak rather than risk a double free.
+    fn scalar_collection_literal_mints(&self, e: &Expr) -> bool {
+        let items: &[Expr] = match &e.kind {
+            ExprKind::ArrayLiteral(items) => items,
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if type_name == "Vec" || type_name == "Array" =>
+            {
+                items
+            }
+            ExprKind::RepeatLiteral { value, .. } => std::slice::from_ref(value.as_ref()),
+            _ => return false,
+        };
+        items.iter().all(|it| self.item_is_inert_scalar(it))
+    }
+
+    fn item_is_inert_scalar(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::Bool(_)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_) => true,
+            ExprKind::Identifier(n) => self
+                .variables
+                .get(n)
+                .is_some_and(|v| v.ty.is_int_type() || v.ty.is_float_type()),
+            ExprKind::Unary { operand, .. } => self.item_is_inert_scalar(operand),
+            ExprKind::Cast { expr, .. } => self.item_is_inert_scalar(expr),
+            ExprKind::Binary { left, right, .. } => {
+                self.item_is_inert_scalar(left) && self.item_is_inert_scalar(right)
+            }
+            // The typechecker desugars primitive operators into intrinsic
+            // calls (`-2` → `i64.neg(2)`); one of those over pure operands
+            // yields a primitive, whatever its operands are named.
+            ExprKind::Call { .. } if Self::index_expr_is_pure_scalar(e) => true,
+            // A string literal is rodata (`cap == 0`, every free skips it) and
+            // a fresh call result has no owner but the literal it moved into,
+            // so neither names a place a later read could reach.
+            ExprKind::StringLit(..) | ExprKind::MultiStringLit(..) => true,
+            _ => self.expr_yields_fresh_owned_temp(e),
         }
     }
 
