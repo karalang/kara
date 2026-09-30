@@ -6289,6 +6289,56 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-09-30-84 — an element of an `Array[T, N]` local
+            // (`rd(a[0])`), or of any container held in a struct field or a
+            // tuple element (`rd(o.v[0])`, `rd(t.0[0])`), is a place too.
+            // Without this it took the rvalue path, which shallow-copies the
+            // element's `{ptr,len,cap}` into a temp and queues a free of it,
+            // while the container's own drop frees the same buffer at scope
+            // exit: `free(): double free` on every compiled surface, and a
+            // `mut ref` callee's write landed in the copy. The store resolver
+            // already places each of these shapes, bounds check included.
+            //
+            // A `self.v[i]` receiver is keyed as the `self` binding, which is
+            // how the field resolvers look it up.
+            let array_slot = matches!(&object.kind, ExprKind::Identifier(v)
+                if self.variables.get(v.as_str()).is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)))
+                    || self.borrow_vars.ref_params.get(v.as_str()).is_some_and(|t| matches!(t, BasicTypeEnum::ArrayType(_))));
+            if array_slot
+                || matches!(
+                    object.kind,
+                    ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+                )
+            {
+                let self_norm;
+                let place: &Expr = match &object.kind {
+                    ExprKind::FieldAccess { object: fo, field }
+                        if matches!(fo.kind, ExprKind::SelfValue) =>
+                    {
+                        self_norm = Expr {
+                            kind: ExprKind::Index {
+                                object: Box::new(Expr {
+                                    kind: ExprKind::FieldAccess {
+                                        object: Box::new(Expr {
+                                            kind: ExprKind::Identifier("self".to_string()),
+                                            span: fo.span,
+                                        }),
+                                        field: field.clone(),
+                                    },
+                                    span: object.span,
+                                }),
+                                index: index.clone(),
+                            },
+                            span: arg.span,
+                        };
+                        &self_norm
+                    }
+                    _ => arg,
+                };
+                if let Some(ptr) = self.nested_store_place_ptr(place) {
+                    return Ok(Some(ptr));
+                }
+            }
         }
         Ok(None)
     }

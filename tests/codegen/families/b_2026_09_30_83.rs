@@ -165,3 +165,74 @@ fn main() { let mut a: (Array[P, 1], i64) = ([P { n: 5 }], 7); f(mut a); println
         "{msg}"
     );
 }
+
+/// B-2026-09-30-84 — an annotated `Array` element handed to a `mut ref`
+/// parameter (`bump(mut a[0])`) was copied into a temp, so the callee grew
+/// the copy and the array kept `x1` (and the temp's free doubled the array's
+/// own). The element is now borrowed in place, as a `Vec` local's element
+/// already was; so is the element of a container in a struct field (through
+/// `self` too) and of a `mut ref` array parameter.
+#[test]
+fn array_element_mut_ref_argument_mutates_in_place() {
+    let cells: &[(&str, &str, &str)] = &[
+        (
+            "local",
+            "fn bump(s: mut ref String) { s.push_str(\"yy\"); }
+fn main() { let mut a: Array[String, 1] = [f\"x{1}\"]; bump(mut a[0]); println(a[0]); }
+",
+            "x1yy\n",
+        ),
+        (
+            "struct-element-field",
+            "struct P { s: String, n: i64 }
+fn bump(s: mut ref String) { s.push_str(\"yy\"); }
+fn main() { let mut a: Array[P, 2] = [P { s: f\"x{1}\", n: 1 }, P { s: f\"z{2}\", n: 2 }]; bump(mut a[1].s); println(f\"{a[0].s} {a[1].s}\"); }
+",
+            "x1 z2yy\n",
+        ),
+        (
+            "vec-field",
+            "struct O { v: Vec[String] }
+fn bump(s: mut ref String) { s.push_str(\"yy\"); }
+fn main() { let mut v: Vec[String] = Vec.new(); v.push(f\"v{6}\"); let mut o = O { v: v }; bump(mut o.v[0]); println(o.v[0]); }
+",
+            "v6yy\n",
+        ),
+        (
+            "self-array-field",
+            "struct O { a: Array[String, 2] }
+impl O { fn g(mut ref self) { bump(mut self.a[0]); } }
+fn bump(s: mut ref String) { s.push_str(\"yy\"); }
+fn main() { let mut o = O { a: [f\"a{1}\", f\"b{1}\"] }; o.g(); println(f\"{o.a[0]} {o.a[1]}\"); }
+",
+            "a1yy b1\n",
+        ),
+        (
+            "mut-ref-array-param",
+            "fn g(a: mut ref Array[String, 2]) { bump(a[1]); }
+fn bump(s: mut ref String) { s.push_str(\"yy\"); }
+fn main() { let mut a: Array[String, 2] = [f\"a{1}\", f\"b{1}\"]; g(mut a); println(a[1]); }
+",
+            "b1yy\n",
+        ),
+        (
+            "scalar-ref",
+            "fn ri(x: ref i64) -> i64 { x + 1 }
+fn main() { let a: Array[i64, 2] = [5, 6]; println(f\"{ri(a[1])}\"); }
+",
+            "7\n",
+        ),
+    ];
+    for (label, prog, want) in cells {
+        let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(prog);
+        assert!(
+            interp_errs.is_empty(),
+            "[{label}] interp errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), *want, "[{label}] interpreter");
+        let Some(aot) = run_program(prog) else {
+            continue;
+        };
+        assert_eq!(aot, *want, "[{label}] AOT");
+    }
+}

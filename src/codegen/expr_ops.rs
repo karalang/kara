@@ -4000,7 +4000,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (its `vec[i]` element-pointer logic is already deref-correct). Kept
     /// separate from `field_chain_place_ptr` so the drop-suppression callers —
     /// which only pass owned / `vec[i]` roots — stay untouched.
-    fn nested_store_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
+    pub(super) fn nested_store_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
         match &expr.kind {
             ExprKind::Identifier(name) => {
                 let p = self.get_data_ptr(name.as_str())?;
@@ -4151,7 +4151,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Bounds-checked exactly as the array READ is (`compile_index`'s
     /// `ArrayType` arm), then an in-bounds GEP into the place's own storage,
     /// so the write lands in the array rather than in a copy of it.
-    fn array_place_elem_ptr(&mut self, object: &Expr, index: &Expr) -> Option<PointerValue<'ctx>> {
+    pub(super) fn array_place_elem_ptr(
+        &mut self,
+        object: &Expr,
+        index: &Expr,
+    ) -> Option<PointerValue<'ctx>> {
         let (arr_ptr, arr_ty) = match &object.kind {
             ExprKind::Identifier(name) => match self.ref_array_index_target(name) {
                 Some(t) => t,
@@ -4268,8 +4272,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             // `field_rooted_index_place_ptr` resolves the container itself and
-            // returns None for a non-Vec field.
-            ExprKind::FieldAccess { .. } => {}
+            // returns None for a non-Vec field (or tuple element).
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {}
             _ => return None,
         }
 
@@ -4311,31 +4315,47 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Index { object, index } = &expr.kind else {
             return None;
         };
-        let ExprKind::FieldAccess {
-            object: inner,
-            field,
-        } = &object.kind
-        else {
-            return None;
-        };
-        // B-2026-09-30-83 — `self.v[i].n = x` in a `mut ref self` method:
-        // `lower_field_access_ptr` keys the receiver as the `self` binding, and
-        // a bare `SelfValue` declined, so the store fell out
-        // `compile_field_store`'s tail and was DROPPED.
-        let self_ident;
-        let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
-            self_ident = Expr {
-                kind: ExprKind::Identifier("self".to_string()),
-                span: inner.span,
-            };
-            &self_ident
-        } else {
-            inner
-        };
-        let Ok(Some((field_ptr, field_ll_ty, field_te))) =
-            self.lower_field_access_ptr(inner, field, "nested-store container lowering")
-        else {
-            return None;
+        let (field_ptr, field_ll_ty, field_te) = match &object.kind {
+            ExprKind::FieldAccess {
+                object: inner,
+                field,
+            } => {
+                // B-2026-09-30-83 — `self.v[i].n = x` in a `mut ref self`
+                // method: `lower_field_access_ptr` keys the receiver as the
+                // `self` binding, and a bare `SelfValue` declined, so the store
+                // fell out `compile_field_store`'s tail and was DROPPED.
+                let self_ident;
+                let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
+                    self_ident = Expr {
+                        kind: ExprKind::Identifier("self".to_string()),
+                        span: inner.span,
+                    };
+                    &self_ident
+                } else {
+                    inner
+                };
+                let Ok(Some(placed)) =
+                    self.lower_field_access_ptr(inner, field, "nested-store container lowering")
+                else {
+                    return None;
+                };
+                placed
+            }
+            // B-2026-09-30-84 — a `Vec` held in a TUPLE element (`t.0[i]`),
+            // placed the same way: the element's own storage, then the synth
+            // container below indexes it.
+            ExprKind::TupleIndex {
+                object: inner,
+                index: hop,
+            } => {
+                let ll_ty = self
+                    .place_chain_aggregate_llvm_type(inner)?
+                    .get_field_type_at_index(*hop as u32)?;
+                let te = self.tuple_index_elem_type_expr(inner, *hop)?;
+                let p = self.field_chain_place_ptr(object)?;
+                (p, ll_ty, te)
+            }
+            _ => return None,
         };
         let synth = format!("__field_elem_{}", self.indexed_elem_counter);
         self.indexed_elem_counter += 1;

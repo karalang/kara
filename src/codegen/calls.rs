@@ -965,6 +965,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 (type_name, recv_ptr, is_shared)
             }
+            // B-2026-09-30-84 — a container held in a TUPLE element
+            // (`rd(t.0[1].s)`). The arm below names its container, and a tuple
+            // element has no name, so the field declined here and the argument
+            // took the rvalue path: a shallow copy of a field the tuple still
+            // owned, freed as a call temp. The element pointer comes from the
+            // store resolver, which already places this shape.
+            ExprKind::Index {
+                object: container, ..
+            } if matches!(container.kind, ExprKind::TupleIndex { .. }) => {
+                let Some(type_name) = self.place_chain_type_name(inner) else {
+                    return Ok(None);
+                };
+                if self.type_decls.shared_types.contains_key(&type_name) {
+                    return Ok(None);
+                }
+                let Some(elem_ptr) = self.nested_store_place_ptr(inner) else {
+                    return Ok(None);
+                };
+                (type_name, elem_ptr, false)
+            }
             ExprKind::Index {
                 object: container,
                 index,
@@ -1028,10 +1048,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Recover the element TypeExpr to learn the struct type
                 // name. The container must be a tracked Vec/Slice/Array;
                 // its element-TypeExpr was populated at binding time.
+                // B-2026-09-30-84 — an annotated `Array[T, N]` keeps its
+                // element type in `array_elem_type_exprs`, so `rd(a[0].s)`
+                // found none here, declined, and the argument took the rvalue
+                // path: a shallow copy of the field freed as a temp while the
+                // array still owned it.
                 let elem_te = match self
                     .var_types
                     .var_elem_type_exprs
                     .get(outer_name.as_str())
+                    .or_else(|| {
+                        self.var_types
+                            .array_elem_type_exprs
+                            .get(outer_name.as_str())
+                    })
                     .cloned()
                 {
                     Some(te) => te,
