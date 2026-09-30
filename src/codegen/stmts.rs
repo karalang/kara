@@ -27727,15 +27727,16 @@ impl<'ctx> super::Codegen<'ctx> {
             let ExprKind::Call { callee, .. } = &tail.kind else {
                 return;
             };
-            let ExprKind::Identifier(name) = &callee.kind else {
-                return;
+            let declared = match &callee.kind {
+                ExprKind::Identifier(name) => self.fn_sig.fn_return_type_exprs.get(name).cloned(),
+                // B-2026-09-30-18 — an associated function, as for the tuple
+                // twin above.
+                ExprKind::Path { .. } => self
+                    .discarded_callee_fn(tail)
+                    .and_then(|f| f.return_type.clone()),
+                _ => return,
             };
-            if self
-                .fn_sig
-                .fn_return_type_exprs
-                .get(name)
-                .is_none_or(|te| self.array_elem_and_len(te).is_none())
-            {
+            if declared.is_none_or(|te| self.array_elem_and_len(&te).is_none()) {
                 return;
             }
         }
@@ -27923,7 +27924,18 @@ impl<'ctx> super::Codegen<'ctx> {
             let ExprKind::Call { callee, .. } = &tail.kind else {
                 return;
             };
-            if !matches!(&callee.kind, ExprKind::Identifier(_)) {
+            // B-2026-09-30-18 — and an ASSOCIATED-function call (`H.mint(1);`).
+            // The interpreter's `Path`-callee discard arm runs the shared
+            // walker over the value for every such call, so the twin exists;
+            // stopping at the `Identifier` test left it running `dR1` against
+            // nothing compiled. `discarded_callee_fn` answers only for a user
+            // function, so an enum variant constructor stays out.
+            let admitted = match &callee.kind {
+                ExprKind::Identifier(_) => true,
+                ExprKind::Path { .. } => self.discarded_callee_fn(tail).is_some(),
+                _ => false,
+            };
+            if !admitted {
                 return;
             }
         }
