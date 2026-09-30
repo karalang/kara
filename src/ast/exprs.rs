@@ -647,3 +647,37 @@ pub struct FieldInit {
     pub shorthand: bool, // true for `Point { x }` (name == value identifier)
     pub span: Span,
 }
+
+/// B-2026-09-30-49 — every bare-identifier source moved into a field of a
+/// STRUCT literal anywhere inside `e`, reached through nested struct, tuple,
+/// array and `Vec` literals and `Option`/`Result` constructors. A source that
+/// is not under some struct literal (`[w]`, `(w, 1)`, `Some(w)`) is left out.
+/// Shared by both backends so the two retire the same set: codegen's
+/// `disarm_struct_literal_arg_sources` and the interpreter's struct-literal arm
+/// in `run_fresh_temp_arg_drops`.
+pub fn collect_struct_literal_field_sources(e: &Expr, inside: bool, out: &mut Vec<String>) {
+    match &e.kind {
+        ExprKind::Identifier(n) if inside => out.push(n.clone()),
+        ExprKind::StructLiteral { fields, .. } => {
+            for f in fields {
+                collect_struct_literal_field_sources(&f.value, true, out);
+            }
+        }
+        ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
+            for el in elems {
+                collect_struct_literal_field_sources(el, inside, out);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for el in items {
+                collect_struct_literal_field_sources(el, inside, out);
+            }
+        }
+        ExprKind::Call { .. } => {
+            if let Some(payload) = crate::ast::option_result_ctor_payload(e) {
+                collect_struct_literal_field_sources(payload, inside, out);
+            }
+        }
+        _ => {}
+    }
+}

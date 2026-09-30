@@ -1841,6 +1841,9 @@ impl<'ctx> super::Codegen<'ctx> {
             if self.tuple_arg_elem_type_exprs(&arg.value).is_none() {
                 self.track_inline_owned_aggregate_arg(val, &arg.value, false);
             }
+            // B-2026-09-30-49 — the closure leg of the struct-literal source
+            // stand-down (`f(Hr { v: r, n: 3 })`).
+            self.disarm_struct_literal_arg_sources(&arg.value);
             return Ok(val);
         }
         if let ExprKind::Identifier(name) = &arg.value.kind {

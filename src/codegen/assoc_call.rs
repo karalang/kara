@@ -3061,6 +3061,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ref_optres_te.as_ref(),
                             );
                         }
+                        // B-2026-09-30-49 — the `ref`-param leg.
+                        self.disarm_struct_literal_arg_sources(&a.value);
                         slot.into()
                     }
                 } else if let Some(Some(elem_ty)) = slice_elems.get(i).cloned() {
@@ -3158,6 +3160,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // consulted here: it answers true for a param that escapes
                     // on one path and dies on another, which is how this row's
                     // free-function cell lost its body in the first place.
+                    // B-2026-09-30-49 — a local moved into a STRUCT literal.
+                    self.disarm_struct_literal_arg_sources(&a.value);
                     // B-2026-09-30-56 — a local moved into a literal argument.
                     if self.conditional_handback_memory_moves_to_callee(&qualified, i)
                         || self.callee_takes_over_arg_drop_body(&qualified, i)

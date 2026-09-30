@@ -8074,6 +8074,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             .call_arg_moves_into_outliving_place(&qualified, i, false)
                             || self.callee_hands_arg_off(&qualified, i)
                             || self.callee_always_hands_arg_back_via_call(&qualified, i);
+                        // B-2026-09-30-49 — a local moved into a STRUCT literal.
+                        self.disarm_struct_literal_arg_sources(&a.value);
                         // B-2026-09-30-56 — a local moved into a literal argument.
                         if whole_escape {
                             self.stand_down_literal_arg_places(&a.value);
@@ -8331,6 +8333,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             &a.value,
                             ref_optres_te.as_ref(),
                         );
+                        // B-2026-09-30-49 — the `ref`-param leg.
+                        self.disarm_struct_literal_arg_sources(&a.value);
                         compiled_args.push(temp.into());
                         continue;
                     }

@@ -2078,6 +2078,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     let ref_optres_te = self.ref_param_optres_te(&name, i);
                     self.queue_ref_rvalue_arg_cleanup(temp, val, &a.value, ref_optres_te.as_ref());
                 }
+                // B-2026-09-30-49 — the `ref`-param leg: the temp is still the
+                // literal's owner, so its sources stand down the same way.
+                self.disarm_struct_literal_arg_sources(&a.value);
                 compiled_args.push(temp.into());
                 continue;
             }
@@ -2950,6 +2953,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-09-30-49 — a local moved into a STRUCT literal argument.
+            self.disarm_struct_literal_arg_sources(&a.value);
             // B-2026-09-30-56 — the same stand-down for a named local moved
             // into a collection LITERAL argument (`pass([w])`); see the helper.
             if !borrow_skip && whole_escape {
@@ -10148,6 +10153,87 @@ impl<'ctx> super::Codegen<'ctx> {
             bodies,
             UserDropKind::ContainerElemBodies,
         );
+    }
+
+    /// B-2026-09-30-49 — a named local moved into a STRUCT literal argument
+    /// (`f2(Hr { v: r, n: 3 })`) is owned by that literal from then on: the
+    /// caller's temp walks its fields after the call, or the callee (or the
+    /// result binding) owns it when the argument leaves. The source binding
+    /// stayed armed, so its body ran at its own NLL death as well (`d5 3 d5`
+    /// on every surface), and when the source was a `Vec` its binding freed the
+    /// buffer the literal's walk then read (`d<garbage>`, one invalid read).
+    ///
+    /// The same STRONG disarm the let-RHS position (`struct_lit_sources`) and
+    /// the consuming-argument position (`disarm_container_bodies_for_arg`)
+    /// already apply, over the same recursive source set, so the three move
+    /// channels agree. Interp twin: the struct-literal arm in
+    /// `run_fresh_temp_arg_drops`.
+    ///
+    /// IN PLACE rather than by removal: this runs while the call's arguments
+    /// lower, inside the window [`Self::call_arg_temp_mark`] measured by frame
+    /// LENGTH, so removing the source's earlier action shifted the literal's
+    /// own temp below the mark and its body drained at scope exit instead of
+    /// at the call (`let k = f2(Hr { v: r, n: 3 })` printed `mid 3 after d5`).
+    /// Each of the source's live `UserDrop` actions keeps its slot and is
+    /// retired instead: renamed so no later by-name lookup finds it, and
+    /// pointed at a no-op. The move into the literal already zeroed or nulled
+    /// the source's heap, so nothing its wrapper would have freed is lost.
+    ///
+    /// A struct literal NESTED in the argument counts too (`f(Some(Hr { v: r
+    /// }))`, `f((Hr { v: r }, 1))`, `f([Hr { v: r }])`): the enclosing
+    /// temp's walk reaches the struct's fields the same way, and the literal
+    /// counts as FRESH to those walks. Only sources that sit inside a struct
+    /// literal are retired, so a bare `[w]` or `(w, 1)` keeps its own rule.
+    pub(super) fn disarm_struct_literal_arg_sources(&mut self, arg: &Expr) {
+        let mut sources = Vec::new();
+        crate::ast::collect_struct_literal_field_sources(arg, false, &mut sources);
+        if sources.is_empty() {
+            return;
+        }
+        let noop = self.noop_user_drop_fn();
+        for n in sources {
+            let Some(cur) = self.variables.get(&n).map(|v| v.ptr) else {
+                continue;
+            };
+            for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+                for action in frame.iter_mut() {
+                    if let super::state::CleanupAction::UserDrop {
+                        binding_name,
+                        binding_ptr,
+                        drop_fn,
+                        ..
+                    } = action
+                    {
+                        if *binding_name == n && *binding_ptr == cur {
+                            *binding_name = "__retired_lit_arg_src".to_string();
+                            *drop_fn = noop;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `__karac_noop_user_drop(p: ptr)`: the retired action's callee in
+    /// [`Self::disarm_struct_literal_arg_sources`].
+    fn noop_user_drop_fn(&mut self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("__karac_noop_user_drop") {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved = self.builder.get_insert_block();
+        let f = self.module.add_function(
+            "__karac_noop_user_drop",
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        f
     }
 
     /// B-2026-09-30-56 — retract the `Drop` BODY of each named local moved

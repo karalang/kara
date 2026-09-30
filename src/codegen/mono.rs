@@ -4079,6 +4079,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-09-30-56 — a local moved into a literal argument, under
             // the every-exit / per-path owner test the named-local arm below
             // uses (`callee_takes_over_arg_drop_body`).
+            // B-2026-09-30-49 — a local moved into a STRUCT literal argument.
+            self.disarm_struct_literal_arg_sources(&a.value);
             if matches!(
                 &a.value.kind,
                 ExprKind::ArrayLiteral(_) | ExprKind::PrefixCollectionLiteral { .. }

@@ -4774,6 +4774,24 @@ impl<'a> super::Interpreter<'a> {
         // when the return is conditional (`if k { return t.r; }`). Taken, so a
         // later call cannot inherit them.
         let dyn_escapes = std::mem::take(&mut self.pending_call_payload_escapes);
+        // B-2026-09-30-49 — a named local moved into a STRUCT literal argument
+        // (`f2(Hr { v: r, n: 3 })`) is the literal's from then on: its walk
+        // below, or the callee, runs the body. The source binding stayed armed
+        // and ran it again at its own death (`d5 3 d5`). Same recording the
+        // consuming-argument position uses. Codegen twin:
+        // `disarm_struct_literal_arg_sources`.
+        for arg in args {
+            let mut names = Vec::new();
+            crate::ast::collect_struct_literal_field_sources(&arg.value, false, &mut names);
+            for n in names {
+                self.record_container_move_source_name(&n);
+                let own_drop = matches!(self.env.get(&n), Some(Value::Struct { name: ref tn, .. })
+                    if self.program.drop_method_keys.contains_key(tn));
+                if own_drop {
+                    self.moved_out_user_drop_bindings.insert(n);
+                }
+            }
+        }
         // B-2026-09-28-55 — the `shared` holders this walk defers, in ARGUMENT
         // order once it is done: the walk runs right to left, and the level
         // releases its holders last-pushed first, so without the flip below
