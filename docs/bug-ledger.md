@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 585 |
-| run-vs-build | 549 |
-| leak | 497 |
+| miscompile | 587 |
+| run-vs-build | 552 |
+| leak | 498 |
 | double-free | 374 |
 | missing-feature | 215 |
 | codegen-gap | 204 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2440 |
-| interp | 726 |
+| codegen | 2445 |
+| interp | 728 |
 | typecheck | 319 |
 | other | 112 |
 | ownership | 79 |
@@ -130,8 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-20-14 | 2026-09-20 | codegen | low | CORRECTION 2026-09-27: THE VEC HALF IS CLOSED -- `v.push(g); match v[0] { .. }` measures clean at -O0 on c47f9ae28, and an unmatched `Vec` element's box is freed since B-2026-09-26-12 (69ac66d2e); what is left is the unmatched TUPLE element and the STRUCT-LITERAL FIELD. ORIGINAL TITLE: A GENERIC ENUM'S HEAP-BOXED PAYLOAD LEAKS ITS BOX IN A VEC ELEMENT, and in a TUPLE element that is never matched -- the MATCHED tuple spellings are FIXED (39bf76b, 2026-09-20); what is left is `v.push(g); match v[0] { .. }` losing 24 B in 1 block at -O0 with 0 indirect, and `let t = (g, 7)` with no match losing the payload's own 13 B because the element walker is envelope-only by measurement (walking the interior double-frees the matched spelling, and the retraction that would decide it per site is keyed by a scrutinee NAME, which `t.0` has none of). The STRUCT-LITERAL FIELD position (`let h = H { g: g }`) leaks the same 24 B and is unchanged by the tuple fix; it is blocked one level further back than either of the above, because `enum_inst_var_types` is keyed per VARIABLE and nothing equivalent exists for a struct FIELD -- `subst_monomorph_type_params` resolves against the enclosing fn's subst and a `main` has none, so `receiver_struct_inst` + `generic_struct_subst_from_inst` is the way round. The payload's `Drop` body runs correctly throughout, so only the envelope is lost and a due-sequence oracle cannot see the class at all. The Vec half is NOT the erasure the tuple half was: its element type arrives concrete and `vec_elem_agg_drop_for_type_expr` reduces it to `p.segments.first()` one line before it is needed -- an address to instrument, not a finding | — |
-| B-2026-09-20-16 | 2026-09-20 | codegen | medium | A WHOLE-VALUE BINDING OF A **BOXED** `Option` TUPLE PAYLOAD RETURNED OUT OF ITS ARM RUNS BOTH PARTS' `Drop` BODIES TWICE ON EVERY COMPILED BACKEND -- `fn eat(o: Option[(H, H)]) -> (H, H) { match o { Some(t) => { return t; } .. } }` prints `dH5 dH6 got:5 dH5 dH6 end` against the interpreter's correct `got:5 dH5 dH6 end`; B-2026-09-19-34's projection narrowing declines by construction because `return t` projects nothing, and the OBVIOUS gate is wrong -- `optres_arm_takes_whole_payload` is equally true of an arm that FORWARDS the binding into another call, which B-2026-09-10-9 measured LOSING both bodies when the walk is stood down, so the repair needs a RETURNED predicate that no existing one in `binding_use` answers; the STRUCT payload spelling is correct on all four surfaces | — |
 | B-2026-09-20-17 | 2026-09-20 | codegen+interp | medium | REBINDING A BOXED `Option` TUPLE PAYLOAD BEFORE PROJECTING OUT OF IT RUNS THE ESCAPING PART'S `Drop` BODY TWICE ON ALL FOUR SURFACES AT ONCE -- `Some(t) => { let u = t; return u.0; }` prints `dH5 dH6 got:5 dH5 end` everywhere against a hand-derived due of `dH6 got:5 dH5 end`, so no A/B against the interpreter can see it and no sanitizer can either; the SAME arm without the intermediate local is correct since B-2026-09-19-34 and the same arm with the local and no projection doubles BOTH parts (B-2026-09-20-16), so the three spellings of taking a payload out through a local behave three different ways | — |
 | B-2026-09-20-18 | 2026-09-20 | codegen+interp | medium | TWO GUARDED `Some` ARMS OVER ONE SCRUTINEE, EACH TAKING A DIFFERENT PAYLOAD ELEMENT, ARE WRONG ON EVERY SURFACE AND THE PAYLOAD'S WIDTH PICKS THE DIRECTION -- at the INLINE width all four lose the untaken sibling's body (`got:5 dR5 end` against a due `dR6 got:5 dR5 end`, an AGREED fault); at the BOXED width the interpreter loses it while the three compiled surfaces DOUBLE the taken one, so neither backend is an oracle; every consumer of an arm's take rewrites state that is not edge-sensitive, so the last arm to write decides, and B-2026-09-19-34's narrowing declines here deliberately because masking one arm's element would LOSE the other's | — |
 | B-2026-09-20-19 | 2026-09-20 | interp+codegen | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR THE PART A CONSUMING ARM MOVES INTO ITS OWN FRAME, AT BOTH PAYLOAD WIDTHS -- `Some(t) => { let x = t.0; println("mid"); return x; }` prints `mid dH5 dH6 got:5 dH5 end` interpreted against the due `mid dH6 got:5 dH5 end`, and a nested two-local spelling behaves the same; the compiled side is CORRECT at the boxed width since B-2026-09-19-34 and LOSES the untaken sibling's body at the inline width (`mid got:5 dR5 end`), which is the second half of this row -- one shape, the width selecting which extra half is wrong | — |
@@ -456,6 +454,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-27 | 2026-09-30 | interp+codegen | high | WHOLE BY-VALUE PARAMS MOVED INTO A LOCAL `Array` OR `Vec` THAT IS THEN RETURNED RUN THEIR `Drop` BODIES TWICE ON EVERY SURFACE, INTERPRETER INCLUDED -- `fn vl(a: R, b: R) -> Vec[R] { let v: Vec[R] = [a, b]; return v; }` prints `dR6 dR5 r2 dR5 dR6` for `let v3 = vl(mk(5), mk(6))`, and the `Array[R, 2]` local the same; the TUPLE local (`let x = (a, b); return x`) is right | — |
 | B-2026-09-30-47 | 2026-09-30 | codegen | medium | REMAINDER OF B-2026-09-30-12: A PAYLOAD-BINDING `match` ARM THAT TAKES ONLY SOME FIELDS OF ITS VARIANT, ON A LOCAL, INSIDE A BRANCH THAT MAY NOT RUN, STILL LOSES THE TAKEN FIELD'S `Drop` BODY ON THE PATH THAT NEVER RAN THE ARM -- `let t = F.P(mks(10), mks(11)); if c { match t { F.P(x, _) => { let k = x; .. } F.Q(q) => { .. } } }` at `c = false` prints only `dS11` compiled where `--interp` prints `dS11 dS10` | — |
 | B-2026-09-30-48 | 2026-09-30 | codegen | medium | AN `Option[S]` LOCAL MATCHED BY A PAYLOAD-TAKING ARM INSIDE A BRANCH THAT MAY NOT RUN LEAKS THE PAYLOAD'S HEAP ON THE PATH THAT NEVER RAN THE ARM, WITH OUTPUT RIGHT -- `let t: Option[S] = Some(mks(7)); if c { match t { Some(s) => { let k = s; .. } None => {} } }` at `c = false` prints `dS7` on every surface and loses 2 B per call at -O0 | — |
+| B-2026-09-30-36 | 2026-09-30 | codegen | medium | A TUPLE LITERAL PASSED BY VALUE LEAKS A GENERIC ENUM ELEMENT'S PAYLOAD BOX AND LOSES ITS `Drop` BODY -- `taket((mk(1), 7))` over `fn taket(t: (G1[W], i64))`, where `G1[W]` heap-boxes its payload, loses 32 B and never prints `dW1`; the named spelling `let t = (mk(1), 7); taket(t)` is clean | — |
+| B-2026-09-30-37 | 2026-09-30 | codegen | medium | A GENERIC STRUCT LITERAL PASSED BY VALUE LOSES ITS BOXED ENUM PAYLOAD'S `Drop` BODY -- `takest(S { g: mk(1), k: 7 })` over `fn takest(s: S[W])` prints `tt7 end` where `--interp` prints `tt7 dW1 end`; memory is balanced since B-2026-09-20-14, and the named spelling and the concrete holder are both correct | — |
+| B-2026-09-30-38 | 2026-09-30 | codegen | medium | A TUPLE PATTERN THAT BINDS TWO ENUM PAYLOADS RUNS THEIR `Drop` BODIES IN REVERSE, AND TWICE EACH FOR A NON-GENERIC ENUM -- `match u { (C1.Y(w), C1.Y(v)) => .. }` prints `dW4 dW3 dW3 dW4` where `--interp` prints `dW3 dW4`, with memory balanced; the generic `G1[W]` twin prints each body once but in reverse | — |
+| B-2026-09-30-39 | 2026-09-30 | interp+codegen | low | WHERE A BY-VALUE ARGUMENT'S `Drop` BODY RUNS, WHEN THE CALL IS INSIDE AN F-STRING, DEPENDS IN THE INTERPRETER ON WHERE THE ARGUMENT CAME FROM -- `println(f"k{keepw(w0)}")` with a local prints `k0 dW0`, the same call on a match-arm binding prints `dW2 k2`; codegen prints `k.. dW..` for both | — |
+| B-2026-09-30-40 | 2026-09-30 | interp | medium | `--interp` LOSES BOTH `Drop` BODIES OF A WHOLE `Option` TUPLE PAYLOAD THAT THE ARM RETURNS ON ONE PATH ONLY, WHEN THE OTHER PATH IS TAKEN -- `Some(t) => { if c { return t; } println(..); return mk(); }` at `c = false` prints `kept5 got:0 dH0 dH1 end` where every compiled surface prints the due `kept5 dH5 dH6 got:0 dH0 dH1 end`; the `if c { t } else { .. }` tail spelling loses them identically | — |
+| B-2026-09-30-41 | 2026-09-30 | codegen | medium | BINDING A WHOLE BOXED `Option` TUPLE PAYLOAD TO A LOCAL THROUGH A `match` INITIALIZER IS A CODEGEN GAP UNANNOTATED AND DOUBLES BOTH `Drop` BODIES ANNOTATED -- `let x = match o { Some(t) => t, None => mk() }; x.0.id` over a by-value `o: Option[(H, H)]` fails with `cannot resolve field 'id' on this receiver`, and `let x: (H, H) = ..` prints `x5 dH5 dH6 dH5 dH6 got:1 end` against the interpreter's due `x5 dH5 dH6 got:1 end` | — |
 
 ### Relocated
 
@@ -3082,7 +3086,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-20-11 | codegen | low | A CODEGEN DIAGNOSTIC FROM THE MODULE-VERIFICATION PATH CARRIES A FABRICATED SPAN -- a 6-line file reports `s1.kara:188:25`, a line that does not exis… | 4466ae501 |
 | B-2026-09-20-12 | codegen | high | A BY-VALUE ENUM ARGUMENT SPELLED AS A FIELD PROJECTION RUNS ITS PAYLOAD'S `Drop` BODY TWICE -- `eat(b.w)` fires the body once inside the callee and a… | 58cb50cd5 |
 | B-2026-09-20-13 | codegen | high | A BY-VALUE CALLEE FREES A GENERIC ENUM PAYLOAD'S BOX WHILE THE CALLER STILL OWNS IT, so a SECOND use of the same value is a use-after-free -- `shw(g)… | 99064aa |
+| B-2026-09-20-14 | codegen | low | CORRECTION 2026-09-30: THE LEFTOVER POSITIONS LOST THE PAYLOAD'S `Drop` BODY TOO, NOT ONLY THE ENVELOPE -- an unmatched tuple element or struct field… | 8ae04976e |
 | B-2026-09-20-15 | codegen | medium | A GENERIC ENUM'S PAYLOAD LOSES ITS USER `Drop` BODY ON ALL THREE COMPILED SURFACES when held as a Vec ELEMENT or a STRUCT FIELD -- the DISCARD positi… | 12b8ec119 |
+| B-2026-09-20-16 | codegen | medium | A WHOLE-VALUE BINDING OF A **BOXED** `Option` TUPLE PAYLOAD RETURNED OUT OF ITS ARM RUNS BOTH PARTS' `Drop` BODIES TWICE ON EVERY COMPILED BACKEND --… | acd81db20 |
 | B-2026-09-20-21 | codegen | high | COMPOSITION CHANGES THE ANSWER IN THE `Drop`-BODY-OWNERSHIP FAMILY: a boxed TUPLE `Option` payload's surviving element runs its `Drop` body twice and… | 24b0a92f6 |
 | B-2026-09-20-24 | codegen+interp | medium | AN OWNED PARAMETER OF A NAMELESS AGGREGATE TYPE -- A TUPLE, AN `Array[T, N]` OR A `Vec[T]` -- RUNS NONE OF ITS ELEMENTS' USER `Drop` BODIES WHEN THE… | 6ec7eb903 |
 | B-2026-09-20-29 | codegen | medium | `expr_cannot_carry_container_heap` IS MISSING TWO ARMS AND ENDS IN `_ => false`, SO AN INDEX STORE WHOSE RHS MENTIONS ITS OWN CONTAINER LEAKS THE DIS… | 6e342a3 |
