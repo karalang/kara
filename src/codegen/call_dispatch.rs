@@ -2950,6 +2950,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-09-30-56 — the same stand-down for a named local moved
+            // into a collection LITERAL argument (`pass([w])`); see the helper.
+            if !borrow_skip && whole_escape {
+                self.stand_down_literal_arg_places(&a.value);
+            }
             // B-2026-09-20-52 — COLLECT AN ARGUMENT BINDING WHOSE BOX THIS
             // CALL MAY HAND BACK, so the disarm below can ask the returned
             // VALUE rather than the callee's signature.
@@ -10051,6 +10056,39 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
             }
             _ => {}
+        }
+    }
+
+    /// B-2026-09-30-56 — retract the `Drop` BODY of each named local moved
+    /// into a collection literal argument (`pass([w])`) whose value leaves
+    /// through the callee: handed back, or stored in an outliving place.
+    ///
+    /// The literal declines the fresh walker because it holds a place, so
+    /// `w`'s own binding runs its body after the call, which is right when the
+    /// value dies in the callee. When it leaves, its new owner (the result
+    /// binding, the container) runs the body again: `dW1_40 r:40 dW1_40` on all
+    /// four surfaces. The move already zeroed `w`'s heap, so only the body is
+    /// retracted. A binding that owns no armed `Drop` of its own (a `match`
+    /// payload copy) is left alone. Every call leg asks this under its own
+    /// whole-escape gate; the interpreter twin is the literal-item list in
+    /// `record_passthrough_arg_moves` (and its method sibling).
+    pub(super) fn stand_down_literal_arg_places(&mut self, arg: &Expr) {
+        let items = match &arg.kind {
+            ExprKind::ArrayLiteral(items) => items,
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if type_name == "Vec" || type_name == "Array" =>
+            {
+                items
+            }
+            _ => return,
+        };
+        for item in items {
+            if let ExprKind::Identifier(var_name) = &item.kind {
+                if self.has_armed_own_user_drop(var_name) {
+                    let var_name = var_name.clone();
+                    self.suppress_user_drop_body_keeping_memory(&var_name);
+                }
+            }
         }
     }
 

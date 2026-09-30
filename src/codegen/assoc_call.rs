@@ -3158,6 +3158,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // consulted here: it answers true for a param that escapes
                     // on one path and dies on another, which is how this row's
                     // free-function cell lost its body in the first place.
+                    // B-2026-09-30-56 — a local moved into a literal argument.
+                    if self.conditional_handback_memory_moves_to_callee(&qualified, i)
+                        || self.callee_takes_over_arg_drop_body(&qualified, i)
+                    {
+                        self.stand_down_literal_arg_places(&a.value);
+                    }
                     if let ExprKind::Identifier(var_name) = &a.value.kind {
                         let var_name = var_name.clone();
                         // B-2026-09-07-4 — the flip branch first, as on the

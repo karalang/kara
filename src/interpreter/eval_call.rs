@@ -3832,11 +3832,42 @@ impl<'a> super::Interpreter<'a> {
                 ))
             })
             .collect();
+        // B-2026-09-30-56 — the method twin of `record_passthrough_arg_moves`'s
+        // literal-item list: a named local moved into a collection literal the
+        // method hands back or stores gives its body to the new owner.
+        let literal_moves: Vec<String> = args
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| {
+                let i = *i;
+                crate::ast::fn_always_returns_param(Some(self.program), f, i)
+                    || crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
+                    || crate::ast::fn_always_moves_param_into_outliving_place(f, i)
+                    || crate::ast::fn_moves_param_into_local_container(f, i)
+                    || crate::ast::fn_always_returns_param_via_call(self.program, f, i)
+            })
+            .flat_map(|(_, arg)| match &arg.value.kind {
+                ExprKind::ArrayLiteral(items) => items.as_slice(),
+                ExprKind::PrefixCollectionLiteral { type_name, items }
+                    if type_name == "Vec" || type_name == "Array" =>
+                {
+                    items.as_slice()
+                }
+                _ => &[],
+            })
+            .filter_map(|e| match &e.kind {
+                ExprKind::Identifier(n) => Some(n.clone()),
+                _ => None,
+            })
+            .collect();
         for (n, callee_owns_body) in moved {
             self.record_container_move_source_name(&n);
             if callee_owns_body {
                 self.record_returned_arg_user_drop_move(&n);
             }
+        }
+        for n in literal_moves {
+            self.record_returned_arg_user_drop_move(&n);
         }
     }
 

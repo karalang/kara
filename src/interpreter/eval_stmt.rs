@@ -9609,11 +9609,58 @@ impl<'a> super::Interpreter<'a> {
                 Some((n.clone(), callee_owns_body))
             })
             .collect();
+        // B-2026-09-30-56 — a named local moved into a collection LITERAL
+        // argument (`pass([w])`) that the callee hands back or stores: the
+        // literal's new owner runs the body, so the local stands down exactly
+        // as a bare named argument does below. Codegen twin: the literal-item
+        // loop beside `suppress_moved_arg_bodies_keeping_memory` in
+        // `call_dispatch.rs`.
+        let literal_moves: Vec<String> = callee
+            .map(|f| {
+                args.iter()
+                    .enumerate()
+                    .filter(|(i, _)| {
+                        let i = *i;
+                        crate::ast::fn_returns_param(f, i)
+                            || crate::ast::fn_always_returns_param(Some(self.program), f, i)
+                            || crate::ast::fn_conditionally_returns_param_bare(
+                                Some(self.program),
+                                f,
+                                i,
+                            )
+                            || crate::ast::fn_always_returns_param_via_call(self.program, f, i)
+                            || crate::ast::fn_moves_param_into_outliving_place(f, i)
+                            || crate::ast::fn_moves_param_into_outliving_place_via_call(
+                                self.program,
+                                f,
+                                i,
+                            )
+                            || crate::ast::fn_moves_param_into_local_container_any(f, i)
+                    })
+                    .flat_map(|(_, arg)| match &arg.value.kind {
+                        ExprKind::ArrayLiteral(items) => items.as_slice(),
+                        ExprKind::PrefixCollectionLiteral { type_name, items }
+                            if type_name == "Vec" || type_name == "Array" =>
+                        {
+                            items.as_slice()
+                        }
+                        _ => &[],
+                    })
+                    .filter_map(|e| match &e.kind {
+                        ExprKind::Identifier(n) => Some(n.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         for (n, callee_owns_body) in passthrough {
             self.record_container_move_source_name(&n);
             if callee_owns_body {
                 self.record_returned_arg_user_drop_move(&n);
             }
+        }
+        for n in literal_moves {
+            self.record_returned_arg_user_drop_move(&n);
         }
     }
 

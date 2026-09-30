@@ -4076,6 +4076,28 @@ impl<'ctx> super::Codegen<'ctx> {
             // through `find_function_ast` instead answers for both shapes by
             // one route, and preserves the free-function behaviour exactly —
             // it is the same `fn_returns_param` union, asked of the same AST.
+            // B-2026-09-30-56 — a local moved into a literal argument, under
+            // the every-exit / per-path owner test the named-local arm below
+            // uses (`callee_takes_over_arg_drop_body`).
+            if matches!(
+                &a.value.kind,
+                ExprKind::ArrayLiteral(_) | ExprKind::PrefixCollectionLiteral { .. }
+            ) {
+                let lit_ast_i = self
+                    .program_snapshot
+                    .as_deref()
+                    .and_then(|p| super::declarations::find_function_ast(p, name))
+                    .and_then(|f| {
+                        if f.self_param.is_some() {
+                            i.checked_sub(1)
+                        } else {
+                            Some(i)
+                        }
+                    });
+                if lit_ast_i.is_some_and(|ai| self.callee_takes_over_arg_drop_body(name, ai)) {
+                    self.stand_down_literal_arg_places(&a.value);
+                }
+            }
             if let ExprKind::Identifier(var_name) = &a.value.kind {
                 let ast_i = self
                     .program_snapshot

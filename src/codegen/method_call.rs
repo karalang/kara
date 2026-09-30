@@ -8074,6 +8074,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             .call_arg_moves_into_outliving_place(&qualified, i, false)
                             || self.callee_hands_arg_off(&qualified, i)
                             || self.callee_always_hands_arg_back_via_call(&qualified, i);
+                        // B-2026-09-30-56 — a local moved into a literal argument.
+                        if whole_escape {
+                            self.stand_down_literal_arg_places(&a.value);
+                        }
                         if whole_escape || payload_escape.is_some() {
                             if let ExprKind::Identifier(var_name) = &a.value.kind {
                                 let var_name = var_name.clone();
