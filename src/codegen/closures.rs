@@ -1895,8 +1895,42 @@ impl<'ctx> super::Codegen<'ctx> {
     /// excluded (its own binding owns the free / it stages its own cleanup), so
     /// no double-free with a caller-scope owner. Shared by the named-binding and
     /// value-callee closure-call paths.
+    ///
+    /// B-2026-09-30-33 — a COLLECTION LITERAL (`f([1, 2])`, `f(Vec[8])`,
+    /// `f([0; 3])`) is the same orphaned fresh-heap shape, and the direct-call
+    /// path has admitted it since B-2026-07-02-6's `is_collection_literal_arg`.
+    /// This closure-side twin kept the Call/MethodCall-only predicate, so every
+    /// literal argument to a closure leaked its buffer on each call.
+    /// `llvm_ty_is_vec_struct` keeps a stack `[N x T]` array literal out.
     fn free_fresh_owned_heap_closure_arg(&mut self, arg: &Expr, val: BasicValueEnum<'ctx>) {
-        if self.expr_yields_fresh_owned_temp(arg)
+        let is_collection_literal = matches!(
+            &arg.kind,
+            ExprKind::ArrayLiteral(_)
+                | ExprKind::PrefixCollectionLiteral { .. }
+                | ExprKind::RepeatLiteral { .. }
+        );
+        // The branching arg (`f(if c { mk(1) } else { mk(2) })`) is the same
+        // twin gap, for B-2026-08-29-27's `expr_is_fresh_owned_branch_tail`.
+        // As on the direct path, a tail that handed out a block-local BINDING
+        // already has its owner (`branch_tail_owner_slots`, B-2026-08-30-2), and
+        // a second one here would be a double free.
+        let tail_already_owned = self
+            .branch_tail_owner_slots
+            .contains_key(&(arg.span.offset, arg.span.length));
+        // And the single-tail BLOCK arg (`f({ [4] })`), B-2026-06-11-5's
+        // `is_block_arg` on the direct path, under the same owned-tail guard.
+        let is_block_arg = matches!(
+            &arg.kind,
+            ExprKind::Block(_)
+                | ExprKind::Seq(_)
+                | ExprKind::Unsafe(_)
+                | ExprKind::LabeledBlock { .. }
+        );
+        if (self.expr_yields_fresh_owned_temp(arg)
+            || is_collection_literal
+            || is_block_arg
+            || self.expr_is_fresh_owned_branch_tail(arg))
+            && !tail_already_owned
             && self.llvm_ty_is_vec_struct(val.get_type())
             && !self.rhs_stages_fstr_acc(arg)
         {
