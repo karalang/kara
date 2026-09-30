@@ -1,0 +1,58 @@
+//! B-2026-09-30-43 — a `match` / `if let` struct pattern that binds an
+//! ENUM-typed or `Vec`-typed leaf and never uses it lost that leaf's `Drop`
+//! bodies on every compiled surface. A generic leaf (`v: T`) named no enum
+//! from its declared type; it is now resolved through the scrutinee's
+//! instantiation and walked on the container channel, so a nested
+//! `match v { .. }` still masks it. A `Vec` leaf, generic or declared, had no
+//! element walk at all and now gets one. By-transfer params join locals.
+
+use super::*;
+
+/// B-2026-09-30-43 — unused and read enum / `Vec` leaves of generic and declared structs: locals and by-transfer params, a guard, one branch, a nested `match`, heap elements, and `if let`.
+#[test]
+fn e2e_struct_pattern_enum_and_vec_leaves_run_their_drop_bodies() {
+    let src = r#"
+struct G[T] { v: T, n: i64 }
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct Rs { id: i64, s: String }
+impl Drop for Rs { fn drop(mut ref self) { println(f"ds{self.id} {self.s.len()}") } }
+enum E { A(R), B }
+struct Hv { v: Vec[R], n: i64 }
+fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
+fn b1(g: G[E]) -> i64 { match g { G { v, n } => n } }
+fn b2(g: G[Vec[R]]) -> i64 { match g { G { v, n } => v.len() + n } }
+fn b3(g: G[E], c: bool) -> i64 { if c { match g { G { v, n } => n } } else { 0 } }
+fn b4(g: G[Vec[Rs]]) -> i64 { match g { G { v, n } => v.len() + n } }
+fn b5(g: G[E]) -> i64 { match g { G { v, n } => match v { E.A(r) => r.id, E.B => n } } }
+fn main() {
+    let g1 = G { v: E.A(R { id: 1 }), n: 10 };
+    let k1 = match g1 { G { v, n } => n };
+    println(k1);
+    let g2 = G { v: [R { id: 2 }, R { id: 3 }], n: 20 };
+    let k2 = match g2 { G { v, n } => n };
+    println(k2);
+    println(b1(G { v: E.A(R { id: 4 }), n: 40 }));
+    println(b2(G { v: [R { id: 5 }, R { id: 6 }], n: 50 }));
+    println(b3(G { v: E.A(R { id: 7 }), n: 70 }, true));
+    println(b3(G { v: E.A(R { id: 8 }), n: 80 }, false));
+    println(b4(G { v: [Rs { id: 9, s: mk(9) }], n: 90 }));
+    println(b5(G { v: E.A(R { id: 11 }), n: 110 }));
+    let g3 = G { v: E.A(R { id: 12 }), n: 120 };
+    let k3 = match g3 { G { v, n } if n > 500 => 0, G { v, n } => n };
+    println(k3);
+    let h = Hv { v: [R { id: 13 }], n: 130 };
+    let k4 = match h { Hv { v, n } => n };
+    println(k4);
+    let g4 = G { v: [Rs { id: 14, s: mk(14) }], n: 140 };
+    if let G { v, n } = g4 { println(n) };
+    let g5 = G { v: E.A(R { id: 15 }), n: 150 };
+    if let G { v, n } = g5 { println(n) };
+    println("end");
+}"#;
+    let want = "d1\n10\nd2\nd3\n20\nd4\n40\nd5\nd6\n52\nd7\n70\nd8\n0\nds9 31\n91\nd11\n11\nd12\n120\nd13\n130\n140\nds14 32\n150\nd15\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    assert_eq!(run_program(src).as_deref(), Some(want), "AOT");
+}

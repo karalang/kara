@@ -13846,6 +13846,25 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned()
             .unwrap_or_default();
         let mut masked_any = false;
+        // B-2026-09-30-43 — asked once, before any field below masks the walk
+        // it reads.
+        let scrut_is_transfer_param = self.scrutinee_is_transfer_owned_struct_param(scrutinee);
+        // B-2026-09-30-43 — a GENERIC struct's field declared `v: T` names no
+        // type; the scrutinee's instantiation is what says `T` is an enum or a
+        // `Vec`. Empty for a non-generic struct.
+        let leaf_subst = self
+            .type_decls
+            .enum_inst_var_types
+            .get(var_name.as_str())
+            .cloned()
+            .map(|i| self.generic_struct_subst_from_inst(&struct_name, &i))
+            .unwrap_or_default();
+        let field_type_exprs = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name.as_str())
+            .cloned()
+            .unwrap_or_default();
         for field_pat in fields {
             let Some(idx) = field_names.iter().position(|n| n == &field_pat.name) else {
                 continue;
@@ -13893,7 +13912,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 // param and `self`-receiver spellings were already correct on
                 // all four surfaces. Registering here as well doubled them —
                 // measured `dE dR54 dE dR54` against `dE dR54`.
-                let scrut_is_owned_param = self.scrutinee_is_owned_param_binding(scrutinee);
+                // B-2026-09-30-43 — except a param held by TRANSFER, whose
+                // walk the callee owns: masking it here hands the leaf's body
+                // to nobody unless the binding takes it.
+                let scrut_is_owned_param =
+                    self.scrutinee_is_owned_param_binding(scrutinee) && !scrut_is_transfer_param;
+                // B-2026-09-30-43 — the declared field type, through the
+                // instantiation when the field is a bare type parameter.
+                let leaf_te = field_type_exprs.get(idx).map(|te| match &te.kind {
+                    TypeKind::Path(p)
+                        if p.segments.len() == 1
+                            && p.generic_args.as_ref().is_none_or(|a| a.is_empty()) =>
+                    {
+                        leaf_subst
+                            .get(p.segments[0].as_str())
+                            .cloned()
+                            .unwrap_or_else(|| te.clone())
+                    }
+                    _ => te.clone(),
+                });
+                let leaf_ty_name = leaf_te.as_ref().and_then(|te| match &te.kind {
+                    TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                });
+                let generic_leaf = leaf_ty_name.is_some()
+                    && field_type_names.get(idx).cloned().flatten() != leaf_ty_name;
                 if let Some(bound) = bound_name
                     .filter(|_| !scrut_is_owned_param)
                     .filter(|n| !binding_is_consumed(n.as_str()))
@@ -13908,18 +13951,45 @@ impl<'ctx> super::Codegen<'ctx> {
                     // this is that measurement, and it says leave it alone.
                     // `Option`/`Result` keep their own payload machinery, and a
                     // `shared` enum drops through refcounts rather than a walk.
-                    if let Some(field_ty) =
-                        field_type_names.get(idx).cloned().flatten().filter(|t| {
-                            !matches!(t.as_str(), "Option" | "Result")
-                                && self
-                                    .type_decls
-                                    .enum_layouts
-                                    .get(t.as_str())
-                                    .is_some_and(|l| !l.is_shared)
-                        })
-                    {
+                    if let Some(field_ty) = leaf_ty_name.clone().filter(|t| {
+                        !matches!(t.as_str(), "Option" | "Result")
+                            && self
+                                .type_decls
+                                .enum_layouts
+                                .get(t.as_str())
+                                .is_some_and(|l| !l.is_shared)
+                    }) {
                         if let Some(slot) = self.variables.get(bound.as_str()).map(|s| s.ptr) {
-                            if let Some(bodies) =
+                            if generic_leaf {
+                                // B-2026-09-30-43 — a leaf declared `v: T` is
+                                // bound without the enum channels a declared
+                                // `v: E` gets, so a nested `match v { E.A(r) =>
+                                // .. }` moves the payload into `r` and masks
+                                // only a `ContainerElemBodies` walk. Register
+                                // the payload walk there, and the enum's own
+                                // body (if any) beside it.
+                                if let Some(own) = self.emit_struct_own_drop_body_only_fn(&field_ty)
+                                {
+                                    self.track_user_drop_var_with_fn(
+                                        &field_ty,
+                                        &bound,
+                                        slot,
+                                        own,
+                                        UserDropKind::StructFieldBodies,
+                                    );
+                                }
+                                if let Some(walk) =
+                                    self.emit_enum_payload_user_drop_bodies_fn(&field_ty)
+                                {
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        &bound,
+                                        slot,
+                                        walk,
+                                        UserDropKind::ContainerElemBodies,
+                                    );
+                                }
+                            } else if let Some(bodies) =
                                 self.emit_struct_user_drop_bodies_only_fn(&field_ty)
                             {
                                 self.track_user_drop_var_with_fn(
@@ -13928,6 +13998,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                     slot,
                                     bodies,
                                     UserDropKind::StructFieldBodies,
+                                );
+                            }
+                        }
+                    }
+                    // B-2026-09-30-43 — a `Vec` leaf the bind gave no element
+                    // walk: one declared `v: T`, and a declared `Vec[R]` bound
+                    // by a struct pattern, which the bind types but does not
+                    // register (only a variant payload binding gets one). The
+                    // mask below hands the elements' bodies over either way.
+                    if self.live_container_elem_bodies_fn(bound.as_str()).is_none() {
+                        if let (Some(elem_te), Some(slot)) = (
+                            leaf_te.as_ref().and_then(vec_inner_type_expr),
+                            self.variables.get(bound.as_str()).map(|s| s.ptr),
+                        ) {
+                            let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                            if let Some(bodies) =
+                                self.arm_vec_payload_elem_bodies_fn(&elem_te, elem_ty)
+                            {
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    &bound,
+                                    slot,
+                                    bodies,
+                                    UserDropKind::ContainerElemBodies,
                                 );
                             }
                         }
