@@ -1419,7 +1419,12 @@ impl<'a> super::Interpreter<'a> {
                             // nothing for that reason.
                             pattern.binding_names()
                         } else if let Value::EnumVariant { ref enum_name, .. } = val {
-                            self.arm_moved_user_drop_payload_bindings(enum_name, pattern)
+                            // B-2026-09-20-26 — see the `match` stash's twin.
+                            self.arm_moved_user_drop_payload_bindings_admitting(
+                                enum_name,
+                                pattern,
+                                Self::place_walk_is_retractable(value),
+                            )
                         } else {
                             Vec::new()
                         }
@@ -1924,7 +1929,12 @@ impl<'a> super::Interpreter<'a> {
                             // empty.
                             pattern.binding_names()
                         } else if let Value::EnumVariant { ref enum_name, .. } = val {
-                            self.arm_moved_user_drop_payload_bindings(enum_name, pattern)
+                            // B-2026-09-20-26 — see the `match` stash's twin.
+                            self.arm_moved_user_drop_payload_bindings_admitting(
+                                enum_name,
+                                pattern,
+                                Self::place_walk_is_retractable(value),
+                            )
                         } else {
                             Vec::new()
                         }

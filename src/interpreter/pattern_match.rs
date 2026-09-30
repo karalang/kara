@@ -581,8 +581,16 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                     if let Value::EnumVariant { enum_name, .. } = scrutinee {
-                        for n in self.arm_moved_user_drop_payload_bindings(enum_name, &arm.pattern)
-                        {
+                        // B-2026-09-20-26 — a container payload only where the
+                        // scrutinee has a walk the disarm retracted; see
+                        // `payload_te_runs_user_drop_admitting`.
+                        let containers =
+                            scrutinee_place.is_some_and(Self::place_walk_is_retractable);
+                        for n in self.arm_moved_user_drop_payload_bindings_admitting(
+                            enum_name,
+                            &arm.pattern,
+                            containers,
+                        ) {
                             // B-2026-08-28-63 — a user ENUM payload is a real
                             // Drop slot too. The struct-only bind below meant a
                             // consuming arm that took an enum out
@@ -2538,6 +2546,17 @@ impl<'a> super::Interpreter<'a> {
         enum_name: &str,
         pattern: &Pattern,
     ) -> Vec<String> {
+        self.arm_moved_user_drop_payload_bindings_admitting(enum_name, pattern, true)
+    }
+
+    /// [`Self::arm_moved_user_drop_payload_bindings`] with the container
+    /// clause switchable; see [`Self::payload_te_runs_user_drop_admitting`].
+    pub(super) fn arm_moved_user_drop_payload_bindings_admitting(
+        &self,
+        enum_name: &str,
+        pattern: &Pattern,
+        containers: bool,
+    ) -> Vec<String> {
         let variant = match &pattern.kind {
             PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
                 match path.last() {
@@ -2598,7 +2617,7 @@ impl<'a> super::Interpreter<'a> {
                         .get(i)
                         .map(|(_, te)| {
                             self.type_expr_is_own_generic_param(enum_name, te)
-                                || self.payload_te_runs_user_drop(te)
+                                || self.payload_te_runs_user_drop_admitting(te, containers)
                         })
                         .unwrap_or(false)
                     {
@@ -2613,7 +2632,7 @@ impl<'a> super::Interpreter<'a> {
                         .find(|(dn, _)| dn.as_deref() == Some(fp.name.as_str()))
                         .map(|(_, te)| {
                             self.type_expr_is_own_generic_param(enum_name, te)
-                                || self.payload_te_runs_user_drop(te)
+                                || self.payload_te_runs_user_drop_admitting(te, containers)
                         })
                         .unwrap_or(false);
                     if !runs {
@@ -2835,8 +2854,19 @@ impl<'a> super::Interpreter<'a> {
     /// as it does for a struct payload. Codegen twin: the tuple clause of
     /// `enum_pattern_consumes_user_drop_payload`.
     fn payload_te_runs_user_drop(&self, te: &TypeExpr) -> bool {
+        self.payload_te_runs_user_drop_admitting(te, true)
+    }
+
+    /// [`Self::payload_te_runs_user_drop`], with the B-2026-09-20-26 container
+    /// clause switchable. `containers: false` is for a FRESH-TEMP scrutinee's
+    /// arm stash: there no backend runs a declared container payload's bodies
+    /// for a read-only arm (B-2026-09-23-3), and admitting the container here
+    /// alone would turn that agreed gap into a divergence.
+    fn payload_te_runs_user_drop_admitting(&self, te: &TypeExpr, containers: bool) -> bool {
         match &te.kind {
-            TypeKind::Tuple(elems) => elems.iter().any(|t| self.payload_te_runs_user_drop(t)),
+            TypeKind::Tuple(elems) => elems
+                .iter()
+                .any(|t| self.payload_te_runs_user_drop_admitting(t, containers)),
             // B-2026-09-19-47 — a declared `Option`/`Result` payload asks its
             // PAYLOAD, through every nested level, as its walk does.
             TypeKind::Path(p)
@@ -2846,6 +2876,17 @@ impl<'a> super::Interpreter<'a> {
                 ) =>
             {
                 self.optres_payload_te_runs_user_drop(te)
+            }
+            // B-2026-09-20-26 — a CONTAINER payload (`Array[R, N]`, `Vec[R]`)
+            // runs a body when its ELEMENT does, the reach the payload walk
+            // already has. Asking the head name `Array` / `Vec` answered false,
+            // so an arm moving the container out (`A(v) => { let u = v; .. }`)
+            // left the scrutinee's walk armed beside the rebinding's own, and
+            // every element's body ran twice.
+            _ if Self::array_payload_elem_te(te).is_some() => {
+                containers
+                    && Self::array_payload_elem_te(te)
+                        .is_some_and(|elem| self.payload_te_runs_user_drop(&elem))
             }
             _ => self.type_expr_runs_user_drop(te),
         }

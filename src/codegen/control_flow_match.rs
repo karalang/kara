@@ -11759,12 +11759,30 @@ impl<'ctx> super::Codegen<'ctx> {
             && self.var_has_boxed_enum_drop(scrut_name)
             && self.arm_consumes_only_generic_payload(&enum_name, pattern)
             && !arm_binding_takes_container_interior;
-        if self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern) {
+        // B-2026-09-20-26 — an arm moving a declared `Array[T, N]` payload
+        // out also takes it, but only here, where the arm's binding can be
+        // handed the element walk the mask takes off the scrutinee: a tuple
+        // variant, over a local (a by-value param's walk is the caller's)
+        // whose payload walk is live (a local wrapping a param's array has
+        // none). The shared predicate stays name-keyed, so the projection
+        // and param paths keep running the bodies on the scrutinee.
+        let array_payload_handed_to_arm = !self.scrutinee_is_owned_param_binding(scrutinee)
+            && self.live_container_elem_bodies_fn(scrut_name).is_some()
+            && self.arm_takes_drop_bodied_array_payload(&enum_name, pattern);
+        if array_payload_handed_to_arm
+            || self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern)
+        {
             // B-2026-09-20-62 — inside the same gate the mask is, and for the
             // same reason: this registration is the other half of that
             // decision, so an arm the gate declines must get neither.
             if arm_binding_takes_container_interior {
                 self.register_arm_binding_container_elem_bodies(pattern, &scalar_tes);
+            }
+            // B-2026-09-20-26 — the `Array` payload's element bodies move to the
+            // arm's binding exactly when the mask below takes them off the
+            // scrutinee, so the two halves share this gate.
+            if !bodies_mask_is_sole_channel && array_payload_handed_to_arm {
+                self.register_arm_binding_array_payload_elem_bodies(pattern, &scalar_tes);
             }
             // Only the BODIES mask is gated: the MEMORY retraction at the end
             // of this block is what stops the box drop and the binding from
@@ -12046,7 +12064,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // the identifier path gates its `suppress_container_elem_bodies_for_var`
         // call: with nothing taken there is nothing to hand over, and masking
         // would lose the body outright.
-        if self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern) {
+        // B-2026-09-20-26 — a moved-out `Array` payload is taken here too,
+        // by an arm KNOWN to move it: no walk is registered on the binding
+        // at this site, so a read-only arm disarmed here ran the bodies
+        // nowhere.
+        if self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern)
+            || (arm_reads_only == Some(false)
+                && self.arm_takes_drop_bodied_array_payload(&enum_name, pattern))
+        {
             self.disarm_projection_enum_payload_bodies(scrutinee);
         }
     }
@@ -15629,6 +15654,46 @@ impl<'ctx> super::Codegen<'ctx> {
     /// at all (`tys.len() != 1` skips the rest). Anything else returns without
     /// registering, and its caller has already decided the husk's mask runs —
     /// the pre-existing behaviour, not a new silence.
+    /// B-2026-09-20-26 — register an arm binding's `Array` payload element
+    /// bodies, for the arm that took them off the scrutinee's walker. The
+    /// binding owns the elements from here on, so a `let u = v;` rebinding
+    /// hands the walk on rather than running it beside the husk's.
+    fn register_arm_binding_array_payload_elem_bodies(
+        &mut self,
+        pattern: &Pattern,
+        scalar_tes: &std::collections::HashMap<String, TypeExpr>,
+    ) {
+        for b in Self::variant_arm_bodied_binds(pattern, scalar_tes) {
+            let Some(te) = scalar_tes.get(b.as_str()) else {
+                continue;
+            };
+            let Some((elem, n)) = self.array_elem_and_len(te) else {
+                continue;
+            };
+            let elem = self.subst_monomorph_type_params(&elem);
+            if n == 0
+                || self.array_elem_and_len(&elem).is_some()
+                || !self.elem_te_runs_user_drop(&elem)
+            {
+                continue;
+            }
+            let Some(slot) = self.variables.get(b.as_str()).map(|s| s.ptr) else {
+                continue;
+            };
+            let elem_ty = self.llvm_type_for_type_expr(&elem);
+            let Some(bodies) = self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem, n) else {
+                continue;
+            };
+            self.track_user_drop_var_with_fn(
+                "",
+                &b,
+                slot,
+                bodies,
+                crate::codegen::state::UserDropKind::ContainerElemBodies,
+            );
+        }
+    }
+
     fn register_arm_binding_container_elem_bodies(
         &mut self,
         pattern: &Pattern,
@@ -16205,6 +16270,40 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
                     .is_some_and(|n| own_params.contains(&n))
             })
+    }
+
+    /// B-2026-09-20-26 — does this TUPLE-variant arm take a declared
+    /// `Array[T, N]` payload whose element runs a user `Drop` body?
+    /// `enum_pattern_consumes_user_drop_payload` reads a payload's head name,
+    /// and `Array` is no user type, so it answers no for these. A NESTED array
+    /// element is left out: the arm binding of an `Array[Array[R, 1], 2]`
+    /// payload reads its elements as zeroes, so handing it the walk loses the
+    /// ids (B-2026-09-30-99).
+    fn arm_takes_drop_bodied_array_payload(&self, enum_name: &str, pattern: &Pattern) -> bool {
+        if !matches!(pattern.kind, PatternKind::TupleVariant { .. }) {
+            return false;
+        }
+        let Some((variant_name, consumed)) =
+            self.enum_pattern_consumed_positions(enum_name, pattern)
+        else {
+            return false;
+        };
+        let Some((_, _, tes)) = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, n, _)| *n == variant_name)
+        else {
+            return false;
+        };
+        consumed.into_iter().any(|pos| {
+            tes.get(pos)
+                .and_then(|te| self.array_elem_and_len(te))
+                .is_some_and(|(elem, n)| {
+                    n > 0
+                        && self.array_elem_and_len(&elem).is_none()
+                        && self.elem_te_runs_user_drop(&elem)
+                })
+        })
     }
 
     /// B-2026-07-30-11 (enum leg) — does `pattern` move out a payload position

@@ -10827,7 +10827,7 @@ impl<'a> super::Interpreter<'a> {
     /// handled a `Vec` payload's elements correctly -- both container kinds are
     /// one runtime value -- and simply never got a type, so it returned before
     /// touching the value.
-    fn array_payload_elem_te(te: &TypeExpr) -> Option<TypeExpr> {
+    pub(super) fn array_payload_elem_te(te: &TypeExpr) -> Option<TypeExpr> {
         match &te.kind {
             TypeKind::Array { element, .. } => Some((**element).clone()),
             TypeKind::Path(p)
