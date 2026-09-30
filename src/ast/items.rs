@@ -1416,7 +1416,9 @@ pub fn fn_returns_param_with(
             ExprKind::StructLiteral { fields, .. } => fields
                 .iter()
                 .any(|f| expr_is_ident(&f.value, name, wraps, program)),
-            ExprKind::Tuple(elems) => elems
+            // B-2026-09-30-22 — an ARRAY literal moves its elements out of
+            // the frame exactly as a tuple literal does.
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems
                 .iter()
                 .any(|el| expr_is_ident(el, name, wraps, program)),
             // B-2026-09-19-36 — an `Option`/`Result` CONSTRUCTOR carries the
@@ -3792,7 +3794,10 @@ fn fn_always_returns_param_ex(
             ExprKind::StructLiteral { fields, .. } => fields
                 .iter()
                 .any(|f| yields(&f.value, name, wraps, program, via)),
-            ExprKind::Tuple(elems) => elems.iter().any(|el| yields(el, name, wraps, program, via)),
+            // B-2026-09-30-22 — an array literal, as a tuple literal.
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
+                elems.iter().any(|el| yields(el, name, wraps, program, via))
+            }
             // B-2026-09-25-16 — a user enum's variant constructor carries the
             // param out exactly as a struct literal does (`return E.A(a)`).
             ExprKind::Call { callee, args }
@@ -4805,7 +4810,8 @@ pub fn fn_conditionally_returns_param_bare(
             ExprKind::StructLiteral { fields, .. } => fields
                 .iter()
                 .any(|f| yields_wrapped_named(&f.value, name, wraps, program, f_self_name)),
-            ExprKind::Tuple(elems) => elems
+            // B-2026-09-30-22 — an array literal, as a tuple literal.
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems
                 .iter()
                 .any(|el| yields_wrapped_named(el, name, wraps, program, f_self_name)),
             ExprKind::Call { callee, args }

@@ -1433,8 +1433,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Option.Some(r)`) takes the same arm: the source walk
                     // below sees through it, and the nested-return guard then
                     // mints the per-path flag exactly as for an aggregate.
-                    if matches!(&e.kind, ExprKind::StructLiteral { .. } | ExprKind::Tuple(_))
-                        || crate::ast::option_result_ctor_payload(e).is_some()
+                    // B-2026-09-30-22 — and an ARRAY literal, which moves its
+                    // elements out exactly as a tuple does; without it a
+                    // conditional `return [a]` left `a`'s per-path flag armed
+                    // and its body ran in the callee and again in the result.
+                    if matches!(
+                        &e.kind,
+                        ExprKind::StructLiteral { .. }
+                            | ExprKind::Tuple(_)
+                            | ExprKind::ArrayLiteral(_)
+                    ) || crate::ast::option_result_ctor_payload(e).is_some()
                     {
                         let mut sources = Vec::new();
                         Self::collect_aggregate_literal_sources(e, &mut sources);
