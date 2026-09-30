@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 592 |
-| run-vs-build | 554 |
+| miscompile | 597 |
+| run-vs-build | 555 |
 | leak | 500 |
 | double-free | 375 |
 | missing-feature | 215 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2456 |
-| interp | 731 |
+| codegen | 2461 |
+| interp | 735 |
 | typecheck | 319 |
 | other | 112 |
 | ownership | 79 |
@@ -130,9 +130,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-20-17 | 2026-09-20 | codegen+interp | medium | REBINDING A BOXED `Option` TUPLE PAYLOAD BEFORE PROJECTING OUT OF IT RUNS THE ESCAPING PART'S `Drop` BODY TWICE ON ALL FOUR SURFACES AT ONCE -- `Some(t) => { let u = t; return u.0; }` prints `dH5 dH6 got:5 dH5 end` everywhere against a hand-derived due of `dH6 got:5 dH5 end`, so no A/B against the interpreter can see it and no sanitizer can either; the SAME arm without the intermediate local is correct since B-2026-09-19-34 and the same arm with the local and no projection doubles BOTH parts (B-2026-09-20-16), so the three spellings of taking a payload out through a local behave three different ways | — |
 | B-2026-09-20-18 | 2026-09-20 | codegen+interp | medium | TWO GUARDED `Some` ARMS OVER ONE SCRUTINEE, EACH TAKING A DIFFERENT PAYLOAD ELEMENT, ARE WRONG ON EVERY SURFACE AND THE PAYLOAD'S WIDTH PICKS THE DIRECTION -- at the INLINE width all four lose the untaken sibling's body (`got:5 dR5 end` against a due `dR6 got:5 dR5 end`, an AGREED fault); at the BOXED width the interpreter loses it while the three compiled surfaces DOUBLE the taken one, so neither backend is an oracle; every consumer of an arm's take rewrites state that is not edge-sensitive, so the last arm to write decides, and B-2026-09-19-34's narrowing declines here deliberately because masking one arm's element would LOSE the other's | — |
-| B-2026-09-20-19 | 2026-09-20 | interp+codegen | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR THE PART A CONSUMING ARM MOVES INTO ITS OWN FRAME, AT BOTH PAYLOAD WIDTHS -- `Some(t) => { let x = t.0; println("mid"); return x; }` prints `mid dH5 dH6 got:5 dH5 end` interpreted against the due `mid dH6 got:5 dH5 end`, and a nested two-local spelling behaves the same; the compiled side is CORRECT at the boxed width since B-2026-09-19-34 and LOSES the untaken sibling's body at the inline width (`mid got:5 dR5 end`), which is the second half of this row -- one shape, the width selecting which extra half is wrong | — |
 | B-2026-09-20-20 | 2026-09-20 | codegen | medium | A CALL RESULT THAT RETURNS THE WHOLE `Option` DOUBLES THE MOVED-OUT FIELD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `take(mkq())` over `fn mkq() -> Option[Q]` and `fn take(o: Option[Q]) { match o { Some(t) => { let x = t.r; .. } .. } }` prints `r:50s:60 dR5 dR6 dR5` on jit / `karac build` / `-O0` / `-O2` against the interpreter's correct `r:50s:60 dR5 dR6`, where the same callee at NAMED-LOCAL and FRESH-TEMP provenance is correct and the TUPLE payload's twin `ttake(mkt())` is correct too, so the trigger is the CALL-RESULT provenance of a named-struct payload and not the move-out | — |
 | B-2026-09-20-22 | 2026-09-20 | codegen | medium | A `shared`-FIELD STRUCT WITH AN `impl Drop` RUNS ITS BODY TWICE ON THE VALUE AN ASSIGNMENT MOVES IN, when the RHS is a match-arm binding -- `out = w` over `struct Wsh { h: Sh }` prints `dWsh-OUT dWsh-PAY dWsh-PAY` on all three compiled surfaces against `--interp`'s correct two, so the moved-in value is destroyed at the assignment and again at the destination's scope exit; the plain-`String` twin of the same statement and the same statement with an inline-literal RHS are correct on every surface, and memory is clean (37 allocs / 37 frees, 0 valgrind errors) because the body only prints -- a body that released a handle would release it twice, and no sanitizer leg in the tree can see it | — |
 | B-2026-09-20-23 | 2026-09-20 | codegen | medium | A NAMED-LOCAL `Option`/`Result` ARGUMENT'S PAYLOAD `Drop` BODIES DRAIN AT THE CALLER'S SCOPE EXIT RATHER THAN AT THE CALLEE'S ARM -- `let a = [W1 { v: 40 }]; take(Some(a))` prints `r:40 end dW1_40` on all three compiled surfaces against the interpreter's due `dW1_40 r:40 end`, while the FRESH-TEMP spelling of the identical call is correct on all four since B-2026-09-20-9, so PROVENANCE is the axis; the count is right and valgrind is clean at -O0, so only a due-sequence oracle sees it, and the open question is which provenance is wrong -- the site's own model says the caller RETAINS these bodies, but the two provenances now drain at different points for the same value | — |
@@ -462,6 +460,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-58 | 2026-09-30 | codegen | low | A BRANCHING ARGUMENT WHOSE TAILS ARE COLLECTION LITERALS, OR MIX A BLOCK-LOCAL BINDING WITH A CALL, LEAKS ITS `Vec` BUFFER ON EVERY COMPILED SURFACE, TO A FREE FUNCTION AND A CLOSURE ALIKE -- `vl(if c { [1] } else { [2, 3] })`, its `match` spelling and `vl(if c { let t = mk(1); t } else { mk(2) })` each lose one block | — |
 | B-2026-09-30-59 | 2026-09-30 | codegen | medium | TWO MORE SPELLINGS OF A HEAP-OWNING VALUE MOVED INTO AN `Array` LITERAL LEAK ITS HEAP ON EVERY COMPILED SURFACE, the remainder of B-2026-09-30-34 -- a BY-VALUE PARAM moved in (`fn mkw(w: W1) -> i64 { return take([w]) }`) and a DISCARDED literal holding a local (`let w = W1 { .. }; let _ = [w];`) each lose the element's `String` (valgrind 1 block); body counts are right | — |
 | B-2026-09-30-60 | 2026-09-30 | codegen | medium | A DISCARDED `Array[..]` PREFIX LITERAL RUNS NO ELEMENT `Drop` BODY COMPILED AND LEAKS THE ELEMENT'S HEAP -- `let _ = Array[W1 { v: 7, s: f"a{7}" }];` prints `end` on all three compiled surfaces against `--interp`'s `dW1_7 end`, and loses 1 block | — |
+| B-2026-09-30-51 | 2026-09-30 | interp+codegen | medium | AN EARLY EXIT BEFORE A PROJECTION OUT OF A BOXED `Option` TUPLE PAYLOAD LOSES THE PROJECTED PART'S `Drop` BODY ON THE EXIT PATH, ON BOTH BACKENDS -- `Some(t) => { if c { return mkh(9); } return t.0; }` called with `c = true` prints `dH6 got:9 dH9 end` interpreted and compiled against the due `dH5 dH6 got:9 dH9 end`: `t.0` never left the frame on that path, yet its body runs nowhere | — |
+| B-2026-09-30-52 | 2026-09-30 | interp+codegen | medium | DESTRUCTURING A REBOUND BOXED `Option` TUPLE PAYLOAD (`let u = t; let (a, b) = u; return a;`) RUNS A DROP BODY THREE TIMES COMPILED AND TWICE INTERPRETED -- `build -O0` prints `dH6 dH5 dH6 got:5 dH5 end` and `--interp` `dH5 dH6 got:5 dH5 end` against the due `dH6 got:5 dH5 end` | — |
+| B-2026-09-30-53 | 2026-09-30 | codegen | medium | A BY-VALUE TUPLE PARAM REBOUND AND THEN PROJECTED (`fn eat(p: (H, H)) -> H { let u = p; return u.0; }`) RUNS THE STAYING ELEMENT'S `Drop` BODY TWICE COMPILED -- `build -O0` prints `dH6 dH6 got:5 dH5 end` against `--interp`'s correct `dH6 got:5 dH5 end` | — |
+| B-2026-09-30-54 | 2026-09-30 | interp+codegen | medium | SHADOWING A REBIND OF A BOXED `Option` TUPLE PAYLOAD LOSES `Drop` BODIES ON BOTH BACKENDS, DIFFERENTLY -- `let u = t; let k = u.0; let u = mkh(8); println(f"k{k.id}"); return u;` prints `k5 got:8 dH8 end` interpreted (both payload bodies lost) and `k5 dH5 got:8 dH8 end` compiled (`dH6` lost) against the due `k5 dH5 dH6 got:8 dH8 end` | — |
+| B-2026-09-30-55 | 2026-09-30 | codegen | medium | A `Result` WHOSE `Ok` AND `Err` PAYLOADS ARE BOTH BOXED TUPLES RUNS A PROJECTED PART'S `Drop` BODY TWICE COMPILED -- `match o { Ok(t) => { return t.0; } Err(e) => { return e.1; } }` over `Result[(H, H), (H, H)]` prints `dH5 dH6 got:5 dH5 end` compiled against `--interp`'s correct `dH6 got:5 dH5 end` | — |
+| B-2026-09-30-61 | 2026-09-30 | interp | low | AN ARM LOCAL TAKEN FROM AN `Option` TUPLE PAYLOAD AND HANDED OUT ONLY UNDER A CONDITION RUNS ITS `Drop` BODY LATER INTERPRETED THAN COMPILED ON THE PATH THAT DOES NOT HAND IT OUT -- `let x = t.0; if c { return x; } println("no"); return mkh(9);` at `c = false` prints `no dH5 dH6` on `--interp` and `dH5 no dH6` at `build -O0`; each body runs once on both, and the compiled position is the one the live-range rule and the existing pins give (INFERRED) | — |
 
 ### Relocated
 
@@ -3091,6 +3095,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-20-14 | codegen | low | CORRECTION 2026-09-30: THE LEFTOVER POSITIONS LOST THE PAYLOAD'S `Drop` BODY TOO, NOT ONLY THE ENVELOPE -- an unmatched tuple element or struct field… | 8ae04976e |
 | B-2026-09-20-15 | codegen | medium | A GENERIC ENUM'S PAYLOAD LOSES ITS USER `Drop` BODY ON ALL THREE COMPILED SURFACES when held as a Vec ELEMENT or a STRUCT FIELD -- the DISCARD positi… | 12b8ec119 |
 | B-2026-09-20-16 | codegen | medium | A WHOLE-VALUE BINDING OF A **BOXED** `Option` TUPLE PAYLOAD RETURNED OUT OF ITS ARM RUNS BOTH PARTS' `Drop` BODIES TWICE ON EVERY COMPILED BACKEND --… | acd81db20 |
+| B-2026-09-20-17 | codegen+interp | medium | REBINDING A BOXED `Option` TUPLE PAYLOAD BEFORE PROJECTING OUT OF IT RUNS THE ESCAPING PART'S `Drop` BODY TWICE ON ALL FOUR SURFACES AT ONCE -- `Some… | 85d93393e |
+| B-2026-09-20-19 | interp+codegen | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR THE PART A CONSUMING ARM MOVES INTO ITS OWN FRAME, AT BOTH PAYLOAD WIDTHS -- `Some(t) => { let x = t.0;… | 3f73e7ee8 |
 | B-2026-09-20-21 | codegen | high | COMPOSITION CHANGES THE ANSWER IN THE `Drop`-BODY-OWNERSHIP FAMILY: a boxed TUPLE `Option` payload's surviving element runs its `Drop` body twice and… | 24b0a92f6 |
 | B-2026-09-20-24 | codegen+interp | medium | AN OWNED PARAMETER OF A NAMELESS AGGREGATE TYPE -- A TUPLE, AN `Array[T, N]` OR A `Vec[T]` -- RUNS NONE OF ITS ELEMENTS' USER `Drop` BODIES WHEN THE… | 6ec7eb903 |
 | B-2026-09-20-29 | codegen | medium | `expr_cannot_carry_container_heap` IS MISSING TWO ARMS AND ENDS IN `_ => false`, SO AN INDEX STORE WHOSE RHS MENTIONS ITS OWN CONTAINER LEAKS THE DIS… | 6e342a3 |
