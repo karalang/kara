@@ -1735,6 +1735,50 @@ impl<'ctx> super::Codegen<'ctx> {
                                     }
                                 }
                             }
+                            // B-2026-09-20-22 — the payload VIEW the block above
+                            // records, for the struct it does not admit: one
+                            // that carries a `shared` field is never
+                            // copy-supported, so a `Drop`-declaring payload of
+                            // that shape bound out of a caller-retained owned
+                            // param was not marked a view. Its body is still the
+                            // caller's (the caller's payload walk runs it), and
+                            // `out = w` then kept `out`'s full drop, which ran
+                            // `w`'s body a second time at `out`'s scope exit:
+                            // `dWsh-OUT dWsh-PAY dWsh-PAY` compiled against the
+                            // interpreter's `dWsh-OUT dWsh-PAY`. The memory is
+                            // the callee's entry copy (its `shared` handle
+                            // rc-incremented in the prologue), which is what
+                            // `param_view_callee_owned` records for the
+                            // assignment's memory-only edge.
+                            if self
+                                .pattern_state
+                                .current_variant_payload_bindings
+                                .contains(name.as_str())
+                                && self.pattern_state.pattern_binding_scrutinee_is_owned_param
+                                // An `Option`/`Result` param has its own
+                                // caller-retains channel (`caller_retained_optres_params`),
+                                // and that spelling is already correct.
+                                && !self.pattern_state.pattern_binding_scrutinee_is_option_result
+                                && !self
+                                    .pattern_state
+                                    .pattern_binding_scrutinee_is_transfer_owned_enum
+                                && !self.payload_vars.param_view_locals.contains(name.as_str())
+                                && self.type_decls.struct_types.contains_key(tn)
+                                && !self.type_decls.shared_types.contains_key(tn)
+                                && self
+                                    .program_snapshot
+                                    .as_deref()
+                                    .is_some_and(|p| p.drop_method_keys.contains_key(tn))
+                                && self.struct_owns_shared_field(tn, &mut Vec::new())
+                            {
+                                self.payload_vars.param_view_locals.insert(name.clone());
+                                if self
+                                    .pattern_state
+                                    .pattern_binding_scrutinee_param_memory_is_callee_owned
+                                {
+                                    self.drop_rc.param_view_callee_owned.insert(name.clone());
+                                }
+                            }
                             // B-2026-07-30-11 (boxed-payload bodies): a
                             // heap-BOXED `Option`/`Result` struct payload's
                             // MEMORY is owned by the box drop — the exclusion

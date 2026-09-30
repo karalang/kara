@@ -1173,6 +1173,29 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.source_carries_callee_owned_param_memory(source_name) {
             return;
         }
+        // B-2026-09-20-22 — a `shared`-field payload VIEW out of an owned enum
+        // param is the one shared-owning source that does carry callee-owned
+        // memory: the enum param's prologue rc-increments the handle for its
+        // entry copy, and `bind_pattern_values` records the view as
+        // callee-owned only then. Its memory edge must release that handle as
+        // well as free the other fields, which the composed element drop does
+        // and the plain synthesis does not (it leaves a DIRECT `shared` field
+        // to the let cleanup, B-2026-06-14-28 #3).
+        let shared_view = self.drop_rc.param_view_callee_owned.contains(source_name)
+            && self.struct_owns_shared_field(type_name, &mut Vec::new())
+            && !self.struct_is_self_referential(type_name);
+        if shared_view {
+            let Some(mem_fn) = self.emit_vec_elem_struct_with_shared_drop_fn(type_name) else {
+                return;
+            };
+            self.drop_rc
+                .param_view_mem_drops
+                .insert((binding_name.to_string(), slot), mem_fn);
+            self.drop_rc
+                .param_view_callee_owned
+                .insert(binding_name.to_string());
+            return;
+        }
         let callee_owns = self.aggregate_param_copy_supported_struct(type_name, &mut Vec::new())
             || (!self.struct_owns_shared_field(type_name, &mut Vec::new())
                 && !self.struct_is_self_referential(type_name));
