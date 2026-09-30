@@ -10298,6 +10298,25 @@ impl<'ctx> super::Codegen<'ctx> {
     /// A binding with no recorded surface name keeps the old behaviour: the
     /// tail's `None => 1` is the only alternative there, so firing can only
     /// widen.
+    /// B-2026-09-30-9 — the INSTANTIATED type of a nested struct pattern over
+    /// a generic struct (`G { v, n }` inside `E.A { x: G { v, n }, .. }` over
+    /// `E[G[String]]`), as the typechecker recorded it at the pattern's own
+    /// span, resolved through the active monomorph. The layout arms of
+    /// `pattern_payload_word_count` / `pattern_payload_llvm_type` otherwise
+    /// size the pattern from `struct_types["G"]` — the ERASED all-`i64` base —
+    /// so a `String` field came back one word wide: the debox predicate missed
+    /// the heap box, `v` was rebuilt out of the envelope words, and its drop
+    /// freed a pointer nothing allocated. `None` for a non-generic struct, whose
+    /// declared layout is already the real one.
+    pub(super) fn generic_struct_pattern_type_expr(&self, pat: &Pattern) -> Option<TypeExpr> {
+        let key = (pat.span.offset, pat.span.length);
+        let te = self.pattern_state.pattern_binding_inner_types.get(&key)?;
+        if !self.is_generic_named_struct_type_expr(te) {
+            return None;
+        }
+        Some(self.subst_monomorph_type_params(te))
+    }
+
     pub(super) fn generic_struct_binding_type_expr(
         &self,
         key: (usize, usize),
@@ -10536,6 +10555,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         .map(|l| Self::llvm_type_word_count(l.llvm_type.into()))
                         .unwrap_or(1);
                 }
+                if let Some(te) = self.generic_struct_pattern_type_expr(pat) {
+                    return Self::llvm_type_word_count(self.llvm_type_for_type_expr(&te)).max(1);
+                }
                 path.last()
                     .and_then(|n| self.type_decls.struct_types.get(n.as_str()))
                     .map(|st| Self::llvm_type_word_count((*st).into()))
@@ -10745,6 +10767,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(layout) = self.type_decls.enum_layouts.get(&enum_name) {
                         return layout.llvm_type.into();
                     }
+                }
+                if let Some(te) = self.generic_struct_pattern_type_expr(pat) {
+                    return self.llvm_type_for_type_expr(&te);
                 }
                 path.last()
                     .and_then(|n| self.type_decls.struct_types.get(n.as_str()))

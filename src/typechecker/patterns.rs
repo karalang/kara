@@ -1183,6 +1183,28 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
 
+                // B-2026-09-30-9 — a struct pattern over a GENERIC struct
+                // records its instantiated type at its own span, solely so
+                // codegen can SIZE it when it sits inside a variant payload
+                // (`E.A { x: G { v, n }, .. }` over `E[G[String]]`). Codegen's
+                // layout arms otherwise read the erased declaration, one word
+                // per field, and rebuilt a `String` field out of the envelope.
+                // Written to `pattern_binding_inner_types` for the same reasons
+                // as the wildcard arm above: looked up by span, carried and
+                // substituted by the monomorph swap. `pattern_binding_types` is
+                // not written: a struct pattern is not a binding.
+                if let Type::Named { name, args, .. } = expected {
+                    if name == &struct_name
+                        && !args.is_empty()
+                        && self.env.structs.contains_key(&struct_name)
+                    {
+                        self.pattern_binding_inner_types.insert(
+                            SpanKey::from_span(&pattern.span),
+                            Self::type_to_type_expr(expected),
+                        );
+                    }
+                }
+
                 // Look up struct or enum variant
                 let field_types: Option<Vec<(String, Type)>> =
                     if let Some(info) = self.env.structs.get(&struct_name) {
