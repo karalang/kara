@@ -1621,7 +1621,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .pattern_state
                                         .current_variant_payload_bindings
                                         .contains(name.as_str())
-                                    && !self.pattern_state.pattern_binding_scrutinee_is_owned_param
+                                    // B-2026-09-30-76 — a payload of a
+                                    // TRANSFER-owned enum param is the
+                                    // callee's, like a local's: the caller
+                                    // stood its walk down and this arm's
+                                    // move cleared the callee's, so the
+                                    // binding is the only owner left.
+                                    && (!self.pattern_state.pattern_binding_scrutinee_is_owned_param
+                                        || transfer_owned_payload)
                                     && !payload_of_masked_slot
                                     && !self
                                         .pattern_state
