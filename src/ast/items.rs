@@ -1421,6 +1421,11 @@ pub fn fn_returns_param_with(
             ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems
                 .iter()
                 .any(|el| expr_is_ident(el, name, wraps, program)),
+            // B-2026-09-30-26 — and a PREFIX collection literal, which is what a
+            // `Vec`-typed `[a, b]` and `vec![a, b]` both reach this as.
+            ExprKind::PrefixCollectionLiteral { items, .. } => items
+                .iter()
+                .any(|el| expr_is_ident(el, name, wraps, program)),
             // B-2026-09-19-36 — an `Option`/`Result` CONSTRUCTOR carries the
             // param out exactly as the struct literal and tuple arms above do.
             // `return Ho { g: Option.Some(g) }` hands `g`'s box to the caller's
@@ -3798,6 +3803,10 @@ fn fn_always_returns_param_ex(
             ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
                 elems.iter().any(|el| yields(el, name, wraps, program, via))
             }
+            // B-2026-09-30-26 — a prefix collection literal, likewise.
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                items.iter().any(|el| yields(el, name, wraps, program, via))
+            }
             // B-2026-09-25-16 — a user enum's variant constructor carries the
             // param out exactly as a struct literal does (`return E.A(a)`).
             ExprKind::Call { callee, args }
@@ -4812,6 +4821,10 @@ pub fn fn_conditionally_returns_param_bare(
                 .any(|f| yields_wrapped_named(&f.value, name, wraps, program, f_self_name)),
             // B-2026-09-30-22 — an array literal, as a tuple literal.
             ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems
+                .iter()
+                .any(|el| yields_wrapped_named(el, name, wraps, program, f_self_name)),
+            // B-2026-09-30-26 — a prefix collection literal, likewise.
+            ExprKind::PrefixCollectionLiteral { items, .. } => items
                 .iter()
                 .any(|el| yields_wrapped_named(el, name, wraps, program, f_self_name)),
             ExprKind::Call { callee, args }
@@ -6265,6 +6278,12 @@ fn part_paths_from_root_mode(
             // on every backend.
             ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
                 for el in elems {
+                    yielded(el, aliases, out);
+                }
+            }
+            // B-2026-09-30-26 — and a prefix collection literal (`vec![w.q, w.r]`).
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                for el in items {
                     yielded(el, aliases, out);
                 }
             }

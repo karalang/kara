@@ -1434,7 +1434,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // below sees through it, and the nested-return guard then
                     // mints the per-path flag exactly as for an aggregate.
                     // B-2026-09-30-22 — and an ARRAY literal, which moves its
-                    // elements out exactly as a tuple does; without it a
+                    // elements out exactly as a tuple does (and B-2026-09-30-26, a
+                    // prefix collection literal, likewise); without it a
                     // conditional `return [a]` left `a`'s per-path flag armed
                     // and its body ran in the callee and again in the result.
                     if matches!(
@@ -1442,6 +1443,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         ExprKind::StructLiteral { .. }
                             | ExprKind::Tuple(_)
                             | ExprKind::ArrayLiteral(_)
+                            | ExprKind::PrefixCollectionLiteral { .. }
                     ) || crate::ast::option_result_ctor_payload(e).is_some()
                     {
                         let mut sources = Vec::new();
