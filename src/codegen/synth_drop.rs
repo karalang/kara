@@ -78,6 +78,16 @@ pub(crate) enum PayloadBodiesMask<'m> {
     /// `..._nested` with an empty `nested` map — so the two arms agree on
     /// every shape the old one could express, symbol name included.
     TupleTree(&'m str, &'m FieldSkipTree),
+    /// B-2026-09-20-6 — a named STRUCT payload masked at DEPTH: the struct's
+    /// name plus a whole [`FieldSkipTree`], so a path that crosses a level
+    /// (`w.p.1`, `w.p.s`) masks the leaf it names instead of the field it
+    /// starts at. The struct sibling of `TupleTree`, for the same reason: the
+    /// flat `StructFields` arm can only say "skip field `p`", which is a FALSE
+    /// escape that loses `p`'s other half. Consumed by the struct arm, which
+    /// already threads a tree to `emit_user_drop_field_bodies_fn_skipping`;
+    /// the flat arm stays for every site whose mask is one level by
+    /// construction.
+    StructTree(&'m str, &'m FieldSkipTree),
     /// B-2026-09-17-14 — a TUPLE payload whose read-only arm DESTRUCTURED it:
     /// same identity, walked LAST ELEMENT FIRST, recursing in reverse into
     /// each element the pattern destructured again (the tree's `nested`).
@@ -12991,6 +13001,11 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(PayloadBodiesMask::TupleTree(key, tree)) if !tree.is_empty() => {
                 format!("$skiptuptree{key}_{}", tree.mangle())
             }
+            // B-2026-09-20-6 — its own prefix, as the tuple tree has, so a
+            // struct tree and a flat struct mask select distinct symbols.
+            Some(PayloadBodiesMask::StructTree(key, tree)) if !tree.is_empty() => {
+                format!("$skipstructtree{key}_{}", tree.mangle())
+            }
             Some(PayloadBodiesMask::TupleReverse(key, tree)) => {
                 format!("$revtup{key}_{}", tree.mangle())
             }
@@ -14213,6 +14228,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ..Default::default()
                             };
                             self.emit_user_drop_field_bodies_fn_skipping(&sname, &subst, &tree)
+                        }
+                        Some(PayloadBodiesMask::StructTree(mname, tree))
+                            if mname == sname && !tree.is_empty() =>
+                        {
+                            self.emit_user_drop_field_bodies_fn_skipping(&sname, &subst, tree)
                         }
                         _ => self.emit_user_drop_field_bodies_fn(&sname, &subst),
                     }

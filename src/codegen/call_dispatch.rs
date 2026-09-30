@@ -4101,6 +4101,39 @@ impl<'ctx> super::Codegen<'ctx> {
             self.amend_named_payload_bodies_walk(arg_name, masked);
             return;
         }
+        // B-2026-09-20-6 — the NAMED-STRUCT twin of the tree route above: every
+        // path field-rooted and one crossing a level (`return w.p.1`, `return
+        // w.p.s`). The flat `Field` arm below declines those whole, which left
+        // the local's walk running the escapee's body beside the caller's
+        // result. Same resolver the fresh-temp gate uses
+        // (`optres_payload_taken_fields` → `insert_skip_path`), and a path
+        // that does not resolve declines the whole amendment, never its prefix.
+        if paths.iter().any(|p| p.len() > 1)
+            && paths
+                .iter()
+                .all(|p| matches!(p.first(), Some(crate::ast::ParamPart::Field(_))))
+        {
+            let Some(sname) = self.sole_struct_payload_name(&env_te) else {
+                return;
+            };
+            let mut tree = super::synth_drop::FieldSkipTree::default();
+            for path in &paths {
+                // Resolvability asked of a fresh tree, for the taker's reason:
+                // the two channels can name one path twice.
+                let mut probe = super::synth_drop::FieldSkipTree::default();
+                self.insert_skip_path(&mut probe, &sname, path);
+                if probe.is_empty() {
+                    return;
+                }
+                self.insert_skip_path(&mut tree, &sname, path);
+            }
+            let masked = self.emit_optres_payload_user_drop_bodies_fn_skipping(
+                &env_te,
+                super::synth_drop::PayloadBodiesMask::StructTree(&sname, &tree),
+            );
+            self.amend_named_payload_bodies_walk(arg_name, masked);
+            return;
+        }
         for path in paths {
             match path.as_slice() {
                 [crate::ast::ParamPart::TupleIndex(n)] => {
@@ -6004,15 +6037,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                         || self.optres_payload_variant_only_copy_read(
                                             f, &p.ty, ast_i, v,
                                         ))
-                                        && fields.len() < arity =>
+                                        && fields.here.len() < arity =>
                                 {
-                                    return Some((
-                                        p.ty.clone(),
-                                        super::synth_drop::FieldSkipTree {
-                                            here: fields,
-                                            ..Default::default()
-                                        },
-                                    ));
+                                    return Some((p.ty.clone(), fields));
                                 }
                                 _ => return None,
                             }
@@ -6280,7 +6307,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     (Some(arity), Some(fields)) => {
                         (!fields.is_empty()
                             || self.optres_payload_variant_only_copy_read(f, &p.ty, ast_i, v))
-                            && fields.len() < arity
+                            && fields.here.len() < arity
                     }
                     _ => false,
                 }
@@ -6496,16 +6523,27 @@ impl<'ctx> super::Codegen<'ctx> {
     /// unusable path into the empty set: for a tuple the empty set already
     /// means decline, and for a struct it means the full walk, so folding
     /// would turn "I do not know" into the most dangerous answer available.
+    ///
+    /// B-2026-09-20-6 — answered as a [`super::synth_drop::FieldSkipTree`]
+    /// rather than a flat index set, so a path that crosses a level (`w.p.1`,
+    /// `w.p.s`) is a masked LEAF in `nested` instead of "cannot answer". The
+    /// decline it replaced left the callee's arm binding running every body of
+    /// the payload while the caller's result ran the escapee's again (`dR31
+    /// dR32 got:32 dR32` against a due `dR31 got:32 dR32`). A one-hop path
+    /// still lands in `here`, so every mask this answered before is unchanged.
+    /// A deep path that does not resolve through the declared field types is
+    /// still `None`: `insert_skip_path` drops such a path whole, and silently
+    /// dropping it here would read as "takes nothing".
     fn optres_payload_taken_fields(
         &self,
         f: &crate::ast::Function,
         param_te: &TypeExpr,
         arg_index: usize,
         variant: &str,
-    ) -> Option<std::collections::BTreeSet<usize>> {
+    ) -> Option<super::synth_drop::FieldSkipTree> {
         let sname = self.sole_struct_payload_name(param_te)?;
         let names = self.type_decls.struct_field_names.get(sname.as_str())?;
-        let mut out = std::collections::BTreeSet::new();
+        let mut out = super::synth_drop::FieldSkipTree::default();
         let consumed =
             crate::ast::fn_consumed_param_payload_part_paths(f, arg_index, Some(variant));
         let escaping =
@@ -6517,7 +6555,9 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             match path.as_slice() {
                 [crate::ast::ParamPart::Field(fname)] => {
-                    out.insert(names.iter().position(|n| n == fname)?);
+                    let idx = names.iter().position(|n| n == fname)?;
+                    out.here.insert(idx);
+                    out.nested.remove(&idx);
                 }
                 // B-2026-09-24-36 — a deeper path whose LEAF carries no `Drop`
                 // body is a copy read (`Ok(x) => x.r.id`), which takes nothing
@@ -6530,6 +6570,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     if optres_payload_te(param_te, Some(variant))
                         .and_then(|root| self.te_at_accessor_chain(&root, &path))
                         .is_some_and(|leaf| !self.elem_te_runs_user_drop(&leaf)) => {}
+                // B-2026-09-20-6 — a deeper path whose leaf DOES run a body:
+                // mask that leaf, one `nested` level per hop. Resolvability is
+                // asked of a FRESH tree, because the two channels can report
+                // one path twice and a second insert into `out` changes
+                // nothing; a path already subsumed by a whole-field mask is
+                // resolved by definition.
+                [crate::ast::ParamPart::Field(_), _, ..] => {
+                    let mut probe = super::synth_drop::FieldSkipTree::default();
+                    self.insert_skip_path(&mut probe, &sname, &path);
+                    if probe.is_empty() {
+                        return None;
+                    }
+                    self.insert_skip_path(&mut out, &sname, &path);
+                }
                 _ => return None,
             }
         }
@@ -7103,12 +7157,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // name one walker differently. A payload that is neither shape
                 // still answers `None` and declines.
                 //
-                // `here` alone: the gate builds this tree from one-hop field
-                // paths only, so `nested` is empty by construction and the flat
-                // `StructFields` arm loses nothing. A field path that crosses a
-                // level makes the gate decline outright rather than arrive here
-                // with depth this arm could not carry.
+                // B-2026-09-20-6 — the gate builds depth for a field path that
+                // crosses a level (`w.p.1`), so a tree with `nested` takes the
+                // `StructTree` arm. A flat tree keeps `StructFields` and with it
+                // the symbol every other caller of that arm already names.
                 None => match self.sole_struct_payload_name(param_te) {
+                    Some(sname) if !skip_parts.nested.is_empty() => self
+                        .emit_optres_payload_user_drop_bodies_fn_skipping(
+                            param_te,
+                            super::synth_drop::PayloadBodiesMask::StructTree(&sname, skip_parts),
+                        ),
                     Some(sname) => self.emit_optres_payload_user_drop_bodies_fn_skipping(
                         param_te,
                         super::synth_drop::PayloadBodiesMask::StructFields(
