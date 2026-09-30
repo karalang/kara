@@ -11922,7 +11922,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(base_ptr) = self.field_chain_place_ptr(scrutinee) else {
             return;
         };
-        self.suppress_destructured_struct_pattern_cleanup_at(base_ptr, &struct_name, pattern);
+        let inst = self
+            .receiver_struct_inst(scrutinee)
+            .map(|t| self.subst_monomorph_type_params(&t));
+        self.suppress_destructured_struct_pattern_cleanup_inst(
+            base_ptr,
+            &struct_name,
+            inst.as_ref(),
+            pattern,
+        );
     }
 
     /// Core of [`Self::suppress_destructured_struct_pattern_cleanup`], keyed on
@@ -11937,13 +11945,47 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         pattern: &Pattern,
     ) {
+        self.suppress_destructured_struct_pattern_cleanup_inst(
+            base_ptr,
+            struct_name,
+            None,
+            pattern,
+        );
+    }
+
+    /// Whether a scope frame still holds a buffer free for the `Vec` /
+    /// `String` in `slot` — i.e. the binding there owns its heap.
+    fn slot_has_buffer_free(&self, slot: PointerValue<'ctx>) -> bool {
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(
+                |a| matches!(a, crate::codegen::state::CleanupAction::FreeVecBuffer { vec_alloca, .. } if *vec_alloca == slot),
+            )
+        })
+    }
+
+    /// [`Self::suppress_destructured_struct_pattern_cleanup_at`] under the
+    /// source's instantiation `inst` (`G[String]` for `struct G[T]`), when the
+    /// caller knows it. B-2026-09-30-8: keyed by the bare name, a field
+    /// declared `v: T` read as the type name `T`, matched none of the arms
+    /// below, and the source's cap was never zeroed, so
+    /// `match g { G { v, n } => v.len() + n }` over a `G[String]` freed `v` in
+    /// the arm binding and again in the mono struct drop. The instantiated
+    /// field types name `String`, and the GEPs use the monomorph's layout,
+    /// whose fields after a widened `T` sit at different offsets.
+    pub(super) fn suppress_destructured_struct_pattern_cleanup_inst(
+        &mut self,
+        base_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+        inst: Option<&TypeExpr>,
+        pattern: &Pattern,
+    ) {
         let PatternKind::Struct { fields, .. } = &pattern.kind else {
             return;
         };
         if self.type_decls.shared_types.contains_key(struct_name) {
             return;
         }
-        let Some(field_type_names) = self
+        let Some(mut field_type_names) = self
             .type_decls
             .struct_field_type_names
             .get(struct_name)
@@ -11954,9 +11996,54 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(field_names) = self.type_decls.struct_field_names.get(struct_name).cloned() else {
             return;
         };
-        let Some(&st) = self.type_decls.struct_types.get(struct_name) else {
+        let Some(&base_st) = self.type_decls.struct_types.get(struct_name) else {
             return;
         };
+        let mut st = base_st;
+        // The fields' TypeExprs under `inst`, for the nested recursion below.
+        let mut field_tes: Vec<Option<TypeExpr>> = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name)
+            .map(|tes| tes.iter().cloned().map(Some).collect())
+            .unwrap_or_default();
+        let subst = inst
+            .map(|t| self.generic_struct_subst_from_inst(struct_name, t))
+            .unwrap_or_default();
+        // Fields whose declared type is one of the struct's own params: their
+        // instantiated type is only a CANDIDATE owner below. Inside a generic
+        // fn (`fn f[T](g: G[T])`) the arm's leaf is typed by the fn's `T` and
+        // registers no free of its own, so zeroing the source's cap there
+        // would leak the buffer the source was going to free.
+        let mut param_typed = vec![false; field_type_names.len()];
+        if !subst.is_empty() {
+            for (i, n) in field_type_names.iter().enumerate() {
+                param_typed[i] = n.as_ref().is_some_and(|n| subst.contains_key(n));
+            }
+            let Some(mono) = self.mono_struct_type_from_subst(struct_name, &subst) else {
+                return;
+            };
+            st = mono;
+            for (i, te) in field_tes.iter_mut().enumerate() {
+                let Some(t) = te.as_ref() else {
+                    continue;
+                };
+                let concrete = super::helpers::subst_type_params_in_type_expr(t, &subst);
+                if let Some(slot) = field_type_names.get_mut(i) {
+                    // An unannotated local's instantiation carries the
+                    // typechecker-internal spelling `str` (`G[str]`).
+                    *slot = if self.is_string_type_expr(&concrete) {
+                        Some("String".to_string())
+                    } else {
+                        match &concrete.kind {
+                            TypeKind::Path(p) => p.segments.last().cloned(),
+                            _ => None,
+                        }
+                    };
+                }
+                *te = Some(concrete);
+            }
+        }
         let vec_ty = self.vec_struct_type();
         let zero = self.context.i64_type().const_int(0, false);
         for field_pat in fields {
@@ -11991,8 +12078,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                         idx as u32,
                                         "p16.nest.p",
                                     ) {
-                                        self.suppress_destructured_struct_pattern_cleanup_at(
-                                            fp, &inner, &sub,
+                                        let inner_inst = field_tes.get(idx).cloned().flatten();
+                                        self.suppress_destructured_struct_pattern_cleanup_inst(
+                                            fp,
+                                            &inner,
+                                            inner_inst.as_ref(),
+                                            &sub,
                                         );
                                     }
                                 }
@@ -12009,6 +12100,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(idx)
                 .and_then(|o| o.as_deref())
                 .unwrap_or("");
+            if param_typed.get(idx).copied().unwrap_or(false) {
+                let leaf = match &field_pat.pattern {
+                    None => field_pat.name.as_str(),
+                    Some(p) => match &p.kind {
+                        PatternKind::Binding(n) => n.as_str(),
+                        _ => continue,
+                    },
+                };
+                let owns = matches!(fname, "Vec" | "VecDeque" | "String")
+                    && self
+                        .variables
+                        .get(leaf)
+                        .is_some_and(|slot| self.slot_has_buffer_free(slot.ptr));
+                if !owns {
+                    continue;
+                }
+            }
             let Ok(field_ptr) =
                 self.builder
                     .build_struct_gep(st, base_ptr, idx as u32, "p16.fld.p")
@@ -12097,7 +12205,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(&base_ptr)
             .copied()
         {
-            self.suppress_destructured_struct_pattern_cleanup_at(box_ptr, struct_name, pattern);
+            self.suppress_destructured_struct_pattern_cleanup_inst(
+                box_ptr,
+                struct_name,
+                inst,
+                pattern,
+            );
         }
     }
 
