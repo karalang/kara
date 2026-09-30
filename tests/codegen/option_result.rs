@@ -3566,27 +3566,21 @@ fn e2e_optres_arg_payload_projection_runs_each_part_body_once() {
                 "got:5\ndH5\ndH6\nend\n",
             ),
             (
-                // AGREED AND WRONG, pinned as it stands -- B-2026-09-20-17. The arm
-                // REBINDS the payload whole (`let u = t`) and projects out of the
-                // rebinding, and element 0's body runs twice on every surface, the
-                // interpreter included. Hand-derived: `u.0` is moved out to the caller
-                // and `u.1` dies here, so the due sequence is `dH6 got:5 dH5 end` and
-                // all four print `dH5 dH6 got:5 dH5 end`.
-                //
-                // NO A/B CAN SEE THIS CELL, which is why it is pinned rather than left
-                // to a sweep: the two backends agree, and a `Drop` body frees nothing,
-                // so no sanitizer leg sees it either. Found by computing the due
-                // sequence from the ownership rule and comparing against that instead of
-                // against the interpreter.
-                "boxed-projection-rebind-then-project-doubles",
+                // B-2026-09-20-17 -- the arm REBINDS the payload whole (`let u = t`)
+                // and projects out of the rebinding. Element 0's body ran twice on
+                // every surface, the interpreter included, until both backends learned
+                // to follow the rebind. Hand-derived: `u.0` is moved out to the caller
+                // and `u.1` dies here. The two backends agreed while wrong, so the due
+                // sequence is the only oracle for this cell.
+                "boxed-projection-rebind-then-project",
                 format!(
                     "{R}struct H {{ id: i64, s: String }}\n\
                      impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
                      fn eat(o: Option[(H, H)]) -> H {{ match o {{ Some(t) => {{ let u = t; return u.0; }} None => {{ return H {{ id: 0, s: \"zzzzzzzzzzzz\" }}; }} }} }}\n\
                      fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, H {{ id: 6, s: \"bbbbbbbbbbbb\" }}))); println(f\"got:{{got.id}}\"); println(\"end\") }}\n"
                 ),
-                "dH5\ndH6\ngot:5\ndH5\nend\n",
-                "dH5\ndH6\ngot:5\ndH5\nend\n",
+                "dH6\ngot:5\ndH5\nend\n",
+                "dH6\ngot:5\ndH5\nend\n",
             ),
             (
                 // DIVERGENT AND PRE-EXISTING -- B-2026-09-20-18. TWO `Some` arms over

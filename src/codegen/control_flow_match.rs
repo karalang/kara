@@ -21150,7 +21150,9 @@ impl<'ctx> super::Codegen<'ctx> {
             if path.last().map(|s| s.as_str()) != Some(tuple_variant) {
                 continue;
             }
-            if crate::binding_use::optres_arm_takes_whole_payload(
+            // B-2026-09-20-17 — through whole rebinds: `let u = t; return
+            // u.0` takes element 0 exactly as `return t.0` does.
+            if crate::binding_use::optres_arm_takes_whole_payload_through_rebinds(
                 &arm.pattern,
                 &arm.body,
                 arm.guard.as_ref(),
@@ -21163,6 +21165,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 arm.guard.as_ref(),
             );
             if paths.is_empty() {
+                return false;
+            }
+            // B-2026-09-20-17 — a rebind's part taken on only some paths
+            // cannot be masked for all of them; a scalar leaf read in a loop
+            // (`u.1.id`) owns nothing and does not count.
+            if crate::binding_use::optres_arm_rebind_places_taken_on_some_paths(
+                &arm.pattern,
+                &arm.body,
+            )
+            .iter()
+            .any(|path| !self.tuple_place_is_owned_scalar(&elem_tes, path))
+            {
                 return false;
             }
             sets.push(paths);
@@ -21215,6 +21229,55 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         hit
+    }
+
+    /// B-2026-09-20-17 — is the place `path` inside a tuple of `elem_tes` a
+    /// primitive scalar, which owns nothing a walk could run twice or lose?
+    /// Follows tuple indices through tuple types and field names through
+    /// declared struct fields; anything it cannot follow answers `false`, the
+    /// direction that declines a narrowing.
+    fn tuple_place_is_owned_scalar(
+        &self,
+        elem_tes: &[TypeExpr],
+        path: &[crate::ast::ParamPart],
+    ) -> bool {
+        let Some((crate::ast::ParamPart::TupleIndex(i), rest)) = path.split_first() else {
+            return false;
+        };
+        let Some(mut te) = elem_tes.get(*i).cloned() else {
+            return false;
+        };
+        for part in rest {
+            te = match (&te.kind, part) {
+                (TypeKind::Tuple(inner), crate::ast::ParamPart::TupleIndex(j)) => {
+                    match inner.get(*j) {
+                        Some(t) => t.clone(),
+                        None => return false,
+                    }
+                }
+                (TypeKind::Path(p), crate::ast::ParamPart::Field(f)) => {
+                    let Some(name) = p.segments.first() else {
+                        return false;
+                    };
+                    let idx = self
+                        .type_decls
+                        .struct_field_names
+                        .get(name)
+                        .and_then(|names| names.iter().position(|n| n == f));
+                    match idx.and_then(|k| {
+                        self.type_decls
+                            .struct_field_type_exprs
+                            .get(name)
+                            .and_then(|tes| tes.get(k))
+                    }) {
+                        Some(t) => t.clone(),
+                        None => return false,
+                    }
+                }
+                _ => return false,
+            };
+        }
+        crate::ast::type_expr_is_owned_scalar(&te)
     }
 
     /// An `Option`/`Result` arm whose payload is bound WHOLE by a single

@@ -3310,6 +3310,31 @@ pub fn param_rebind_aliases(f: &Function, param_name: &str) -> Vec<String> {
     close_rebind_aliases(&rebind_walk(f), param_name)
 }
 
+/// B-2026-09-20-17 — [`param_rebind_aliases`] for a binding that is not a
+/// parameter: the whole-rebind chain of `seed` inside `body` (`let u = t; let
+/// w = u;` gives `[t, u, w]`), each link bound exactly once in `body`.
+///
+/// Its subject is an `Option`/`Result` arm binding, which the function-level
+/// walk cannot seed because it is bound by the arm's pattern rather than a
+/// parameter list, and which other arms may bind again under the same name.
+/// Counting inside the arm body alone is what keeps a sibling arm's `Some(t)`
+/// from reading as a second binding of this one.
+pub fn expr_rebind_aliases(body: &Expr, seed: &str) -> Vec<String> {
+    let mut w = RebindWalk {
+        rebinds: Vec::new(),
+        mut_rebinds: Vec::new(),
+        wraps: Vec::new(),
+        ctor_wraps: Vec::new(),
+        coll_wraps: Vec::new(),
+        proj_rebinds: Vec::new(),
+        call_rebinds: Vec::new(),
+        destructured: Vec::new(),
+        bound: std::collections::HashMap::new(),
+    };
+    w.expr(body);
+    close_rebind_aliases(&w, seed)
+}
+
 /// B-2026-09-28-4 — is `ty` spelled as an `Option[..]` / `Result[..]`
 /// envelope? A generic parameter answers `false`, like
 /// [`type_expr_is_owned_scalar`].
@@ -8114,7 +8139,20 @@ fn escaping_param_payload_part_paths_impl(
             ExprKind::Match { scrutinee, arms } if is_param(scrutinee) => {
                 for a in arms {
                     if let Some(bind) = optres_whole_payload_binding(&a.pattern, variant) {
-                        returns_in(&a.body, bind, out, whole, true, tail, any_path);
+                        // B-2026-09-20-17 — and every whole rebind of it
+                        // (`let u = t; return u.0`), which yields the same
+                        // payload's parts under another name. The rebind
+                        // itself is a `let`, never a yield, so it reports
+                        // nothing on its own.
+                        // Only for an arm that cannot leave before its
+                        // move: the mask this feeds is per call, not per path.
+                        let mut roots = expr_rebind_aliases(&a.body, bind);
+                        if !crate::binding_use::optres_arm_exits_only_at_its_end(&a.body) {
+                            roots.truncate(1);
+                        }
+                        for root in roots {
+                            returns_in(&a.body, &root, out, whole, true, tail, any_path);
+                        }
                     }
                 }
             }

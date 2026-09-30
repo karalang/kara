@@ -69,6 +69,48 @@ pub(crate) fn optres_arm_takes_whole_payload(
     })
 }
 
+/// B-2026-09-20-17 — [`optres_arm_takes_whole_payload`] read THROUGH whole
+/// rebinds of the arm binding: `Some(t) => { let u = t; return u.0 }` takes
+/// only element 0, because `let u = t` hands the payload to another name and
+/// takes nothing out of it.
+///
+/// A link in the chain (`t` in `let u = t`) counts as taking the payload
+/// whole when anything other than its own rebinding materializes it; the last
+/// link answers the plain read-through question. With no rebinding this is
+/// exactly [`optres_arm_takes_whole_payload`].
+///
+/// Deliberately a SEPARATE predicate: its one caller, codegen's projection
+/// narrowing, pairs it with [`optres_arm_moved_tuple_paths`], which follows
+/// the same chain. The plain predicate's other callers place a payload's
+/// bodies by the arm binding's own fate and must keep reading `let u = t` as
+/// the take it is for them.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn optres_arm_takes_whole_payload_through_rebinds(
+    pattern: &crate::ast::Pattern,
+    body: &Expr,
+    guard: Option<&Expr>,
+) -> bool {
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return true;
+    };
+    patterns.iter().any(|sub| match &sub.kind {
+        crate::ast::PatternKind::Wildcard => false,
+        crate::ast::PatternKind::Binding(n) => {
+            if !guard.is_none_or(|g| binding_only_read_through(n, g)) {
+                return true;
+            }
+            let aliases = crate::ast::expr_rebind_aliases(body, n);
+            let (last, links) = aliases.split_last().expect("seeded");
+            links.iter().any(|a| {
+                let mut t = Tally::default();
+                walk_expr(Target::Bare(a), body, &mut t);
+                t.captured || t.mentions - t.read_through != 1
+            }) || !binding_only_read_through(last, body)
+        }
+        _ => true,
+    })
+}
+
 /// B-2026-09-19-12 — the TOP-LEVEL tuple element indices an arm MATERIALIZES
 /// out of a whole-value `Option`/`Result` payload binding.
 ///
@@ -162,34 +204,47 @@ pub(crate) fn optres_arm_moved_tuple_paths(
         let crate::ast::PatternKind::Binding(n) = &sub.kind else {
             continue;
         };
-        // A capture takes the whole binding, so nothing finer is answerable.
-        let mut cap = Tally::default();
-        walk_expr(Target::Bare(n), body, &mut cap);
-        if let Some(g) = guard {
-            walk_expr(Target::Bare(n), g, &mut cap);
-        }
-        if cap.captured {
+        // B-2026-09-20-17 — every whole rebind of the binding (`let u = t`)
+        // IS the payload under another name, so a place taken off `u` is a
+        // place taken off the payload. Asking about `t` alone answered
+        // nothing for `let u = t; return u.0` and left the walk whole.
+        let aliases = crate::ast::expr_rebind_aliases(body, n);
+        if aliases.len() > 1 && !optres_arm_exits_only_at_its_end(body) {
             return Vec::new();
         }
-        let mut cand = Tally {
-            collect_root: Some(n),
-            ..Default::default()
-        };
-        walk_expr(Target::Bare(n), body, &mut cand);
-        if let Some(g) = guard {
-            walk_expr(Target::Bare(n), g, &mut cand);
-        }
-        let mut seen: Vec<crate::ast::ParamPath> = Vec::new();
-        for path in cand.places {
-            if !seen.contains(&path) {
-                seen.push(path);
+        for a in &aliases {
+            // A capture takes the whole binding, so nothing finer is
+            // answerable.
+            let mut cap = Tally::default();
+            walk_expr(Target::Bare(a), body, &mut cap);
+            if let Some(g) = guard {
+                walk_expr(Target::Bare(a), g, &mut cap);
+            }
+            if cap.captured {
+                return Vec::new();
             }
         }
-        for path in seen {
-            if !place_only_read_through(n, &path, body)
-                || !guard.is_none_or(|g| place_only_read_through(n, &path, g))
-            {
-                out.push(path);
+        for a in &aliases {
+            let mut cand = Tally {
+                collect_root: Some(a),
+                ..Default::default()
+            };
+            walk_expr(Target::Bare(a), body, &mut cand);
+            if let Some(g) = guard {
+                walk_expr(Target::Bare(a), g, &mut cand);
+            }
+            let mut seen: Vec<crate::ast::ParamPath> = Vec::new();
+            for path in cand.places {
+                if !seen.contains(&path) {
+                    seen.push(path);
+                }
+            }
+            for path in seen {
+                if !place_only_read_through(a, &path, body)
+                    || !guard.is_none_or(|g| place_only_read_through(a, &path, g))
+                {
+                    out.push(path);
+                }
             }
         }
     }
@@ -205,6 +260,77 @@ pub(crate) fn optres_arm_moved_tuple_paths(
         .cloned()
         .collect();
     pruned
+}
+
+/// B-2026-09-20-17 — can a place taken off a REBIND of an arm binding (`let u
+/// = t; return u.0`) be masked out of the payload walk for every path out of
+/// the arm, as far as the arm's EXITS go?
+///
+/// The mask is static: once the arm narrows the walk, every exit compiled
+/// after it runs the narrowed walk, so an arm that can leave before its move
+/// would lose the part's body on that path. The answer is yes only when the
+/// arm's one exit is a `return` that is its last statement, or it has none.
+/// Where a rebind place is taken under a branch is the other half of the same
+/// question, and needs the payload's types to tell an owning part from a
+/// scalar leaf: see [`optres_arm_rebind_places_taken_on_some_paths`].
+///
+/// The arm binding ITSELF is not held to this: `if k { return t.0; }` narrows
+/// today and its conditional corner is B-2026-09-27-19's. A rebind must not
+/// extend that corner to a spelling that did not have it.
+pub(crate) fn optres_arm_exits_only_at_its_end(body: &Expr) -> bool {
+    let mut t = Tally::default();
+    walk_expr(Target::Bare(""), body, &mut t);
+    let last_is_return = match &body.kind {
+        ExprKind::Block(b) => match (b.final_expr.as_deref(), b.stmts.last()) {
+            (Some(fe), _) => matches!(fe.kind, ExprKind::Return(_)),
+            (None, Some(st)) => {
+                matches!(&st.kind, StmtKind::Expr(e) if matches!(e.kind, ExprKind::Return(_)))
+            }
+            (None, None) => false,
+        },
+        ExprKind::Return(_) => true,
+        _ => false,
+    };
+    t.exits <= usize::from(last_is_return)
+}
+
+/// B-2026-09-20-17 — the places a REBIND of a whole `Option`/`Result` payload
+/// binding (`u` in `let u = t`) materializes on only SOME paths through the
+/// arm: under a branch, a loop body or a short-circuited operand.
+///
+/// The type-blind half of the question [`optres_arm_exits_only_at_its_end`]
+/// starts. A scalar leaf (`u.1.id` read inside a loop) shows up here exactly
+/// like an owning part does, so the caller keeps only what its payload's types
+/// say can own something before declining.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn optres_arm_rebind_places_taken_on_some_paths(
+    pattern: &crate::ast::Pattern,
+    body: &Expr,
+) -> Vec<crate::ast::ParamPath> {
+    let mut out = Vec::new();
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return out;
+    };
+    for sub in patterns {
+        let crate::ast::PatternKind::Binding(n) = &sub.kind else {
+            continue;
+        };
+        for a in crate::ast::expr_rebind_aliases(body, n).iter().skip(1) {
+            let mut cand = Tally {
+                collect_root: Some(a),
+                ..Default::default()
+            };
+            walk_expr(Target::Bare(a), body, &mut cand);
+            for path in cand.places {
+                let mut t = Tally::default();
+                walk_expr(Target::Path(a, &path), body, &mut t);
+                if t.cond_mentions > t.cond_read_through && !out.contains(&path) {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// True iff every mention of the place `name` + `path` inside `e` is a read
@@ -468,6 +594,18 @@ struct Tally<'a> {
     /// PREFIX of a longer chain, since the recursion visits each sub-chain as
     /// a node in its own right. The caller filters; this only enumerates.
     places: Vec<crate::ast::ParamPath>,
+    /// B-2026-09-20-17 — how many branches, loop bodies or short-circuited
+    /// operands the walk is currently inside. Not every path reaches a node
+    /// counted at a positive depth.
+    cond_depth: usize,
+    /// The subsets of `mentions` / `read_through` counted at a positive
+    /// [`Self::cond_depth`]: a target materialized on SOME paths only has
+    /// `cond_mentions > cond_read_through`.
+    cond_mentions: usize,
+    cond_read_through: usize,
+    /// Every `return`, `?`, `break` and `continue` the walk passed, closures
+    /// aside — each one a path that may leave before a later node runs.
+    exits: usize,
 }
 
 impl Tally<'_> {
@@ -590,6 +728,18 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
     }
     if tgt.matches(e) {
         t.mentions += 1;
+        if t.cond_depth > 0 {
+            t.cond_mentions += 1;
+        }
+    }
+    if matches!(
+        &e.kind,
+        ExprKind::Return(_)
+            | ExprKind::Question(_)
+            | ExprKind::Break { .. }
+            | ExprKind::Continue { .. }
+    ) {
+        t.exits += 1;
     }
     // A bare `name` in one of these positions is read, not taken. Counting the
     // position rather than rewriting the recursion keeps the two tallies over
@@ -604,6 +754,9 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
             if tgt.matches(object) =>
         {
             t.read_through += 1;
+            if t.cond_depth > 0 {
+                t.cond_read_through += 1;
+            }
         }
         _ => {}
     }
@@ -646,9 +799,19 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
         | ExprKind::Cast { expr: x, .. } => walk_expr(tgt, x, t),
         // ── Two children ──────────────────────────────────────────────────
         ExprKind::Binary {
+            op: crate::ast::BinOp::And | crate::ast::BinOp::Or,
+            left: a,
+            right: b,
+        }
+        | ExprKind::NilCoalesce { left: a, right: b } => {
+            walk_expr(tgt, a, t);
+            t.cond_depth += 1;
+            walk_expr(tgt, b, t);
+            t.cond_depth -= 1;
+        }
+        ExprKind::Binary {
             left: a, right: b, ..
         }
-        | ExprKind::NilCoalesce { left: a, right: b }
         | ExprKind::Pipe { left: a, right: b }
         | ExprKind::Index {
             object: a,
@@ -670,6 +833,10 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
                 if tgt.matches(&a.value) && t.borrows.is_some_and(|f| f(obj, i)) {
                     t.mentions += 1;
                     t.read_through += 1;
+                    if t.cond_depth > 0 {
+                        t.cond_mentions += 1;
+                        t.cond_read_through += 1;
+                    }
                     continue;
                 }
                 walk_expr(tgt, &a.value, t);
@@ -685,9 +852,11 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
         }
         ExprKind::OptionalChain { object, args, .. } => {
             walk_expr(tgt, object, t);
+            t.cond_depth += 1;
             for a in args.iter().flatten() {
                 walk_expr(tgt, &a.value, t);
             }
+            t.cond_depth -= 1;
         }
         // ── Sequences ─────────────────────────────────────────────────────
         ExprKind::Tuple(items)
@@ -732,9 +901,12 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
         | ExprKind::Unsafe(b)
         | ExprKind::Try(b)
         | ExprKind::Seq(b)
-        | ExprKind::Par(b)
-        | ExprKind::Loop { body: b, .. }
-        | ExprKind::LabeledBlock { body: b, .. } => walk_block(tgt, b, t),
+        | ExprKind::Par(b) => walk_block(tgt, b, t),
+        ExprKind::Loop { body: b, .. } | ExprKind::LabeledBlock { body: b, .. } => {
+            t.cond_depth += 1;
+            walk_block(tgt, b, t);
+            t.cond_depth -= 1;
+        }
         // ── Control flow ──────────────────────────────────────────────────
         ExprKind::If {
             condition: head,
@@ -742,10 +914,12 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
             else_branch,
         } => {
             walk_expr(tgt, head, t);
+            t.cond_depth += 1;
             walk_block(tgt, then_block, t);
             if let Some(x) = else_branch.as_deref() {
                 walk_expr(tgt, x, t);
             }
+            t.cond_depth -= 1;
         }
         ExprKind::IfLet {
             value,
@@ -754,19 +928,23 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
             ..
         } => {
             walk_expr(tgt, value, t);
+            t.cond_depth += 1;
             walk_block(tgt, then_block, t);
             if let Some(x) = else_branch.as_deref() {
                 walk_expr(tgt, x, t);
             }
+            t.cond_depth -= 1;
         }
         ExprKind::Match { scrutinee, arms } => {
             walk_expr(tgt, scrutinee, t);
+            t.cond_depth += 1;
             for a in arms {
                 if let Some(g) = &a.guard {
                     walk_expr(tgt, g, t);
                 }
                 walk_expr(tgt, &a.body, t);
             }
+            t.cond_depth -= 1;
         }
         ExprKind::While {
             condition: head,
@@ -780,8 +958,13 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
             iterable: head,
             body,
             ..
+        } => {
+            walk_expr(tgt, head, t);
+            t.cond_depth += 1;
+            walk_block(tgt, body, t);
+            t.cond_depth -= 1;
         }
-        | ExprKind::Lock {
+        ExprKind::Lock {
             mutex: head, body, ..
         } => {
             walk_expr(tgt, head, t);
@@ -806,7 +989,10 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
         // ── Capture ───────────────────────────────────────────────────────
         ExprKind::Closure { body, .. } => {
             let before = t.mentions;
+            // A `return` inside a closure leaves the closure, not the arm.
+            let exits = t.exits;
             walk_expr(tgt, body, t);
+            t.exits = exits;
             if t.mentions > before {
                 t.captured = true;
             }
