@@ -11555,10 +11555,12 @@ impl<'ctx> super::Codegen<'ctx> {
         //    as readily as for a named local. Deriving it from the payload type
         //    instead left the param cell printing garbage, because the
         //    derivation had nothing to read.
+        // B-2026-09-26-38 — one binding PAST the scalar siblings, as the
+        // helper says: `G2.X(v, n)`'s `n` owns nothing and has no stake here.
         let arm_binding_takes_container_interior = arm_reads_only_bodies
             && self.var_has_boxed_enum_drop(scrut_name)
             && matches!(
-                Self::variant_arm_binds(pattern).as_slice(),
+                Self::variant_arm_bodied_binds(pattern, &scalar_tes).as_slice(),
                 [b] if self.var_owns_vec_buffer(b)
             );
         // B-2026-09-26-15 — an arm whose binding registers NO drop (a plain
@@ -11607,7 +11609,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // same reason: this registration is the other half of that
             // decision, so an arm the gate declines must get neither.
             if arm_binding_takes_container_interior {
-                self.register_arm_binding_container_elem_bodies(pattern);
+                self.register_arm_binding_container_elem_bodies(pattern, &scalar_tes);
             }
             // Only the BODIES mask is gated: the MEMORY retraction at the end
             // of this block is what stops the box drop and the binding from
@@ -11671,7 +11673,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     && self.var_has_boxed_enum_drop(scrut_name)
                     && self.arm_consumes_only_generic_payload(&enum_name, pattern)
                 {
-                    self.adopt_masked_generic_payload_view_bodies(scrut_name, &enum_name, pattern);
+                    self.adopt_masked_generic_payload_view_bodies(
+                        scrut_name,
+                        &enum_name,
+                        pattern,
+                        &scalar_tes,
+                    );
                 }
             }
             // B-2026-09-10-2 — the MEMORY half of the same move-out for a
@@ -14949,8 +14956,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// at all (`tys.len() != 1` skips the rest). Anything else returns without
     /// registering, and its caller has already decided the husk's mask runs —
     /// the pre-existing behaviour, not a new silence.
-    fn register_arm_binding_container_elem_bodies(&mut self, pattern: &Pattern) {
-        let binds = Self::variant_arm_binds(pattern);
+    fn register_arm_binding_container_elem_bodies(
+        &mut self,
+        pattern: &Pattern,
+        scalar_tes: &std::collections::HashMap<String, TypeExpr>,
+    ) {
+        let binds = Self::variant_arm_bodied_binds(pattern, scalar_tes);
         let [bind_name] = binds.as_slice() else {
             return;
         };
@@ -15025,8 +15036,9 @@ impl<'ctx> super::Codegen<'ctx> {
         scrut_name: &str,
         enum_name: &str,
         pattern: &Pattern,
+        scalar_tes: &std::collections::HashMap<String, TypeExpr>,
     ) {
-        let binds = Self::variant_arm_binds(pattern);
+        let binds = Self::variant_arm_bodied_binds(pattern, scalar_tes);
         let [bind] = binds.as_slice() else {
             return;
         };
@@ -15038,7 +15050,15 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        let tes = self.arm_consumed_payload_inst_tes(scrut_name, enum_name, pattern, true);
+        // B-2026-09-26-38 — the consumed positions past the scalar ones, in
+        // step with `binds` above: a two-field `X(T, i64)` arm consumes the
+        // `i64` too, and counting it declined every such variant, so its
+        // payload's body ran on no compiled surface once the box was owned.
+        let tes: Vec<TypeExpr> = self
+            .arm_consumed_payload_inst_tes(scrut_name, enum_name, pattern, true)
+            .into_iter()
+            .filter(|te| !Self::te_is_primitive_scalar(te))
+            .collect();
         let [te] = tes.as_slice() else {
             return;
         };
@@ -16510,6 +16530,36 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// The binding names a `Some`/`Ok`/`Err` arm introduces, for the borrow
     /// verdict in [`Self::boxed_tuple_payload_arm_takes_ownership`].
+    /// B-2026-09-26-38 — [`Self::variant_arm_binds`] without the bindings
+    /// whose resolved type is a PRIMITIVE scalar.
+    ///
+    /// The single-binding helpers below were written against one-field
+    /// variants, where the one binding IS the payload. A multi-field variant
+    /// binds its scalar siblings too (`G2.X(v, n)`), and counting `n` made
+    /// every such arm decline. A scalar owns no heap and runs no body, so it
+    /// has no stake in who runs the payload's. A binding whose type is
+    /// unresolved is kept, so the answer only ever narrows by a proven
+    /// scalar.
+    fn variant_arm_bodied_binds(
+        pattern: &Pattern,
+        scalar_tes: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Vec<String> {
+        Self::variant_arm_binds(pattern)
+            .into_iter()
+            .filter(|b| {
+                !scalar_tes
+                    .get(b.as_str())
+                    .is_some_and(Self::te_is_primitive_scalar)
+            })
+            .collect()
+    }
+
+    /// A bare path to a primitive scalar (`i64`, `bool`, `f64`, …).
+    fn te_is_primitive_scalar(te: &TypeExpr) -> bool {
+        matches!(&te.kind, TypeKind::Path(p) if p.generic_args.is_none()
+            && p.segments.last().is_some_and(|n| crate::codegen::param_own::is_primitive_type_name(n)))
+    }
+
     pub(super) fn variant_arm_binds(pattern: &Pattern) -> Vec<String> {
         let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
             return Vec::new();

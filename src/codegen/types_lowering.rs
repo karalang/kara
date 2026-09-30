@@ -5427,7 +5427,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let subst: HashMap<String, TypeExpr> = if args.is_empty() || params.is_empty() {
             HashMap::new()
         } else {
-            params.into_iter().zip(args).collect()
+            params.iter().cloned().zip(args).collect()
         };
         let mut out = Vec::new();
         for (_tag, vname, tys) in self.enum_variant_field_type_exprs(enum_name) {
@@ -5536,8 +5536,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     else {
                         continue;
                     };
+                    // B-2026-09-26-38 — whether the DECLARED field is erased,
+                    // which is what lifts restriction 2 below for it.
+                    let erased = !subst.is_empty() && Self::type_expr_mentions_param(fty, &params);
                     if let Some(payload_te) =
-                        self.multi_field_boxed_field(&concrete, field_words, enum_name, &vname)
+                        self.multi_field_boxed_field(&concrete, field_words, erased)
                     {
                         out.push((
                             enum_name.to_string(),
@@ -5650,20 +5653,32 @@ impl<'ctx> super::Codegen<'ctx> {
     ///     after it under `--interp`. That class is caller-sequenced now, so
     ///     the two clauses came out together, as this paragraph said they
     ///     would.
+    ///
+    /// B-2026-09-26-38 — restriction 2 now binds only a CONCRETELY declared
+    /// field. Its evidence was monomorphic struct payloads whose boxes already
+    /// had an owner, and says nothing about a field declared as (or mentioning)
+    /// the enum's own parameter: that field's `EnumDropKind` is `None` because
+    /// the declaration pass cannot see through `T`, so no arm of the drop
+    /// switch owns its box whatever it instantiates to. The single-field arm of
+    /// the caller has admitted every generic payload shape all along
+    /// (`!subst.is_empty() || array`), and this is the same rule. Measured
+    /// on `enum G2[T] { X(T, i64), Y }` at `-O0`: `T = String` stranded
+    /// 24 B + the string, `Vec[i64]` 24 + 24, and `Vec[R]` 24 + 134 with the
+    /// element bodies already running on the separate bodies channel.
     fn multi_field_boxed_field(
         &self,
         concrete: &TypeExpr,
         field_words: usize,
-        enum_name: &str,
-        variant: &str,
+        erased: bool,
     ) -> Option<TypeExpr> {
-        let (_elem_te, _n) = self.array_elem_and_len(concrete)?;
+        if !erased {
+            self.array_elem_and_len(concrete)?;
+        }
         // B-2026-09-20-55 — restriction 3 is gone; see the twin note in
         // `declarations.rs`'s `BoxedArray` pass. It declined an element that
         // runs a user `Drop` body, to avoid the ordering divergence that
         // admitting the field used to cause; that class is caller-sequenced
         // now, so admitting it moves nothing and recovers the box.
-        let _ = (enum_name, variant);
         let ll = self.llvm_type_for_type_expr(concrete);
         if Self::llvm_type_word_count(ll) > field_words {
             Some(concrete.clone())
