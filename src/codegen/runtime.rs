@@ -17114,9 +17114,25 @@ impl<'ctx> super::Codegen<'ctx> {
             // element drop is the one that covers both halves without
             // overlapping; it declines for a struct with no shared field, where
             // the plain synthesis is already complete.
-            let field_fn = self
-                .emit_vec_elem_struct_with_shared_drop_fn(&type_name)
-                .or_else(|| self.emit_struct_drop_synthesis(&type_name));
+            //
+            // B-2026-09-30-13 — and per MONOMORPH. The base synthesis reads a
+            // generic `G[T]`'s `v: T` as owning nothing, so a `G[String]`
+            // source downgraded here kept a memory drop that freed no buffer
+            // (31 B lost at -O0 on `let x = t; println(t.v)`). An empty subst
+            // (every non-generic struct) is the base drop, unchanged.
+            let subst = self
+                .type_decls
+                .enum_inst_var_types
+                .get(name)
+                .cloned()
+                .map(|i| self.generic_struct_subst_from_inst(&type_name, &i))
+                .unwrap_or_default();
+            let field_fn = if subst.is_empty() {
+                self.emit_vec_elem_struct_with_shared_drop_fn(&type_name)
+                    .or_else(|| self.emit_struct_drop_synthesis(&type_name))
+            } else {
+                self.sole_owner_struct_memory_drop_mono(&type_name, &subst)
+            };
             // B-2026-09-26-60 — the action lives in an ENCLOSING frame, so the
             // call sits in a branch, a loop body or a statement scope that may
             // not run (`if d.id > 3 { std(mut v, d); }`). A static downgrade

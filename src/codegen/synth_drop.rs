@@ -15174,7 +15174,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// reaches the mono arm. That arm mirrors `emit_user_drop_wrapper_mono`'s
     /// own choice between the shared-field walker and the plain synthesizer,
     /// with the name-keyed fall-through preserved.
-    fn sole_owner_struct_memory_drop_mono(
+    pub(super) fn sole_owner_struct_memory_drop_mono(
         &mut self,
         type_name: &str,
         subst: &std::collections::HashMap<String, TypeExpr>,

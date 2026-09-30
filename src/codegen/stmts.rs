@@ -12184,6 +12184,45 @@ impl<'ctx> super::Codegen<'ctx> {
                                     value,
                                     shared_info.is_none(),
                                 );
+                            } else if has_user_drop
+                                && Self::uam_consume_root_span(value).is_some_and(|sp| {
+                                    self.span_tables
+                                        .uam_copied_sites
+                                        .contains(&(sp.offset, sp.length))
+                                })
+                            {
+                                // B-2026-09-30-13 — a USE-AFTER-MOVE COPY
+                                // (`let x = t; println(t.s)`). `uam_defensive_copy`
+                                // gave `x` its own heap, so `t` still owns the
+                                // original buffers and box and must keep its
+                                // MEMORY; the body is the consumer's, as the
+                                // interpreter counts it. The retraction below
+                                // took both, and the source's heap leaked (31 B
+                                // `String`, 16 B `shared` box at -O0). Same
+                                // split as the hand-back argument (B-2026-09-30-7).
+                                // A source whose body rides a bodies-only
+                                // action instead (a VIEW, `let m = self; let
+                                // n = m;`, where the caller holds the memory;
+                                // or a by-value param with its memory in a
+                                // separate action) gives up just that action;
+                                // any memory action it has stays armed.
+                                let owns_wrapper = self
+                                    .drop_rc
+                                    .scope_cleanup_actions
+                                    .iter()
+                                    .flatten()
+                                    .any(|a| {
+                                        matches!(a, crate::codegen::state::CleanupAction::UserDrop {
+                                            binding_name,
+                                            kind: crate::codegen::state::UserDropKind::OwnWrapper,
+                                            ..
+                                        } if binding_name == source_name)
+                                    });
+                                if owns_wrapper {
+                                    self.suppress_user_drop_body_keeping_memory(source_name);
+                                } else {
+                                    self.suppress_user_drop_for_var(source_name);
+                                }
                             } else if has_user_drop {
                                 // B-2026-09-05-13 — PER PATH where the source is
                                 // a parameter whose body this frame owns under
