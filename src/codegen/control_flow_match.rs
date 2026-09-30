@@ -853,6 +853,24 @@ impl<'ctx> super::Codegen<'ctx> {
             // SSA value, unaffected by the revert.
             let arm_snap = self.snapshot_var_env();
 
+            // B-2026-09-30-46 — an arm that binds a named STRUCT scrutinee
+            // WHOLE (`match g { x => .. }`) is `let x = g` with a test in front
+            // of it, and is compiled as one. Bound as a copy through
+            // `bind_pattern_values` it gained its own owner registration while
+            // nothing disarmed the source's, so both dropped one value: the
+            // struct's memory freed twice for a local (`free(): double free`
+            // over a plain `String` field, no `Drop` anywhere) and every field
+            // body ran twice for a param. The `let` path already carries every
+            // rule a whole move of a named struct needs -- a local's move, a
+            // caller-retained param's view, a by-transfer param's walk, a move
+            // on one branch only -- so this reuses it rather than growing a
+            // second copy of them here.
+            let whole_rebind = scrut_ref_ptr.is_none()
+                && !self.pattern_state.pattern_binding_is_borrow
+                && freshtemp_enum.is_none()
+                && freshtemp_struct.is_none()
+                && self.arm_rebinds_named_struct_scrutinee_whole(scrutinee, &arm.pattern);
+
             // Bind pattern variables
             if let PatternKind::Slice {
                 prefix,
@@ -967,8 +985,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.pattern_state
                         .pattern_binding_field_boxed_payload_disarmed = saved_field_boxed_disarmed;
                 }
-                if !handled_via_ptr {
-                    self.bind_pattern_values(&arm.pattern, scrut)?;
+                if !handled_via_ptr && whole_rebind && arm.guard.is_none() {
+                    // B-2026-09-30-46 — bound below, after the guard, as a
+                    // `let` of the scrutinee. See `whole_rebind`.
+                    self.pattern_state.pattern_binding_arm_only_borrows = saved_arm_borrows;
+                    self.pattern_state.pattern_binding_arm_borrowed_only_names =
+                        saved_arm_borrowed_names.clone();
+                    self.pattern_state
+                        .pattern_binding_field_boxed_payload_disarmed = saved_field_boxed_disarmed;
+                    self.pattern_state.current_variant_payload_bindings.clear();
+                    self.pattern_state.current_bare_tuple_bindings.clear();
+                } else if !handled_via_ptr {
+                    // B-2026-09-30-46 — a guarded whole rebind binds a VIEW for
+                    // the guard to read; the owning `let` follows the guard.
+                    let saved_is_borrow = self.pattern_state.pattern_binding_is_borrow;
+                    if whole_rebind {
+                        self.pattern_state.pattern_binding_is_borrow = true;
+                    }
+                    let bound = self.bind_pattern_values(&arm.pattern, scrut);
+                    self.pattern_state.pattern_binding_is_borrow = saved_is_borrow;
+                    bound?;
                     self.pattern_state.pattern_binding_arm_only_borrows = saved_arm_borrows;
                     self.pattern_state.pattern_binding_arm_borrowed_only_names =
                         saved_arm_borrowed_names.clone();
@@ -1054,6 +1090,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_conditional_branch(guard_val, guard_pass_bb, fail_bb)
                     .unwrap();
                 self.builder.position_at_end(guard_pass_bb);
+            }
+            if whole_rebind {
+                let rebind = Stmt {
+                    kind: StmtKind::Let {
+                        is_mut: false,
+                        pattern: arm.pattern.clone(),
+                        ty: None,
+                        value: scrutinee.clone(),
+                    },
+                    span: arm.pattern.span,
+                };
+                self.compile_stmt(&rebind)?;
             }
 
             // Value-move destructure: when the scrutinee is an owned
@@ -16422,6 +16470,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+    }
+
+    /// B-2026-09-30-46 — does this arm bind a named, owned, non-`shared`
+    /// STRUCT scrutinee whole (`match g { x => .. }`)? Such an arm is compiled
+    /// as `let x = g` after its guard; see `whole_rebind` in `compile_match`.
+    fn arm_rebinds_named_struct_scrutinee_whole(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) -> bool {
+        let ExprKind::Identifier(src) = &scrutinee.kind else {
+            return false;
+        };
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return false;
+        };
+        // A `Binding` whose name is a unit enum variant is a tag test.
+        let variant = name.rsplit('.').next().unwrap_or(name);
+        if name.contains('.') || self.enum_tag_for_variant(variant).is_some() {
+            return false;
+        }
+        if self.borrow_vars.ref_params.contains_key(src.as_str()) {
+            return false;
+        }
+        let Some(tn) = self.var_types.var_type_names.get(src.as_str()) else {
+            return false;
+        };
+        self.type_decls.struct_types.contains_key(tn)
+            && !self.type_decls.shared_types.contains_key(tn)
+            && self.variables.contains_key(src.as_str())
     }
 
     /// B-2026-09-01-30 — carry an owned by-value param's deep-copy obligation

@@ -6578,6 +6578,7 @@ impl<'ctx> Codegen<'ctx> {
                 cond_move_mem_drop_flags: HashMap::new(),
                 param_view_mem_drops: HashMap::new(),
                 param_view_callee_owned: HashSet::new(),
+                handed_transfer_walk_locals: HashSet::new(),
                 caller_retained_aggregate_memory: HashSet::new(),
                 loop_decl_rearm_anchors: HashMap::new(),
                 cond_store_flag_params: std::collections::HashSet::new(),

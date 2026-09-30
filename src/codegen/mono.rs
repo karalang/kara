@@ -4444,6 +4444,8 @@ impl<'ctx> super::Codegen<'ctx> {
             let saved_param_view_locals = std::mem::take(&mut self.payload_vars.param_view_locals);
             let saved_param_view_callee_owned =
                 std::mem::take(&mut self.drop_rc.param_view_callee_owned);
+            let saved_handed_transfer_walk_locals =
+                std::mem::take(&mut self.drop_rc.handed_transfer_walk_locals);
             let saved_caller_retained_memory =
                 std::mem::take(&mut self.drop_rc.caller_retained_aggregate_memory);
             // Slice 5: per-binding layout carrier — the mono body seeds its own
@@ -4523,6 +4525,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.borrow_vars.caller_retained_struct_field_views = saved_caller_retained_views;
             self.payload_vars.param_view_locals = saved_param_view_locals;
             self.drop_rc.param_view_callee_owned = saved_param_view_callee_owned;
+            self.drop_rc.handed_transfer_walk_locals = saved_handed_transfer_walk_locals;
             self.drop_rc.caller_retained_aggregate_memory = saved_caller_retained_memory;
             self.borrow_vars.entry_slot_ref_vars = saved_entry_slot_ref_vars;
             self.mono_state.layout_subst = saved_layout_subst;
@@ -5372,6 +5375,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_param_view_locals = std::mem::take(&mut self.payload_vars.param_view_locals);
         let saved_param_view_callee_owned =
             std::mem::take(&mut self.drop_rc.param_view_callee_owned);
+        let saved_handed_transfer_walk_locals =
+            std::mem::take(&mut self.drop_rc.handed_transfer_walk_locals);
         let saved_caller_retained_memory =
             std::mem::take(&mut self.drop_rc.caller_retained_aggregate_memory);
         // Slice 5: the mono body seeds its own locals' layouts in
@@ -5429,6 +5434,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.caller_retained_struct_field_views = saved_caller_retained_views;
         self.payload_vars.param_view_locals = saved_param_view_locals;
         self.drop_rc.param_view_callee_owned = saved_param_view_callee_owned;
+        self.drop_rc.handed_transfer_walk_locals = saved_handed_transfer_walk_locals;
         self.drop_rc.caller_retained_aggregate_memory = saved_caller_retained_memory;
         self.borrow_vars.entry_slot_ref_vars = saved_entry_slot_ref_vars;
         self.return_layout = saved_return_layout;

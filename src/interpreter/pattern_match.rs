@@ -524,6 +524,27 @@ impl<'a> super::Interpreter<'a> {
                             ExprKind::SelfValue => Some("self".to_string()),
                             _ => None,
                         });
+                        // B-2026-09-30-46 — an arm that binds the named
+                        // struct WHOLE (`match g { x => .. }`) moves it, as
+                        // `let x = g` does: the binding owns the value from
+                        // here and the scrutinee runs nothing. Left as a view,
+                        // an arm that moved `x` on (`let h = match g { x => x }`)
+                        // ran the body at `g`'s death AND at `h`'s. An owned
+                        // param's scrutinee is excluded: its arm bindings are
+                        // the caller's views, recorded above.
+                        if let (Some(root), PatternKind::Binding(bn)) =
+                            (root.as_ref(), &arm.pattern.kind)
+                        {
+                            if root != "self"
+                                && !scrutinee_is_owned_param_name
+                                && !scrutinee_projects_owned_param
+                                && !masked_view_names.contains(bn)
+                                && self.pattern_binding_owes_drop_body(bn)
+                            {
+                                self.pending_arm_drop_bindings.push(bn.clone());
+                                self.moved_out_user_drop_bindings.insert(root.clone());
+                            }
+                        }
                         if let Some(root) = root {
                             for (field, bound) in
                                 Self::struct_pattern_whole_field_bindings(&arm.pattern)

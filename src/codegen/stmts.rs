@@ -12148,6 +12148,25 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                        // B-2026-09-30-46 — asked BEFORE the retraction below
+                        // takes it: does the rebound source own its bodies
+                        // walk itself? A by-transfer param (`g: G[R]`) does
+                        // (the caller registers none), so the param-view
+                        // registration further down, which is memory only,
+                        // has to carry the walk on or no body runs at all.
+                        let rebind_src_walk_handed = match &value.kind {
+                            ExprKind::Identifier(src) => {
+                                has_field_user_drop
+                                    && (self.fn_ctx.current_fn_param_names.contains(src.as_str())
+                                        || self
+                                            .payload_vars
+                                            .param_view_locals
+                                            .contains(src.as_str()))
+                                    && !self.borrow_vars.ref_params.contains_key(src.as_str())
+                                    && self.var_holds_struct_field_bodies_walk(src)
+                            }
+                            _ => false,
+                        };
                         let move_source_name = match &value.kind {
                             ExprKind::Identifier(n) => Some(n.as_str()),
                             ExprKind::SelfValue => Some("self"),
@@ -12812,7 +12831,53 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // received still frees at scope exit.
                                     let inst =
                                         self.type_decls.enum_inst_var_types.get(var_name).cloned();
-                                    self.track_struct_var_inst(&struct_name, alloca, inst);
+                                    self.track_struct_var_inst(&struct_name, alloca, inst.clone());
+                                    // B-2026-09-30-46 — and the bodies walk the
+                                    // source owned itself (see
+                                    // `rebind_src_walk_handed`), masked as the
+                                    // source's was.
+                                    if let (true, ExprKind::Identifier(src)) =
+                                        (rebind_src_walk_handed, &value.kind)
+                                    {
+                                        let subst = inst
+                                            .as_ref()
+                                            .map(|i| {
+                                                self.generic_struct_subst_from_inst(&struct_name, i)
+                                            })
+                                            .unwrap_or_default();
+                                        self.transfer_move_masks_on_rebind(src, var_name);
+                                        let here: std::collections::BTreeSet<usize> = self
+                                            .type_decls
+                                            .struct_moved_field_bodies
+                                            .get(var_name.as_str())
+                                            .map(|s| s.iter().copied().collect())
+                                            .unwrap_or_default();
+                                        let skip = self.field_skip_tree_for_var(var_name, here);
+                                        let bodies = if skip.is_empty() {
+                                            self.emit_user_drop_field_bodies_fn(
+                                                &struct_name,
+                                                &subst,
+                                            )
+                                        } else {
+                                            self.emit_user_drop_field_bodies_fn_skipping(
+                                                &struct_name,
+                                                &subst,
+                                                &skip,
+                                            )
+                                        };
+                                        if let Some(bodies) = bodies {
+                                            self.track_user_drop_var_with_fn(
+                                                &struct_name,
+                                                var_name,
+                                                alloca,
+                                                bodies,
+                                                UserDropKind::StructFieldBodies,
+                                            );
+                                        }
+                                        self.drop_rc
+                                            .handed_transfer_walk_locals
+                                            .insert(var_name.to_string());
+                                    }
                                 }
                                 // B-2026-09-02-5 — and that sentence is exactly
                                 // the induction step: this binding now carries
@@ -13408,6 +13473,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                         // may have emptied it.
                                         || (self.fn_ctx.current_fn_param_names.contains(root)
                                             && !self.borrow_vars.ref_params.contains_key(root)
+                                            && self.var_holds_struct_field_bodies_walk(root))
+                                        // B-2026-09-30-46 — and a local that
+                                        // walk was handed on to by a rebind.
+                                        || (self.drop_rc.handed_transfer_walk_locals.contains(root)
                                             && self.var_holds_struct_field_bodies_walk(root))
                                 });
                             if self.field_move_out_source_is_param_view(value)

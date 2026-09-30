@@ -1706,6 +1706,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // B-2026-09-02-5 — its memory-ownership companion, same scope.
         self.drop_rc.param_view_callee_owned.clear();
+        self.drop_rc.handed_transfer_walk_locals.clear();
         self.drop_rc.caller_retained_aggregate_memory.clear();
         self.payload_vars.bare_tuple_elem_slots.clear();
         self.payload_vars.param_view_struct_fields.clear();

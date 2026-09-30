@@ -315,6 +315,15 @@ pub(crate) struct DropRc<'ctx> {
     ///
     /// Cleared per function alongside `param_view_callee_owned`.
     pub(crate) caller_retained_aggregate_memory: HashSet<String>,
+    /// B-2026-09-30-46 — the param-view locals that were HANDED the bodies
+    /// walk a by-transfer param owned itself (`let x = g` over `g: G[R]`).
+    /// Unlike every other view, such a local owns its fields' bodies, so a
+    /// field moved out of it goes to the destination alone. Kept apart from
+    /// "holds a walk" because a view can hold a wrapper's own-body walk
+    /// (B-2026-09-06-63) while its fields stay the caller's.
+    ///
+    /// Cleared per function alongside `param_view_callee_owned`.
+    pub(crate) handed_transfer_walk_locals: HashSet<String>,
     /// B-2026-08-30-28 — the parameters whose user `Drop` BODY is owned by a
     /// per-path flag rather than by a static decision, so a later move site
     /// must NOT retract their action.
