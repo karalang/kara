@@ -1266,6 +1266,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // run before the free.
                     self.free_discarded_vec_literal_buffer(owned_tail, v);
                     self.track_discarded_array_elem_bodies(owned_tail, v);
+                    self.track_discarded_fixed_array_literal(owned_tail, v);
                 } else if let Some(v) = result {
                     // B-2026-09-13-28 / B-2026-09-01-17 — the DECLINED literal.
                     //
@@ -5015,6 +5016,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // registrar claimed an array literal here, so its elements' Drop
                 // bodies ran nowhere.
                 self.track_discarded_array_elem_bodies(&tail, val);
+                // B-2026-09-30-60 — and an `Array[..]` literal's `[N x T]` value.
+                self.track_discarded_fixed_array_literal(&tail, val);
                 self.drain_discard_frame_args_first(b53_arg_mark);
                 Ok(())
             }
@@ -14071,6 +14074,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `let _ =` literal arm's `Vec` buffer free.
                     self.free_discarded_vec_literal_buffer(lt, val);
                     self.track_discarded_array_elem_bodies(lt, val);
+                    self.track_discarded_fixed_array_literal(lt, val);
                     self.drain_discard_frame_args_first(b53_arg_mark);
                 }
                 Ok(())
@@ -28725,6 +28729,119 @@ impl<'ctx> super::Codegen<'ctx> {
             bodies,
             UserDropKind::StructFieldBodies,
         );
+    }
+
+    /// B-2026-09-30-60 — the fixed-`Array` peer of
+    /// [`Self::free_discarded_vec_literal_buffer`]: a discarded `Array[..]`
+    /// literal (`let _ = Array[W1 { .. }];`, `Array[mk(1)];`, an `if` / `match`
+    /// arm yielding one) lowers to an `[N x T]` VALUE, not a `Vec` handle, so
+    /// that free declines it, the aggregate registrar returns early on it, and
+    /// [`Self::track_discarded_array_elem_bodies`] walks only a handle. Nothing
+    /// owned the elements: no `Drop` body ran compiled while `--interp` ran
+    /// each one, and every element's heap leaked.
+    ///
+    /// Registers the same pair a discarded `Array`-returning CALL gets
+    /// (`try_track_discarded_array_temp` + its bodies peer): the memory walk
+    /// first, then the bodies, so the frame's LIFO drain runs the bodies over
+    /// live fields before the free. ALL-FRESH items only: an item naming a
+    /// place moved its value in, and whose drop that becomes is the question
+    /// B-2026-09-30-59 carries for the bare spelling.
+    pub(super) fn track_discarded_fixed_array_literal(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let items: &[Expr] = match &tail.kind {
+            ExprKind::ArrayLiteral(items) => items,
+            ExprKind::PrefixCollectionLiteral { type_name, items } if type_name == "Array" => items,
+            _ => return,
+        };
+        let inkwell::types::BasicTypeEnum::ArrayType(arr_ty) = val.get_type() else {
+            return;
+        };
+        let n = arr_ty.len();
+        if n == 0 || items.len() != n as usize {
+            return;
+        }
+        if !items
+            .iter()
+            .all(|it| self.discarded_array_item_is_fresh(it))
+        {
+            return;
+        }
+        // The literal's own instantiation when the typechecker recorded one,
+        // else its first item's type: the typechecker unified every item with
+        // it, and `infer_arg_elem_te` is how the call-argument registrar names
+        // the same element.
+        let elem_te = match self
+            .type_decls
+            .enum_inst_type_exprs
+            .get(&(tail.span.offset, tail.span.length))
+            .and_then(|te| self.array_elem_and_len(te))
+        {
+            Some((te, te_n)) if te_n == n => te,
+            Some(_) => return,
+            None => self.infer_arg_elem_te(&items[0]),
+        };
+        let elem_ty = arr_ty.get_element_type();
+        if self.llvm_type_for_type_expr(&elem_te) != elem_ty {
+            return;
+        }
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return;
+        };
+        // Both emitters may synthesize a function and move the builder, so
+        // they run before the alloca and store.
+        let drop_fn = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n);
+        let bodies = self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem_te, n);
+        if drop_fn.is_none() && bodies.is_none() {
+            return;
+        }
+        let slot = self.create_entry_alloca(cur_fn, "__disc_array_lit", val.get_type());
+        if self.builder.build_store(slot, val).is_err() {
+            return;
+        }
+        if let Some(drop_fn) = drop_fn {
+            if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+                frame.push(super::state::CleanupAction::StructDrop {
+                    struct_alloca: slot,
+                    drop_fn,
+                });
+            }
+        }
+        if let Some(bodies) = bodies {
+            self.track_user_drop_var_with_fn(
+                "",
+                "__disc_array_lit",
+                slot,
+                bodies,
+                UserDropKind::ContainerElemBodies,
+            );
+        }
+    }
+
+    /// An item of a discarded `Array[..]` literal that no binding owns: a
+    /// literal, a fresh call or f-string, or a struct/variant literal whose own
+    /// fields are fresh by the same test.
+    fn discarded_array_item_is_fresh(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::Bool(_)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(..)
+            | ExprKind::MultiStringLit(..)
+            | ExprKind::InterpolatedStringLit(_) => true,
+            ExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .all(|f| self.discarded_array_item_is_fresh(&f.value)),
+            _ => self.expr_yields_fresh_owned_temp(e) || self.item_is_inert_scalar(e),
+        }
     }
 
     /// B-2026-09-30-32 — free the buffer of a discarded collection literal

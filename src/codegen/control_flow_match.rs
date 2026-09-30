@@ -1880,6 +1880,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the bodies run before the free).
                         self.free_discarded_vec_literal_buffer(owned_tail, arm_val);
                         self.track_discarded_array_elem_bodies(owned_tail, arm_val);
+                        self.track_discarded_fixed_array_literal(owned_tail, arm_val);
                     }
                 }
                 self.drain_top_frame_with_emit();
