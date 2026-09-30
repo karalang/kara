@@ -2939,6 +2939,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // owns it; registering here as well produced a valgrind
             // `Invalid free` on `let back = idOpt(Some(a))` — measured, on a
             // program that is clean both before this arm and after it.
+            // B-2026-09-20-20 — the NAMED-LOCAL tuple mask `compile_call`
+            // applies (B-2026-09-17-37), which this loop never asked:
+            // `let a = Some((r5, r6)); gt(a)` over `fn gt[T](o: Option[(T, T)])`
+            // moving `t.0` into a local ran the local's full walk beside that
+            // local's own body (`dR5 g dR5 dR6` against a due `dR5 g dR6`).
+            // The helper resolves the callee by name in `program.items`, which
+            // holds the generic declaration, and reads only its AST.
+            if let ExprKind::Identifier(argn) = &a.value.kind {
+                self.remask_named_tuple_payload_arg(argn, &generic_fn.name, i);
+            }
             let param_nonescaping = generic_fn
                 .params
                 .get(i)
@@ -3188,7 +3198,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // type, and the erased `Option[(T, i64)]`'s bare `T`
                     // resolves nothing, which answers "not a copy read" for
                     // every projection and reproduces the bug.
-                    let ctor_variant = self.ctor_variant_name_of_arg(&a.value);
+                    // B-2026-09-20-20 — the variant as `compile_call`'s gate
+                    // reads it: a call result's callee name is not one.
+                    let ctor_variant = self.optres_arg_variant(&a.value, &inst);
                     let escaping = self
                         .optres_payload_escape_map(&generic_fn, &inst, ctor_variant.as_deref())
                         .get(match &p.pattern.kind {
@@ -3223,29 +3235,39 @@ impl<'ctx> super::Codegen<'ctx> {
                             };
                             let parts =
                                 self.optres_payload_escape_parts(&generic_fn, &inst, Some(v));
-                            match parts.get(pname).and_then(|m| m.get(v)) {
-                                Some(esc)
-                                    if !esc.is_empty()
-                                        && self.tuple_payload_arity(&inst, v)
-                                            != Some(esc.len()) =>
-                                {
-                                    // B-2026-09-19-33 — the mask is a
-                                    // `FieldSkipTree` now. This leg still
-                                    // answers in TOP-LEVEL indices only, which
-                                    // is a flat tree: it reads the element-wise
-                                    // map and never the PROJECTION channel, so
-                                    // a nested path cannot reach it in the
-                                    // first place. That asymmetry with the
-                                    // concrete leg is pre-existing and
-                                    // untouched here — widening it needs its
-                                    // own measurement, not a type change.
-                                    Some(super::synth_drop::FieldSkipTree {
-                                        here: esc.clone(),
-                                        ..Default::default()
-                                    })
+                            let mut paths: Vec<crate::ast::ParamPath> = match parts
+                                .get(pname)
+                                .and_then(|m| m.get(v))
+                            {
+                                Some(esc) => esc
+                                    .iter()
+                                    .map(|i| vec![crate::ast::ParamPart::TupleIndex(*i)])
+                                    .collect(),
+                                None => {
+                                    Self::optres_payload_projected_escaping_paths(&generic_fn, i, v)
                                 }
-                                _ => None,
+                            };
+                            // B-2026-09-20-20 — and the parts moved into a
+                            // local of the callee's own frame, the channel
+                            // `compile_call`'s gate unions in since
+                            // B-2026-09-17-38. This leg read the escape map
+                            // alone, so `Some(t) => { let x = t.0; .. }` over
+                            // `Option[(T, T)]` declined and element 1's body
+                            // ran nowhere (`dR5 g end` against a due
+                            // `dR5 g dR6 end`) -- invisible while a call
+                            // result's callee name was read as its variant,
+                            // which stood the unmasked walk up instead.
+                            paths.extend(Self::optres_payload_consumed_paths(&generic_fn, i, v));
+                            let tree = self.optres_payload_skip_tree(&inst, v, &paths)?;
+                            // A mask covering every part at the top level is
+                            // the old all-or-nothing answer and declines, as
+                            // it does at `compile_call`'s gate.
+                            if tree.nested.is_empty()
+                                && self.tuple_payload_arity(&inst, v) == Some(tree.here.len())
+                            {
+                                return None;
                             }
+                            Some(tree)
                         })
                     } else {
                         Some(super::synth_drop::FieldSkipTree::default())

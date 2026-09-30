@@ -5719,6 +5719,48 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-20-20 — the variant of `param_te` that argument `arg` carries,
+    /// for the caller-side bodies questions keyed on one.
+    ///
+    /// [`Self::ctor_variant_name_of_arg`] reads the CALLEE of any call, so a
+    /// call RESULT answered with the name of the function that made it:
+    /// `take(mkq())` asked about variant `mkq`. No escape map ever flags a
+    /// variant of that name, so the gate read the payload as untouched and
+    /// stood up the UNMASKED walk beside a callee that had moved a field out,
+    /// running that field's body twice on every compiled surface. Only a name
+    /// that IS a variant of the param's head counts as a constructor here.
+    ///
+    /// An argument that is not a constructor (a call result, a passthrough)
+    /// still has a variant the question can use when only ONE variant's
+    /// payload carries a body: the walk this gates switches on the runtime tag
+    /// and runs nothing for any other, so asking about that variant is exact
+    /// whichever one the value holds. That is every `Option`, and a `Result`
+    /// with one bodiless side. When both sides carry bodies there is no single
+    /// answer and this says so, which the callers read as "decline".
+    pub(super) fn optres_arg_variant(&self, arg: &Expr, param_te: &TypeExpr) -> Option<String> {
+        let variants: &[&str] = match &param_te.kind {
+            TypeKind::Path(p) => match p.segments.last().map(String::as_str) {
+                Some("Option") => &["Some", "None"],
+                Some("Result") => &["Ok", "Err"],
+                _ => return self.ctor_variant_name_of_arg(arg),
+            },
+            _ => return self.ctor_variant_name_of_arg(arg),
+        };
+        if let Some(v) = self.ctor_variant_name_of_arg(arg) {
+            if variants.contains(&v.as_str()) {
+                return Some(v);
+            }
+        }
+        let mut carrying = variants
+            .iter()
+            .filter(|v| optres_payload_te(param_te, Some(v)).is_some())
+            .filter(|v| !optres_variant_payload_is_bodiless(param_te, v));
+        match (carrying.next(), carrying.next()) {
+            (Some(v), None) => Some((*v).to_string()),
+            _ => None,
+        }
+    }
+
     /// B-2026-09-12-15 — may the CALLER own this by-value `Option`/`Result`
     /// argument's payload `Drop` BODIES?
     ///
@@ -5930,11 +5972,13 @@ impl<'ctx> super::Codegen<'ctx> {
             Some((t, m)) => (Some(t), m),
             None => (None, callee_name),
         };
-        let want_variant = self.ctor_variant_name_of_arg(arg);
         let check = |f: &crate::ast::Function,
                      ast_i: usize|
          -> Option<(TypeExpr, super::synth_drop::FieldSkipTree)> {
             let p = f.params.get(ast_i)?;
+            // B-2026-09-20-20 — asked of the param's own type, so a call
+            // result's CALLEE name is never read as its variant.
+            let want_variant = self.optres_arg_variant(arg, &p.ty);
             let TypeKind::Path(path) = &p.ty.kind else {
                 return None;
             };
@@ -6425,7 +6469,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `insert_tuple_skip_path` drops a path WHOLE the moment one level does
     /// not resolve, never its prefix — a prefix would be that same false
     /// escape arriving by another route.
-    fn optres_payload_projected_escaping_paths(
+    pub(super) fn optres_payload_projected_escaping_paths(
         f: &crate::ast::Function,
         arg_index: usize,
         variant: &str,
@@ -6465,7 +6509,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// against the interpreter's correct `mid dR32 dR31 got:32`, so the
     /// sibling element's body ran nowhere. Both arms feed one tree now, which
     /// is why one fix closes both.
-    fn optres_payload_consumed_paths(
+    pub(super) fn optres_payload_consumed_paths(
         f: &crate::ast::Function,
         arg_index: usize,
         variant: &str,
@@ -6496,7 +6540,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `None` when the payload is not a tuple, or when no path resolved: both
     /// mean "cannot narrow", which the caller reads as the historical
     /// all-or-nothing verdict rather than as an empty mask.
-    fn optres_payload_skip_tree(
+    pub(super) fn optres_payload_skip_tree(
         &self,
         param_te: &TypeExpr,
         variant: &str,
