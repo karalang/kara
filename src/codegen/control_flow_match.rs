@@ -11777,12 +11777,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // ran it keeps the payload body. The mask below is
                     // all-paths, so `if c { match t { E.A(s) => .. } }` at
                     // `c = false` freed the payload with no body run.
+                    //
+                    // B-2026-09-30-47 — and an arm that takes only SOME fields
+                    // does the same, with the walk the binding runs on such a
+                    // path masked by what the per-path arms took.
                     Some((variant, positions))
                         if !positions.is_empty()
-                            && self
-                                .enum_arm_takes_whole_variant(&enum_name, &variant, &positions)
                             && self.container_bodies_owned_by_let_slot(scrut_name)
-                            && self.clear_container_bodies_bit_on_this_path(scrut_name) =>
+                            && self.mask_enum_payload_bodies_on_this_path(
+                                scrut_name, &enum_name, &variant, &positions,
+                            ) =>
                     {
                         true
                     }
@@ -15900,18 +15904,60 @@ impl<'ctx> super::Codegen<'ctx> {
         self.plain_struct_has_user_drop_deep(ename, 0)
     }
 
-    /// B-2026-09-30-12 — do `positions` cover every payload field of
-    /// `enum_name`'s `variant`?
-    fn enum_arm_takes_whole_variant(
-        &self,
+    /// B-2026-09-30-47 — the per-path route of the arm's payload mask for a
+    /// `let` local: clear the local's bit on this path, and when the arms
+    /// that took that route have not taken every field of their variants,
+    /// hand the guarded drop a walker masked by what they took to run on the
+    /// paths whose bit is clear. Declines, touching nothing, when the masked
+    /// walker cannot be emitted for a partial take or the bit cannot be had.
+    fn mask_enum_payload_bodies_on_this_path(
+        &mut self,
+        name: &str,
         enum_name: &str,
         variant: &str,
         positions: &[usize],
     ) -> bool {
-        self.enum_variant_field_type_exprs(enum_name)
+        let mut acc = self
+            .drop_rc
+            .arm_per_path_payload_positions
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
+        for p in positions {
+            acc.insert((variant.to_string(), *p));
+        }
+        let every_variant_whole = self
+            .enum_variant_field_type_exprs(enum_name)
             .iter()
-            .find(|(_, vname, _)| vname == variant)
-            .is_some_and(|(_, _, tes)| (0..tes.len()).all(|fi| positions.contains(&fi)))
+            .filter(|(_, v, _)| acc.iter().any(|(av, _)| av == v))
+            .all(|(_, v, tes)| (0..tes.len()).all(|fi| acc.contains(&(v.clone(), fi))));
+        let else_walker = if every_variant_whole {
+            None
+        } else {
+            match self.emit_enum_payload_user_drop_bodies_fn_skipping(enum_name, &acc) {
+                Some(w) => Some(w),
+                None => return false,
+            }
+        };
+        let Some(slot) = self.variables.get(name).map(|v| v.ptr) else {
+            return false;
+        };
+        if !self.clear_container_bodies_bit_on_this_path(name) {
+            return false;
+        }
+        let key = (name.to_string(), slot);
+        match else_walker {
+            Some(w) => {
+                self.drop_rc.param_view_mem_drops.insert(key, w);
+            }
+            None => {
+                self.drop_rc.param_view_mem_drops.remove(&key);
+            }
+        }
+        self.drop_rc
+            .arm_per_path_payload_positions
+            .insert(name.to_string(), acc);
+        true
     }
 
     pub(super) fn enum_pattern_consumed_positions(

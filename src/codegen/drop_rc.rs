@@ -624,6 +624,14 @@ pub(crate) struct DropRc<'ctx> {
     /// only the per-POSITION half is new.
     pub(crate) arm_moved_enum_payload_positions:
         HashMap<String, std::collections::BTreeSet<(String, usize)>>,
+    /// B-2026-09-30-47 — the per-PATH twin of the map above: the positions
+    /// arms nested in a scope the scrutinee outlives took, each on its own
+    /// path. The union masks the walker the binding runs on a path whose bit
+    /// such an arm cleared (see `emit_user_drop_call_guarded`'s else edge);
+    /// on any such path the value is the variant that arm matched, so the
+    /// other arms' positions in the union are not live there.
+    pub(crate) arm_per_path_payload_positions:
+        HashMap<String, std::collections::BTreeSet<(String, usize)>>,
     /// Phase 7.2 Slice DP — per-enum drop function cache (enum name →
     /// `__karac_drop_<EnumName>` `FunctionValue`). Lazily populated by
     /// `emit_enum_drop_switch` on first registration of a value-type

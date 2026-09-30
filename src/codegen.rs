@@ -6603,6 +6603,7 @@ impl<'ctx> Codegen<'ctx> {
                 enum_handback_body_slots: HashSet::new(),
                 deep_copy_rc_inc_bare_shared: false,
                 arm_moved_enum_payload_positions: HashMap::new(),
+                arm_per_path_payload_positions: HashMap::new(),
                 enum_drop_fns: HashMap::new(),
                 enum_drop_fns_box_only: HashMap::new(),
                 struct_drop_fns: HashMap::new(),

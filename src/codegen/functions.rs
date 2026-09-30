@@ -1821,6 +1821,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // every body it did not take. Measured: three functions each matching
         // their own `let w`, the third losing the field its own arm wildcarded.
         self.drop_rc.arm_moved_enum_payload_positions.clear();
+        self.drop_rc.arm_per_path_payload_positions.clear();
         // Slice 10: reseed module-binding side-tables after the per-fn
         // clear. Module bindings live for the program's lifetime but
         // the clear above wipes their `var_type_names` / `vec_elem_types`
