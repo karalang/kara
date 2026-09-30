@@ -17643,7 +17643,22 @@ impl<'ctx> super::Codegen<'ctx> {
         walker: FunctionValue<'ctx>,
         slot: PointerValue<'ctx>,
     ) {
-        let flag = self.handoff_flag_for(name);
+        let mut flag = self.handoff_flag_for(name);
+        // B-2026-09-30-12 — a reassignment compiled BEFORE any hand-off of the
+        // name (straight-line `t = ..; if c { let y = t }`, or a loop whose
+        // top reassigns what a later branch hands off) makes the bit itself,
+        // so that hand-off can clear it per path instead of retracting the
+        // walk on every path, and this walk can skip the payload a previous
+        // trip handed off.
+        if flag.is_none()
+            && self.drop_rc.mut_let_names.contains(name)
+            && !self.drop_rc.cond_store_flag_params.contains(name)
+        {
+            flag = self.cond_move_drop_flag_for(name);
+            if let Some(f) = flag {
+                self.drop_rc.handoff_flags.insert(name.to_string(), f);
+            }
+        }
         let guard = flag.and_then(|f| self.open_guard_on_flag(f));
         self.builder.build_call(walker, &[slot.into()], "").unwrap();
         self.close_cond_move_guard(guard);
@@ -17654,14 +17669,26 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_container_elem_bodies_for_receiver(&mut self, name: &str) {
+        if !self.clear_container_bodies_bit_on_this_path(name) {
+            self.suppress_container_elem_bodies_for_var(name);
+        }
+    }
+
+    /// The per-path half of [`Self::suppress_container_elem_bodies_for_receiver`]:
+    /// clear `name`'s bit when its walk lives in an enclosing frame only, and
+    /// say whether it did. B-2026-09-30-12 — the match-arm site takes it alone,
+    /// because its own fallback is a per-variant mask, not the retraction.
+    pub(super) fn clear_container_bodies_bit_on_this_path(&mut self, name: &str) -> bool {
         let live = self
             .variables
             .get(name)
             .map(|v| v.ptr)
             .filter(|_| self.payload_vars.shadowed_top_level_locals.contains(name));
         // B-2026-09-30-6 — see `DropRc::assigned_names`.
-        let reassigned_mut =
-            self.drop_rc.mut_let_names.contains(name) && self.drop_rc.assigned_names.contains(name);
+        // B-2026-09-30-12 — unless the reassignment made the bit itself.
+        let reassigned_mut = self.drop_rc.mut_let_names.contains(name)
+            && self.drop_rc.assigned_names.contains(name)
+            && self.handoff_flag_for(name).is_none();
         if !self.drop_rc.cond_store_flag_params.contains(name)
             && !reassigned_mut
             && self.container_bodies_in_enclosing_frame(name, live)
@@ -17674,11 +17701,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .is_ok()
                 {
                     self.drop_rc.handoff_flags.insert(name.to_string(), flag);
-                    return;
+                    return true;
                 }
             }
         }
-        self.suppress_container_elem_bodies_for_var(name);
+        false
     }
 
     pub(super) fn suppress_container_elem_bodies_for_var(&mut self, name: &str) {

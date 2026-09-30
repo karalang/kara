@@ -11713,6 +11713,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 // and every case any existing fixture covers — keeps today's
                 // behaviour byte-for-byte.
                 let masked = match self.enum_pattern_consumed_positions(&enum_name, pattern) {
+                    // B-2026-09-30-12 — an arm that takes EVERY payload field
+                    // of its variant, matching a `let` local whose walk lives
+                    // in a scope this arm is nested in, clears the local's
+                    // per-path bit instead: on the path that ran the arm the
+                    // value is this variant, so skipping the whole walk there
+                    // skips exactly what the arm took, and the path that never
+                    // ran it keeps the payload body. The mask below is
+                    // all-paths, so `if c { match t { E.A(s) => .. } }` at
+                    // `c = false` freed the payload with no body run.
+                    Some((variant, positions))
+                        if !positions.is_empty()
+                            && self
+                                .enum_arm_takes_whole_variant(&enum_name, &variant, &positions)
+                            && self.container_bodies_owned_by_let_slot(scrut_name)
+                            && self.clear_container_bodies_bit_on_this_path(scrut_name) =>
+                    {
+                        true
+                    }
                     Some((variant, positions)) if !positions.is_empty() => {
                         let acc = self
                             .drop_rc
@@ -15813,6 +15831,20 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         };
         self.plain_struct_has_user_drop_deep(ename, 0)
+    }
+
+    /// B-2026-09-30-12 — do `positions` cover every payload field of
+    /// `enum_name`'s `variant`?
+    fn enum_arm_takes_whole_variant(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        positions: &[usize],
+    ) -> bool {
+        self.enum_variant_field_type_exprs(enum_name)
+            .iter()
+            .find(|(_, vname, _)| vname == variant)
+            .is_some_and(|(_, _, tes)| (0..tes.len()).all(|fi| positions.contains(&fi)))
     }
 
     pub(super) fn enum_pattern_consumed_positions(
