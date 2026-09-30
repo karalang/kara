@@ -5067,6 +5067,80 @@ impl<'ctx> super::Codegen<'ctx> {
             && !crate::ast::fn_conditionally_stores_param(f, arg_index)
     }
 
+    /// B-2026-09-30-85 — the recorded CONCRETE instantiation of a pattern
+    /// binding whose type is a generic struct (`G[String]`), or `None` for a
+    /// non-generic struct and for a binding with no usable record. Only a
+    /// fully concrete record is returned: one still naming a type parameter
+    /// would answer the erased question under a concrete-looking name.
+    pub(super) fn generic_struct_binding_inst(&self, name: &str, tn: &str) -> Option<TypeExpr> {
+        let params = self.type_decls.struct_generic_params.get(tn)?;
+        if params.is_empty() {
+            return None;
+        }
+        let inst = self.type_decls.enum_inst_var_types.get(name)?;
+        let TypeKind::Path(p) = &inst.kind else {
+            return None;
+        };
+        if p.segments.last().map(String::as_str) != Some(tn) {
+            return None;
+        }
+        let args = p.generic_args.as_ref()?;
+        if args.len() != params.len()
+            || args.iter().any(
+                |a| matches!(a, GenericArg::Type(t) if Self::type_expr_mentions_param(t, params)),
+            )
+        {
+            return None;
+        }
+        Some(inst.clone())
+    }
+
+    /// B-2026-09-30-85 — [`Self::aggregate_param_copy_supported_struct`] asked
+    /// of a generic struct's INSTANTIATION: each declared field with the
+    /// instantiation's arguments substituted in.
+    pub(super) fn generic_struct_inst_copy_supported(&self, tn: &str, inst: &TypeExpr) -> bool {
+        if self.type_decls.shared_types.contains_key(tn) {
+            return false;
+        }
+        let subst = self.generic_struct_subst_from_inst(tn, inst);
+        if subst.is_empty() {
+            return false;
+        }
+        let Some(ftes) = self.type_decls.struct_field_type_exprs.get(tn).cloned() else {
+            return false;
+        };
+        ftes.iter().all(|fte| {
+            let resolved = crate::codegen::helpers::subst_type_params_in_type_expr(fte, &subst);
+            self.field_copy_supported(&resolved, &mut vec![tn.to_string()])
+        })
+    }
+
+    /// B-2026-09-30-85 — does an `Option`/`Result` arm binding `name` of the
+    /// generic struct `tn` OWN its inline payload, asked at the binding's
+    /// instantiation? `None` when there is no concrete record, so the caller
+    /// keeps its by-name answer.
+    ///
+    /// ONE question for the two sites that must agree: the bind site
+    /// (`is_inline_optres_struct_payload`), which registers the binding's
+    /// drop, and the fresh-temp source gate
+    /// (`inline_result_payload_binding_registers_own_drop`), which disarms the
+    /// scrutinee's payload free exactly when the binding took it. Asked
+    /// separately, the bind site answered at the instantiation and the gate by
+    /// the erased name, and `match mk() { Err(e) => println(e.val) }` freed the
+    /// `String` in both.
+    pub(super) fn generic_optres_struct_payload_owned_by_binding(
+        &self,
+        name: &str,
+        tn: &str,
+        area: usize,
+    ) -> Option<bool> {
+        let inst = self.generic_struct_binding_inst(name, tn)?;
+        Some(
+            self.generic_struct_inst_copy_supported(tn, &inst)
+                && Self::llvm_type_word_count(self.llvm_type_for_type_expr(&inst)) <= area,
+        )
+    }
+
     fn aggregate_param_copy_supported_struct_mono(&self, struct_name: &str) -> bool {
         if self.type_decls.shared_types.contains_key(struct_name) {
             return false;

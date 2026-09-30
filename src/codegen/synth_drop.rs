@@ -6181,6 +6181,30 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-30-77 — [`Self::type_expr_has_drop_heap`] asked of a GENERIC
+    /// struct's INSTANTIATION (`G[String]`) rather than its declaration. The
+    /// base predicate reads the declared field types, where `v: T` owns
+    /// nothing, so `Result[G[String], i64]` registered no payload drop and
+    /// leaked the `String`. Substitutes the path's own arguments into the
+    /// field types first; any other type expr answers exactly as before.
+    pub(super) fn inst_type_expr_has_drop_heap(&self, te: &TypeExpr) -> bool {
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(name) = p.segments.last() {
+                let subst = self.generic_struct_subst_from_inst(name, te);
+                if !subst.is_empty() {
+                    if let Some(fields) = self.type_decls.struct_field_type_exprs.get(name) {
+                        return fields.iter().any(|f| {
+                            let f =
+                                crate::codegen::helpers::subst_type_params_in_type_expr(f, &subst);
+                            self.inst_type_expr_has_drop_heap(&f)
+                        });
+                    }
+                }
+            }
+        }
+        self.type_expr_has_drop_heap(te)
+    }
+
     /// B-2026-08-05-22 — companion to [`Self::type_expr_has_drop_heap`] for the
     /// one caller that must NOT inherit its `Option`/`Result` carve-out.
     ///

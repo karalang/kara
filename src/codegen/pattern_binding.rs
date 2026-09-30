@@ -1429,16 +1429,34 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // binding there would turn a status-quo leak
                                 // into a UAF on `sink(e); use(e)`. A local or
                                 // temp scrutinee has no such second owner.
-                                && (self
-                                    .aggregate_param_copy_supported_struct(tn, &mut Vec::new())
-                                    || (!self.pattern_state.pattern_binding_scrutinee_is_owned_param
-                                        && !self.pattern_state.pattern_binding_scrutinee_is_fresh_owning_temp
-                                        && self.pattern_state.pattern_binding_arm_only_borrows
-                                        && self.struct_heap_copyable_or_handle(tn)))
-                                && self.type_decls.struct_types.get(tn).is_some_and(|st| {
-                                    Self::llvm_type_word_count((*st).into())
-                                        <= self.pattern_state.pattern_binding_scrutinee_optres_area
-                                });
+                                && match self.generic_optres_struct_payload_owned_by_binding(
+                                    name,
+                                    tn,
+                                    self.pattern_state.pattern_binding_scrutinee_optres_area,
+                                ) {
+                                    // B-2026-09-30-85 — a GENERIC struct is asked
+                                    // at the binding's INSTANTIATION. By name,
+                                    // `G[String]` is the erased layout: its `v: T`
+                                    // is not copy-supported (so this gate
+                                    // refused) and its width is not the payload's
+                                    // (so the area test could admit a boxed one).
+                                    // The consuming arm zeroed the source's
+                                    // payload words either way, and the `String`
+                                    // was nobody's.
+                                    Some(owned) => owned,
+                                    None => {
+                                        (self
+                                            .aggregate_param_copy_supported_struct(tn, &mut Vec::new())
+                                            || (!self.pattern_state.pattern_binding_scrutinee_is_owned_param
+                                                && !self.pattern_state.pattern_binding_scrutinee_is_fresh_owning_temp
+                                                && self.pattern_state.pattern_binding_arm_only_borrows
+                                                && self.struct_heap_copyable_or_handle(tn)))
+                                            && self.type_decls.struct_types.get(tn).is_some_and(|st| {
+                                                Self::llvm_type_word_count((*st).into())
+                                                    <= self.pattern_state.pattern_binding_scrutinee_optres_area
+                                            })
+                                    }
+                                };
                             if matches!(tn, "Response" | "HttpError")
                                 || is_copy_supported_user_struct
                                 || is_inline_optres_struct_payload
@@ -1651,7 +1669,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // the scrutinee tuple's element, whose heap
                                     // the tuple's own drop frees. See
                                     // `current_bare_tuple_bindings`.
-                                    self.track_struct_var(tn, alloca);
+                                    //
+                                    // B-2026-09-30-85 — at the binding's
+                                    // INSTANTIATION: by name, a generic
+                                    // `G[String]` resolves the erased layout,
+                                    // whose drop frees nothing, while the arm
+                                    // has already disarmed the source's walk.
+                                    let inst = self.generic_struct_binding_inst(name, tn);
+                                    self.track_struct_var_inst(tn, alloca, inst);
                                     // B-2026-09-03-34 — a payload struct with
                                     // Drop-bearing FIELDS and no `Drop` of its
                                     // own got memory alone here, while the arm

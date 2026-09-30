@@ -2011,7 +2011,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // `type_expr_has_drop_heap` answers `false` for it, but it still owns
         // one refcount that nothing else releases. `Result[ShP, i64]` stranded
         // the block and its `String` at every spelling, bound or temp.
-        if !self.type_expr_has_drop_heap(&drop_te) && !self.struct_elem_owns_shared_field(&drop_te)
+        if !self.inst_type_expr_has_drop_heap(&drop_te)
+            && !self.struct_elem_owns_shared_field(&drop_te)
         {
             return None;
         }

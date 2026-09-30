@@ -25254,9 +25254,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         patterns.iter().any(|p| {
-            if !matches!(&p.kind, PatternKind::Binding(_)) {
+            let PatternKind::Binding(name) = &p.kind else {
                 return false;
-            }
+            };
             let key = (p.span.offset, p.span.length);
             let Some(tn) = self.pattern_state.pattern_binding_types.get(&key) else {
                 return false;
@@ -25270,6 +25270,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // The by-name pair the bind site tracks unconditionally.
             if matches!(tn, "Response" | "HttpError") {
                 return true;
+            }
+            // B-2026-09-30-85 — a generic struct at its instantiation, the
+            // same question the bind site asks.
+            if let Some(owned) = self.generic_optres_struct_payload_owned_by_binding(
+                name,
+                tn,
+                self.pattern_state.pattern_binding_scrutinee_optres_area,
+            ) {
+                return owned;
             }
             self.aggregate_param_copy_supported_struct(tn, &mut Vec::new())
                 && self.type_decls.struct_types.get(tn).is_some_and(|st| {
