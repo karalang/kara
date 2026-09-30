@@ -9945,6 +9945,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (B-2026-09-13-26's trap).
     fn track_fresh_container_arg_elem_bodies(&mut self, val: BasicValueEnum<'ctx>, arg: &Expr) {
         let Some(te) = self.fresh_nameless_container_arg_te(arg) else {
+            self.track_placed_array_literal_arg_memory(val, arg);
             return;
         };
         let Some(cur_fn) = self.current_fn else {
@@ -10006,6 +10007,94 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
             }
             _ => {}
+        }
+    }
+
+    /// B-2026-09-30-34 — the MEMORY of an `Array` literal argument holding a
+    /// moved PLACE (`take([w])`), which nothing freed.
+    ///
+    /// [`Self::fresh_nameless_container_arg_te`] declines such a literal, and
+    /// for the BODIES that is right: `w`'s own binding still runs its body after
+    /// the call. But moving `w` into the literal zeroes its heap fields, so that
+    /// binding frees nothing, while an element that runs a user `Drop` makes the
+    /// param caller-retained (`array_param_elem_is_callee_owned` declines it)
+    /// and the callee frees nothing either. The element's heap leaked on every
+    /// compiled surface. Its memory is freed here, WITHOUT bodies, from the
+    /// temp the call was handed, which is the one copy that still holds it.
+    ///
+    /// Only an `Array` needs this: a `Vec` literal's buffer is the caller's
+    /// `__owned_tmp` (`materialize_owned_temp`), whose walk already frees its
+    /// elements' heap.
+    fn track_placed_array_literal_arg_memory(&mut self, val: BasicValueEnum<'ctx>, arg: &Expr) {
+        let items = match &arg.kind {
+            ExprKind::ArrayLiteral(items) => items,
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if type_name == "Vec" || type_name == "Array" =>
+            {
+                items
+            }
+            _ => return,
+        };
+        // A place is admitted only when its binding OWNS the value: its own
+        // user `Drop` is still armed (so it runs the body after the call), and
+        // the move zeroed its heap (an RC-fallback box is disarmed by a flag
+        // instead, and keeps its buffers). A payload binding out of a `match`
+        // is a COPY whose buffers the scrutinee still frees, and freeing them
+        // here as well was a double free (measured on the `Some(w) =>
+        // take([w])` cell); such a literal is left alone.
+        let is_place = |e: &Expr| matches!(e.kind, ExprKind::Identifier(_));
+        let place_is_sole_owner = |e: &Expr| match &e.kind {
+            ExprKind::Identifier(name) => {
+                self.has_armed_own_user_drop(name)
+                    && !self.rc_fallback_box_value_drop_is_flagged(name)
+            }
+            _ => false,
+        };
+        if !items.iter().any(is_place)
+            || !items
+                .iter()
+                .filter(|e| is_place(e))
+                .all(place_is_sole_owner)
+            || !items
+                .iter()
+                .all(|e| is_place(e) || self.discard_tuple_elem_is_fresh_expr(e))
+        {
+            return;
+        }
+        let BasicTypeEnum::ArrayType(at) = val.get_type() else {
+            return;
+        };
+        let n = at.len();
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let Some(te) = self.collection_literal_te(arg) else {
+            return;
+        };
+        let elem_te = match self.array_elem_and_len(&te) {
+            Some((inner, _)) => inner,
+            None => match super::helpers::vec_inner_type_expr(&te) {
+                Some(inner) => inner,
+                None => return,
+            },
+        };
+        if n == 0
+            || !self.elem_te_runs_user_drop(&elem_te)
+            || !self.array_elem_owns_callee_drop(&elem_te)
+        {
+            return;
+        }
+        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+        let Some(drop_fn) = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n) else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__placed_arr_arg", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+            frame.push(super::state::CleanupAction::StructDrop {
+                struct_alloca: slot,
+                drop_fn,
+            });
         }
     }
 
