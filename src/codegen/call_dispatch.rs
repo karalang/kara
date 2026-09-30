@@ -8655,6 +8655,38 @@ impl<'ctx> super::Codegen<'ctx> {
         callee_name: &str,
         args: &[CallArg],
     ) -> Option<String> {
+        // B-2026-09-27-77 — "the result IS that part" holds only when the
+        // callee's declared return is a bare type parameter of its own, the
+        // generic shape this route exists for. An escaping part is also one
+        // handed back INSIDE an aggregate (`fn onews(w: Ws) -> (R, i64) {
+        // return (w.r, 5); }`), and naming the whole result `R` there hung
+        // `karac_drop_R` off the TUPLE's slot beside the tuple arm's own walk:
+        // a discarded `onews(w)` ran `dR5` twice and freed its `String` twice,
+        // and `(5, w.r)` ran the body over the tuple's first word. A concrete
+        // callee never needs this route, since a declared drop type answers
+        // before it is asked.
+        let bare_param_return = self
+            .program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, callee_name))
+            .is_some_and(|f| {
+                let Some(ret) = f.return_type.as_ref() else {
+                    return false;
+                };
+                let TypeKind::Path(p) = &ret.kind else {
+                    return false;
+                };
+                p.segments.len() == 1
+                    && p.generic_args.as_ref().is_none_or(|a| a.is_empty())
+                    && f.generic_params.as_ref().is_some_and(|g| {
+                        g.params
+                            .iter()
+                            .any(|gp| !gp.is_const && gp.name == p.segments[0])
+                    })
+            });
+        if !bare_param_return {
+            return None;
+        }
         // Collected rather than returned on first hit: a call returns ONE value,
         // so two candidates that disagree mean this resolution has misread the
         // signature, and the name decides which type's layout the registrar
