@@ -2250,7 +2250,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 )
                             })) =>
                     {
-                        self.clone_caller_retained_struct_field_for_return(&a.value, v)
+                        self.clone_handback_arg(&a.value, v)
                     }
                     _ => v,
                 };

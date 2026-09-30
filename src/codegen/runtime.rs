@@ -8558,7 +8558,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Each occurrence of a root is its own span, so per-use-site precision is
     /// unchanged: `let t = b.a;` and a later `let u = b.n;` still key on their
     /// own `b` tokens.
-    fn uam_consume_root_span(expr: &Expr) -> Option<crate::token::Span> {
+    pub(super) fn uam_consume_root_span(expr: &Expr) -> Option<crate::token::Span> {
         let mut cur = expr;
         loop {
             match &cur.kind {
@@ -8574,7 +8574,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// True when a PLACE expression's root is a flagged use-after-move consume
     /// site. The one lookup all three place readers share, so none of them can
     /// drift back onto the node's own span.
-    fn uam_consume_site_at_root(&self, expr: &Expr) -> bool {
+    pub(super) fn uam_consume_site_at_root(&self, expr: &Expr) -> bool {
         Self::uam_consume_root_span(expr).is_some_and(|sp| {
             self.span_tables
                 .uam_consume_sites

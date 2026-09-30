@@ -8938,7 +8938,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.callee_always_returns_arg(&qualified, ai)
                                 || self.conditional_handback_memory_moves_to_callee(&qualified, ai)
                         }) {
-                        self.clone_caller_retained_struct_field_for_return(&a.value, val)
+                        self.clone_handback_arg(&a.value, val)
                     } else {
                         val
                     };

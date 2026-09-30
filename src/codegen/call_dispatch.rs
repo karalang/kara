@@ -2202,7 +2202,7 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 val
             } else {
-                self.clone_caller_retained_struct_field_for_return(&a.value, val)
+                self.clone_handback_arg(&a.value, val)
             };
             // Widen a narrow scalar to the callee's declared param width HERE,
             // where the argument expression is still in hand to say whether the
@@ -2809,7 +2809,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 // this gate nor the stand-down below and kept its cleanup while
                 // the result binding took a second one.
                 || self.callee_always_hands_arg_back_via_call(&name, i);
-            if !borrow_skip && (whole_escape || payload_escape.is_some()) {
+            // B-2026-09-30-7 — an argument passed as its use-after-move copy
+            // (`clone_handback_arg`) leaves the source's registration alone:
+            // the callee took the copy, and the source is used again.
+            let arg_uam_copied = Self::uam_consume_root_span(&a.value).is_some_and(|sp| {
+                self.span_tables
+                    .uam_copied_sites
+                    .contains(&(sp.offset, sp.length))
+            });
+            // The value that runs the source's `Drop` body is the one the
+            // callee took, as the interpreter counts it: `let a = keep(s);
+            // println(s.id)` runs one body. So the source keeps its MEMORY (it
+            // still owns the original buffers and box) and gives up its body.
+            if !borrow_skip && arg_uam_copied {
+                if let ExprKind::Identifier(var_name) = &a.value.kind {
+                    let var_name = var_name.clone();
+                    self.suppress_user_drop_body_keeping_memory(&var_name);
+                }
+            }
+            if !borrow_skip && !arg_uam_copied && (whole_escape || payload_escape.is_some()) {
                 if let ExprKind::Identifier(var_name) = &a.value.kind {
                     let var_name = var_name.clone();
                     match (&payload_escape, whole_escape) {
@@ -20598,6 +20616,58 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         Some(head.to_string())
+    }
+
+    /// B-2026-09-30-7 — the argument a by-value callee may HAND BACK, as the
+    /// call passes it. A caller-retained struct (one owning a bare `shared`
+    /// field, which the callee neither entry-copies nor takes by transfer)
+    /// comes back as the argument's own words, so the result and the source
+    /// are one object. That is right for a plain move and wrong at a
+    /// use-after-move site, where the source is used again: `let a =
+    /// keep(s); let d = keep(s)` gave `a` and `d` one `Sh` box and released
+    /// it twice. At such a site the argument is the defensive copy
+    /// (`uam_defensive_copy`, which retains the box and records the site in
+    /// `uam_copied_sites`), and the source keeps its registration. Every other
+    /// argument takes -79's clone-on-extract for a caller-retained param's
+    /// field (a no-op for anything else); when that clone is taken at a
+    /// use-after-move site the site is recorded too, so the move-out disarm
+    /// leaves the field in place for the later use instead of zeroing it.
+    pub(super) fn clone_handback_arg(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        if let ExprKind::Identifier(n) = &expr.kind {
+            let caller_retained = self
+                .var_types
+                .var_type_names
+                .get(n.as_str())
+                .cloned()
+                .is_some_and(|t| self.struct_type_is_caller_retained(&t));
+            // A PARAMETER is left to its own machinery: the caller frees it,
+            // and a copy here was measured to strand the box (16 B at -O0).
+            if caller_retained
+                && !self.fn_ctx.current_fn_param_names.contains(n.as_str())
+                && self.uam_consume_site_at_root(expr)
+            {
+                return self.uam_defensive_copy(expr, val);
+            }
+        }
+        let out = self.clone_caller_retained_struct_field_for_return(expr, val);
+        if out != val && self.uam_consume_site_at_root(expr) {
+            // Under the root's span, which the site lookups key on, and the
+            // expression's own, which the move-out disarm
+            // (`suppress_source_vec_cleanup_for_arg_ex`) checks.
+            if let Some(sp) = Self::uam_consume_root_span(expr) {
+                self.span_tables
+                    .uam_copied_sites
+                    .insert((sp.offset, sp.length));
+            }
+            self.span_tables
+                .uam_copied_sites
+                .insert((expr.span.offset, expr.span.length));
+        }
+        out
     }
 
     /// B-2026-09-29-79 — a returned value that is a caller-retained param's
