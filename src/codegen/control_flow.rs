@@ -363,6 +363,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // for an element the then-block MOVES. Before `restore_…` because
             // both read the owned-param flag `set_…` derived.
             self.record_bare_tuple_elem_sources(pattern, value);
+            self.mark_loop_elem_tuple_pattern_leaves(pattern, value);
             self.disarm_moved_bare_tuple_elem_bodies_for_block(pattern, value, then_block);
         }
         self.restore_scrutinee_shape_flags(saved_shape_flags);
@@ -1304,6 +1305,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-09-02-27 / B-2026-09-02-26 (B-2026-09-05-34, `while let`
             // leg) — see the `if let` site.
             self.record_bare_tuple_elem_sources(pattern, value);
+            self.mark_loop_elem_tuple_pattern_leaves(pattern, value);
             self.disarm_moved_bare_tuple_elem_bodies_for_block(pattern, value, body);
         }
         self.restore_scrutinee_shape_flags(saved_shape_flags);
@@ -2658,6 +2660,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // per-element bodies classification the `if let` / `while let`
             // legs run has nothing to classify against here.
             self.record_bare_tuple_elem_sources(pattern, value);
+            self.mark_loop_elem_tuple_pattern_leaves(pattern, value);
         }
         self.restore_scrutinee_shape_flags(saved_shape_flags);
         self.pattern_state.current_variant_payload_bindings.clear();

@@ -977,6 +977,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the source is the tuple's own storage, and a later
                     // per-field move-out has to neutralize BOTH.
                     self.record_bare_tuple_elem_sources(&arm.pattern, scrutinee);
+                    self.mark_loop_elem_tuple_pattern_leaves(&arm.pattern, scrutinee);
                     // B-2026-09-02-26 — and the BODIES retraction for a LOCAL
                     // tuple scrutinee whose arm MATERIALIZES an element.
                     // `let t = (R { id: 6 }, 0); match t { (r, k) =>
@@ -2423,6 +2424,10 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.borrow_vars.ref_params.contains_key(name)
             || self.borrow_vars.for_loop_borrow_vars.contains(name)
+            // B-2026-09-30-3 — a `for` loop's TUPLE element is a bit-copy of
+            // the container's slot, exactly like a `Vec` / `String` element in
+            // the set above; its tuple sibling is only filed apart.
+            || self.borrow_vars.elem_borrow_roots.contains(name)
             || self
                 .borrow_vars
                 .borrow_accessor_let_payload
@@ -3553,6 +3558,69 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned()
             .map(|i| self.generic_struct_subst_from_inst(&tn, &i));
         self.zero_struct_move_caps_mono(elem_ptr, &tn, subst.as_ref());
+    }
+
+    /// B-2026-09-30-3 — the leaves a tuple pattern binds out of a `for`
+    /// loop's tuple element (`match pair { (a, j) => .. }`) alias the
+    /// container's slot, which still owns them: the scrutinee is a borrowed
+    /// binding, so they register no drop, and each is marked a loop borrow so
+    /// a consuming use (`out.push(a)`, `let b = a`) takes a copy. The
+    /// `let (a, j) = pair` spelling marks its leaves the same way
+    /// (`place_source_tuple_leaf_cleanups`).
+    pub(super) fn mark_loop_elem_tuple_pattern_leaves(
+        &mut self,
+        pattern: &Pattern,
+        scrutinee: &Expr,
+    ) {
+        let ExprKind::Identifier(src) = &scrutinee.kind else {
+            return;
+        };
+        if !self.borrow_vars.elem_borrow_roots.contains(src.as_str())
+            || self.borrow_vars.ref_params.contains_key(src.as_str())
+        {
+            return;
+        }
+        let Some(elems) = self
+            .var_types
+            .tuple_var_elem_type_exprs
+            .get(src.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        self.mark_loop_elem_tuple_pattern_leaves_at(pattern, &elems);
+    }
+
+    fn mark_loop_elem_tuple_pattern_leaves_at(&mut self, pattern: &Pattern, elems: &[TypeExpr]) {
+        let PatternKind::Tuple(pats) = &pattern.kind else {
+            return;
+        };
+        if pats.len() != elems.len() {
+            return;
+        }
+        for (p, te) in pats.iter().zip(elems.iter()) {
+            match &p.kind {
+                PatternKind::Tuple(_) => {
+                    if let TypeKind::Tuple(inner) = &te.kind {
+                        self.mark_loop_elem_tuple_pattern_leaves_at(p, inner);
+                    }
+                }
+                PatternKind::Binding(name) => {
+                    if let Some((arr_elem_te, _)) = self.array_elem_and_len(te) {
+                        self.var_types
+                            .array_elem_type_exprs
+                            .insert(name.clone(), arr_elem_te);
+                    } else if matches!(&te.kind, TypeKind::Path(pp)
+                        if !matches!(pp.segments.last().map(String::as_str),
+                            Some("Vec") | Some("String") | Some("str")))
+                    {
+                        self.register_var_from_type_expr(name, te);
+                    }
+                    self.mark_for_loop_borrow_if_heap(name, te);
+                }
+                _ => {}
+            }
+        }
     }
 
     pub(super) fn record_bare_tuple_elem_sources(&mut self, pattern: &Pattern, scrutinee: &Expr) {
