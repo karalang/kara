@@ -9995,6 +9995,7 @@ impl<'ctx> super::Codegen<'ctx> {
     fn track_fresh_container_arg_elem_bodies(&mut self, val: BasicValueEnum<'ctx>, arg: &Expr) {
         let Some(te) = self.fresh_nameless_container_arg_te(arg) else {
             self.track_placed_array_literal_arg_memory(val, arg);
+            self.track_mixed_literal_arg_fresh_bodies(val, arg);
             return;
         };
         let Some(cur_fn) = self.current_fn else {
@@ -10057,6 +10058,96 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => {}
         }
+    }
+
+    /// B-2026-09-30-57 — the indices of the FRESH items of a collection
+    /// literal argument that also holds at least one moved place
+    /// (`[w, W1 { .. }]`), when every item is one or the other. `None` for any
+    /// other shape, including an all-fresh literal, which
+    /// [`Self::fresh_nameless_container_arg_te`] takes whole. Interp twin:
+    /// `mixed_literal_arg_fresh_indices` in `interpreter/eval_call.rs`.
+    fn mixed_literal_arg_fresh_indices(&self, arg: &Expr) -> Option<Vec<u32>> {
+        let items = match &arg.kind {
+            ExprKind::ArrayLiteral(items) => items,
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if type_name == "Vec" || type_name == "Array" =>
+            {
+                items
+            }
+            _ => return None,
+        };
+        let is_place = |e: &Expr| matches!(e.kind, ExprKind::Identifier(_));
+        if !items.iter().any(is_place)
+            || !items
+                .iter()
+                .all(|e| is_place(e) || self.discard_tuple_elem_is_fresh_expr(e))
+        {
+            return None;
+        }
+        let fresh: Vec<u32> = (0..items.len())
+            .filter(|&k| !is_place(&items[k]))
+            .map(|k| k as u32)
+            .collect();
+        (!fresh.is_empty()).then_some(fresh)
+    }
+
+    /// B-2026-09-30-57 — run the `Drop` BODIES of the fresh items of a
+    /// collection literal argument that mixes them with moved places
+    /// (`take([w, W1 { v: 2, .. }])`).
+    ///
+    /// [`Self::fresh_nameless_container_arg_te`] declines the literal because
+    /// of the place, and for the place that is right: `w`'s own binding runs
+    /// its body after the call. The fresh items have no binding, so nothing
+    /// ran theirs, on any surface -- an agreed silence (`dW1_40 r:42 end`
+    /// against a due `dW1_40 dW1_2 r:42 end`). Registered after the memory
+    /// that [`Self::track_placed_array_literal_arg_memory`] pushes for an
+    /// `Array`, so the LIFO drain runs the bodies before the free; a `Vec`'s
+    /// memory is its `__owned_tmp`, as on the all-fresh path.
+    fn track_mixed_literal_arg_fresh_bodies(&mut self, val: BasicValueEnum<'ctx>, arg: &Expr) {
+        let Some(fresh) = self.mixed_literal_arg_fresh_indices(arg) else {
+            return;
+        };
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let Some(te) = self.collection_literal_te(arg) else {
+            return;
+        };
+        let elem_te = match self.array_elem_and_len(&te) {
+            Some((inner, _)) => inner,
+            None => match super::helpers::vec_inner_type_expr(&te) {
+                Some(inner) => inner,
+                None => return,
+            },
+        };
+        if !self.elem_te_runs_user_drop(&elem_te) {
+            return;
+        }
+        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+        let (n, vec) = match val.get_type() {
+            BasicTypeEnum::ArrayType(at) => {
+                if self.array_param_elem_is_callee_owned(&elem_te) {
+                    return;
+                }
+                (at.len(), false)
+            }
+            ty if self.llvm_ty_is_vec_struct(ty) => (0, true),
+            _ => return,
+        };
+        let Some(bodies) =
+            self.emit_masked_elem_user_drop_bodies_fn(elem_ty, &elem_te, n, &fresh, vec)
+        else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__disc_tup_arg", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        self.track_user_drop_var_with_fn(
+            "",
+            "__disc_tup_arg",
+            slot,
+            bodies,
+            UserDropKind::ContainerElemBodies,
+        );
     }
 
     /// B-2026-09-30-56 — retract the `Drop` BODY of each named local moved
@@ -10123,7 +10214,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // instead, and keeps its buffers). A payload binding out of a `match`
         // is a COPY whose buffers the scrutinee still frees, and freeing them
         // here as well was a double free (measured on the `Some(w) =>
-        // take([w])` cell); such a literal is left alone.
+        // take([w])` cell); such an item is left alone, and the rest of the
+        // literal is freed item by item (B-2026-09-30-57).
         let is_place = |e: &Expr| matches!(e.kind, ExprKind::Identifier(_));
         let place_is_sole_owner = |e: &Expr| match &e.kind {
             ExprKind::Identifier(name) => {
@@ -10135,12 +10227,23 @@ impl<'ctx> super::Codegen<'ctx> {
         if !items.iter().any(is_place)
             || !items
                 .iter()
-                .filter(|e| is_place(e))
-                .all(place_is_sole_owner)
-            || !items
-                .iter()
                 .all(|e| is_place(e) || self.discard_tuple_elem_is_fresh_expr(e))
         {
+            return;
+        }
+        // B-2026-09-30-57 — when some place is NOT the sole owner of its heap,
+        // the whole-array free below would double-free it, but every OTHER
+        // item's heap (a fresh item, a sole-owner place) is still this frame's
+        // alone, and leaked. Those are freed per item then.
+        let places_sole = items
+            .iter()
+            .filter(|e| is_place(e))
+            .all(place_is_sole_owner);
+        let owned: Vec<u32> = (0..items.len())
+            .filter(|&k| !is_place(&items[k]) || place_is_sole_owner(&items[k]))
+            .map(|k| k as u32)
+            .collect();
+        if !places_sole && owned.is_empty() {
             return;
         }
         let BasicTypeEnum::ArrayType(at) = val.get_type() else {
@@ -10167,6 +10270,28 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+        if !places_sole {
+            // One element laid out alone is a `[1 x T]`, so the one-element
+            // array drop fn frees it from its own slot.
+            let Some(drop_fn) = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, 1) else {
+                return;
+            };
+            let arr = val.into_array_value();
+            for i in owned {
+                let Ok(ev) = self.builder.build_extract_value(arr, i, "fresh.elem") else {
+                    continue;
+                };
+                let slot = self.create_entry_alloca(cur_fn, "__placed_arr_fresh", elem_ty);
+                self.builder.build_store(slot, ev).unwrap();
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+                    frame.push(super::state::CleanupAction::StructDrop {
+                        struct_alloca: slot,
+                        drop_fn,
+                    });
+                }
+            }
+            return;
+        }
         let Some(drop_fn) = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n) else {
             return;
         };

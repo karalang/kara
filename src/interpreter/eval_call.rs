@@ -4887,6 +4887,33 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-30-57 — the indices of the FRESH items of a collection literal
+    /// argument that also holds at least one moved place (`[w, W1 { .. }]`),
+    /// when every item is one or the other. `None` for any other shape,
+    /// including an all-fresh literal, which [`Self::fresh_nameless_container_arg`]
+    /// takes whole. Codegen twin: `mixed_literal_arg_fresh_indices`.
+    fn mixed_literal_arg_fresh_indices(&self, e: &Expr) -> Option<Vec<usize>> {
+        let items = match &e.kind {
+            ExprKind::ArrayLiteral(items) => items,
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if type_name == "Vec" || type_name == "Array" =>
+            {
+                items
+            }
+            _ => return None,
+        };
+        let is_place = |x: &Expr| matches!(x.kind, ExprKind::Identifier(_));
+        if !items.iter().any(is_place)
+            || !items
+                .iter()
+                .all(|x| is_place(x) || self.discard_tuple_elem_is_fresh(x))
+        {
+            return None;
+        }
+        let fresh: Vec<usize> = (0..items.len()).filter(|&k| !is_place(&items[k])).collect();
+        (!fresh.is_empty()).then_some(fresh)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn run_fresh_temp_arg_drops_walk(
         &mut self,
@@ -5340,6 +5367,26 @@ impl<'a> super::Interpreter<'a> {
                         continue;
                     }
                     _ => {}
+                }
+            }
+            // B-2026-09-30-57 — a literal MIXING a moved place with fresh items
+            // (`take([w, W1 { .. }])`). The walk above declines it because of
+            // the place, whose own binding runs its body; the fresh items have
+            // no binding, so nothing ran theirs. Run exactly those. Codegen
+            // twin: `track_mixed_literal_arg_fresh_bodies`.
+            if let Some(fresh) = self.mixed_literal_arg_fresh_indices(&arg.value) {
+                if let Some(Value::Array(items)) = arg_vals.get(i) {
+                    let picked: Vec<Value> = {
+                        let items = items.read().unwrap();
+                        fresh
+                            .iter()
+                            .filter_map(|&k| items.get(k).cloned())
+                            .collect()
+                    };
+                    for v in picked {
+                        self.run_discarded_value_user_drops(v);
+                    }
+                    continue;
                 }
             }
             // B-2026-07-30-11 (param-tuple leg, the A shape): a tuple

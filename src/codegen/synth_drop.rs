@@ -11689,6 +11689,90 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(walker)
     }
 
+    /// B-2026-09-30-57 — the BODIES-ONLY walk over the listed element
+    /// `indices` of an `Array[T, n]` (`vec == false`, the param is the array
+    /// slot) or of a `Vec[T]` (`vec == true`, the param is the vec header),
+    /// for a collection literal argument that mixes moved places with fresh
+    /// items: the places' own bindings run their bodies, so only the fresh
+    /// items' are walked here. Frees nothing, like its unmasked siblings.
+    pub(super) fn emit_masked_elem_user_drop_bodies_fn(
+        &mut self,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        elem_te: &TypeExpr,
+        n: u32,
+        indices: &[u32],
+        vec: bool,
+    ) -> Option<FunctionValue<'ctx>> {
+        if indices.is_empty() || !self.elem_te_runs_user_drop(elem_te) {
+            return None;
+        }
+        let mask: String = indices.iter().map(|i| format!("_{i}")).collect();
+        let fn_name = format!(
+            "__karac_dropelems_{}_masked_{}_{n}{mask}",
+            if vec { "vec" } else { "array" },
+            Self::display_mangle_te(elem_te)
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let saved = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        self.current_fn = Some(walker);
+        let entry = self.context.append_basic_block(walker, "entry");
+        self.builder.position_at_end(entry);
+        let p = walker.get_nth_param(0).unwrap().into_pointer_value();
+        let te = elem_te.clone();
+        let data = if vec {
+            let vec_ty = self.vec_struct_type();
+            let dp = self
+                .builder
+                .build_struct_gep(vec_ty, p, 0, "dm.data.p")
+                .unwrap();
+            self.builder
+                .build_load(ptr_ty, dp, "dm.data")
+                .unwrap()
+                .into_pointer_value()
+        } else {
+            p
+        };
+        let arr_ty = inkwell::types::BasicType::array_type(&elem_ty, n);
+        for &i in indices {
+            let ep = unsafe {
+                if vec {
+                    self.builder.build_in_bounds_gep(
+                        elem_ty,
+                        data,
+                        &[i64_t.const_int(i as u64, false)],
+                        "dm.elem",
+                    )
+                } else {
+                    self.builder.build_in_bounds_gep(
+                        arr_ty,
+                        data,
+                        &[i32_t.const_zero(), i32_t.const_int(i as u64, false)],
+                        "dm.elem",
+                    )
+                }
+            };
+            let Ok(ep) = ep else { continue };
+            self.emit_slot_drop_bodies_at(ep, &te);
+        }
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
     /// B-2026-09-14-15 — `__karac_dropslot_<T>(p: ptr)`: the one-slot
     /// BODIES-ONLY walk over a value of type `te`, i.e. a callable wrapper
     /// around [`Self::emit_slot_drop_bodies_at`].
