@@ -7681,6 +7681,42 @@ fn optres_part_denote(e: &Expr, root: &str) -> Option<ParamPath> {
     }
 }
 
+/// B-2026-09-20-7 — every path off `root` that yielding `e` hands out: the
+/// path `e` itself denotes, or, when `e` is a TUPLE or STRUCT literal, the
+/// paths its elements denote, recursively. `return (t.0.0, t.0.1)` moves both
+/// elements out of the arm binding exactly as `return t.0.0` moves one, and
+/// reporting nothing for it left both backends' caller walks running the
+/// handed-back parts' bodies a second time (the interpreter at every width,
+/// the compiled backends for a named argument). An element that is not a
+/// projection off `root` contributes nothing, as a bare yield of it would.
+///
+/// Only a bare yield can report the EMPTY path (the whole binding). Inside a
+/// literal the root itself reports nothing: this is the AST, so `R { id: e }`
+/// in an `Err(e)` arm reads exactly like a move of `e`, and answering "whole"
+/// for it stood the channel down for the whole function, the `Ok` arm's
+/// `return t.1` included. Declining is the direction this channel keeps.
+fn optres_yielded_parts(e: &Expr, root: &str, out: &mut Vec<ParamPath>) {
+    fn literal_elem(e: &Expr, root: &str, out: &mut Vec<ParamPath>) {
+        match &e.kind {
+            ExprKind::Tuple(elems) => {
+                for el in elems {
+                    literal_elem(el, root, out);
+                }
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                for f in fields {
+                    literal_elem(&f.value, root, out);
+                }
+            }
+            _ => out.extend(optres_part_denote(e, root).filter(|p| !p.is_empty())),
+        }
+    }
+    match &e.kind {
+        ExprKind::Tuple(_) | ExprKind::StructLiteral { .. } => literal_elem(e, root, out),
+        _ => out.extend(optres_part_denote(e, root)),
+    }
+}
+
 /// B-2026-09-13-5 — the PART-PRECISE sibling of
 /// [`fn_escaping_param_payload_variants`]: which paths INSIDE the payload of
 /// by-value `Option` / `Result` parameter `arg_index` does `f` hand out of its
@@ -7914,12 +7950,16 @@ fn escaping_param_payload_part_paths_impl(
         // `disarm_escaping_tail_projection`). Only a DEEPER-than-one-hop tail
         // part still declines the shape, which the one-field-hop check in
         // `optres_param_part_returns_are_callee_owned_shape` already does.
-        let mut record = |e: &Expr, top: bool, _is_tail: bool| match optres_part_denote(e, root) {
-            Some(p) if p.is_empty() => *whole = true,
-            Some(p) if (top || any_path) && !out.contains(&p) => {
-                out.push(p);
+        let mut record = |e: &Expr, top: bool, _is_tail: bool| {
+            let mut parts = Vec::new();
+            optres_yielded_parts(e, root, &mut parts);
+            for p in parts {
+                if p.is_empty() {
+                    *whole = true;
+                } else if (top || any_path) && !out.contains(&p) {
+                    out.push(p);
+                }
             }
-            _ => {}
         };
         if tail {
             record(e, top, true);
