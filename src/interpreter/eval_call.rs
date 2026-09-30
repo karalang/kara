@@ -6867,6 +6867,48 @@ impl<'a> super::Interpreter<'a> {
         })
     }
 
+    /// B-2026-09-27-72 — does the NON-generic user fn `fn_name` declare a
+    /// `Vec[E]` return whose element `E` is a user struct or value enum that
+    /// is not `shared`? The same admission codegen's
+    /// `track_discarded_vec_return_bodies` makes, so a discarded `Vec` result
+    /// runs its element bodies on both backends or on neither.
+    pub(crate) fn user_fn_returns_vec_of_user_type(&self, fn_name: &str) -> bool {
+        use crate::ast::{Item, TypeKind};
+        let Some(f) = self.program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == fn_name => Some(f),
+            _ => None,
+        }) else {
+            return false;
+        };
+        if f.generic_params.is_some() {
+            return false;
+        }
+        // `Vec` only: the shared recognizer also answers for a `VecDeque`,
+        // whose ring buffer the codegen walker does not read.
+        let Some(elem) = f
+            .return_type
+            .as_ref()
+            .filter(|t| matches!(&t.kind, TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Vec"))
+            .and_then(crate::closure_escape::vec_inner_type_expr)
+        else {
+            return false;
+        };
+        let TypeKind::Path(ep) = &elem.kind else {
+            return false;
+        };
+        let Some(en) = ep.segments.first() else {
+            return false;
+        };
+        if en == "Option" || en == "Result" {
+            return false;
+        }
+        self.program.items.iter().any(|item| match item {
+            Item::StructDef(sd) => &sd.name == en && !sd.is_shared,
+            Item::EnumDef(ed) => &ed.name == en && !ed.is_shared,
+            _ => false,
+        })
+    }
+
     pub(crate) fn user_fn_return_type_name(&self, fn_name: &str) -> Option<String> {
         self.program.items.iter().find_map(|item| match item {
             crate::ast::Item::Function(f) if f.name == fn_name => {

@@ -27258,6 +27258,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // away from the boxed tracker and frees less than it would.
             if !(not_borrow && self.try_track_discarded_inline_option_mono(tail, val)) {
                 self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
+                // B-2026-09-27-72 — and a `Vec` result's element bodies,
+                // registered after the free for the LIFO reason the tuple and
+                // array arms give.
+                if not_borrow {
+                    self.track_discarded_vec_return_bodies(tail, branch_tails.as_deref(), val);
+                }
             }
         }
     }
@@ -28693,7 +28699,86 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(elem_te) = super::helpers::vec_inner_type_expr(&te) else {
             return;
         };
-        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+        self.track_discarded_vec_handle_bodies(&elem_te, val);
+    }
+
+    /// B-2026-09-27-72 — a discarded CALL whose callee is declared to return
+    /// `Vec[E]` (`mv();`, `let _ = mv();`, `H.mv();` over `fn mv() -> Vec[R]`)
+    /// runs its elements' `Drop` bodies. `materialize_owned_temp` frees the
+    /// handle and its elements' memory, and has no bodies peer, so every
+    /// element body ran nowhere compiled: on all four surfaces for the
+    /// statement spelling, and against `--interp`'s one each for `let _ =`
+    /// and the associated-function spelling. Registered through the same
+    /// walker a discarded `Vec` LITERAL uses (above), keyed on the callee's
+    /// DECLARED return. A generic callee declines here and in the interpreter
+    /// alike: its `Vec[T]` names no element walker, the reason the tuple and
+    /// array arms give (B-2026-09-16-37, B-2026-09-27-71).
+    ///
+    /// Interpreter twin: the `Identifier`-callee statement arm in
+    /// `eval_stmt.rs`, keyed on `user_fn_returns_vec`; the `Path` arm there
+    /// already ran the shared walker.
+    ///
+    /// `branch_tails` is a discarded `match` / `if` whose every arm is such a
+    /// call (`match k { 1 => mv(21), _ => mv(23) };`): every arm must resolve,
+    /// and the typechecker made their element types agree.
+    pub(super) fn track_discarded_vec_return_bodies(
+        &mut self,
+        tail: &Expr,
+        branch_tails: Option<&[&Expr]>,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let elem_te = match branch_tails {
+            None => self.discarded_call_vec_elem_te(tail),
+            Some(ts) => {
+                let tes: Option<Vec<TypeExpr>> = ts
+                    .iter()
+                    .map(|t| self.discarded_call_vec_elem_te(t))
+                    .collect();
+                tes.and_then(|v| v.into_iter().next())
+            }
+        };
+        let Some(elem_te) = elem_te else {
+            return;
+        };
+        self.track_discarded_vec_handle_bodies(&elem_te, val);
+    }
+
+    /// The element type of a NON-generic user function call's declared
+    /// `Vec[E]` return, for [`Self::track_discarded_vec_return_bodies`].
+    fn discarded_call_vec_elem_te(&self, tail: &Expr) -> Option<TypeExpr> {
+        let ExprKind::Call { callee, .. } = &tail.kind else {
+            return None;
+        };
+        if !matches!(
+            &callee.kind,
+            ExprKind::Identifier(_) | ExprKind::Path { .. }
+        ) {
+            return None;
+        }
+        let f = self.discarded_callee_fn(tail)?;
+        if f.generic_params.is_some() {
+            return None;
+        }
+        let ret = f.return_type.as_ref()?;
+        // `Vec` only: the shared recognizer also answers for a `VecDeque`,
+        // whose ring buffer the walker does not read.
+        if !matches!(&ret.kind, TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Vec")
+        {
+            return None;
+        }
+        super::helpers::vec_inner_type_expr(ret)
+    }
+
+    /// The shared tail of the two discarded-`Vec` bodies registrars: `val` is
+    /// a heap VEC HANDLE whose elements are `elem_te`.
+    fn track_discarded_vec_handle_bodies(&mut self, elem_te: &TypeExpr, val: BasicValueEnum<'ctx>) {
+        let inkwell::types::BasicTypeEnum::StructType(handle_ty) = val.get_type() else {
+            return;
+        };
+        if handle_ty.count_fields() != 3 {
+            return;
+        }
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
         // Element must name a non-shared struct or a user value enum, the same
         // admission the `let`-bound Vec registration uses, so a discarded
         // literal and a bound one resolve the identical walker.
@@ -28714,7 +28799,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let elem_name = elem_name.clone();
-        let subst = self.generic_struct_subst_from_inst(&elem_name, &elem_te);
+        let subst = self.generic_struct_subst_from_inst(&elem_name, elem_te);
         let Some(bodies) = self.emit_vec_elem_user_drop_bodies_fn_mono(&elem_name, elem_ty, &subst)
         else {
             return;
