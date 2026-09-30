@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 598 |
+| miscompile | 601 |
 | run-vs-build | 557 |
 | leak | 501 |
-| double-free | 376 |
+| double-free | 377 |
 | missing-feature | 215 |
 | codegen-gap | 205 |
 | other | 163 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2466 |
-| interp | 738 |
+| codegen | 2469 |
+| interp | 740 |
 | typecheck | 319 |
 | other | 112 |
 | ownership | 79 |
@@ -447,7 +447,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-41 | 2026-09-30 | codegen | medium | BINDING A WHOLE BOXED `Option` TUPLE PAYLOAD TO A LOCAL THROUGH A `match` INITIALIZER IS A CODEGEN GAP UNANNOTATED AND DOUBLES BOTH `Drop` BODIES ANNOTATED -- `let x = match o { Some(t) => t, None => mk() }; x.0.id` over a by-value `o: Option[(H, H)]` fails with `cannot resolve field 'id' on this receiver`, and `let x: (H, H) = ..` prints `x5 dH5 dH6 dH5 dH6 got:1 end` against the interpreter's due `x5 dH5 dH6 got:1 end` | — |
 | B-2026-09-30-43 | 2026-09-30 | codegen | medium | A `match` that binds an ENUM-typed or `Vec[Drop]`-typed leaf out of a GENERIC struct and never uses it loses the leaf's `Drop` bodies on every compiled surface, for a local and a param alike -- `let g = G { v: E.A(R { id: 5 }), n: 1 }; match g { G { v, n } => n }` prints `1 after` where --interp prints `d5 1 after` | — |
 | B-2026-09-30-44 | 2026-09-30 | codegen | low | A field of a by-value struct param held by TRANSFER, moved into a local inside the callee, runs its `Drop` body when that local dies instead of at the end of the call as --interp does -- `fn f(g: G[R]) -> i64 { let k = { let G { v, n } = g; let w = v; n }; println("mid"); k }` prints `d16 mid 1 after` compiled and `mid d16 1 after` interpreted, and a named argument's whole body runs inside the callee (`1 d4 after` interpreted, `d4 1 after` compiled) | — |
-| B-2026-09-30-46 | 2026-09-30 | codegen | high | A `match` whose only arm binds the WHOLE by-value struct param by name (`match g { x => x.n }`) runs the field's `Drop` body TWICE on every compiled surface, for a generic and a non-generic struct alike, and DOUBLE-FREES a heap-bearing field -- `fn f(g: H) -> i64 { match g { x => x.n } }` prints `d4 d4 1 after` where --interp prints `d4 1 after` | — |
 | B-2026-09-30-49 | 2026-09-30 | interp+codegen | high | A NAMED LOCAL MOVED INTO A STRUCT LITERAL WRITTEN AS A CALL ARGUMENT RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, INTERPRETER INCLUDED, AND COMPILED WALKS THE FREED BUFFER WHEN THE LOCAL IS A `Vec` -- `let r = R { id: 5 }; println(f2(Hr { v: r, n: 3 }))` prints `d5 3 d5` everywhere, and `let q = [R { id: 5 }]; f2(Hq { v: q, n: 3 })` prints `d5 3 d<garbage>` compiled with one invalid read | — |
 | B-2026-09-30-58 | 2026-09-30 | codegen | low | A BRANCHING ARGUMENT WHOSE TAILS ARE COLLECTION LITERALS, OR MIX A BLOCK-LOCAL BINDING WITH A CALL, LEAKS ITS `Vec` BUFFER ON EVERY COMPILED SURFACE, TO A FREE FUNCTION AND A CLOSURE ALIKE -- `vl(if c { [1] } else { [2, 3] })`, its `match` spelling and `vl(if c { let t = mk(1); t } else { mk(2) })` each lose one block | — |
 | B-2026-09-30-59 | 2026-09-30 | codegen | medium | TWO MORE SPELLINGS OF A HEAP-OWNING VALUE MOVED INTO AN `Array` LITERAL LEAK ITS HEAP ON EVERY COMPILED SURFACE, the remainder of B-2026-09-30-34 -- a BY-VALUE PARAM moved in (`fn mkw(w: W1) -> i64 { return take([w]) }`) and a DISCARDED literal holding a local (`let w = W1 { .. }; let _ = [w];`) each lose the element's `String` (valgrind 1 block); body counts are right | — |
@@ -464,6 +463,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-62 | 2026-09-30 | interp | medium | A PART OF AN `Option` TUPLE PAYLOAD HANDED OUT INSIDE A CONSTRUCTOR (`return Option.Some(t.0)`) RUNS ITS `Drop` BODY TWICE INTERPRETED -- `fn ct(o: Option[(R, R)]) -> Option[R]` prints `dR5 dR6 dR5 got` on `--interp` against the compiled side's correct `dR6 dR5 got`, at fresh-temp and named-local arguments alike; the GENERIC twin with a named argument doubles on BOTH backends | — |
 | B-2026-09-30-63 | 2026-09-30 | codegen | medium | A GENERIC CALLEE THAT HANDS ONE PART OF A FRESH `Option[(T, T)]` ARGUMENT OUT INSIDE A CONSTRUCTOR LOSES THE OTHER PART'S `Drop` BODY COMPILED -- `gt(Option.Some((mkr(5), mkr(6))))` over `fn gt[T](o: Option[(T, T)]) -> Option[T] { .. return Option.Some(t.0) .. }` prints `dR5 got end` at `build -O0`, element 1's body never running, where the concrete twin is correct | — |
 | B-2026-09-30-50 | 2026-09-30 | interp+codegen | medium | A BY-VALUE PARAM RETURNED THROUGH A WRAPPING LOCAL ON ONLY SOME PATHS RUNS ITS `Drop` BODY TWICE OR NOT AT ALL ON EVERY SURFACE, BY SPELLING -- `fn cvl(a: R, f: bool) -> Vec[R] { let v = [a]; if f { return v; } return [mk(92)]; }` runs `dR5` twice when `v` is returned, while the tuple and struct twins (`let x = (a, 1); if f { return x; } return (mk(90), 1);`) lose `dR2` on the path that does NOT return `x`; memory is balanced | — |
+| B-2026-09-30-71 | 2026-09-30 | interp | medium | `--interp` runs an arm binding's `Drop` body TWICE when a bare (non-block) arm body hands the binding to a callee that returns it -- `let h = match o { Option.Some(x) => id(x), Option.None => R { id: 0 } }` over `fn id(r: R) -> R { r }` prints `d4 4 d4 after` where every compiled surface prints `4 d4 after` | — |
+| B-2026-09-30-72 | 2026-09-30 | codegen | medium | A by-value struct param returned through a whole-value `match` arm runs its field's `Drop` body TWICE on every compiled surface -- `fn f(g: H) -> H { match g { x => x } }` prints `d4 1 d4 after` where `--interp` and the `let x = g; x` spelling print `1 d4 after` | — |
+| B-2026-09-30-73 | 2026-09-30 | codegen | high | An irrefutable `if let x = g` over a named struct local DOUBLE-FREES on every compiled surface -- `let g = H { v: Rs { id: 4, s: mk(4) }, n: 1 }; if let x = g { println(x.n) }` aborts with `free(): double free detected in tcache 2` where `--interp` prints `1 ds4 31 after` | — |
+| B-2026-09-30-74 | 2026-09-30 | interp+codegen | medium | A whole-value `match` arm over a named ENUM local that moves its binding on runs the payload's `Drop` body TWICE on all four surfaces -- `let g = E.A(R { id: 4 }); let h = match g { x => x }; println("mid")` prints `d4 d4 mid after` everywhere against the due `d4 mid after` | — |
 
 ### Relocated
 
@@ -3425,6 +3428,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-48 | codegen | medium | AN `Option[S]` LOCAL MATCHED BY A PAYLOAD-TAKING ARM INSIDE A BRANCH THAT MAY NOT RUN LEAKS THE PAYLOAD'S HEAP ON THE PATH THAT NEVER RAN THE ARM, WI… | 6c0700641 |
 | B-2026-09-30-42 | codegen | medium | Two more spellings over a by-value struct param held by TRANSFER still lose a field's `Drop` body on every compiled surface after B-2026-09-30-24 --… | 954c59744 |
 | B-2026-09-30-45 | codegen | high | A `let` that destructures a by-value `G[Vec[R]]` param held by TRANSFER runs the elements' `Drop` bodies over FREED memory on every compiled surface… | 897ddd0a5 |
+| B-2026-09-30-46 | codegen | high | A `match` whose only arm binds the WHOLE by-value struct param by name (`match g { x => x.n }`) runs the field's `Drop` body TWICE on every compiled… | e037709ec |
 | B-2026-09-30-56 | interp+codegen | high | A NAMED LOCAL MOVED INTO AN `Array` LITERAL ARGUMENT THAT THE CALLEE HANDS BACK RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `let w = W1 { . | 0f2a9c748 |
 | B-2026-09-30-57 | interp+codegen | medium | A FRESH ELEMENT BESIDE A MOVED LOCAL IN A COLLECTION LITERAL ARGUMENT RUNS NO `Drop` BODY ON ANY SURFACE -- `take([w, W1 { v: 2, . | 8ab1e086d |
 
