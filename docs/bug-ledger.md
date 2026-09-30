@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 584 |
+| miscompile | 585 |
 | run-vs-build | 549 |
-| leak | 496 |
+| leak | 497 |
 | double-free | 374 |
 | missing-feature | 215 |
 | codegen-gap | 204 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2438 |
+| codegen | 2440 |
 | interp | 726 |
 | typecheck | 319 |
 | other | 112 |
@@ -437,7 +437,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-15 | 2026-09-30 | codegen | medium | A BY-VALUE `Option` TUPLE PAYLOAD LEAKS A SIBLING'S HEAP WHEN THE ARM READS A SCALAR THROUGH IT, OR HANDS BACK PARTS FROM TWO LEVELS -- `Some(t) => { let k = t.0.id; return t.1; }` over `Option[(R, R)]` with `struct R { id: i64, t: String }` runs `t.0`'s `Drop` body and never frees its `String` (2 bytes in 1 block per call at -O0), and `return (t.0.0, t.1)` over `Option[((R, R), R)]` loses `t.0.1`'s buffer the same way; the bare `return t.1` is clean, so the scalar read or the second level is what trips it | — |
 | B-2026-09-30-16 | 2026-09-30 | interp+codegen | high | A TUPLE-INDEX PROJECTION OF A LOCAL MOVED INTO A TUPLE OR ARRAY LITERAL, OR A TWO-HOP CHAIN THROUGH A TUPLE MOVED AT `let`, RUNS THE MOVED PART'S `Drop` BODY TWICE ON EVERY SURFACE AND DOUBLE-FREES COMPILED -- `let t = (R1, R2); let g: (R, R) = (t.0, t.1);` prints `dR1 dR2 got:1 dR1 dR2` on `--interp` and compiled with 2 invalid frees at -O0; `[t.0, t.1]`, `(t.1, 9)`, `let g = t.0.1` and `let g = w.p.1` do the same, while `let g = t.1` and two separate `let`s are right | — |
 | B-2026-09-30-2 | 2026-09-30 | interp+codegen | medium | AN ELEMENT PUSHED INTO A REBOUND BY-VALUE `Vec` PARAM RUNS NO `Drop` BODY ON ANY SURFACE -- `fn pv(v: Vec[D]) -> i64 { let mut b = v; b.push(mkd(9)); return b.len() }` called with a named `Vec[D]` prints `3 dD1 dD2 end` on `--interp` and every compiled surface, where a `dD9` is also due; the same push into a leaf of a by-value tuple param (`let (a, j) = t; let mut b = a; b.push(mkd(9))`) loses it the same way. Memory balanced (valgrind 0) | — |
-| B-2026-09-30-12 | 2026-09-30 | codegen | medium | REMAINDER OF B-2026-09-29-116 AND B-2026-09-30-6: A LOCAL WHOSE PAYLOAD WALK RUNS A `Drop` BODY STILL LOSES IT ON THE PATH THAT NEVER HANDED IT OFF WHEN THE HAND-OFF IN AN UNTAKEN BRANCH IS A PAYLOAD-BINDING `match`, AND A `let mut` LOCAL REASSIGNED AT THE TOP OF A LOOP AND MOVED IN A BRANCH WALKS THE MOVED PAYLOAD (`dS0`) -- `if c { let y = match t { E.A(s) => s.id, E.B(n) => n }; return y }` at `c = false` prints nothing for `t` where `--interp` prints `dS5` | — |
 | B-2026-09-30-13 | 2026-09-30 | codegen | medium | A `let` USE-AFTER-MOVE COPY OF A STRUCT WITH A USER `Drop` LEAKS THE SOURCE'S HEAP ON EVERY COMPILED SURFACE -- `let t = S1 { s: f"aaa..{1}", id: 5 }; let x = t; println(f"{t.s.len()} {x.s.len()}")` over `struct S1 { s: String, id: i64 }` with `impl Drop for S1` prints the right text and ONE body (`d1_5`, as the interpreter does) but loses the source's 31 B `String` buffer at -O0; the same with a `shared` field (`S2 { h: Sh, id: i64 }`) loses the 16 B `Sh` box. A Drop-less struct (`S0 { s: String }`, `S4 { h: Sh }`) is clean | — |
 | B-2026-09-30-17 | 2026-09-30 | interp+codegen | high | AN ARRAY LITERAL OF A BY-VALUE STRUCT PARAM'S FIELDS, RETURNED, RUNS EACH FIELD'S `Drop` BODY TWICE ON EVERY SURFACE, INTERPRETER INCLUDED -- `fn arr(w: W3) -> Array[R, 2] { return [w.q, w.r]; }` prints `dR1 dR2 dR2 dR1` for one call, where each field is moved into the array exactly once; memory is balanced | — |
 | B-2026-09-30-18 | 2026-09-30 | codegen | medium | A DISCARDED ASSOCIATED-FUNCTION CALL RETURNING A TUPLE RUNS NO ELEMENT `Drop` BODY ON ANY COMPILED SURFACE WHERE `--interp` RUNS ONE -- `H.mint(1);` over `impl H { fn mint(i: i64) -> (R, i64) { return (mk(i), 5); } }` prints nothing compiled and `dR1` interpreted; memory is freed | — |
@@ -455,6 +454,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-25 | 2026-09-30 | codegen | medium | AN ASSOCIATED FUNCTION'S `Array[R, N]` RESULT BOUND TO AN UNANNOTATED LOCAL RUNS NO ELEMENT `Drop` BODY COMPILED AND LEAKS ITS HEAP -- `let a = K.fr(1)` over `fn fr(i: i64) -> Array[R, 1] { return [mk(i)]; }` prints nothing where `--interp` prints `dR1`, 2 B definitely lost at -O0; the annotated `let a: Array[R, 1] = K.fr(1)`, a free function and a method are right, and reading `a[0].id` fails to build | — |
 | B-2026-09-30-26 | 2026-09-30 | interp+codegen | high | THE `Vec` TWIN OF B-2026-09-30-22: A WHOLE BY-VALUE PARAM MOVED INTO A RETURNED `Vec` LITERAL RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, INTERPRETER INCLUDED -- `fn vc(a: R, b: R) -> Vec[R] { return vec![a, b]; }` prints `dR2 dR1 r21 dR1 dR2` for `let c = vc(mk(1), mk(2))`; a `Vec`-typed `return [a, b]` and a param's FIELDS (`vec![w.q, w.r]`) do the same; memory is balanced | — |
 | B-2026-09-30-27 | 2026-09-30 | interp+codegen | high | WHOLE BY-VALUE PARAMS MOVED INTO A LOCAL `Array` OR `Vec` THAT IS THEN RETURNED RUN THEIR `Drop` BODIES TWICE ON EVERY SURFACE, INTERPRETER INCLUDED -- `fn vl(a: R, b: R) -> Vec[R] { let v: Vec[R] = [a, b]; return v; }` prints `dR6 dR5 r2 dR5 dR6` for `let v3 = vl(mk(5), mk(6))`, and the `Array[R, 2]` local the same; the TUPLE local (`let x = (a, b); return x`) is right | — |
+| B-2026-09-30-47 | 2026-09-30 | codegen | medium | REMAINDER OF B-2026-09-30-12: A PAYLOAD-BINDING `match` ARM THAT TAKES ONLY SOME FIELDS OF ITS VARIANT, ON A LOCAL, INSIDE A BRANCH THAT MAY NOT RUN, STILL LOSES THE TAKEN FIELD'S `Drop` BODY ON THE PATH THAT NEVER RAN THE ARM -- `let t = F.P(mks(10), mks(11)); if c { match t { F.P(x, _) => { let k = x; .. } F.Q(q) => { .. } } }` at `c = false` prints only `dS11` compiled where `--interp` prints `dS11 dS10` | — |
+| B-2026-09-30-48 | 2026-09-30 | codegen | medium | AN `Option[S]` LOCAL MATCHED BY A PAYLOAD-TAKING ARM INSIDE A BRANCH THAT MAY NOT RUN LEAKS THE PAYLOAD'S HEAP ON THE PATH THAT NEVER RAN THE ARM, WITH OUTPUT RIGHT -- `let t: Option[S] = Some(mks(7)); if c { match t { Some(s) => { let k = s; .. } None => {} } }` at `c = false` prints `dS7` on every surface and loses 2 B per call at -O0 | — |
 
 ### Relocated
 
@@ -3391,6 +3392,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-97 | codegen | high | A STRUCT WITH AN `i128` / `u128` FIELD LOSES THE FIELD'S HIGH WORD AS AN ENUM PAYLOAD, AND SHIFTS EVERY LATER FIELD DOWN ONE SLOT -- `E.Int(Lit { val… | 5d95ab44b |
 | B-2026-09-29-120 | codegen | high | REMAINDER OF B-2026-09-29-101: A NESTED STRUCT FIELD OF A BY-VALUE PARAM THAT HOLDS A `shared` VALUE, PASSED TO A CALLEE THAT RETURNS THAT PARAM ON O… | 06a2d9968 |
 | B-2026-09-30-6 | codegen | medium | A `let mut` LOCAL WHOSE CONTAINER WALK RUNS ITS PAYLOAD'S `Drop` BODY, HANDED OFF INSIDE A BRANCH THAT MAY NOT RUN AND THEN REASSIGNED, LOSES THE BOD… | 66e0f7b6f |
+| B-2026-09-30-12 | codegen | medium | REMAINDER OF B-2026-09-29-116 AND B-2026-09-30-6: A LOCAL WHOSE PAYLOAD WALK RUNS A `Drop` BODY STILL LOSES IT ON THE PATH THAT NEVER HANDED IT OFF W… | d67dcf88c |
 | B-2026-09-30-19 | interp+codegen | medium | AN EARLIER LIVE LOCAL LOSES ITS `Drop` BODY WHEN A NESTED `match` ARM BINDING OF THE SAME NAME IS MOVED, ON EVERY BACKEND INCLUDING `--interp` -- `le… | cd6efa894 |
 | B-2026-09-30-7 | codegen | high | A STRUCT THAT OWNS A `shared` FIELD AND RUNS A `Drop` BODY, MOVED TWICE INTO A BY-VALUE CALLEE THAT HANDS IT BACK (WARNED AS A USE AFTER MOVE, SO ACC… | 559209b57 |
 | B-2026-09-30-3 | codegen | high | A TUPLE PATTERN MATCHED AGAINST A `for` LOOP'S TUPLE ELEMENT DOUBLE-FREES EVERY HEAP LEAF IT BINDS, ON EVERY COMPILED SURFACE -- `for pair in v.iter(… | 534746271 |
