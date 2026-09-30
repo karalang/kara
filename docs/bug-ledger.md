@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 575 |
+| miscompile | 576 |
 | run-vs-build | 546 |
-| leak | 489 |
-| double-free | 367 |
+| leak | 490 |
+| double-free | 370 |
 | missing-feature | 215 |
 | codegen-gap | 204 |
 | other | 161 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2407 |
-| interp | 714 |
+| codegen | 2412 |
+| interp | 716 |
 | typecheck | 318 |
 | other | 112 |
 | ownership | 79 |
@@ -130,8 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-09-20-5 | 2026-09-20 | codegen+interp | medium | ONE-HOP HALF FIXED BY 6adfc4cfc (B-2026-09-14-6); WHAT REMAINS IS THE TWO-HOP PROJECTION -- a NAMED LOCAL handed to a callee that returns `t.0.1` of its `Option` tuple payload (`let a = Some(((R,R), i64)); let g = m2(a)`) prints `got:22 dR22` under `--interp`, LOSING element 0.0's body, and `dR21 dR22 got:22 dR22` on every compiled surface, DOUBLING the escapee, against the due `dR21 got:22 dR22`; `remask_named_tuple_payload_arg` declines any path deeper than one hop, and the interpreter's named-local walk loses the sibling instead | — |
-| B-2026-09-20-6 | 2026-09-20 | codegen | medium | A STRUCT-ROOTED PROJECTION OUT OF A BY-VALUE `Option` PAYLOAD IS WRONG IN BOTH DIRECTIONS AND THE PAYLOAD'S WIDTH PICKS WHICH -- `w.p.1` over an INLINE `struct W { p: (R, R), n: i64 }` runs the escaping element's body TWICE on every compiled surface, the same path over a BOXED 4-word twin LOSES the sibling's body entirely, and the boxed field-then-field cell loses it too although the inline field-then-field cell is correct -- so boxing breaks a case the inline channel gets right; `--interp` correct throughout | — |
 | B-2026-09-20-7 | 2026-09-20 | interp | low | THE INTERPRETER RUNS BOTH INNER ELEMENTS' `Drop` BODIES TWICE WHEN AN ARM RETURNS EVERY SIBLING OF A NESTED `Option` TUPLE PAYLOAD -- `Some(t) => return (t.0.0, t.0.1)` prints `dR81 dR82 got:81,82 dR81 dR82` against the compiled backends' correct `got:81,82 dR81 dR82`, the reverse direction from every other cell of this family; and the compiled side is right here BY ACCIDENT -- it used to decline the whole mask for a two-hop path, which happens to be correct exactly when every part escapes | — |
 | B-2026-09-20-8 | 2026-09-20 | other | low | CLAUDE.md's FULL-DISK section does not cover the case where its fifth shape causes a WRONG ATTRIBUTION -- on a freshly REBASED tree, named tests failing with ordinary assertion diffs and no disk message read as a regression from the commits just rebased onto, so the thread bisects against a commit that did nothing wrong; the combination is routine rather than unlucky because a rebase is followed by a re-verification leg and that leg is what spends the allowance | — |
 | B-2026-09-20-11 | 2026-09-20 | codegen | low | A CODEGEN DIAGNOSTIC FROM THE MODULE-VERIFICATION PATH CARRIES A FABRICATED SPAN -- a 6-line file reports `s1.kara:188:25`, a line that does not exist, while the `Index operator applied to non-array type` diagnostic on the SAME file reports a correct `4:52`. So the span is wrong only on the verifier route, which is also the route a reader is least able to sanity-check | — |
@@ -448,6 +446,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-114 | 2026-09-29 | interp+codegen | medium | `let _ = (a, 7);` OVER A NAMED `Array[D, 2]` RUNS NONE OF ITS ELEMENTS' `Drop` BODIES ON ANY SURFACE -- prints `x end` everywhere, `--interp` included, where `dD1 dD2` are due; memory is freed (valgrind 0), and the statement spelling `(a, 7);` is right | — |
 | B-2026-09-29-115 | 2026-09-29 | interp+codegen | medium | A FRESH TUPLE SCRUTINEE HOLDING AN `Array[D, 2]` (`match mk(3) { (x, n) => .. }`) RUNS NO ELEMENT `Drop` BODIES AND LEAKS THE ELEMENTS' HEAP ON EVERY SURFACE -- prints `m 3 3 end` everywhere, `--interp` included, where `dD3 dD4` are due; valgrind 2 (72 B definitely lost) at -O0 | — |
 | B-2026-09-30-1 | 2026-09-30 | interp | medium | `--interp` LOSES THE `Drop` BODY OF A GENERIC MULTI-FIELD ENUM'S PAYLOAD WHEN A BY-VALUE CALLEE'S ARM REBINDS IT AND YIELDS A VALUE -- `fn cz(x: X2[W, i64]) -> i64 { match x { X2.Two(r, n) => { let z = r; n } X2.Nil => 0 } }` prints `m 7` interpreted where every compiled surface prints `dW3 m 7`; the one-field twin `X1.One(r) => { let z = r; 7 }` and a unit arm (`{ let z = r; println(..) }`) both run the body under `--interp` | — |
+| B-2026-09-30-4 | 2026-09-30 | codegen | medium | A NAMED `Result` LOCAL WHOSE ERROR TYPE OWNS HEAP LOSES ITS TUPLE PAYLOAD'S `Drop` BODIES COMPILED WHEN PASSED BY VALUE -- `let e: Result[(R, R), String] = Result.Ok((R3, R4)); peek(e)` prints `n:4` compiled against the due `dR3 dR4 n:4` under `--interp`, and a callee that hands `t.1` back loses the sibling; the caller zeroes the whole slot at the move and its bodies walk then reads the zeroed tag | — |
+| B-2026-09-30-10 | 2026-09-30 | codegen | high | A `String` LEAF HANDED BACK TWO HOPS DEEP OUT OF A BY-VALUE `Option` PAYLOAD IS FREED TWICE -- `fn v(o: Option[W]) -> String { match o { Some(w) => return w.p.1, .. } }` over `struct W { p: (String, String), n: i64 }` prints the right value and valgrind reports an Invalid free of a 2-byte block, the returned leaf's size, at -O0; field-then-field and named-local spellings do the same, the tuple-rooted `t.0.1` leaks 2 bytes instead, and one hop (`w.p`) is clean | — |
+| B-2026-09-30-11 | 2026-09-30 | interp+codegen | high | A BY-VALUE USER-ENUM PARAM WHOSE ARM RETURNS A PART OF ITS STRUCT PAYLOAD RUNS `Drop` BODIES TWICE ON EVERY SURFACE, ALREADY AT ONE HOP, AND EACH BACKEND DOUBLES A DIFFERENT SET -- `fn one(u: U1) -> R { match u { U1.A(w) => { return w.s; } .. } }` over `enum U1 { A(W1), B }`, `struct W1 { r: R, s: R }` prints `dR2 dR1 got:2 dR2` under `--interp` (the escapee's body early) and `dR1 dR2 dR1 got:2 dR2` compiled (the escapee early AND the sibling twice); the two-hop `w.p.1` agrees on both at `dR51 dR52 got:52 dR52`. The `Option`/`Result` spelling of the same shapes is correct since B-2026-09-20-6 (d1bdd06) | — |
+| B-2026-09-30-15 | 2026-09-30 | codegen | medium | A BY-VALUE `Option` TUPLE PAYLOAD LEAKS A SIBLING'S HEAP WHEN THE ARM READS A SCALAR THROUGH IT, OR HANDS BACK PARTS FROM TWO LEVELS -- `Some(t) => { let k = t.0.id; return t.1; }` over `Option[(R, R)]` with `struct R { id: i64, t: String }` runs `t.0`'s `Drop` body and never frees its `String` (2 bytes in 1 block per call at -O0), and `return (t.0.0, t.1)` over `Option[((R, R), R)]` loses `t.0.1`'s buffer the same way; the bare `return t.1` is clean, so the scalar read or the second level is what trips it | — |
+| B-2026-09-30-16 | 2026-09-30 | interp+codegen | high | A TUPLE-INDEX PROJECTION OF A LOCAL MOVED INTO A TUPLE OR ARRAY LITERAL, OR A TWO-HOP CHAIN THROUGH A TUPLE MOVED AT `let`, RUNS THE MOVED PART'S `Drop` BODY TWICE ON EVERY SURFACE AND DOUBLE-FREES COMPILED -- `let t = (R1, R2); let g: (R, R) = (t.0, t.1);` prints `dR1 dR2 got:1 dR1 dR2` on `--interp` and compiled with 2 invalid frees at -O0; `[t.0, t.1]`, `(t.1, 9)`, `let g = t.0.1` and `let g = w.p.1` do the same, while `let g = t.1` and two separate `let`s are right | — |
 
 ### Relocated
 
@@ -3065,6 +3068,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-20-2 | codegen+interp | high | A BOXED `Array[T, N]` ENUM PAYLOAD RUNS ITS ELEMENTS' `Drop` BODIES AT THE WRONG TIME OR NOT AT ALL -- 19 of 20 cells fail, the compiled backends run… | 33b456c2d |
 | B-2026-09-20-3 | codegen | medium | A CHAINED PLACE'S ENUM FIELD HANDED TO A BY-VALUE CALLEE IS STILL FREED TWICE after B-2026-09-19-51 -- `eatb(k.h.g)` over `struct Kb { h: Hb }` / `st… | a2c32b033 |
 | B-2026-09-20-4 | codegen | medium | AN ENUM FIELD REACHED THROUGH AN OWNED `self` AND HANDED TO A BY-VALUE CALLEE IS FREED TWICE, and WORSE than the free-function spelling -- `eatb(self… | 0ff7e2d34 |
+| B-2026-09-20-5 | codegen+interp | medium | ONE-HOP HALF FIXED BY 6adfc4cfc (B-2026-09-14-6); WHAT REMAINS IS THE TWO-HOP PROJECTION -- a NAMED LOCAL handed to a callee that returns `t.0.1` of… | d94d9c1 |
+| B-2026-09-20-6 | codegen | medium | A STRUCT-ROOTED PROJECTION OUT OF A BY-VALUE `Option` PAYLOAD IS WRONG IN BOTH DIRECTIONS AND THE PAYLOAD'S WIDTH PICKS WHICH -- `w.p.1` over an INLI… | d1bdd06 |
 | B-2026-09-20-9 | codegen | high | A SEEDED `Option` / `Result` ENVELOPE LOSES ITS PAYLOAD'S `Drop` BODY ON A MATCH ARM -- `match o { Some(x) => x[0].tag.len() }` over `Option[Array[S,… | 678ebf8 |
 | B-2026-09-20-10 | interp | medium | THE INTERPRETER, NOT THE COMPILED BACKENDS, LOSES A DISCARDED SEEDED-ENVELOPE VALUE'S `Drop` BODY -- `Some(a);` as a statement prints nothing under `… | 678ebf8 |
 | B-2026-09-20-12 | codegen | high | A BY-VALUE ENUM ARGUMENT SPELLED AS A FIELD PROJECTION RUNS ITS PAYLOAD'S `Drop` BODY TWICE -- `eat(b.w)` fires the body once inside the callee and a… | 58cb50cd5 |
