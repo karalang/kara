@@ -270,6 +270,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.payload_vars
                             .param_payload_arm_views
                             .insert(name.clone());
+                        self.payload_vars
+                            .param_payload_arm_view_owner
+                            .remove(name.as_str());
                     } else {
                         self.payload_vars
                             .param_payload_arm_views

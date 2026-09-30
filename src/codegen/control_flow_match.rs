@@ -19388,6 +19388,46 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-20-16 — a `return` of a whole-payload VIEW of a callee-owned
+    /// param (`Some(t) => { return t; }` over `o: Option[(H, H)]`) hands the
+    /// payload, and with it the bodies, to the caller. The param's walk keeps
+    /// the bodies for every other use of the view (B-2026-09-10-9), so it
+    /// stands down HERE, on the returning path only: a runtime `false` into
+    /// the walk's flag, which leaves a path that does not return still armed.
+    ///
+    /// RETURN rather than any materialization, and the difference is the
+    /// row's point: forwarding the view into a call (`return sink(t)`) is
+    /// equally a whole-payload take, and B-2026-09-10-9 measured that
+    /// spelling LOSING both bodies once the walk stood down, because the
+    /// callee's by-value tuple param registers no bodies of its own. Only a
+    /// value leaving the frame as the frame's result has an owner waiting
+    /// for it.
+    pub(super) fn disarm_callee_owned_payload_walk_for_returned_view(&mut self, name: &str) {
+        if !self.payload_vars.param_payload_arm_views.contains(name) {
+            return;
+        }
+        let Some(param) = self
+            .payload_vars
+            .param_payload_arm_view_owner
+            .get(name)
+            .cloned()
+        else {
+            return;
+        };
+        if !self
+            .payload_vars
+            .callee_owned_payload_bodies_params
+            .contains(&param)
+        {
+            return;
+        }
+        if let Some(flag) = self.optres_payload_bodies_flag_for(&param) {
+            let _ = self
+                .builder
+                .build_store(flag, self.context.bool_type().const_int(0, false));
+        }
+    }
+
     /// B-2026-09-10-14 — `suppress_optres_payload_bodies_for_match` (the
     /// name older notes use for the `takes_payload = true` call, whose last
     /// caller B-2026-09-28-28 turned into this one) with the caller's verdict
@@ -19529,6 +19569,9 @@ impl<'ctx> super::Codegen<'ctx> {
             for sub in patterns {
                 if let PatternKind::Binding(b) = &sub.kind {
                     self.payload_vars.param_payload_arm_views.insert(b.clone());
+                    self.payload_vars
+                        .param_payload_arm_view_owner
+                        .insert(b.clone(), name.clone());
                 }
             }
             return;

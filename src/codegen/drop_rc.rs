@@ -114,6 +114,15 @@ pub(crate) struct DropRc<'ctx> {
     /// parent set is.
     pub(crate) cond_move_call_arg_sites: std::collections::HashSet<(usize, usize)>,
     pub(crate) seeding_call_arg_sites: bool,
+    /// B-2026-09-20-16 — the escaping sites whose value leaves the FRAME: a
+    /// function body's tail and a `return` operand, and the branch tails
+    /// under them, but not a call argument beneath one. A whole-payload view
+    /// of a callee-owned param handed out at such a site takes the param's
+    /// bodies with it; handed to a local or an argument it does not, because
+    /// neither registers bodies for a tuple. Span-keyed and never cleared,
+    /// as the parent set is.
+    pub(crate) cond_move_return_sites: std::collections::HashSet<(usize, usize)>,
+    pub(crate) seeding_return_sites: bool,
     /// B-2026-09-27-14 — the call-argument sites above whose one-hop
     /// projection tail DID hand its part over (the source's walk now skips
     /// it on that path), so the argument temp must own the merged value

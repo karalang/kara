@@ -1565,7 +1565,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // goes to the caller. The other two — `let` initializers and `return`
         // operands — are seeded per statement in `compile_stmt`.
         if let Some(tail) = func.body.final_expr.as_deref() {
-            self.note_escaping_site(tail);
+            self.note_frame_escaping_site(tail);
         }
         self.payload_vars.inline_option_payload_vars.clear();
         // B-2026-09-24-14 — the passthrough alias maps are keyed by a LOCAL's
@@ -1591,6 +1591,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.caller_retained_array_views.clear();
         self.payload_vars.arm_array_payload_seed_source.clear();
         self.payload_vars.param_payload_arm_views.clear();
+        self.payload_vars.param_payload_arm_view_owner.clear();
         self.payload_vars.cond_handback_array_params.clear();
         self.payload_vars.cond_handback_optres_params.clear();
         self.payload_vars.always_returned_locals = self.locals_returned_on_every_exit(func);

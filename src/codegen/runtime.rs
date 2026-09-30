@@ -14581,10 +14581,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// A DISCARDED `if` statement is deliberately not a seed. Its arm tails go
     /// nowhere, and treating one as a move would take a program that runs one
     /// body today to zero.
+    /// B-2026-09-20-16 — [`Self::note_escaping_site`] for a site whose value
+    /// leaves the frame (a body tail or a `return` operand); see
+    /// `DropRc::cond_move_return_sites`.
+    pub(super) fn note_frame_escaping_site(&mut self, expr: &Expr) {
+        let outer = std::mem::replace(&mut self.drop_rc.seeding_return_sites, true);
+        self.note_escaping_site(expr);
+        self.drop_rc.seeding_return_sites = outer;
+    }
+
     pub(super) fn note_escaping_site(&mut self, expr: &Expr) {
         if self.drop_rc.seeding_call_arg_sites {
             self.drop_rc
                 .cond_move_call_arg_sites
+                .insert((expr.span.offset, expr.span.length));
+        }
+        if self.drop_rc.seeding_return_sites {
+            self.drop_rc
+                .cond_move_return_sites
                 .insert((expr.span.offset, expr.span.length));
         }
         if !self
@@ -14644,12 +14658,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // each binding armed, dying in place.
             ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
                 let outer = std::mem::replace(&mut self.drop_rc.seeding_call_arg_sites, true);
+                let outer_ret = std::mem::replace(&mut self.drop_rc.seeding_return_sites, false);
                 for a in args {
                     if self.first_minting_branch_tail(&a.value).is_some() {
                         self.note_escaping_site(&a.value);
                     }
                 }
                 self.drop_rc.seeding_call_arg_sites = outer;
+                self.drop_rc.seeding_return_sites = outer_ret;
             }
             _ => {}
         }
@@ -14733,7 +14749,7 @@ impl<'ctx> super::Codegen<'ctx> {
             StmtKind::Assign { value, .. } => self.note_escaping_site(value),
             StmtKind::Expr(e) => {
                 if let ExprKind::Return(Some(inner)) = &e.kind {
-                    self.note_escaping_site(inner);
+                    self.note_frame_escaping_site(inner);
                 }
                 // B-2026-08-30-50 — a call in STATEMENT position
                 // (`one(if c { b } else { mk(11) });`, result discarded). Its
@@ -15692,6 +15708,23 @@ impl<'ctx> super::Codegen<'ctx> {
             .contains(&(expr.span.offset, expr.span.length))
         {
             return;
+        }
+        // B-2026-09-20-16 — a whole-payload view handed out of the frame,
+        // bare or inside the aggregate the frame returns.
+        if self
+            .drop_rc
+            .cond_move_return_sites
+            .contains(&(expr.span.offset, expr.span.length))
+        {
+            let mut names: Vec<String> = Vec::new();
+            if let ExprKind::Identifier(n) = &expr.kind {
+                names.push(n.clone());
+            } else {
+                Self::collect_aggregate_literal_sources(expr, &mut names);
+            }
+            for n in names {
+                self.disarm_callee_owned_payload_walk_for_returned_view(&n);
+            }
         }
         self.disarm_escaping_tail_projection(expr);
         self.clear_cond_move_flags_for_tail_sources(expr);

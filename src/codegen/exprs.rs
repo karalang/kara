@@ -1449,6 +1449,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         let mut sources = Vec::new();
                         Self::collect_aggregate_literal_sources(e, &mut sources);
                         for n in sources {
+                            // B-2026-09-20-16 — `return Some(t)` / `return
+                            // (t, 1)`: the view leaves inside the result.
+                            self.disarm_callee_owned_payload_walk_for_returned_view(&n);
                             if !self.guard_user_drop_for_nested_return(&n) {
                                 self.suppress_user_drop_for_var(&n);
                             }
@@ -1474,6 +1477,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.share_tuple_elem_shared_ref_for_return(object, *index, v);
                     }
                     if let ExprKind::Identifier(name) = &e.kind {
+                        // B-2026-09-20-16 — `return t` of a view of a
+                        // callee-owned param's payload takes the bodies.
+                        self.disarm_callee_owned_payload_walk_for_returned_view(name);
                         // B-2026-08-28-65 — a `return r;` NESTED in a branch
                         // moves `r` only on the path that takes it, but the
                         // removal below is a compile-time frame retraction and

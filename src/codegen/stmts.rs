@@ -4456,6 +4456,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 temps: Vec::new(),
             });
         let out = self.compile_stmt_tracking_assign_target(stmt);
+        // B-2026-09-20-16 — a plain rebind of a callee-owned payload view
+        // (`let u = t;`) is the same view under a new name, so a later
+        // `return u` must reach the same param walk. The two element-bodies
+        // rebind sites above carry this for the shapes they handle; a TUPLE
+        // payload reaches neither, which is the shape this row is about.
+        if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+            if let (PatternKind::Binding(dst), ExprKind::Identifier(src)) =
+                (&pattern.kind, &value.kind)
+            {
+                if self
+                    .payload_vars
+                    .param_payload_arm_views
+                    .contains(src.as_str())
+                {
+                    if let Some(o) = self
+                        .payload_vars
+                        .param_payload_arm_view_owner
+                        .get(src.as_str())
+                        .cloned()
+                    {
+                        self.payload_vars
+                            .param_payload_arm_views
+                            .insert(dst.clone());
+                        self.payload_vars
+                            .param_payload_arm_view_owner
+                            .insert(dst.clone(), o);
+                    }
+                }
+            }
+        }
         // B-2026-09-27-131 — see `PayloadVars::pending_optres_handon`.
         if let Some((dst, f)) = self.payload_vars.pending_optres_handon.take() {
             if out.is_ok() {
@@ -9756,6 +9786,20 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.payload_vars
                                         .param_payload_arm_views
                                         .insert(var_name.clone());
+                                    // B-2026-09-20-16 — carry the owning param, so a `return`
+                                    // of the rebind stands the param's walk down as well.
+                                    if let ExprKind::Identifier(src) = &value.kind {
+                                        if let Some(o) = self
+                                            .payload_vars
+                                            .param_payload_arm_view_owner
+                                            .get(src.as_str())
+                                            .cloned()
+                                        {
+                                            self.payload_vars
+                                                .param_payload_arm_view_owner
+                                                .insert(var_name.clone(), o);
+                                        }
+                                    }
                                 } else {
                                     self.payload_vars
                                         .param_payload_arm_views
@@ -10944,6 +10988,20 @@ impl<'ctx> super::Codegen<'ctx> {
                                         self.payload_vars
                                             .param_payload_arm_views
                                             .insert(var_name.clone());
+                                        // B-2026-09-20-16 — carry the owning param, so a `return`
+                                        // of the rebind stands the param's walk down as well.
+                                        if let ExprKind::Identifier(src) = &value.kind {
+                                            if let Some(o) = self
+                                                .payload_vars
+                                                .param_payload_arm_view_owner
+                                                .get(src.as_str())
+                                                .cloned()
+                                            {
+                                                self.payload_vars
+                                                    .param_payload_arm_view_owner
+                                                    .insert(var_name.clone(), o);
+                                            }
+                                        }
                                     } else {
                                         self.payload_vars
                                             .param_payload_arm_views

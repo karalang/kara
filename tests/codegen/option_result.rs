@@ -3544,26 +3544,25 @@ fn e2e_optres_arg_payload_projection_runs_each_part_body_once() {
                 "dH5\ndH6\ngot:11\nend\n",
             ),
             (
-                // DIVERGENT AND PRE-EXISTING, not this row's -- B-2026-09-20-16. The
-                // arm returns the payload WHOLE, so no projection is involved and
-                // B-2026-09-19-34's narrowing declines by construction; the callee-owned
-                // walk stays armed over both parts the caller has just been handed and
-                // runs both bodies a second time. Measured identical before and after
-                // that fix.
+                // B-2026-09-20-16 — the arm returns the payload WHOLE, so no
+                // projection is involved and B-2026-09-19-34's narrowing declines by
+                // construction. The callee-owned walk stayed armed over both parts the
+                // caller had just been handed and ran both bodies a second time
+                // (pre-fix AOT `dH5 dH6 got:5 dH5 dH6 end`). The walk now stands down
+                // at the `return`, on the returning path only.
                 //
-                // THE OBVIOUS GATE IS THE WRONG ONE, which is why this is a row rather
-                // than a line in that fix. `optres_arm_takes_whole_payload` is already
-                // computed at the call site and is true here -- and equally true of the
-                // `forwarded-whole` cell above, which B-2026-09-10-9 measured LOSING
-                // both bodies when the walk is stood down.
-                "boxed-projection-whole-binding-returned-doubles",
+                // THE OBVIOUS GATE WAS THE WRONG ONE. `optres_arm_takes_whole_payload`
+                // is equally true of the `forwarded-whole` cell above, which
+                // B-2026-09-10-9 measured LOSING both bodies when the walk is stood
+                // down, so the disarm keys on the value leaving the FRAME instead.
+                "boxed-projection-whole-binding-returned",
                 format!(
                     "{R}struct H {{ id: i64, s: String }}\n\
                      impl Drop for H {{ fn drop(mut ref self) {{ println(f\"dH{{self.id}}\") }} }}\n\
                      fn eat(o: Option[(H, H)]) -> (H, H) {{ match o {{ Some(t) => {{ return t; }} None => {{ return (H {{ id: 0, s: \"zzzzzzzzzzzz\" }}, H {{ id: 1, s: \"zzzzzzzzzzzz\" }}); }} }} }}\n\
                      fn main() {{ let got = eat(Some((H {{ id: 5, s: \"aaaaaaaaaaaa\" }}, H {{ id: 6, s: \"bbbbbbbbbbbb\" }}))); println(f\"got:{{got.0.id}}\"); println(\"end\") }}\n"
                 ),
-                "dH5\ndH6\ngot:5\ndH5\ndH6\nend\n",
+                "got:5\ndH5\ndH6\nend\n",
                 "got:5\ndH5\ndH6\nend\n",
             ),
             (

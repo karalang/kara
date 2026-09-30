@@ -468,6 +468,13 @@ pub(crate) struct PayloadVars<'ctx> {
     /// Cleared per function with its siblings; a later `let` of the same name
     /// that is not such a rebind removes it.
     pub(crate) param_payload_arm_views: std::collections::HashSet<String>,
+    /// B-2026-09-20-16 — for each member of `param_payload_arm_views` that is
+    /// a view of a CALLEE-OWNED param's payload, the param whose walk owns
+    /// the bodies. A `return` of such a view hands the payload to the caller,
+    /// so the param's walk stands down on that path (see the `Return` arm in
+    /// `exprs.rs`). Read only after a membership check on the set, which is
+    /// what keeps an entry from outliving the view it names.
+    pub(crate) param_payload_arm_view_owner: HashMap<String, String>,
     /// B-2026-09-23-15 — caller-retained by-value `Array` params that THIS
     /// frame conditionally hands back and so owns outright (bodies and memory,
     /// under the per-path flag `compile_function` registers). The caller
