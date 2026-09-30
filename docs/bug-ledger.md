@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 607 |
 | run-vs-build | 558 |
-| leak | 504 |
+| leak | 505 |
 | double-free | 377 |
 | missing-feature | 215 |
 | codegen-gap | 206 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2479 |
+| codegen | 2480 |
 | interp | 745 |
 | typecheck | 319 |
 | other | 112 |
@@ -131,7 +131,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-09-20-18 | 2026-09-20 | codegen+interp | medium | TWO GUARDED `Some` ARMS OVER ONE SCRUTINEE, EACH TAKING A DIFFERENT PAYLOAD ELEMENT, ARE WRONG ON EVERY SURFACE AND THE PAYLOAD'S WIDTH PICKS THE DIRECTION -- at the INLINE width all four lose the untaken sibling's body (`got:5 dR5 end` against a due `dR6 got:5 dR5 end`, an AGREED fault); at the BOXED width the interpreter loses it while the three compiled surfaces DOUBLE the taken one, so neither backend is an oracle; every consumer of an arm's take rewrites state that is not edge-sensitive, so the last arm to write decides, and B-2026-09-19-34's narrowing declines here deliberately because masking one arm's element would LOSE the other's | — |
-| B-2026-09-20-23 | 2026-09-20 | codegen | medium | A NAMED-LOCAL `Option`/`Result` ARGUMENT'S PAYLOAD `Drop` BODIES DRAIN AT THE CALLER'S SCOPE EXIT RATHER THAN AT THE CALLEE'S ARM -- `let a = [W1 { v: 40 }]; take(Some(a))` prints `r:40 end dW1_40` on all three compiled surfaces against the interpreter's due `dW1_40 r:40 end`, while the FRESH-TEMP spelling of the identical call is correct on all four since B-2026-09-20-9, so PROVENANCE is the axis; the count is right and valgrind is clean at -O0, so only a due-sequence oracle sees it, and the open question is which provenance is wrong -- the site's own model says the caller RETAINS these bodies, but the two provenances now drain at different points for the same value | — |
 | B-2026-09-20-25 | 2026-09-20 | codegen | medium | A STRUCT FIELD READ THROUGH AN ARRAY OR `Vec` INDEX INSIDE A TUPLE ELEMENT NEVER LOWERS -- `a.0[0].n` over `(Array[P, 1], i64)` passes `karac check`, runs correctly under `--interp`, and fails `karac build` with `cannot resolve field 'n' on this receiver (its type was not recorded for codegen)`; naming the field instead of indexing the tuple builds, a tuple holding a plain struct builds, and a bare array of the same struct builds, so it is the TUPLE-INDEX-then-CONTAINER-INDEX composition alone; B-2026-08-28-34 fixed the same pair in the OTHER ORDER (`v[0].0.id`) and every other member of that family is closed | — |
 | B-2026-09-20-26 | 2026-09-20 | codegen+interp | medium | REBINDING A USER ENUM'S CONTAINER PAYLOAD INTO A LOCAL INSIDE THE ARM RUNS EVERY ELEMENT'S `Drop` BODY TWICE, AND MOVING THE SAME BINDING INTO A CALL DOES NOT -- `match e { EArr.A(v) => { let u = v; .. } }` over `enum EArr { A(Array[R, 2]), B }` prints `dR1 dR2 dR1 dR2` on ALL FOUR SURFACES at a let-bound scrutinee, where `eat(v)` over the identical binding is correct everywhere; the `Vec` spelling doubles on the INTERPRETER only, and at a BY-VALUE PARAM scrutinee the same shapes double on the COMPILED side instead, so the wrong backend is selected by the scrutinee position rather than the payload; a plain-struct payload is correct at every position, a second rebind still fires exactly twice, and memory is clean under valgrind at -O0 with the doubled body reading its `String` correctly both times, so it is the bodies channel alone and neither ASAN ratchet can see it | — |
 | B-2026-09-20-27 | 2026-09-20 | codegen+interp | medium | THE DISPLACED ELEMENT'S USER `Drop` BODY NEVER RUNS AT A NESTED STORE `d[i][j] = x`, ON ALL FOUR SURFACES -- `Vec[Vec[S]]` and `Vec[Vec[Array[D, 1]]]` print only the SURVIVOR's body at scope exit, while the SINGLE-level `a[i] = x` over the same element runs both bodies correctly on every surface since B-2026-09-16-2/`021b83f`, so the gap is the nested POSITION and not the element shape -- and a 2x2 over {narrow, wide} x {single, nested} pins it further: a `struct N { k: i64 }` with NO heap anywhere loses the body at the nested store while reading 11/11 allocs/frees, so the defect is INVISIBLE to valgrind and to both ASAN ratchets and the memory half's width condition cannot be the gate for this one; it is an AGREED FAULT, so no A/B against the interpreter sees it and only a hand-derived due sequence does, and the naive fix is a REGRESSION rather than a partial win -- running the body from the codegen side alone was measured to turn the agreed silence into a run-vs-build divergence (`dS1:5|dS2:10|end` compiled against `dS2:10|end` interpreted), which is why B-2026-09-16-3's memory fix deliberately passes `run_bodies: false` and leaves this half here | — |
@@ -470,6 +469,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-80 | 2026-09-30 | codegen | medium | `Vec.contains` ON A COLLECTION-LITERAL, BLOCK OR BRANCH RECEIVER FAILS TO COMPILE -- `[1, 3].contains(3)`, `{ mk(3) }.contains(3)` and `(match c { true => mk(1), false => mk(3) }).contains(3)` each stop at `codegen: no handler for method 'contains' on non-identifier receiver` on jit, -O0 and -O2 auto-par, while `--interp` prints `true` and the call receiver `mk(3).contains(3)` compiles | — |
 | B-2026-09-30-81 | 2026-09-30 | codegen+interp | high | A BLOCK OR BRANCH ARGUMENT WHOSE VALUE IS A `Vec` OF `Drop` ELEMENTS RUNS NO ELEMENT BODY ON ANY SURFACE -- `tv(if c { mk1() } else { mk1() })` and `tv({ [mw(8)] })` over `fn tv(x: Vec[W]) -> i64` print `v5 w8 end` on all five surfaces where `d5` and `d8` are due after each call, while the direct literal `tv([mw(2), mw(3)])` prints `d2 d3` as it should; memory is clean | — |
 | B-2026-09-30-82 | 2026-09-30 | codegen | medium | REMAINDER OF B-2026-09-30-58: A BRANCH ARGUMENT WHERE ONE ARM'S COLLECTION LITERAL HOLDS A HEAP PLACE STILL LEAKS THE TAKEN ARM'S BUFFER ON EVERY COMPILED SURFACE -- `vs(if c { [s] } else { [ms(1)] })` over `fn vs(x: Vec[String])` loses 1 block at -O0 on the path that does not move `s`; output right everywhere | — |
+| B-2026-09-30-70 | 2026-09-30 | codegen | medium | A FRESH `Ok([..])` ARGUMENT TO A BY-VALUE `Result[Array[P, 1], E]` PARAM LEAKS THE ELEMENT'S `String` AT `-O0` -- `take(Ok([P2 { v: 42, tag: f"t{1}" }]))` loses 2 B in 1 block with no user `Drop` anywhere and whether or not the callee matches, while the `Option` twin, the boxed `Array[P, 2]` payload, a struct payload and the named-local `Ok(a)` spelling are all clean; stdout is correct, so only a leak gate sees it | — |
 
 ### Relocated
 
@@ -3104,6 +3104,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-20-20 | codegen | medium | A CALL RESULT THAT RETURNS THE WHOLE `Option` DOUBLES THE MOVED-OUT FIELD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `take(mkq())` over `fn mkq() ->… | 05343f465 |
 | B-2026-09-20-21 | codegen | high | COMPOSITION CHANGES THE ANSWER IN THE `Drop`-BODY-OWNERSHIP FAMILY: a boxed TUPLE `Option` payload's surviving element runs its `Drop` body twice and… | 24b0a92f6 |
 | B-2026-09-20-22 | codegen | medium | A `shared`-FIELD STRUCT WITH AN `impl Drop` RUNS ITS BODY TWICE ON THE VALUE AN ASSIGNMENT MOVES IN, when the RHS is a match-arm binding -- `out = w`… | 36753943a |
+| B-2026-09-20-23 | codegen | medium | A NAMED-LOCAL `Option`/`Result` ARGUMENT'S PAYLOAD `Drop` BODIES DRAIN AT THE CALLER'S SCOPE EXIT RATHER THAN AT THE CALLEE'S ARM -- `let a = [W1 { v… | 60db124 |
 | B-2026-09-20-24 | codegen+interp | medium | AN OWNED PARAMETER OF A NAMELESS AGGREGATE TYPE -- A TUPLE, AN `Array[T, N]` OR A `Vec[T]` -- RUNS NONE OF ITS ELEMENTS' USER `Drop` BODIES WHEN THE… | 6ec7eb903 |
 | B-2026-09-20-29 | codegen | medium | `expr_cannot_carry_container_heap` IS MISSING TWO ARMS AND ENDS IN `_ => false`, SO AN INDEX STORE WHOSE RHS MENTIONS ITS OWN CONTAINER LEAKS THE DIS… | 6e342a3 |
 | B-2026-09-20-38 | codegen | high | A BOXED GENERIC-ENUM PAYLOAD FORWARDED THROUGH A GENERIC MIDDLE FUNCTION IS FREED BY THE INNER MONOMORPH WHILE THE CALLER STILL OWNS IT -- `fn gfwd[T… | caffdbba3 |
