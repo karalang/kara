@@ -14931,6 +14931,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     return None;
                 }
+                // B-2026-09-20-25 — a container held in a TUPLE element
+                // (`t.0[0].n`), through the same resolver the read uses.
+                if let ExprKind::TupleIndex { .. } = &object.kind {
+                    if let Some(TypeKind::Path(p)) =
+                        self.vec_index_elem_type_expr(object).map(|te| te.kind)
+                    {
+                        return p.segments.last().cloned();
+                    }
+                }
                 None
             }
             ExprKind::FieldAccess { object, field } => {

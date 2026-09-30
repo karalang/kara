@@ -3930,6 +3930,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 vec_inner_type_expr(&field_te)
                     .or_else(|| self.array_elem_and_len(&field_te).map(|(elem, _n)| elem))
             }
+            // B-2026-09-20-25 — `t.0[i]`: a container held in a TUPLE element.
+            // The arms above cover a container reached through a binding, an
+            // index and a named field, and this is the one hop left: without
+            // it `a.0[0].n` over `(Array[P, 1], i64)` failed `karac build` on
+            // the "cannot resolve field" guard while `karac check` accepted it
+            // and the interpreter answered it, and naming the field instead
+            // (`a.a[0].n` on a struct) built. The element's `TypeExpr` comes
+            // from the same chain resolver the tuple-index receiver reads, and
+            // the container peel is the field arm's, `Array` included.
+            ExprKind::TupleIndex {
+                object: tuple,
+                index: hop,
+            } => {
+                let elem_te = self
+                    .place_chain_tuple_tes(tuple)?
+                    .get(*hop as usize)
+                    .cloned()?;
+                let elem_te = self.subst_monomorph_type_params(&elem_te);
+                vec_inner_type_expr(&elem_te)
+                    .or_else(|| self.array_elem_and_len(&elem_te).map(|(elem, _n)| elem))
+            }
             _ => None,
         }
     }

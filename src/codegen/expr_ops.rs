@@ -5627,6 +5627,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => None,
                     }
                 }
+                // B-2026-09-20-25 — a container held in a TUPLE element
+                // (`a.0[0].n`); see `vec_index_elem_type_expr`'s arm.
+                ExprKind::TupleIndex { .. } => {
+                    match self.vec_index_elem_type_expr(object).map(|te| te.kind) {
+                        Some(TypeKind::Path(p)) => p.segments.last().cloned(),
+                        _ => None,
+                    }
+                }
                 _ => None,
             },
             // Call-chain field access: `expr.method().field` / `func().field`
