@@ -13840,6 +13840,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(())
             }
             StmtKind::Assign { target, value } => {
+                // B-2026-09-30-6 — see `DropRc::assigned_names`.
+                if let ExprKind::Identifier(n) = &target.kind {
+                    self.drop_rc.assigned_names.insert(n.clone());
+                }
                 // `f = g;` moves g's container value into f — retract g's
                 // bodies action, same rule as the Let-arm hook above (the
                 // reassign shape double-printed the payload body on both
@@ -15146,7 +15150,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                                 if self.has_armed_container_elem_bodies(name.as_str()) {
                                     if let Some(w) = walker {
-                                        self.builder.build_call(w, &[slot.ptr.into()], "").unwrap();
+                                        self.call_displaced_walk_on_handoff_paths(
+                                            name.as_str(),
+                                            w,
+                                            slot.ptr,
+                                        );
                                     }
                                 }
                             }
@@ -15221,9 +15229,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .armed_reversed_container_elem_bodies(name.as_str())
                                     .or_else(|| self.emit_optres_payload_user_drop_bodies_fn(&te))
                                 {
-                                    self.builder
-                                        .build_call(bodies, &[slot.ptr.into()], "")
-                                        .unwrap();
+                                    self.call_displaced_walk_on_handoff_paths(
+                                        name.as_str(),
+                                        bodies,
+                                        slot.ptr,
+                                    );
                                 }
                                 // B-2026-09-17-14 — the reversal belonged to
                                 // the destructured value just displaced; the

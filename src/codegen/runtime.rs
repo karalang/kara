@@ -17467,14 +17467,43 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the same flag at the let-move, keeping-call and match-arm hand-offs
     /// disturbed fixtures whose other readers treat the flag's mere presence
     /// as a signal (B-2026-09-29-95's remainder).
+    /// B-2026-09-30-6 — the per-path bit a nested hand-off cleared for `name`
+    /// ([`DropRc::handoff_flags`]), while it is still the binding's bit.
+    pub(super) fn handoff_flag_for(&self, name: &str) -> Option<PointerValue<'ctx>> {
+        let flag = self.drop_rc.handoff_flags.get(name).copied()?;
+        (self.drop_rc.cond_move_drop_flags.get(name) == Some(&flag)).then_some(flag)
+    }
+
+    /// B-2026-09-30-6 — call a reassignment's displaced-payload walk only on
+    /// the paths a nested hand-off did not take the payload on, then re-arm
+    /// the bit: the stored value owns its payload on every path.
+    pub(super) fn call_displaced_walk_on_handoff_paths(
+        &mut self,
+        name: &str,
+        walker: FunctionValue<'ctx>,
+        slot: PointerValue<'ctx>,
+    ) {
+        let flag = self.handoff_flag_for(name);
+        let guard = flag.and_then(|f| self.open_guard_on_flag(f));
+        self.builder.build_call(walker, &[slot.into()], "").unwrap();
+        self.close_cond_move_guard(guard);
+        if let Some(f) = flag {
+            let bool_t = self.context.bool_type();
+            let _ = self.builder.build_store(f, bool_t.const_int(1, false));
+        }
+    }
+
     pub(super) fn suppress_container_elem_bodies_for_receiver(&mut self, name: &str) {
         let live = self
             .variables
             .get(name)
             .map(|v| v.ptr)
             .filter(|_| self.payload_vars.shadowed_top_level_locals.contains(name));
+        // B-2026-09-30-6 — see `DropRc::assigned_names`.
+        let reassigned_mut =
+            self.drop_rc.mut_let_names.contains(name) && self.drop_rc.assigned_names.contains(name);
         if !self.drop_rc.cond_store_flag_params.contains(name)
-            && !self.drop_rc.mut_let_names.contains(name)
+            && !reassigned_mut
             && self.container_bodies_in_enclosing_frame(name, live)
         {
             if let Some(flag) = self.cond_move_drop_flag_for(name) {

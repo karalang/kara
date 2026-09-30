@@ -159,6 +159,14 @@ pub(crate) struct DropRc<'ctx> {
     /// `let mut t = E.A(mks(1)); if c { t.m1() }; t = E.A(mks(2))` ran `dS1`
     /// a second time at the reassignment on the path that called.
     pub(crate) mut_let_names: HashSet<String>,
+    /// B-2026-09-30-6 — names a plain `name = ..` assignment has been compiled
+    /// for so far in the current function. A `let mut` name takes the per-path
+    /// flag at a nested hand-off only while this does not hold it: every
+    /// reassignment compiled AFTER the hand-off consults the flag (the
+    /// displaced-bodies legs in stmts.rs), but one compiled before it -- the
+    /// top of a loop body the hand-off sits later in -- cannot, and would walk
+    /// the consumed payload again on the next trip.
+    pub(crate) assigned_names: HashSet<String>,
     /// B-2026-09-23-23 — the GENERATION each `cond_move_drop_flags` bit was
     /// created for: the binding's slot at the move site that made it, or
     /// `None` once two generations of one name have asked for it.
