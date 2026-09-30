@@ -2508,6 +2508,12 @@ struct RebindWalk {
     /// like an associated-function call, and only [`param_wrap_aliases`], which
     /// may hold the program, can tell the two apart.
     ctor_wraps: Vec<(String, String, Expr, ParamPath)>,
+    /// B-2026-09-30-27 — `let x = [y, ..]` / `let x: Vec[T] = [y, ..]` /
+    /// `let x = vec![y, ..]`: `x` WRAPS `y` inside an ARRAY or COLLECTION
+    /// literal, as `(x, y, path)` where `path` is any struct / tuple nesting
+    /// inside the element. The element layer adds nothing to the path, as an
+    /// enum payload's does not: no place chain projects through an index.
+    coll_wraps: Vec<(String, String, ParamPath)>,
     /// `let x = y.f.g` / `let x = y.0`: `x` REBINDS the part of `y` at `path`.
     /// Read back against a wrap: `let q = p.r` after `let p = P2 { r: r, .. }`
     /// makes `q` the param itself again (an empty remaining path).
@@ -2586,6 +2592,19 @@ impl RebindWalk {
                     if let (false, PatternKind::Binding(x)) = (*is_mut, &pattern.kind) {
                         let mut path: ParamPath = Vec::new();
                         Self::collect_wrap_sources(value, &mut path, x, &mut self.wraps);
+                        let elems: &[Expr] = match &value.kind {
+                            ExprKind::ArrayLiteral(elems) => elems,
+                            ExprKind::PrefixCollectionLiteral { items, .. } => items,
+                            _ => &[],
+                        };
+                        for el in elems {
+                            if let ExprKind::Identifier(y) = &el.kind {
+                                self.coll_wraps.push((x.clone(), y.clone(), Vec::new()));
+                            } else {
+                                let mut path: ParamPath = Vec::new();
+                                Self::collect_wrap_sources(el, &mut path, x, &mut self.coll_wraps);
+                            }
+                        }
                         if let ExprKind::Call { callee, args } = &value.kind {
                             for a in args {
                                 let mut inner: Vec<(String, String, ParamPath)> = Vec::new();
@@ -2785,6 +2804,7 @@ fn rebind_walk_raw(f: &Function) -> RebindWalk {
         mut_rebinds: Vec::new(),
         wraps: Vec::new(),
         ctor_wraps: Vec::new(),
+        coll_wraps: Vec::new(),
         proj_rebinds: Vec::new(),
         call_rebinds: Vec::new(),
         destructured: Vec::new(),
@@ -3106,6 +3126,20 @@ fn param_wrap_aliases_impl(
                 .iter()
                 .filter(|(_, _, c, _)| with_ctor && ctor_ok(c))
                 .map(|(x, y, _, path)| (x.clone(), y.clone(), path.clone())),
+        )
+        // B-2026-09-30-27 — an array / collection literal wraps its elements
+        // as an enum constructor wraps its payload, and is asked for on the
+        // same terms: only by the ALL-paths predicates (`with_ctor`), never by
+        // the union, and not by the conditional hand-back (`!user_variants`),
+        // whose per-path carrier walks an `Option` / `Result` wrapper and has
+        // no arm for an array's elements. Without it `let v: Vec[R] = [a, b];
+        // return v` stood no caller down, and `a` and `b` ran their bodies in
+        // the caller AND over the result, on every surface.
+        .chain(
+            w.coll_wraps
+                .iter()
+                .filter(|_| with_ctor && user_variants)
+                .cloned(),
         )
         .collect();
     let mut out: Vec<(String, ParamPath)> = Vec::new();
