@@ -878,9 +878,22 @@ fn classify_call(f: &str, args: &[crate::ast::CallArg], fr: &FrameOwned, cx: &mu
 /// `let q = a;` — the flag is keyed by the parameter's own name, so a rebind
 /// hands over something the clear never sees — and not granted to a name the
 /// walk also forbids (reassigned, or shadowed by a pattern).
+///
+/// B-2026-09-29-120 — a THIRD admitted shape: a nested struct field of the
+/// enclosing frame's CALLER-RETAINED by-value param (`maybe(q.u, b)`), or an
+/// immutable local bound once straight from one (`let x = q.u; maybe(x, b)`).
+/// The call site passes such an argument as a CLONE
+/// (`clone_caller_retained_struct_field_for_return`), and a clone has no
+/// caller-side owner at all, so there is nothing to retract and the callee's
+/// per-path ownership is the only one. Declined, the field went in as the
+/// caller's own words and the handing path's result released the buffer the
+/// caller frees whole. `clone_on_pass(type, field)` is the codegen-side
+/// answer to "does that call site clone this field?", asked of the param's
+/// declared type so the two sides cannot disagree.
 pub(crate) fn compute_handback_safe_params(
     program: &Program,
     self_owned: &FxHashSet<(String, String)>,
+    clone_on_pass: &dyn Fn(&str, &str) -> bool,
 ) -> FxHashSet<ParamKey> {
     let mut live: FxHashSet<ParamKey> = FxHashSet::default();
     let mut fns: FxHashMap<String, (usize, bool)> = FxHashMap::default();
@@ -976,6 +989,16 @@ pub(crate) fn compute_handback_safe_params(
         let mut forbidden: FxHashSet<String> = FxHashSet::default();
         let mut owned_here: FxHashSet<String> = FxHashSet::default();
         forbidden.insert("self".to_string());
+        // B-2026-09-29-120 — by-value params by their declared (non-generic,
+        // single-segment) type name, for the clone-on-pass field shape.
+        let mut param_types: FxHashMap<String, String> = FxHashMap::default();
+        for p in params {
+            if let (Some(n), TypeKind::Path(tp)) = (p.name(), &p.ty.kind) {
+                if tp.segments.len() == 1 && tp.generic_args.as_ref().is_none_or(|a| a.is_empty()) {
+                    param_types.insert(n.to_string(), tp.segments[0].clone());
+                }
+            }
+        }
         for p in params {
             if let Some(n) = p.name() {
                 if region_key
@@ -998,11 +1021,30 @@ pub(crate) fn compute_handback_safe_params(
         let mut callees: FxHashSet<*const Expr> = FxHashSet::default();
         let mut mentions: Vec<(String, *const Expr)> = Vec::new();
         let mut let_bound: FxHashSet<String> = FxHashSet::default();
+        // B-2026-09-29-120 — names re-bound by a pattern or written through,
+        // kept apart from `forbidden` (which already holds every param) so a
+        // param shadowed or reassigned can be told from one that is not.
+        let mut rebound: FxHashSet<String> = FxHashSet::default();
+        let mut let_count: FxHashMap<String, usize> = FxHashMap::default();
+        let mut views: FxHashMap<String, (String, String)> = FxHashMap::default();
         let mut collect = |n| match n {
             Node::Stmt(st) => match &st.kind {
-                StmtKind::Let { pattern, value, .. } => {
+                StmtKind::Let {
+                    pattern,
+                    value,
+                    is_mut,
+                    ..
+                } => {
                     if let PatternKind::Binding(b) = &pattern.kind {
                         let_bound.insert(b.clone());
+                        *let_count.entry(b.clone()).or_default() += 1;
+                        if let (false, ExprKind::FieldAccess { object, field }) =
+                            (*is_mut, &value.kind)
+                        {
+                            if let ExprKind::Identifier(o) = &object.kind {
+                                views.insert(b.clone(), (o.clone(), field.clone()));
+                            }
+                        }
                         match &value.kind {
                             ExprKind::Call { .. }
                             | ExprKind::MethodCall { .. }
@@ -1015,24 +1057,24 @@ pub(crate) fn compute_handback_safe_params(
                             _ => {}
                         }
                     } else {
-                        pattern_names(&pattern.kind, &mut forbidden);
+                        pattern_names(&pattern.kind, &mut rebound);
                     }
                 }
-                StmtKind::LetElse { pattern, .. } => pattern_names(&pattern.kind, &mut forbidden),
+                StmtKind::LetElse { pattern, .. } => pattern_names(&pattern.kind, &mut rebound),
                 StmtKind::LetUninit { name, .. } => {
-                    forbidden.insert(name.clone());
+                    rebound.insert(name.clone());
                 }
                 // A name ever written through is not the value its `let`
                 // produced, so it stops being a retractable fresh temp.
                 StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } => {
                     if let Some(r) = place_root(target) {
-                        forbidden.insert(r.to_string());
+                        rebound.insert(r.to_string());
                     }
                 }
                 StmtKind::MultiAssign { targets, .. } => {
                     for t in targets {
                         if let Some(r) = place_root(t) {
-                            forbidden.insert(r.to_string());
+                            rebound.insert(r.to_string());
                         }
                     }
                 }
@@ -1041,15 +1083,15 @@ pub(crate) fn compute_handback_safe_params(
             Node::Expr(e) => match &e.kind {
                 ExprKind::IfLet { pattern, .. }
                 | ExprKind::WhileLet { pattern, .. }
-                | ExprKind::For { pattern, .. } => pattern_names(&pattern.kind, &mut forbidden),
+                | ExprKind::For { pattern, .. } => pattern_names(&pattern.kind, &mut rebound),
                 ExprKind::Match { arms, .. } => {
                     for a in arms {
-                        pattern_names(&a.pattern.kind, &mut forbidden);
+                        pattern_names(&a.pattern.kind, &mut rebound);
                     }
                 }
                 ExprKind::Closure { params, .. } => {
                     for cp in params {
-                        pattern_names(&cp.pattern.kind, &mut forbidden);
+                        pattern_names(&cp.pattern.kind, &mut rebound);
                     }
                 }
                 ExprKind::Call { callee, args } => {
@@ -1099,6 +1141,17 @@ pub(crate) fn compute_handback_safe_params(
                 poisoned.insert(n);
             }
         }
+        forbidden.extend(rebound.iter().cloned());
+        // B-2026-09-29-120 — `p.f` over a caller-retained by-value param `p`
+        // that nothing in this body shadows or writes, whose field the call
+        // site clones.
+        let field_of_param = |o: &str, field: &str| {
+            !let_bound.contains(o)
+                && !rebound.contains(o)
+                && param_types
+                    .get(o)
+                    .is_some_and(|ty| clone_on_pass(ty.as_str(), field))
+        };
         // B-2026-09-25-41 — a `let` of the same name SHADOWS the parameter, and
         // the admission belongs to the parameter alone: the shadow is judged
         // as the local it is (fresh, or not).
@@ -1136,8 +1189,16 @@ pub(crate) fn compute_handback_safe_params(
                     | ExprKind::MethodCall { .. }
                     | ExprKind::StructLiteral { .. } => true,
                     ExprKind::Identifier(n) => {
-                        (fresh.contains(n.as_str()) || owned_here.contains(n.as_str()))
-                            && !forbidden.contains(n.as_str())
+                        ((fresh.contains(n.as_str()) || owned_here.contains(n.as_str()))
+                            && !forbidden.contains(n.as_str()))
+                            || (let_count.get(n.as_str()) == Some(&1)
+                                && !rebound.contains(n.as_str())
+                                && views
+                                    .get(n.as_str())
+                                    .is_some_and(|(o, fld)| field_of_param(o, fld)))
+                    }
+                    ExprKind::FieldAccess { object, field } => {
+                        matches!(&object.kind, ExprKind::Identifier(o) if field_of_param(o, field))
                     }
                     _ => false,
                 };

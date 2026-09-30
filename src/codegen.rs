@@ -8376,8 +8376,17 @@ impl<'ctx> Codegen<'ctx> {
         // every caller can give it up. B-2026-09-25-41 — a caller that owns the
         // param it hands on per path itself can give it up too.
         let self_owned = self.per_path_self_owned_params(program);
-        self.handback_safe_params =
-            crate::codegen::param_transfer::compute_handback_safe_params(program, &self_owned);
+        // B-2026-09-29-120 — and a caller-retained param's nested struct
+        // field, which the call site passes as a clone with no caller-side
+        // owner to retract.
+        let clone_on_pass =
+            |ty: &str, field: &str| self.caller_retained_type_field_head(ty, field).is_some();
+        let safe = crate::codegen::param_transfer::compute_handback_safe_params(
+            program,
+            &self_owned,
+            &clone_on_pass,
+        );
+        self.handback_safe_params = safe;
         // Collect SoA `layout` blocks BEFORE the state-machine emission below:
         // a persisted local that is SoA (a `layout`-named `Vec[E]` carried
         // across a suspend, e.g. the browser render loop's `grid`) must size its

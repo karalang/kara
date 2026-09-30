@@ -2231,16 +2231,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-09-29-101 — the generic twin of the free-fn site: a
                 // caller-retained param's struct field handed to a callee that
                 // returns that param on every path (`keep2[T](x: T) -> T`) is
-                // cloned, or the result aliases the caller's argument.
+                // cloned, or the result aliases the caller's argument. And
+                // (B-2026-09-29-120) one that returns it on SOME paths where
+                // the monomorph takes the memory per path. `generic_fn` counts
+                // a method's receiver among its params (index `i`), while the
+                // per-path predicate resolves the receiver-excluding AST
+                // (`ai`), so each is asked in its own convention.
                 let v = match ast_i {
                     Some(ai)
-                        if generic_fn.params.get(ai).is_some_and(|p| {
-                            !matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_))
-                        }) && crate::ast::fn_always_returns_param(
-                            self.program_snapshot.as_deref(),
-                            &generic_fn,
-                            ai,
-                        ) =>
+                        if by_value
+                            && (crate::ast::fn_always_returns_param(
+                                self.program_snapshot.as_deref(),
+                                &generic_fn,
+                                i,
+                            ) || self.type_name_of_expr(&a.value).is_some_and(|tn| {
+                                self.conditional_handback_memory_moves_to_mono_callee(
+                                    name, ai, &tn,
+                                )
+                            })) =>
                     {
                         self.clone_caller_retained_struct_field_for_return(&a.value, v)
                     }

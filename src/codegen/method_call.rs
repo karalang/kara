@@ -8929,11 +8929,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.clone_rc_fallback_optres_handback_arg(&qualified, pidx, &a.value, val);
                     // B-2026-09-29-101 — the method twin of the free-fn site:
                     // a caller-retained param's struct field handed to a
-                    // method that returns that param on every path is cloned.
+                    // method that returns that param on every path is cloned,
+                    // and on some paths where the method takes the memory per
+                    // path (B-2026-09-29-120).
                     let val = if self
                         .callee_param_ast(&qualified, pidx)
-                        .is_some_and(|(_, ai)| self.callee_always_returns_arg(&qualified, ai))
-                    {
+                        .is_some_and(|(_, ai)| {
+                            self.callee_always_returns_arg(&qualified, ai)
+                                || self.conditional_handback_memory_moves_to_callee(&qualified, ai)
+                        }) {
                         self.clone_caller_retained_struct_field_for_return(&a.value, val)
                     } else {
                         val

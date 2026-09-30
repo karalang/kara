@@ -2187,12 +2187,19 @@ impl<'ctx> super::Codegen<'ctx> {
             // clone, exactly as a `return` of the field does. A callee that
             // never returns the param (`eat(q.u)`) keeps receiving the view.
             //
-            // ALL paths, not some: a callee that returns the param on one path
-            // only (`if b { return s } mk(0)`) runs just the BODIES on the other
-            // and leaves the memory to this frame, which frees its argument and
-            // not a clone, so a clone there leaked its retained `shared` box
-            // (16 B at -O0). That conditional shape is still open.
-            let val = if borrow_skip || !self.callee_always_returns_arg(&name, i) {
+            // ALL paths, or SOME paths where the callee takes the memory per
+            // path (B-2026-09-29-120). A callee that returns the param on one
+            // path only (`if b { return s } mk(0)`) ran just the BODIES on the
+            // other and left the memory to this frame, which frees its argument
+            // and not a clone, so a clone there leaked its retained `shared`
+            // box (16 B at -O0). The hand-back gate now admits this argument
+            // shape (`compute_handback_safe_params`), so such a callee frees the
+            // clone on the path that keeps it and the result owns it on the
+            // other; where the gate still declines, no clone is made.
+            let val = if borrow_skip
+                || !(self.callee_always_returns_arg(&name, i)
+                    || self.conditional_handback_memory_moves_to_callee(&name, i))
+            {
                 val
             } else {
                 self.clone_caller_retained_struct_field_for_return(&a.value, val)
@@ -20447,14 +20454,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(type_name) = self.var_types.var_type_names.get(obj) else {
             return false;
         };
-        !self
-            .type_decls
-            .shared_types
-            .contains_key(type_name.as_str())
-            && self
-                .type_decls
-                .struct_types
-                .contains_key(type_name.as_str())
+        self.struct_type_is_caller_retained(type_name)
+    }
+
+    /// The TYPE half of [`Self::struct_param_is_caller_retained`]: a by-value
+    /// param of struct `type_name` is caller-retained. Split out so the
+    /// program-wide hand-back gate (B-2026-09-29-120) asks the same question
+    /// of a declared type, with no function context.
+    pub(super) fn struct_type_is_caller_retained(&self, type_name: &str) -> bool {
+        !self.type_decls.shared_types.contains_key(type_name)
+            && self.type_decls.struct_types.contains_key(type_name)
             && self.struct_owns_shared_field(type_name, &mut Vec::new())
             && !self.aggregate_param_copy_supported_struct(type_name, &mut Vec::new())
     }
@@ -20483,16 +20492,31 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         let type_name = self.var_types.var_type_names.get(obj)?.clone();
+        self.caller_retained_type_field_head(&type_name, field)
+    }
+
+    /// The TYPE half of [`Self::caller_retained_struct_field_head`]: the
+    /// nested struct head of `type_name.field` when a caller-retained by-value
+    /// param of that type hands the field out as a clone. B-2026-09-29-120's
+    /// program-wide hand-back gate asks this of a param's declared type.
+    pub(super) fn caller_retained_type_field_head(
+        &self,
+        type_name: &str,
+        field: &str,
+    ) -> Option<String> {
+        if !self.struct_type_is_caller_retained(type_name) {
+            return None;
+        }
         let idx = self
             .type_decls
             .struct_field_names
-            .get(&type_name)?
+            .get(type_name)?
             .iter()
             .position(|n| n == field)?;
         let fte = self
             .type_decls
             .struct_field_type_exprs
-            .get(&type_name)?
+            .get(type_name)?
             .get(idx)?
             .clone();
         let fte = self.subst_monomorph_type_params(&fte);
