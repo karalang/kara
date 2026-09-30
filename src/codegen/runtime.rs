@@ -17568,6 +17568,21 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-30-42 — does `name` hold a `StructFieldBodies` walk at all,
+    /// counting one a move has masked down to `__karac_dropbodies_none`?
+    /// [`Self::var_owns_struct_field_bodies`] answers whether any body is
+    /// still armed; this answers who the walk BELONGS to, which a mask does
+    /// not change. A by-value param holds one only when the callee owns it by
+    /// transfer.
+    pub(super) fn var_holds_struct_field_bodies_walk(&self, name: &str) -> bool {
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|action| {
+                matches!(action, CleanupAction::UserDrop { binding_name, kind, .. }
+                    if binding_name == name && *kind == UserDropKind::StructFieldBodies)
+            })
+        })
+    }
+
     /// B-2026-09-03-32 — fire a binding's `StructFieldBodies` walk NOW and
     /// retract the action, for a source a destructure has just consumed: the
     /// discards it still holds are destroyed as part of the statement rather

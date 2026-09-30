@@ -13395,6 +13395,20 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .contains(root)
                                         || (self.payload_vars.param_view_locals.contains(root)
                                             && self.var_owns_struct_field_bodies(root))
+                                        // B-2026-09-30-42 — a by-value param
+                                        // held by TRANSFER (`G[R]`, whose
+                                        // erased `T` field fails the entry
+                                        // copy) is the exception to "a param
+                                        // root owns no walk": the callee
+                                        // registered one of its own, which
+                                        // the move has just masked at this
+                                        // field, so the destination is the
+                                        // field's only owner. Asked of the
+                                        // walk's EXISTENCE, since the mask
+                                        // may have emptied it.
+                                        || (self.fn_ctx.current_fn_param_names.contains(root)
+                                            && !self.borrow_vars.ref_params.contains_key(root)
+                                            && self.var_holds_struct_field_bodies_walk(root))
                                 });
                             if self.field_move_out_source_is_param_view(value)
                                 && !src_owns_its_own_walk
@@ -18028,7 +18042,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let (src, tn) = (src.clone(), tn.clone());
                     let src_ptr = self.variables.get(src.as_str()).map(|v| v.ptr);
                     if let (Some(slot), Some(_)) = (self.variables.get(&name).copied(), src_ptr) {
-                        self.disarm_struct_field_bodies_at(&src, idx);
+                        self.mask_destructured_param_field_bodies(&src, fname, idx);
                         let has_wrapper = self
                             .program_snapshot
                             .as_deref()
@@ -18654,7 +18668,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(bodies) = self.arm_vec_payload_elem_bodies_fn(&elem_te, elem_ty)
                         {
                             let src = src.clone();
-                            self.disarm_struct_field_bodies_at(&src, idx);
+                            self.mask_destructured_param_field_bodies(&src, fname, idx);
                             self.track_user_drop_var_with_fn(
                                 "",
                                 &name,

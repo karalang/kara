@@ -13856,6 +13856,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-09-30-42 — a param held by TRANSFER owns this walk in
+                // the callee's frame; an arm on a branch masks it per path, or
+                // the path that never matched loses the field's body.
+                if self.scrutinee_is_transfer_owned_struct_param(scrutinee)
+                    && self.conditional_field_move_takes_runtime_flag(
+                        &var_name,
+                        &field_pat.name,
+                        idx,
+                    )
+                {
+                    continue;
+                }
                 self.type_decls
                     .struct_moved_field_bodies
                     .entry(var_name.clone())

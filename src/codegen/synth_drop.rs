@@ -10308,6 +10308,25 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-30-42 — mask field `idx` out of a by-value param's OWN
+    /// field-bodies walk (a param held by transfer) for a destructure that
+    /// hands the field to a leaf. On a branch, a static mask also silenced the
+    /// path that never destructured the param, so there the move takes the
+    /// same runtime per-field flag a conditional `let w = g.v` takes.
+    pub(super) fn mask_destructured_param_field_bodies(
+        &mut self,
+        src: &str,
+        field: &str,
+        idx: usize,
+    ) {
+        if self.fn_ctx.current_fn_param_names.contains(src)
+            && self.conditional_field_move_takes_runtime_flag(src, field, idx)
+        {
+            return;
+        }
+        self.disarm_struct_field_bodies_at(src, idx);
+    }
+
     /// B-2026-09-08-4 (runtime half) — route a CONDITIONAL simple field
     /// move-out through a per-field runtime flag instead of the compile-time
     /// mask, so the path that never ran the move keeps the field's body.
