@@ -92,17 +92,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 580 |
+| miscompile | 581 |
 | run-vs-build | 547 |
 | leak | 491 |
-| double-free | 371 |
+| double-free | 374 |
 | missing-feature | 215 |
 | codegen-gap | 204 |
 | other | 163 |
 | diagnostics | 138 |
 | perf | 117 |
 | false-positive | 115 |
-| crash | 103 |
+| crash | 104 |
 | soundness | 97 |
 | use-after-free | 70 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2423 |
-| interp | 720 |
-| typecheck | 318 |
+| codegen | 2428 |
+| interp | 721 |
+| typecheck | 319 |
 | other | 112 |
 | ownership | 79 |
 | cli | 73 |
@@ -422,9 +422,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-87 | 2026-09-29 | interp+codegen | medium | A destructured `Option` param that hands back a `Vec[i64]` field bare (`Some(S { r, v }) => v`) still loses its sibling field's `Drop` body on BOTH backends, for a fresh temp and a named argument alike; B-2026-09-29-43's fix covers only scalar and `String` fields | — |
 | B-2026-09-29-88 | 2026-09-29 | codegen | high | A GENERIC struct param with a `shared` field still double-frees a field it hands out, the remainder of B-2026-09-29-85 -- `fn f(g: G[String]) -> String { g.v }` over `struct G[T] { i: ShIn, v: T }`, `match g { G { v, .. } => v.len() }` and a generic `fn tk[T](g: G[T]) -> T { g.v }` abort at -O0 with `free(): double free detected`; -O2 and the interpreter print the right output | — |
 | B-2026-09-29-90 | 2026-09-29 | codegen | medium | A destructure of a by-value struct param with a `shared` field LEAKS an `Option[String]` field it does not bind -- `let Q { s, r, .. } = q` or `match q { Q { s, .. } => .. }` over a `Q` with an `o: Option[String]` loses the `Some` payload, 33 B per call at -O0, output right on every surface | — |
-| B-2026-09-29-103 | 2026-09-29 | typecheck | medium | `let` destructuring a CONCRETE instantiation of a generic struct types the leaf as the bare parameter, so `fn f(g: G[String]) -> i64 { let G { v, n } = g; v.len() }` is rejected with `no method 'len' on type parameter 'T'`; the `match` spelling of the same destructure typechecks | — |
-| B-2026-09-29-104 | 2026-09-29 | typecheck | low | A NESTED struct pattern over a generic struct in a `let` is rejected as refutable -- `let G { v: G { v, n }, n: m } = g` over `g: G[G[String]]` reports `refutable pattern in \`let\` binding`, while the same nested pattern over a non-generic struct (`let A { b: B { x }, y } = a`) is accepted | — |
-| B-2026-09-29-105 | 2026-09-29 | codegen | high | A `match` over a by-value struct param with a `shared` field that binds a nested struct field which ITSELF owns a `shared` field (`match q { Q { hs, .. } => hs.t.len() }`, `hs: Hs { sh: ShIn, t: String }`) double-frees at -O0 and -O2; the `let` spelling and `q.hs` returned are clean -- the remainder of B-2026-09-29-89 | — |
 | B-2026-09-29-98 | 2026-09-29 | typecheck | low | `i128.parse` / `u128.parse` DO NOT EXIST -- `i128.parse(s)` is rejected with "no associated function 'parse' on type 'i128'", and so is `i128.from_str_radix`, while `i32.parse`, `i64.parse` and `u64.parse` type-check and run | — |
 | B-2026-09-29-99 | 2026-09-29 | codegen | medium | A `shared enum` HELD BY A GENERIC `G[T]` PAYLOAD, BY A TUPLE ARGUMENT, OR BY A DISCARDED HOLDER RUNS NO PAYLOAD `Drop` BODY ON ANY COMPILED SURFACE AND LEAKS THE PAYLOAD -- `{ let g = G.X(SMono.P(mkr(1))); println("x") }`, `let _ = shArg((S(mk(1)), 7))` and `let _ = Hs { m: s }` print no body compiled while `--interp` prints one, and valgrind at -O0 reports 224 B in 3 blocks definitely lost for the three together | — |
 | B-2026-09-29-117 | 2026-09-29 | codegen+interp | medium | THE HEAP-BOXED SPELLING OF B-2026-09-19-31 STILL LOSES THE ELEMENT LEFT BEHIND ON ALL FOUR SURFACES -- `fn eatH(o: Option[(H, H)], k: bool) -> H { match o { Some((a, b)) => { if k { return a; } return b; } .. } }` with `struct H { id: i64, s: String }` prints `got:2 dH2` against the due `dH1 got:2 dH2`, and `got:3 dH3` against `dH4 got:3 dH3` | — |
@@ -449,6 +446,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-17 | 2026-09-30 | interp+codegen | high | AN ARRAY LITERAL OF A BY-VALUE STRUCT PARAM'S FIELDS, RETURNED, RUNS EACH FIELD'S `Drop` BODY TWICE ON EVERY SURFACE, INTERPRETER INCLUDED -- `fn arr(w: W3) -> Array[R, 2] { return [w.q, w.r]; }` prints `dR1 dR2 dR2 dR1` for one call, where each field is moved into the array exactly once; memory is balanced | — |
 | B-2026-09-30-18 | 2026-09-30 | codegen | medium | A DISCARDED ASSOCIATED-FUNCTION CALL RETURNING A TUPLE RUNS NO ELEMENT `Drop` BODY ON ANY COMPILED SURFACE WHERE `--interp` RUNS ONE -- `H.mint(1);` over `impl H { fn mint(i: i64) -> (R, i64) { return (mk(i), 5); } }` prints nothing compiled and `dR1` interpreted; memory is freed | — |
 | B-2026-09-30-21 | 2026-09-30 | interp+codegen | medium | A LEAF DESTRUCTURED OUT OF A `filter`ED BORROWED LOOP ELEMENT RUNS ITS `Drop` BODY AT THE LEAF AND AGAIN AT THE COLLECTION'S DEATH, ON EVERY SURFACE -- `for pair in v.iter().filter(|p| p.1 > 1) { let (a, j) = pair; .. }` over `Vec[(D, i64)]` prints `2 2 dD2 x2 dD1 dD2 end` on `--interp` and all three compiled surfaces, where `2 2 x2 dD1 dD2 end` is due; the unfiltered `v.iter()` and the `enumerate` / `rev` / `skip` / `take` adaptors are right. Memory balanced (valgrind 0) | — |
+| B-2026-09-30-9 | 2026-09-30 | codegen | high | A GENERIC enum's struct-variant payload matched by value with a NESTED struct pattern frees a pointer it never allocated compiled -- `match e { E.A { x: G { v, n }, k } => .. }` over `e: E[G[String]]` ends in `free(): invalid pointer` at -O0 and prints nothing at -O2, while --interp is right | — |
+| B-2026-09-30-5 | 2026-09-30 | interp+codegen | high | A nested struct with BOTH a `shared` field and a `Drop`-bodied field, bound out of a by-value struct param with a `shared` field by a `match` and handed back (`fn g(q: Q) -> Hs { match q { Q { hs, .. } => hs } }`), double-frees at -O0 and -O2, and the interpreter runs the inner `Drop` body TWICE per call (`d1 d1 a62`) -- the remainder of B-2026-09-29-105, which declines to copy a struct with a `Drop` body | — |
+| B-2026-09-30-24 | 2026-09-30 | codegen | high | A by-value struct param the callee holds by TRANSFER (a generic struct such as `G[R]`) and destructures with a `match` loses the leaf's `Drop` body on every compiled surface, generic callee or not, and a heap-bearing leaf double-frees at -O0 -- `fn f(g: G[R]) -> i64 { match g { G { v, n } => n } }` prints `1 after` where --interp prints `d4 1 after` | — |
 
 ### Relocated
 
@@ -3376,11 +3376,16 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-116 | codegen | medium | REMAINDER OF B-2026-09-29-95: A LOCAL WHOSE CONTAINER WALK RUNS ITS PAYLOAD'S `Drop` BODY (A USER ENUM, AN `Option`, A TUPLE) STILL LOSES THAT BODY O… | 194abf74b |
 | B-2026-09-29-85 | codegen | high | A by-value struct PARAM with a `shared` field (which the prologue neither entry-copies nor takes by transfer) double-frees an owned `String` field it… | d48b3fcef |
 | B-2026-09-29-89 | codegen | high | A `match` over a by-value struct param with a `shared` field that binds a nested STRUCT field (`match q { Q { h, . | c09cc8a89 |
+| B-2026-09-29-103 | typecheck | medium | `let` destructuring a CONCRETE instantiation of a generic struct types the leaf as the bare parameter, so `fn f(g: G[String]) -> i64 { let G { v, n }… | 3c591a9eb |
+| B-2026-09-29-104 | typecheck | low | A NESTED struct pattern over a generic struct in a `let` is rejected as refutable -- `let G { v: G { v, n }, n: m } = g` over `g: G[G[String]]` repor… | efb6850ee |
+| B-2026-09-29-105 | codegen | high | A `match` over a by-value struct param with a `shared` field that binds a nested struct field which ITSELF owns a `shared` field (`match q { Q { hs, . | 8d205d83c |
 | B-2026-09-29-97 | codegen | high | A STRUCT WITH AN `i128` / `u128` FIELD LOSES THE FIELD'S HIGH WORD AS AN ENUM PAYLOAD, AND SHIFTS EVERY LATER FIELD DOWN ONE SLOT -- `E.Int(Lit { val… | 5d95ab44b |
 | B-2026-09-29-120 | codegen | high | REMAINDER OF B-2026-09-29-101: A NESTED STRUCT FIELD OF A BY-VALUE PARAM THAT HOLDS A `shared` VALUE, PASSED TO A CALLEE THAT RETURNS THAT PARAM ON O… | 06a2d9968 |
 | B-2026-09-30-6 | codegen | medium | A `let mut` LOCAL WHOSE CONTAINER WALK RUNS ITS PAYLOAD'S `Drop` BODY, HANDED OFF INSIDE A BRANCH THAT MAY NOT RUN AND THEN REASSIGNED, LOSES THE BOD… | 66e0f7b6f |
 | B-2026-09-30-7 | codegen | high | A STRUCT THAT OWNS A `shared` FIELD AND RUNS A `Drop` BODY, MOVED TWICE INTO A BY-VALUE CALLEE THAT HANDS IT BACK (WARNED AS A USE AFTER MOVE, SO ACC… | 559209b57 |
 | B-2026-09-30-3 | codegen | high | A TUPLE PATTERN MATCHED AGAINST A `for` LOOP'S TUPLE ELEMENT DOUBLE-FREES EVERY HEAP LEAF IT BINDS, ON EVERY COMPILED SURFACE -- `for pair in v.iter(… | 534746271 |
+| B-2026-09-30-8 | codegen | high | A `match` / `if let` struct pattern over a CONCRETE instantiation of a generic struct double-frees the leaf it moves out -- `match g { G { v, n } =>… | d6d493949 |
+| B-2026-09-30-14 | typecheck+codegen | high | Inside a GENERIC fn, a leaf moved out of a `match` over a generic struct param double-frees -- `fn f[T](g: G[T]) -> T { match g { G { v, . | 451ecd42c |
 
 </details>
 
