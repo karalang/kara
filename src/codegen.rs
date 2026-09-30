@@ -9306,6 +9306,18 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
+        // B-2026-09-20-11 — every expression is compiled by now, so the walk
+        // cursors hold whatever node was compiled LAST, and the stdlib is
+        // compiled after the user's program. `compile_program_spanned` stamps
+        // those cursors onto any error, so a check below that fails (the
+        // verifier, the bf16 scan) reported a stdlib line against the user's
+        // file: `mv.kara:188:25` for a two-line program. These failures belong
+        // to the whole module and have no source position; clearing the
+        // cursors lets them render as the bare sentence `CodegenError`
+        // documents for them.
+        self.tracing.current_span = None;
+        self.tracing.diag_span = None;
+
         // B-2026-08-29-23 — fail closed on any NATIVE `bfloat` operation
         // before handing the module to a backend that cannot select one.
         self.verify_no_native_bf16_ops()?;
