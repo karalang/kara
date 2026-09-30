@@ -92,16 +92,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 613 |
-| run-vs-build | 560 |
+| miscompile | 614 |
+| run-vs-build | 562 |
 | leak | 508 |
-| double-free | 379 |
+| double-free | 380 |
 | missing-feature | 215 |
 | codegen-gap | 206 |
 | other | 164 |
 | diagnostics | 138 |
 | perf | 117 |
-| false-positive | 115 |
+| false-positive | 116 |
 | crash | 104 |
 | soundness | 97 |
 | use-after-free | 72 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2493 |
+| codegen | 2497 |
 | interp | 751 |
-| typecheck | 319 |
+| typecheck | 320 |
 | other | 112 |
 | ownership | 79 |
 | cli | 73 |
@@ -131,7 +131,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-09-20-18 | 2026-09-20 | codegen+interp | medium | TWO GUARDED `Some` ARMS OVER ONE SCRUTINEE, EACH TAKING A DIFFERENT PAYLOAD ELEMENT, ARE WRONG ON EVERY SURFACE AND THE PAYLOAD'S WIDTH PICKS THE DIRECTION -- at the INLINE width all four lose the untaken sibling's body (`got:5 dR5 end` against a due `dR6 got:5 dR5 end`, an AGREED fault); at the BOXED width the interpreter loses it while the three compiled surfaces DOUBLE the taken one, so neither backend is an oracle; every consumer of an arm's take rewrites state that is not edge-sensitive, so the last arm to write decides, and B-2026-09-19-34's narrowing declines here deliberately because masking one arm's element would LOSE the other's | — |
-| B-2026-09-20-25 | 2026-09-20 | codegen | medium | A STRUCT FIELD READ THROUGH AN ARRAY OR `Vec` INDEX INSIDE A TUPLE ELEMENT NEVER LOWERS -- `a.0[0].n` over `(Array[P, 1], i64)` passes `karac check`, runs correctly under `--interp`, and fails `karac build` with `cannot resolve field 'n' on this receiver (its type was not recorded for codegen)`; naming the field instead of indexing the tuple builds, a tuple holding a plain struct builds, and a bare array of the same struct builds, so it is the TUPLE-INDEX-then-CONTAINER-INDEX composition alone; B-2026-08-28-34 fixed the same pair in the OTHER ORDER (`v[0].0.id`) and every other member of that family is closed | — |
 | B-2026-09-20-26 | 2026-09-20 | codegen+interp | medium | REBINDING A USER ENUM'S CONTAINER PAYLOAD INTO A LOCAL INSIDE THE ARM RUNS EVERY ELEMENT'S `Drop` BODY TWICE, AND MOVING THE SAME BINDING INTO A CALL DOES NOT -- `match e { EArr.A(v) => { let u = v; .. } }` over `enum EArr { A(Array[R, 2]), B }` prints `dR1 dR2 dR1 dR2` on ALL FOUR SURFACES at a let-bound scrutinee, where `eat(v)` over the identical binding is correct everywhere; the `Vec` spelling doubles on the INTERPRETER only, and at a BY-VALUE PARAM scrutinee the same shapes double on the COMPILED side instead, so the wrong backend is selected by the scrutinee position rather than the payload; a plain-struct payload is correct at every position, a second rebind still fires exactly twice, and memory is clean under valgrind at -O0 with the doubled body reading its `String` correctly both times, so it is the bodies channel alone and neither ASAN ratchet can see it | — |
 | B-2026-09-20-27 | 2026-09-20 | codegen+interp | medium | THE DISPLACED ELEMENT'S USER `Drop` BODY NEVER RUNS AT A NESTED STORE `d[i][j] = x`, ON ALL FOUR SURFACES -- `Vec[Vec[S]]` and `Vec[Vec[Array[D, 1]]]` print only the SURVIVOR's body at scope exit, while the SINGLE-level `a[i] = x` over the same element runs both bodies correctly on every surface since B-2026-09-16-2/`021b83f`, so the gap is the nested POSITION and not the element shape -- and a 2x2 over {narrow, wide} x {single, nested} pins it further: a `struct N { k: i64 }` with NO heap anywhere loses the body at the nested store while reading 11/11 allocs/frees, so the defect is INVISIBLE to valgrind and to both ASAN ratchets and the memory half's width condition cannot be the gate for this one; it is an AGREED FAULT, so no A/B against the interpreter sees it and only a hand-derived due sequence does, and the naive fix is a REGRESSION rather than a partial win -- running the body from the codegen side alone was measured to turn the agreed silence into a run-vs-build divergence (`dS1:5|dS2:10|end` compiled against `dS2:10|end` interpreted), which is why B-2026-09-16-3's memory fix deliberately passes `run_bodies: false` and leaves this half here | — |
 | B-2026-09-20-28 | 2026-09-20 | codegen | low | THE NESTED-STORE DISPLACED RELEASE STOPS AT EXACTLY ONE LEVEL OF NESTING AND DOES NOT COMPOSE WITH A FIELD ROOT -- after B-2026-09-16-3, `d[0][0] = x` over `Vec[Vec[(String, i64)]]` is clean, but `d[0][0][0] = x` at depth 3 still loses 5 B in 1 block at `-O0` and `h.xs[0][0] = x` through a struct field loses the same, because `emit_displaced_index_elem_drop`'s new `Index` arm requires the INNER object to be a bare `Identifier` and its `FieldAccess` arm requires the same, so the two arms decline each other's shapes and neither recurses to a fixpoint; the element type is identical in all three cells, so this is purely the OBJECT's shape, and the fix is to let each arm accept the other's synthesized identifier rather than to add a third arm per spelling | — |
@@ -475,6 +474,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-105 | 2026-09-30 | codegen | medium | AN `Option` PAYLOAD BINDING DISCARDED IN A `match` ARM RUNS ITS `Drop` BODY LATE AND LEAKS -- `Some(w) => { let _ = w; println("arm") }` and `Some(w) => { let _ = [w]; println("arm") }` print `dW1_3 arm end` under `--interp` but `arm dW1_3 end` on the JIT, -O2 and -O2 auto-par, with 1 block lost; the tuple spelling `let _ = (w, 1)` is right since B-2026-09-30-98 | — |
 | B-2026-09-30-106 | 2026-09-30 | codegen | medium | A TUPLE BUILT FROM AN `Option` PAYLOAD AS A `match` VALUE ARM TAIL RUNS ITS `Drop` BODY BEFORE THE TUPLE IS USED -- `let t = match o { Some(w) => (w, 1), None => (mk(0), 0) }; println(f"{t.1}")` prints `1 dW1_8 end` under `--interp` but `dW1_8 1 end` compiled, valgrind clean; it double-freed before B-2026-09-30-98 | — |
 | B-2026-09-30-107 | 2026-09-30 | interp | medium | UNDER `--interp`, A METHOD THAT HANDS BACK A LITERAL HOLDING A PAYLOAD BINDING RUNS THE BODY TWICE -- `Some(x) => { let z = k.pass([x]); println(f"z:{z[0].v}") }` over `fn pass(ref self, x: Array[W1, 1]) -> Array[W1, 1] { return x }` prints `z:2 dW1_2 dW1_2 end` under `--interp`; compiled prints `z:2 dW1_2 end`, valgrind clean | — |
+| B-2026-09-30-88 | 2026-09-30 | codegen | low | AN INDEX-ASSIGN INTO AN `Array` HELD IN A TUPLE ELEMENT FAILS `karac build` -- `a.0[0] = P { n: 9 }` and `a.0[0] = 9` over `(Array[_, 1], i64)` pass `karac check`, run under `--interp`, and fail with `Index assignment target must be a variable`; the `Vec` spelling is fixed (B-2026-08-10-5) and the field store `a.0[0].n = 9` builds since B-2026-09-20-25 | — |
+| B-2026-09-30-89 | 2026-09-30 | codegen | medium | A `ref` OR `mut ref` TUPLE PARAMETER'S CONTAINER ELEMENT DOES NOT LOWER -- `fn f(a: ref (Array[P, 1], i64)) -> i64 { return a.0[0].n }` fails `karac build` with `cannot resolve field 'n' on this receiver`, and the `mut ref` store `a.0[0].n = 9` (and a plain `a.1 = 9`) is refused, while `--interp` answers both; B-2026-09-20-25 fixed the OWNED tuple local | — |
+| B-2026-09-30-90 | 2026-09-30 | typecheck | low | AN ARRAY LITERAL NESTED INSIDE A TUPLE THAT IS ITSELF INSIDE A TUPLE OR AN `Option` IS TYPED `Vec` UNDER AN ANNOTATED `let` -- `let a: (i64, (Array[P, 1], i64)) = (1, ([P { n: 5 }], 7))` and `let a: Option[(Array[i64, 2], i64)] = Some(([4, 5], 7))` fail `expected '..Array..', found '..Vec..'`, while one tuple level (`let a: (Array[P, 1], i64) = ([P { n: 5 }], 7)`) is accepted; a neighbour of B-2026-09-25-8 | — |
 
 ### Relocated
 
@@ -3111,6 +3113,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-20-22 | codegen | medium | A `shared`-FIELD STRUCT WITH AN `impl Drop` RUNS ITS BODY TWICE ON THE VALUE AN ASSIGNMENT MOVES IN, when the RHS is a match-arm binding -- `out = w`… | 36753943a |
 | B-2026-09-20-23 | codegen | medium | A NAMED-LOCAL `Option`/`Result` ARGUMENT'S PAYLOAD `Drop` BODIES DRAIN AT THE CALLER'S SCOPE EXIT RATHER THAN AT THE CALLEE'S ARM -- `let a = [W1 { v… | 60db124 |
 | B-2026-09-20-24 | codegen+interp | medium | AN OWNED PARAMETER OF A NAMELESS AGGREGATE TYPE -- A TUPLE, AN `Array[T, N]` OR A `Vec[T]` -- RUNS NONE OF ITS ELEMENTS' USER `Drop` BODIES WHEN THE… | 6ec7eb903 |
+| B-2026-09-20-25 | codegen | medium | A STRUCT FIELD READ THROUGH AN ARRAY OR `Vec` INDEX INSIDE A TUPLE ELEMENT NEVER LOWERS -- `a.0[0].n` over `(Array[P, 1], i64)` passes `karac check`,… | 7b6e2de |
 | B-2026-09-20-29 | codegen | medium | `expr_cannot_carry_container_heap` IS MISSING TWO ARMS AND ENDS IN `_ => false`, SO AN INDEX STORE WHOSE RHS MENTIONS ITS OWN CONTAINER LEAKS THE DIS… | 6e342a3 |
 | B-2026-09-20-38 | codegen | high | A BOXED GENERIC-ENUM PAYLOAD FORWARDED THROUGH A GENERIC MIDDLE FUNCTION IS FREED BY THE INNER MONOMORPH WHILE THE CALLER STILL OWNS IT -- `fn gfwd[T… | caffdbba3 |
 | B-2026-09-20-44 | codegen | high | FIXED 2026-09-20 IN 0709baa -- the gate was the fourth term and the row's three are CONFIRMED BY INSTRUMENTING THE CONJUNCTION rather than inferred:… | 0709baa |
@@ -3458,6 +3461,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-95 | codegen | high | A VALUE MOVED INTO A STRUCT, TUPLE OR ARRAY LITERAL BOUND INSIDE A BRANCH LOSES ITS `Drop` BODY AND LEAKS ITS HEAP ON THE PATH THAT NEVER BUILT THE L… | 472771516 |
 | B-2026-09-30-98 | codegen | high | AN `Option`/`Result` PAYLOAD BINDING MOVED INTO A TUPLE IS FREED TWICE -- `match o { Some(w) => { let _ = (w, 1); println("arm") }, None => {} }` abo… | 4f56fcb92 |
 | B-2026-09-30-86 | codegen | high | `r.unwrap()` ON A `Result` WHOSE INLINE PAYLOAD IS WIDER THAN THREE WORDS RETURNS A WRONG VALUE on every compiled surface -- over `struct S { v: Stri… | 33fe00f92 |
+| B-2026-09-30-83 | codegen | high | A FIELD STORE THROUGH AN `Array[T, N]` ELEMENT IS SILENTLY DROPPED ON EVERY COMPILED SURFACE -- `let mut a: Array[P, 1] = [P { n: 5 }]; a[0].n = 9` r… | 3643daa |
+| B-2026-09-30-84 | codegen | high | A CONTAINER ELEMENT HANDED TO A `ref` OR `mut ref` PARAMETER IS SHALLOW-COPIED AND FREED AS A CALL TEMP UNLESS THE CONTAINER IS A `Vec` LOCAL -- `rd(… | 7ffd2c2 |
 
 </details>
 
