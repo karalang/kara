@@ -3331,6 +3331,23 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => Some("self".to_string()),
             _ => None,
         };
+        // B-2026-09-30-83 — a field store whose parent is a PLACE chain rooted
+        // at a binding (`a[0].n`, `b.a[0].n`, `t.0[0].n`) and that the nested
+        // branch above could not resolve used to fall out the `Ok(())` tail
+        // below with nothing emitted: the write was DROPPED, `karac check` was
+        // clean and `--interp` applied it. Every earlier "fell through to the
+        // no-op tail" row in this function was one more receiver shape of that
+        // same silence. Refuse instead, so an unlowered shape is a build error
+        // rather than a wrong answer. A parent that is NOT rooted at a binding
+        // (a call result, a temporary) keeps the tail: storing into a value
+        // nothing can read again is a no-op on every backend.
+        if var_name_owned.is_none() && store_place_rooted_at_binding(object) {
+            return Err(format!(
+                "codegen: assignment to field '{}' through this place is not yet lowered; \
+                 bind the element to a local, assign, and store it back",
+                field
+            ));
+        }
         if let Some(var_name) = var_name_owned.as_deref() {
             // Shared type: store directly into the heap object via GEP.
             if let Some(type_name) = self.var_types.var_type_names.get(var_name).cloned() {
@@ -4010,7 +4027,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // index — so a call-valued subscript declined on both and the
                     // store fell out the no-op tail, taking the index's SIDE
                     // EFFECTS with it (the call never ran at all).
-                    None => self.impure_index_store_place_ptr(object, index, expr),
+                    None => match self.array_place_elem_ptr(object, index) {
+                        Some(p) => Some(p),
+                        None => self.impure_index_store_place_ptr(object, index, expr),
+                    },
                 },
             },
             // B-2026-08-02-5: a tuple-element link (`t.0.f = v` /
@@ -4118,6 +4138,110 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Gated on container shapes the resolvers can actually place, so a store
     /// that would still fail does not gain a side effect it never had.
+    /// B-2026-09-30-83 — the element slot of an `Array[T, N]` PLACE, for a
+    /// store through it (`a[i].f = v`). Every arm above is a `Vec` or slice
+    /// path: `field_chain_place_ptr` declines an array-typed slot outright and
+    /// `field_rooted_index_place_ptr` peels only a `Vec` field. So an array
+    /// held in an annotated local, an array field (`b.a[0].n = 9`), a `mut ref`
+    /// array param and an array tuple element (`t.0[0].n = 9`) all reached
+    /// `compile_field_store`'s no-op tail, and the store was DROPPED with no
+    /// diagnostic: `let mut a: Array[P, 1] = [..]; a[0].n = 9` read back `5`.
+    /// (An unannotated array literal is laid out as a `Vec` and was right.)
+    ///
+    /// Bounds-checked exactly as the array READ is (`compile_index`'s
+    /// `ArrayType` arm), then an in-bounds GEP into the place's own storage,
+    /// so the write lands in the array rather than in a copy of it.
+    fn array_place_elem_ptr(&mut self, object: &Expr, index: &Expr) -> Option<PointerValue<'ctx>> {
+        let (arr_ptr, arr_ty) = match &object.kind {
+            ExprKind::Identifier(name) => match self.ref_array_index_target(name) {
+                Some(t) => t,
+                None => {
+                    if self
+                        .drop_rc
+                        .rc_fallback_heap_types
+                        .contains_key(name.as_str())
+                    {
+                        return None;
+                    }
+                    let slot = self.variables.get(name.as_str()).copied()?;
+                    (slot.ptr, slot.ty)
+                }
+            },
+            ExprKind::FieldAccess {
+                object: inner,
+                field,
+            } => {
+                let obj_ty = self.place_chain_type_name(inner)?;
+                if self.type_decls.shared_types.contains_key(obj_ty.as_str()) {
+                    return None;
+                }
+                let st = self
+                    .place_chain_aggregate_llvm_type(inner)
+                    .or_else(|| self.type_decls.struct_types.get(obj_ty.as_str()).copied())?;
+                let idx = self
+                    .type_decls
+                    .struct_field_names
+                    .get(obj_ty.as_str())?
+                    .iter()
+                    .position(|n| n == field)? as u32;
+                let fty = st.get_field_type_at_index(idx)?;
+                if !matches!(fty, BasicTypeEnum::ArrayType(_)) {
+                    return None;
+                }
+                let base = self.nested_store_place_ptr(inner)?;
+                let p = self
+                    .builder
+                    .build_struct_gep(st, base, idx, "arr.place.field.p")
+                    .ok()?;
+                (p, fty)
+            }
+            ExprKind::TupleIndex {
+                object: inner,
+                index: hop,
+            } => {
+                let st = self.place_chain_aggregate_llvm_type(inner)?;
+                let fty = st.get_field_type_at_index(*hop as u32)?;
+                if !matches!(fty, BasicTypeEnum::ArrayType(_)) {
+                    return None;
+                }
+                let base = self.nested_store_place_ptr(inner)?;
+                let p = self
+                    .builder
+                    .build_struct_gep(st, base, *hop as u32, "arr.place.tup.p")
+                    .ok()?;
+                (p, fty)
+            }
+            _ => return None,
+        };
+        let BasicTypeEnum::ArrayType(at) = arr_ty else {
+            return None;
+        };
+        let idx_raw = self.compile_expr(index).ok()?;
+        let idx_val = self.coerce_to_i64(idx_raw).ok()?;
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn?;
+        let oob_bb = self.context.append_basic_block(fn_val, "arr.place.oob");
+        let ok_bb = self.context.append_basic_block(fn_val, "arr.place.ok");
+        let len = i64_t.const_int(at.len() as u64, false);
+        let cmp = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "arr.place.bounds")
+            .ok()?;
+        self.builder
+            .build_conditional_branch(cmp, oob_bb, ok_bb)
+            .ok()?;
+        self.builder.position_at_end(oob_bb);
+        self.emit_panic("array index out of bounds");
+        self.builder.build_unreachable().ok()?;
+        self.builder.position_at_end(ok_bb);
+        let zero = i64_t.const_int(0, false);
+        unsafe {
+            self.builder
+                .build_in_bounds_gep(at, arr_ptr, &[zero, idx_val], "arr.place.elem.p")
+                .ok()
+        }
+    }
+
     fn impure_index_store_place_ptr(
         &mut self,
         object: &Expr,
@@ -4193,6 +4317,20 @@ impl<'ctx> super::Codegen<'ctx> {
         } = &object.kind
         else {
             return None;
+        };
+        // B-2026-09-30-83 — `self.v[i].n = x` in a `mut ref self` method:
+        // `lower_field_access_ptr` keys the receiver as the `self` binding, and
+        // a bare `SelfValue` declined, so the store fell out
+        // `compile_field_store`'s tail and was DROPPED.
+        let self_ident;
+        let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
+            self_ident = Expr {
+                kind: ExprKind::Identifier("self".to_string()),
+                span: inner.span,
+            };
+            &self_ident
+        } else {
+            inner
         };
         let Ok(Some((field_ptr, field_ll_ty, field_te))) =
             self.lower_field_access_ptr(inner, field, "nested-store container lowering")
@@ -13122,5 +13260,18 @@ impl<'ctx> super::Codegen<'ctx> {
             .last()
             .filter(|n| self.is_known_layout_type_name(n))
             .cloned()
+    }
+}
+
+/// Whether a store target's parent is a place chain ending at a named binding
+/// (`a`, `self`) through field, tuple-index and index hops. See
+/// `compile_field_store`'s B-2026-09-30-83 refusal.
+fn store_place_rooted_at_binding(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Identifier(_) | ExprKind::SelfValue => true,
+        ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. } => store_place_rooted_at_binding(object),
+        _ => false,
     }
 }

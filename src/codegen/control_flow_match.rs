@@ -14891,6 +14891,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         .var_types
                         .var_elem_type_exprs
                         .get(v.as_str())
+                        // B-2026-09-30-83 — an annotated `Array[T, N]` local
+                        // keeps its element type in `array_elem_type_exprs`,
+                        // so a store through it (`a[0].n = 9`) resolved no
+                        // parent type and was dropped.
+                        .or_else(|| self.var_types.array_elem_type_exprs.get(v.as_str()))
                         .map(|te| &te.kind)
                     {
                         Some(TypeKind::Path(p)) => p.segments.last().cloned(),
@@ -14918,10 +14923,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         .struct_field_type_exprs
                         .get(obj_ty.as_str())?
                         .get(fidx)?;
-                    let elem_te = vec_inner_type_expr(field_te)?;
+                    // B-2026-09-30-83 — an `Array[T, N]` field peels the same way.
+                    let elem_te = vec_inner_type_expr(field_te)
+                        .or_else(|| super::helpers::array_inner_type_expr(field_te))?;
                     if let TypeKind::Path(p) = &elem_te.kind {
                         return p.segments.last().cloned();
                     }
+                    return None;
                 }
                 None
             }
