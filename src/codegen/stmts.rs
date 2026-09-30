@@ -19887,6 +19887,14 @@ impl<'ctx> super::Codegen<'ctx> {
             self.register_var_from_type_expr(name, &te);
             if let Some(slot) = self.variables.get(name.as_str()).copied() {
                 self.track_destructure_leaf_cleanup(name, slot.ptr, !owner_runs_bodies);
+                if is_enum {
+                    self.track_destructure_leaf_boxed_generic_enum(
+                        name,
+                        slot.ptr,
+                        &te,
+                        !owner_runs_bodies,
+                    );
+                }
             }
             // B-2026-09-02-43 — the leaf just took this element's BODY (the
             // `!owner_runs_bodies` argument above is that decision), and
@@ -20977,6 +20985,67 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let b = self.emit_nested_vec_elem_bodies_fn(te)?;
         Some((label, b))
+    }
+
+    /// B-2026-09-20-14 — a destructured GENERIC ENUM leaf whose monomorph
+    /// heap-BOXES its payload (`let (a, b) = t` over `(G1[W], i64)`).
+    ///
+    /// `track_destructure_leaf_cleanup` registers the name-keyed enum drop,
+    /// whose arms come from the erased declaration and never see the box, so
+    /// the leaf owned nothing of it. That was harmless while the tuple's own
+    /// walk freed the envelope and nothing else; now that the move out of the
+    /// element zeroes the box word (`zero_tuple_elem_cap_at`) the leaf is the
+    /// only owner left, and it takes the box exactly as a `let` of the same
+    /// monomorph does: the box drop with the memory-only interior, then the
+    /// instantiation-keyed bodies walker (registered second, so it runs first,
+    /// before the payload it reads is freed), and the instantiation recorded
+    /// so a later `match a` retracts the interior as the let-bound twin does.
+    fn track_destructure_leaf_boxed_generic_enum(
+        &mut self,
+        name: &str,
+        alloca: PointerValue<'ctx>,
+        te: &TypeExpr,
+        register_user_bodies: bool,
+    ) {
+        let te = self.subst_monomorph_type_params(te);
+        let boxed = self.user_enum_boxed_payload_variants(&te);
+        if boxed.is_empty() {
+            return;
+        }
+        self.type_decls
+            .enum_inst_var_types
+            .insert(name.to_string(), te.clone());
+        self.var_types
+            .var_enum_inst_te
+            .insert(name.to_string(), te.clone());
+        for (en, variant, payload_te, box_field, multi_field) in boxed {
+            let inner = self.enum_boxed_payload_interior_drop(&payload_te, true);
+            self.track_boxed_enum_var_with_inner_drop_for_payload(
+                name,
+                alloca,
+                &en,
+                &variant,
+                inner,
+                &payload_te,
+                box_field,
+            );
+            if multi_field {
+                self.payload_vars
+                    .boxed_enum_multi_field_vars
+                    .insert(name.to_string());
+            }
+        }
+        if register_user_bodies {
+            if let Some(bodies) = self.emit_generic_enum_payload_user_drop_bodies_fn(&te) {
+                self.track_user_drop_var_with_fn(
+                    "",
+                    name,
+                    alloca,
+                    bodies,
+                    UserDropKind::ContainerElemBodies,
+                );
+            }
+        }
     }
 
     fn track_destructure_leaf_cleanup(

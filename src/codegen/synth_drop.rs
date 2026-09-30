@@ -4432,28 +4432,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// emitting a walker. Head names only, plus a `Vec` payload's element: a
     /// shape it does not recognise answers false, leaving the field as it was.
     ///
-    /// DECLINES an instantiation whose payload is heap-BOXED and owns heap of
-    /// its own (`Ho[S]`, `S { id, s: String }`). Answering yes makes the
-    /// holding struct Drop-relevant, which turns a read-only `match h.g`
-    /// into a borrow of the field: the parent then owns the payload, and the
-    /// parent's field drop frees only the box ENVELOPE (by design -- see
-    /// `emit_erased_boxed_enum_payload_free_at`), so the `String` the arm
-    /// used to take and free leaked 4 B where it was clean. Freeing the
-    /// interior there instead was measured to double-free every consuming
-    /// spelling (`match h.g { Ho.Full(r) => keeps(r) }` and three more), so
-    /// this class keeps its old answer until the field has a per-site owner.
+    /// A heap-BOXED payload that owns heap of its own (`Ho[S]`,
+    /// `S { id, s: String }`) was DECLINED here until B-2026-09-20-14, because
+    /// the parent's field drop freed only the box envelope and a read-only
+    /// `match h.g` then leaked the payload's heap. The field now has a
+    /// per-site owner: the drop frees the contents too, and a consuming arm
+    /// frees the envelope and zeroes the word
+    /// (`free_projection_boxed_enum_envelope_for_arm`), so `keeps(r)` and the
+    /// read-only arm are both single-owner.
     pub(super) fn generic_enum_inst_runs_user_drop(
         &self,
         te: &TypeExpr,
         seen: &mut Vec<String>,
     ) -> bool {
-        if self
-            .user_enum_boxed_payload_variants(te)
-            .iter()
-            .any(|(_, _, payload_te, _, _)| self.type_expr_has_drop_heap(payload_te))
-        {
-            return false;
-        }
         let TypeKind::Path(p) = &te.kind else {
             return false;
         };
@@ -6397,11 +6388,14 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   let t = (g, 7); match t.0 { .. }     24 B direct, 0 indirect
     /// ```
     ///
-    /// ZERO INDIRECT is the tell that says what to emit: the payload's own heap
-    /// and its `Drop` body are already handled by the match arm, so only the
-    /// ENVELOPE is lost. This frees the envelope and nothing else — see the
-    /// comment at the `inner` binding for why that is the only answer that
-    /// cannot make a cell worse, and for what it leaves open.
+    /// ZERO INDIRECT was the tell that said what to emit while the match arm
+    /// handled the payload's own heap: only the ENVELOPE was lost. Since
+    /// B-2026-09-20-14 this frees the box's CONTENTS as well (memory only; the
+    /// payload's `Drop` body is the container's bodies walker's), because an
+    /// element nobody matched lost both. Every site that hands the contents
+    /// elsewhere now frees the envelope and zeroes the word itself -- a
+    /// consuming arm, a move-out, a by-value argument -- so the walk finds
+    /// null there.
     ///
     /// The monomorphic twin is clean and stays untouched: a concrete declaration
     /// sizes its area to the widest variant, so nothing is ever boxed and
@@ -6485,6 +6479,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(fn_val) = self.current_fn else {
             return;
         };
+        // Resolve every callee before emitting: each may synthesize a function.
+        let inners: std::collections::HashMap<u32, Option<FunctionValue<'ctx>>> = boxed
+            .iter()
+            .map(|(_, _, pte, bf, _)| (*bf, self.enum_boxed_payload_interior_drop(pte, true)))
+            .collect();
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let enum_ty = layout.llvm_type;
@@ -6509,35 +6508,31 @@ impl<'ctx> super::Codegen<'ctx> {
             else {
                 continue;
             };
-            // ENVELOPE ONLY, NEVER THE CONTENTS, and this is the whole
-            // difference between a fix and a regression here.
+            // B-2026-09-20-14 — the CONTENTS as well as the envelope. This walk
+            // was envelope-only from 39bf76b until now, because the consuming
+            // spelling (`match t.0 { G1.Y(s) => .. }`) handed the interior to
+            // the arm's binding and nothing told the container: walking it
+            // double-freed that cell, skipping it leaked the interior of every
+            // element nobody matched -- and lost its `Drop` body, which is the
+            // half that row never measured (`let t = (mk(1), 7)` over
+            // `G1[W]` printed no `dW1` at all).
             //
-            // A container's synthesized drop is keyed by LAYOUT and shared by
-            // every site with that layout, so it cannot know what any one site
-            // did with the payload. The let-site owner CAN: a `match g { G1.Y(s)
-            // => .. }` that moves the payload out downgrades `g`'s own
-            // `BoxedEnumDrop` to box-only through
-            // `clear_boxed_enum_inner_drop`, which is why the IR for that
-            // spelling frees the box and calls no `karac_drop_String`. There is
-            // no such channel for an ELEMENT of a container — the retraction
-            // machinery is keyed by a scrutinee NAME, and `t.0` has none.
+            // The channel that row asked for now exists at the two places an
+            // element's payload can leave it. A consuming arm on a projection
+            // scrutinee frees the envelope and zeroes this word
+            // (`free_projection_boxed_enum_envelope_for_arm`), and a whole-value
+            // move out of the element zeroes it (`zero_tuple_elem_cap_at`,
+            // `suppress_struct_field_move_by_name`). Either way this walk finds
+            // null and does nothing, so the interior it reaches is one no other
+            // owner holds.
             //
-            // Both answers were measured, and each is wrong for a different
-            // cell. Walking the interior double-frees the consuming spelling
-            // (`match t.0 { G1.Y(s) => .. }`): the arm's binding already freed
-            // the buffer, so this walk frees it again — one invalid free, at
-            // `-O0` and `-O2`. Skipping it leaks the interior of a tuple whose
-            // element is never matched at all.
-            //
-            // Skipping is the one that cannot make anything worse. Before this
-            // fix the element got NO walker, so both the envelope and the
-            // contents leaked in every cell; freeing only the envelope strictly
-            // reduces all three (24 B -> 0 on both matching spellings, 24 B + 13
-            // indirect -> 13 B on the non-matching one) and introduces no free
-            // that any other owner also performs. The interior remainder on the
-            // never-matched spelling stays open, and needs the per-site channel
-            // above rather than a wider walk here.
-            let inner: Option<FunctionValue<'ctx>> = None;
+            // MEMORY ONLY, through the let site's memory-only resolver. The
+            // payload's `Drop` BODIES are the container's bodies walker's, which
+            // fires at the container's live-range end rather than at this
+            // scope-exit free (`emit_slot_drop_bodies_at_opt` for a tuple
+            // element, the `generic_enum_field` leg for a struct field). Both
+            // read the box word and both take its null guard.
+            let inner = inners.get(&box_field).copied().flatten();
             let is_v = self
                 .builder
                 .build_int_compare(
@@ -6978,6 +6973,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         {
                             if !layout.is_shared {
                                 self.zero_enum_payload_caps(field_ptr, &layout);
+                                // B-2026-09-20-14 — and a generic monomorph's
+                                // payload BOX word, which the name-keyed kinds
+                                // above classify `None` and skip. The element
+                                // walk now frees the box AND its contents, so a
+                                // whole-value move out (`let x = t.0`,
+                                // `takeg(t.0)`) that left this word armed freed
+                                // the box twice -- it already did, as an invalid
+                                // free of the envelope, before the walk grew.
+                                self.zero_erased_boxed_enum_payload_words_at(te, field_ptr);
                             }
                         } else if self.type_decls.struct_types.contains_key(name)
                             && !self.type_decls.shared_types.contains_key(name)
@@ -12103,6 +12107,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return true;
                 }
+                // B-2026-09-20-14 — a GENERIC ENUM INSTANTIATION element
+                // (`(G1[W], i64)`), the tuple-element twin of the struct-FIELD
+                // leg B-2026-09-20-15 added (`generic_enum_field`). The head
+                // question above reads `G1`'s erased `T` payload and answers
+                // false, so no tuple walker was emitted and `W`'s body ran on
+                // no compiled surface -- before this row freed the payload at
+                // all, it simply leaked with it.
+                if user_enum && self.generic_enum_inst_runs_user_drop(te, &mut Vec::new()) {
+                    return true;
+                }
             }
         }
         if let Some(e) = Self::vec_field_elem_head(te) {
@@ -12280,6 +12294,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         if !skip_enum_payload {
                             if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&head) {
+                                self.builder.build_call(w, &[ep.into()], "").unwrap();
+                            }
+                            // B-2026-09-20-14 — and the instantiation-keyed
+                            // complement, exactly as the struct-FIELD arm pairs
+                            // them (B-2026-09-20-15): the payloads declared as
+                            // the enum's own params, which the name-keyed walker
+                            // above skips. It reads a boxed payload through the
+                            // box word and takes its null guard, so a payload an
+                            // arm or a move took (the word zeroed) runs nothing.
+                            if let Some(w) = self.emit_generic_enum_payload_user_drop_bodies_fn(te)
+                            {
                                 self.builder.build_call(w, &[ep.into()], "").unwrap();
                             }
                         }

@@ -1360,6 +1360,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     &arm.pattern,
                     field_reads_only,
                 );
+                self.free_tuple_pattern_boxed_enum_envelopes_for_arm(scrutinee, &arm.pattern);
                 // B-2026-07-21-16: the seeded Option/Result sibling of #15 —
                 // `match a.opt { Some(s) => … }` over an OWNED place. The #15
                 // route hands these to the generic enum suppressor, which
@@ -11931,6 +11932,7 @@ impl<'ctx> super::Codegen<'ctx> {
             pattern,
             arm_reads_only,
         );
+        self.free_projection_boxed_enum_envelope_for_arm(scrutinee, field_ptr, &enum_name, pattern);
         // B-2026-08-29-33 — the BODIES half, beside the MEMORY half above.
         // Gated on the arm actually taking a body-running payload, exactly as
         // the identifier path gates its `suppress_container_elem_bodies_for_var`
@@ -11938,6 +11940,234 @@ impl<'ctx> super::Codegen<'ctx> {
         // would lose the body outright.
         if self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern) {
             self.disarm_projection_enum_payload_bodies(scrutinee);
+        }
+    }
+
+    /// B-2026-09-20-14 — the arm half of a projected generic enum's BOXED
+    /// payload hand-off (`match t.0 { G1.Y(w) => .. }`, `if let G1.Y(w) = s.g`).
+    ///
+    /// A generic enum's payload area is sized from its erased declaration, so
+    /// a monomorph that outgrows it (`G1[W]`) is heap-BOXED and every variant
+    /// kind reads `None` -- which is why the suppression just above skips it.
+    /// The arm's binding is a bit-copy of the box's CONTENTS and owns them, so
+    /// the container must stand down for them. It cannot do that by zeroing the
+    /// contents: a payload with a `Drop` body would still run it on the zeroed
+    /// husk. So this frees the ENVELOPE here, exactly as the concrete
+    /// wide-struct sibling in `suppress_destructured_enum_payload_cleanup_at_limited`
+    /// does (B-2026-09-05-26), and zeroes the word, and the container's walk --
+    /// which now frees the box's contents as well as the box -- finds null.
+    ///
+    /// Only positions the pattern BINDS count; a wildcard sub-pattern claims
+    /// nothing, and the walk keeps the payload and runs its body at the
+    /// container's drop.
+    fn free_projection_boxed_enum_envelope_for_arm(
+        &mut self,
+        scrutinee: &Expr,
+        field_ptr: PointerValue<'ctx>,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) {
+        // A borrowed binding owns nothing, so the container keeps the payload.
+        if self.pattern_state.pattern_binding_is_borrow {
+            return;
+        }
+        let Some(te) = self.projection_scrutinee_concrete_te(scrutinee) else {
+            return;
+        };
+        self.free_boxed_enum_envelope_for_arm_at(&te, field_ptr, enum_name, pattern);
+    }
+
+    /// B-2026-09-20-14 — the TUPLE-PATTERN leg of the arm hand-off above:
+    /// `match t { (G1.Y(w), n) => .. }` over a tuple local binds the payload
+    /// of the element in place, so each element whose sub-pattern takes a
+    /// boxed payload gets the same envelope free and zero.
+    pub(super) fn free_tuple_pattern_boxed_enum_envelopes_for_arm(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        if self.pattern_state.pattern_binding_is_borrow
+            || self.pattern_state.pattern_binding_scrutinee_is_owned_param
+        {
+            return;
+        }
+        let PatternKind::Tuple(subs) = &pattern.kind else {
+            return;
+        };
+        let ExprKind::Identifier(src) = &scrutinee.kind else {
+            return;
+        };
+        let Some(tes) = self
+            .var_types
+            .tuple_var_elem_tes
+            .get(src.as_str())
+            .cloned()
+            .or_else(|| self.tuple_var_elem_tes(src.as_str()))
+        else {
+            return;
+        };
+        let Some(slot) = self.variables.get(src.as_str()).copied() else {
+            return;
+        };
+        let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
+            return;
+        };
+        for (i, sub) in subs.iter().enumerate() {
+            let Some(te) = tes.get(i) else {
+                continue;
+            };
+            let te = self.subst_monomorph_type_params(te);
+            let Some(en) = self
+                .user_enum_boxed_payload_variants(&te)
+                .first()
+                .map(|b| b.0.clone())
+            else {
+                continue;
+            };
+            let Ok(elem_ptr) =
+                self.builder
+                    .build_struct_gep(agg_ty, slot.ptr, i as u32, "b14.tuppat.p")
+            else {
+                continue;
+            };
+            self.free_boxed_enum_envelope_for_arm_at(&te, elem_ptr, &en, sub);
+        }
+    }
+
+    fn free_boxed_enum_envelope_for_arm_at(
+        &mut self,
+        te: &TypeExpr,
+        field_ptr: PointerValue<'ctx>,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) {
+        let boxed = self.user_enum_boxed_payload_variants(te);
+        if boxed.is_empty() {
+            return;
+        }
+        let Some((variant_name, consumed)) =
+            self.enum_pattern_consumed_positions(enum_name, pattern)
+        else {
+            return;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name).cloned() else {
+            return;
+        };
+        if layout.is_shared {
+            return;
+        }
+        let Some(offsets) = layout.field_word_offsets.get(&variant_name).cloned() else {
+            return;
+        };
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let consumed_fields: std::collections::HashSet<u32> = consumed
+            .iter()
+            .filter_map(|p| offsets.get(*p).map(|(start, _)| (*start + 1) as u32))
+            .collect();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let mut freed = false;
+        for (_en, vname, _pte, box_field, _multi) in boxed {
+            if vname != variant_name || !consumed_fields.contains(&box_field) {
+                continue;
+            }
+            let Ok(word_ptr) = self.builder.build_struct_gep(
+                layout.llvm_type,
+                field_ptr,
+                box_field,
+                "b14.armbox.wp",
+            ) else {
+                continue;
+            };
+            let bp = self
+                .builder
+                .build_load(ptr_ty, word_ptr, "b14.armbox.p")
+                .unwrap()
+                .into_pointer_value();
+            let is_null = self.builder.build_is_null(bp, "b14.armbox.isnull").unwrap();
+            let free_bb = self.context.append_basic_block(cur_fn, "b14.armbox.free");
+            let join_bb = self.context.append_basic_block(cur_fn, "b14.armbox.join");
+            self.builder
+                .build_conditional_branch(is_null, join_bb, free_bb)
+                .unwrap();
+            self.builder.position_at_end(free_bb);
+            self.builder
+                .build_call(self.runtime_fns.free_fn, &[bp.into()], "")
+                .unwrap();
+            self.builder
+                .build_store(word_ptr, i64_t.const_zero())
+                .unwrap();
+            self.builder.build_unconditional_branch(join_bb).unwrap();
+            self.builder.position_at_end(join_bb);
+            freed = true;
+        }
+        // The pattern's bindings recorded this box as the place a later
+        // move-out mirrors its cap zeroes into (`deboxed_payload_box_ptrs`),
+        // for a container that would otherwise free the moved contents again.
+        // The container no longer owns them and the box is gone, so the
+        // mirror would write into freed memory: `v.push(w)` in the arm.
+        if freed {
+            let mut names = Vec::new();
+            collect_pattern_bindings(pattern, &mut names);
+            for n in names {
+                if let Some(slot) = self.variables.get(n.as_str()).map(|v| v.ptr) {
+                    self.payload_vars.deboxed_payload_box_ptrs.remove(&slot);
+                }
+                self.payload_vars
+                    .deferred_payload_box_ptrs
+                    .remove(n.as_str());
+            }
+        }
+    }
+
+    /// B-2026-09-20-14 — the CONCRETE instantiation of a projected scrutinee
+    /// (`t.0`, `s.g`), where the enum's own name is erased.
+    ///
+    /// The typechecker's per-expression record first; then the tuple local's
+    /// element list, and a struct field's type under the binding's
+    /// instantiation (or as declared, for a non-generic owner).
+    pub(super) fn projection_scrutinee_concrete_te(&self, e: &Expr) -> Option<TypeExpr> {
+        if let Some(te) = self
+            .type_decls
+            .enum_inst_type_exprs
+            .get(&(e.span.offset, e.span.length))
+        {
+            return Some(self.subst_monomorph_type_params(te));
+        }
+        match &e.kind {
+            ExprKind::TupleIndex { object, index } => {
+                let ExprKind::Identifier(n) = &object.kind else {
+                    return None;
+                };
+                self.var_types
+                    .tuple_var_elem_type_exprs
+                    .get(n.as_str())
+                    .and_then(|tes| tes.get(*index as usize))
+                    .map(|te| self.subst_monomorph_type_params(te))
+            }
+            ExprKind::FieldAccess { object, field } => {
+                let ExprKind::Identifier(n) = &object.kind else {
+                    return None;
+                };
+                self.field_move_out_resolved_te_by_name(n, field)
+                    .or_else(|| {
+                        let sname = self.var_types.var_type_names.get(n.as_str())?;
+                        let idx = self
+                            .type_decls
+                            .struct_field_names
+                            .get(sname.as_str())?
+                            .iter()
+                            .position(|f| f == field)?;
+                        self.type_decls
+                            .struct_field_type_exprs
+                            .get(sname.as_str())?
+                            .get(idx)
+                            .cloned()
+                    })
+            }
+            _ => None,
         }
     }
 

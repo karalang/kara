@@ -11246,6 +11246,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 &ret_ty_name,
                                 field_payload_paths,
                             );
+                            // B-2026-09-20-14 — as the struct-literal arm below.
+                            skip.here
+                                .extend(self.boxed_body_enum_field_indices(&ret_ty_name));
                             self.field_bodies_fn_for_owned_temp_skipping(&ret_ty_name, &skip)
                         };
                         // B-2026-08-02-28 — the MEMORY half, which this arm
@@ -12111,6 +12114,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `run_fresh_temp_arg_drops`' masked-value call.
                     let mut skip = self.escaping_field_skip_tree(&name, escaping_paths);
                     self.insert_payload_skip_paths(&mut skip, &name, field_payload_paths);
+                    // B-2026-09-20-14 — a field whose boxed generic enum payload
+                    // the callee takes over, and whose body it now runs.
+                    skip.here.extend(self.boxed_body_enum_field_indices(&name));
                     // B-2026-09-04-24 — resolve the walk through the temp's
                     // INSTANTIATION when the call path handed one down.
                     //
@@ -13784,6 +13790,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 _ => None,
             };
+            // B-2026-09-20-14 — a USER generic enum's constructor inline in
+            // the tuple (`(G1.Y(W { .. }), 7)`). The namers below give the bare
+            // head, which cannot say whether this instantiation boxes its
+            // payload, so the element's box and its payload's `Drop` body were
+            // lost where the same value through `mk(..)` or a local was not.
+            // The typechecker recorded the instantiation for this node.
+            if let Some((head, _)) = &head_variant {
+                if head != "Option"
+                    && head != "Result"
+                    && !self.enum_generic_param_names(head).is_empty()
+                {
+                    if let Some(te) = self
+                        .type_decls
+                        .enum_inst_type_exprs
+                        .get(&(e.span.offset, e.span.length))
+                    {
+                        return self.subst_monomorph_type_params(te);
+                    }
+                }
+            }
             if let Some((head, variant)) = head_variant {
                 let segments = [head, variant];
                 {
@@ -16534,6 +16560,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // now). Hooked at this same choke point so every call-arg site is
         // covered by one call.
         self.zero_transfer_owned_enum_field_arg(arg);
+        // B-2026-09-20-14 — the TUPLE-ELEMENT spelling (`takeg(t.0)`).
+        self.zero_transfer_owned_boxed_enum_tuple_elem_arg(arg);
         // B-2026-09-20-4 — `self` too: `fn fwd(self) { eat(self) }` hands
         // the receiver on exactly as a named binding would.
         let var = match &arg.kind {
@@ -16725,6 +16753,52 @@ impl<'ctx> super::Codegen<'ctx> {
     /// inline struct rather than a `ref Struct` borrow, whose slot is an
     /// 8-byte pointer; zeroing through that would corrupt the caller. Same
     /// gate, same rationale, as `zero_struct_field_move_cap_impl`'s.
+    /// B-2026-09-20-14 — a by-value `t.0` argument whose generic enum
+    /// monomorph heap-BOXES its payload hands the callee the box, so the
+    /// tuple's own walk of that element must find the box word null.
+    ///
+    /// Before that walk freed anything but the envelope this spelling was
+    /// already a double free of it (the callee and the tuple each freed the
+    /// box); once the walk also frees the contents and runs their `Drop`
+    /// body, an armed word would read a box the callee had freed. Queued on
+    /// the struct-field sibling's statement-end drain rather than emitted
+    /// now, for the reason given there: the argument is loaded out of the
+    /// slot after this runs.
+    fn zero_transfer_owned_boxed_enum_tuple_elem_arg(&mut self, arg: &Expr) {
+        let ExprKind::TupleIndex { object, index } = &arg.kind else {
+            return;
+        };
+        if !matches!(&object.kind, ExprKind::Identifier(_)) {
+            return;
+        }
+        let Some(te) = self.projection_scrutinee_concrete_te(arg) else {
+            return;
+        };
+        if self.user_enum_boxed_payload_variants(&te).is_empty() {
+            return;
+        }
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        let Some(ename) = p.segments.last().cloned() else {
+            return;
+        };
+        let Some(base_ptr) = self.field_chain_place_ptr(object) else {
+            return;
+        };
+        let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(object) else {
+            return;
+        };
+        let Ok(elem_ptr) =
+            self.builder
+                .build_struct_gep(tuple_ty, base_ptr, *index as u32, "b14.tupelem.p")
+        else {
+            return;
+        };
+        self.pending_enum_field_zeros
+            .push((elem_ptr, ename, Some(te)));
+    }
+
     pub(super) fn zero_transfer_owned_enum_field_arg(&mut self, arg: &Expr) {
         // B-2026-09-20-13 — see `move_declined_copy_enum_arg`'s twin of this
         // gate. Zeroing the field neutralizes the STRUCT's drop of it, which is
@@ -18759,6 +18833,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(layout) = self.type_decls.enum_layouts.get(fname).cloned() {
                     if !layout.is_shared {
                         self.zero_enum_payload_caps(field_ptr, &layout);
+                        // B-2026-09-20-14 — a generic enum field whose payload
+                        // this instantiation heap-BOXES: the caps above cannot
+                        // see inside the box, and the struct's drop now frees
+                        // the box's contents as well as the box, so the moved
+                        // source must lose the box word itself.
+                        if let Some(fte) = field_tes.as_ref().and_then(|tes| tes.get(i)) {
+                            let fte = match subst {
+                                Some(s) => {
+                                    crate::codegen::helpers::subst_type_params_in_type_expr(fte, s)
+                                }
+                                None => fte.clone(),
+                            };
+                            let fte = self.subst_monomorph_type_params(&fte);
+                            self.zero_erased_boxed_enum_payload_words_at(&fte, field_ptr);
+                        }
                     }
                 } else if self.type_decls.struct_types.contains_key(fname)
                     && !self.type_decls.shared_types.contains_key(fname)

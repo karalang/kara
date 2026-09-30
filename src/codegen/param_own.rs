@@ -219,6 +219,87 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-20-14 — the fields of a NON-generic struct whose generic
+    /// enum payload this instantiation heap-BOXES and whose payload runs a
+    /// user `Drop` body.
+    ///
+    /// The entry copy cannot duplicate such a box (its contents run a body),
+    /// so the callee aliases it and the caller hands it over: at a named
+    /// argument `zero_uncopied_enum_fields_of_struct_arg` zeroes the caller's
+    /// word and masks the field out of the caller's bodies walk, and at a
+    /// struct literal the temp's walk skips it. Both caller sites and the
+    /// callee's registration ask this one list, so they cannot disagree about
+    /// which fields moved.
+    ///
+    /// Generic structs are left out, matching the named-argument site's own
+    /// gate: there the caller keeps the field.
+    pub(super) fn boxed_body_enum_field_indices(&mut self, struct_name: &str) -> Vec<usize> {
+        if self
+            .type_decls
+            .struct_generic_params
+            .get(struct_name)
+            .is_some_and(|g| !g.is_empty())
+        {
+            return Vec::new();
+        }
+        let Some(ftes) = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name)
+            .cloned()
+        else {
+            return Vec::new();
+        };
+        ftes.iter()
+            .enumerate()
+            .filter(|(_, fte)| {
+                !self.user_enum_boxed_payload_variants(fte).is_empty()
+                    && self.generic_enum_inst_runs_user_drop(fte, &mut Vec::new())
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// B-2026-09-20-14 — the callee half of
+    /// [`Self::boxed_body_enum_field_indices`]: the box arrives by transfer,
+    /// the callee's struct drop frees it with its contents, and so the
+    /// payload's `Drop` body is the callee's to run too. Registered after the
+    /// memory action so the LIFO drain runs it first.
+    fn register_boxed_enum_field_bodies_for_param(
+        &mut self,
+        type_name: &str,
+        param_name: &str,
+        slot: PointerValue<'ctx>,
+    ) {
+        let owned = self.boxed_body_enum_field_indices(type_name);
+        if owned.is_empty() {
+            return;
+        }
+        let Some(n) = self
+            .type_decls
+            .struct_field_names
+            .get(type_name)
+            .map(|v| v.len())
+        else {
+            return;
+        };
+        let mut skip = super::synth_drop::FieldSkipTree::default();
+        skip.here.extend((0..n).filter(|j| !owned.contains(j)));
+        if let Some(f) = self.emit_user_drop_field_bodies_fn_skipping(
+            type_name,
+            &std::collections::HashMap::new(),
+            &skip,
+        ) {
+            self.track_user_drop_var_with_fn(
+                type_name,
+                param_name,
+                slot,
+                f,
+                crate::codegen::state::UserDropKind::StructFieldBodies,
+            );
+        }
+    }
+
     pub(super) fn make_aggregate_param_callee_owned_transfer(
         &mut self,
         type_name: &str,
@@ -466,6 +547,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // caller keeps that half, and registering it here would double it.
             if let Some(pname) = transfer_param {
                 self.register_transferred_param_field_bodies(type_name, pname, slot, inst.as_ref());
+            } else {
+                self.register_boxed_enum_field_bodies_for_param(type_name, param_name, slot);
             }
             return true;
         }
@@ -7798,6 +7881,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         if !layout.is_shared {
                             let layout = layout.clone();
                             self.zero_enum_payload_caps(field_ptr, &layout);
+                            // B-2026-09-20-14 — the payload BOX word of a
+                            // generic monomorph, which the name-keyed kinds
+                            // classify `None` and skip; see the tuple-element
+                            // twin in `zero_tuple_elem_cap_at`. The field's
+                            // concrete type is the binding's instantiation for
+                            // a generic owner and the declaration otherwise.
+                            let fte =
+                                self.field_move_out_resolved_te_by_name(s, field)
+                                    .or_else(|| {
+                                        self.type_decls
+                                            .struct_field_type_exprs
+                                            .get(sname.as_str())
+                                            .and_then(|ftes| ftes.get(idx))
+                                            .cloned()
+                                    });
+                            if let Some(fte) = fte {
+                                self.zero_erased_boxed_enum_payload_words_at(&fte, field_ptr);
+                            }
                         }
                     }
                 }
