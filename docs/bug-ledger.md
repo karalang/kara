@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 590 |
-| run-vs-build | 553 |
-| leak | 498 |
+| miscompile | 592 |
+| run-vs-build | 554 |
+| leak | 500 |
 | double-free | 375 |
 | missing-feature | 215 |
 | codegen-gap | 204 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2451 |
-| interp | 729 |
+| codegen | 2456 |
+| interp | 731 |
 | typecheck | 319 |
 | other | 112 |
 | ownership | 79 |
@@ -440,10 +440,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-21 | 2026-09-30 | interp+codegen | medium | A LEAF DESTRUCTURED OUT OF A `filter`ED BORROWED LOOP ELEMENT RUNS ITS `Drop` BODY AT THE LEAF AND AGAIN AT THE COLLECTION'S DEATH, ON EVERY SURFACE -- `for pair in v.iter().filter(|p| p.1 > 1) { let (a, j) = pair; .. }` over `Vec[(D, i64)]` prints `2 2 dD2 x2 dD1 dD2 end` on `--interp` and all three compiled surfaces, where `2 2 x2 dD1 dD2 end` is due; the unfiltered `v.iter()` and the `enumerate` / `rev` / `skip` / `take` adaptors are right. Memory balanced (valgrind 0) | — |
 | B-2026-09-30-9 | 2026-09-30 | codegen | high | A GENERIC enum's struct-variant payload matched by value with a NESTED struct pattern frees a pointer it never allocated compiled -- `match e { E.A { x: G { v, n }, k } => .. }` over `e: E[G[String]]` ends in `free(): invalid pointer` at -O0 and prints nothing at -O2, while --interp is right | — |
 | B-2026-09-30-5 | 2026-09-30 | interp+codegen | high | A nested struct with BOTH a `shared` field and a `Drop`-bodied field, bound out of a by-value struct param with a `shared` field by a `match` and handed back (`fn g(q: Q) -> Hs { match q { Q { hs, .. } => hs } }`), double-frees at -O0 and -O2, and the interpreter runs the inner `Drop` body TWICE per call (`d1 d1 a62`) -- the remainder of B-2026-09-29-105, which declines to copy a struct with a `Drop` body | — |
-| B-2026-09-30-31 | 2026-09-30 | codegen | medium | A DISCARDED CALL RESULT WHOSE ELEMENTS RUN `Drop` BUT OWN NO HEAP RUNS NO BODY COMPILED -- `mka();` over `fn mka() -> Array[W1, 1] { return [W1 { v: 40 }] }` (`struct W1 { v: i64 }` with a `Drop`), `mkt();` over a `(W1, i64)` return, and `let _ = mka();` print `end` on all three compiled surfaces against `--interp`'s `dW1_40 end`. The same shapes with a `String` field in the element are right | — |
-| B-2026-09-30-32 | 2026-09-30 | codegen | low | A DISCARDED BARE `[..]` LITERAL LEAKS ITS BUFFER ON EVERY COMPILED SURFACE -- `let _ = [1, 2];` and the statement `[W1 { v: 44 }];` each lose one block (valgrind definitely lost 16 B); the element bodies run correctly | — |
-| B-2026-09-30-33 | 2026-09-30 | codegen | low | A CLOSURE CALLED WITH A `Vec` LITERAL ARGUMENT LEAKS THE BUFFER ON EVERY COMPILED SURFACE -- `let f = |x: Vec[i64]| x.len(); let r = f([1, 2]);` prints `r:2 end` everywhere and loses one block (valgrind definitely lost) | — |
-| B-2026-09-30-34 | 2026-09-30 | codegen | medium | A HEAP-OWNING PLACE MOVED INTO AN ARRAY LITERAL ARGUMENT LEAKS ON EVERY COMPILED SURFACE -- `let w = W1 { v: 40, s: f"..." }; let r = take([w]);` over `fn take(x: Array[W1, 1]) -> i64` prints `dW1_40 r:40 end` everywhere and loses the element's `String` (valgrind 1 block). The same with no `String` field is clean | — |
 | B-2026-09-30-35 | 2026-09-30 | interp+codegen | medium | A DISCARDED `Vec` CALL RESULT RUNS NO ELEMENT `Drop` BODY -- `let _ = mkv();` over `fn mkv() -> Vec[W1]` prints `end` on all three compiled surfaces against `--interp`'s `dW1_41 end`, and the statement `mkv();` prints `end` on ALL FOUR surfaces, heap-owning element or not. Memory balanced (valgrind 0) | — |
 | B-2026-09-30-23 | 2026-09-30 | interp+codegen | medium | A GENERIC CALLEE'S `Array[T, N]` OR TUPLE RESULT BOUND TO A LOCAL RUNS NO ELEMENT `Drop` BODY ON THE COMPILED SURFACES AND LEAKS EVERY ELEMENT'S HEAP, WHERE `--interp` RUNS EACH BODY ONCE -- `let e = arrg(mk(1), mk(2))` over `fn arrg[T](a: T, b: T) -> Array[T, 2] { return [a, b]; }` prints nothing at -O0 and loses 2 B per element; the concrete `fn arrc(a: R, b: R) -> Array[R, 2]` is right everywhere | — |
 | B-2026-09-30-25 | 2026-09-30 | codegen | medium | AN ASSOCIATED FUNCTION'S `Array[R, N]` RESULT BOUND TO AN UNANNOTATED LOCAL RUNS NO ELEMENT `Drop` BODY COMPILED AND LEAKS ITS HEAP -- `let a = K.fr(1)` over `fn fr(i: i64) -> Array[R, 1] { return [mk(i)]; }` prints nothing where `--interp` prints `dR1`, 2 B definitely lost at -O0; the annotated `let a: Array[R, 1] = K.fr(1)`, a free function and a method are right, and reading `a[0].id` fails to build | — |
@@ -462,6 +458,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-45 | 2026-09-30 | codegen | high | A `let` that destructures a by-value `G[Vec[R]]` param held by TRANSFER runs the elements' `Drop` bodies over FREED memory on every compiled surface -- `fn f(g: G[Vec[R]]) -> i64 { let G { v, n } = g; n }` prints garbage ids (`d23003179811 d909648563121847314`) where --interp prints `d8 d9`, valgrind 1 invalid read of size 8 | — |
 | B-2026-09-30-46 | 2026-09-30 | codegen | high | A `match` whose only arm binds the WHOLE by-value struct param by name (`match g { x => x.n }`) runs the field's `Drop` body TWICE on every compiled surface, for a generic and a non-generic struct alike, and DOUBLE-FREES a heap-bearing field -- `fn f(g: H) -> i64 { match g { x => x.n } }` prints `d4 d4 1 after` where --interp prints `d4 1 after` | — |
 | B-2026-09-30-49 | 2026-09-30 | interp+codegen | high | A NAMED LOCAL MOVED INTO A STRUCT LITERAL WRITTEN AS A CALL ARGUMENT RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, INTERPRETER INCLUDED, AND COMPILED WALKS THE FREED BUFFER WHEN THE LOCAL IS A `Vec` -- `let r = R { id: 5 }; println(f2(Hr { v: r, n: 3 }))` prints `d5 3 d5` everywhere, and `let q = [R { id: 5 }]; f2(Hq { v: q, n: 3 })` prints `d5 3 d<garbage>` compiled with one invalid read | — |
+| B-2026-09-30-56 | 2026-09-30 | interp+codegen | high | A NAMED LOCAL MOVED INTO AN `Array` LITERAL ARGUMENT THAT THE CALLEE HANDS BACK RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `let w = W1 { .. }; let r = pass([w]);` over `fn pass(x: Array[W1, 1]) -> Array[W1, 1] { return x }` prints `dW1_40 r:40 dW1_40 end` everywhere, where one body is due. Memory balanced (valgrind 0) | — |
+| B-2026-09-30-57 | 2026-09-30 | interp+codegen | medium | A FRESH ELEMENT BESIDE A MOVED LOCAL IN A COLLECTION LITERAL ARGUMENT RUNS NO `Drop` BODY ON ANY SURFACE -- `take([w, W1 { v: 2, .. }])` prints `dW1_40 r:42 end` on all four surfaces (the fresh `dW1_2` never fires), for an `Array[W1, 2]` and a `Vec[W1]` param alike | — |
+| B-2026-09-30-58 | 2026-09-30 | codegen | low | A BRANCHING ARGUMENT WHOSE TAILS ARE COLLECTION LITERALS, OR MIX A BLOCK-LOCAL BINDING WITH A CALL, LEAKS ITS `Vec` BUFFER ON EVERY COMPILED SURFACE, TO A FREE FUNCTION AND A CLOSURE ALIKE -- `vl(if c { [1] } else { [2, 3] })`, its `match` spelling and `vl(if c { let t = mk(1); t } else { mk(2) })` each lose one block | — |
+| B-2026-09-30-59 | 2026-09-30 | codegen | medium | TWO MORE SPELLINGS OF A HEAP-OWNING VALUE MOVED INTO AN `Array` LITERAL LEAK ITS HEAP ON EVERY COMPILED SURFACE, the remainder of B-2026-09-30-34 -- a BY-VALUE PARAM moved in (`fn mkw(w: W1) -> i64 { return take([w]) }`) and a DISCARDED literal holding a local (`let w = W1 { .. }; let _ = [w];`) each lose the element's `String` (valgrind 1 block); body counts are right | — |
+| B-2026-09-30-60 | 2026-09-30 | codegen | medium | A DISCARDED `Array[..]` PREFIX LITERAL RUNS NO ELEMENT `Drop` BODY COMPILED AND LEAKS THE ELEMENT'S HEAP -- `let _ = Array[W1 { v: 7, s: f"a{7}" }];` prints `end` on all three compiled surfaces against `--interp`'s `dW1_7 end`, and loses 1 block | — |
 
 ### Relocated
 
@@ -3408,6 +3409,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-8 | codegen | high | A `match` / `if let` struct pattern over a CONCRETE instantiation of a generic struct double-frees the leaf it moves out -- `match g { G { v, n } =>… | d6d493949 |
 | B-2026-09-30-14 | typecheck+codegen | high | Inside a GENERIC fn, a leaf moved out of a `match` over a generic struct param double-frees -- `fn f[T](g: G[T]) -> T { match g { G { v, . | 451ecd42c |
 | B-2026-09-30-24 | codegen | high | A by-value struct param the callee holds by TRANSFER (a generic struct such as `G[R]`) and destructures with a `match` loses the leaf's `Drop` body o… | f6a0817bf |
+| B-2026-09-30-31 | codegen | medium | A DISCARDED CALL RESULT WHOSE ELEMENTS RUN `Drop` BUT OWN NO HEAP RUNS NO BODY COMPILED -- `mka();` over `fn mka() -> Array[W1, 1] { return [W1 { v:… | 22cf35dc6 |
+| B-2026-09-30-32 | codegen | low | A DISCARDED BARE `[..]` LITERAL LEAKS ITS BUFFER ON EVERY COMPILED SURFACE -- `let _ = [1, 2];` and the statement `[W1 { v: 44 }];` each lose one blo… | 0069d15e3 |
+| B-2026-09-30-33 | codegen | low | A CLOSURE CALLED WITH A `Vec` LITERAL ARGUMENT LEAKS THE BUFFER ON EVERY COMPILED SURFACE -- `let f = \|x: Vec[i64]\| x.len(); let r = f([1, 2]);` prin… | 59da304fe |
+| B-2026-09-30-34 | codegen | medium | A HEAP-OWNING PLACE MOVED INTO AN ARRAY LITERAL ARGUMENT LEAKS ON EVERY COMPILED SURFACE -- `let w = W1 { v: 40, s: f"..." }; let r = take([w]);` ove… | c5d0a8979 |
 | B-2026-09-30-22 | interp+codegen | high | A WHOLE BY-VALUE PARAM MOVED INTO A RETURNED ARRAY LITERAL RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, INTERPRETER INCLUDED -- `fn arrc(a: R, b: R)… | 80f3e1dcd |
 | B-2026-09-30-26 | interp+codegen | high | THE `Vec` TWIN OF B-2026-09-30-22: A WHOLE BY-VALUE PARAM MOVED INTO A RETURNED `Vec` LITERAL RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, INTERPRETE… | 4fb8d4a07 |
 
