@@ -15563,7 +15563,19 @@ impl<'ctx> super::Codegen<'ctx> {
             if let ExprKind::Identifier(n) = &arg.value.kind {
                 let n = n.clone();
                 if !self.guard_user_drop_for_nested_return(&n) {
-                    self.suppress_user_drop_for_var(&n);
+                    // B-2026-09-20-36 — at a site `uam_defensive_copy` copied
+                    // (`Ws.Full(p); println(p.s)`) the payload holds a copy, so
+                    // the source still frees its own buffers and only the body
+                    // moves. Removing the whole wrapper leaked them (3 B).
+                    if self
+                        .span_tables
+                        .uam_copied_sites
+                        .contains(&(arg.value.span.offset, arg.value.span.length))
+                    {
+                        self.suppress_user_drop_body_keeping_memory(&n);
+                    } else {
+                        self.suppress_user_drop_for_var(&n);
+                    }
                 }
             }
             // B-2026-09-26-35 — a field PROJECTED off a named local

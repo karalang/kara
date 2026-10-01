@@ -16311,6 +16311,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.try_compile_heap_env_vec_elem_reassign(object, index, val, value)? {
                         return Ok(());
                     }
+                    // B-2026-09-20-36 — the index-assign sink's half of
+                    // B-2026-09-15-16's pair. A named source READ AFTER the
+                    // store (`a[0] = p; println(p.s)`) hands the slot its own
+                    // copy and keeps its buffers; the cap-zeroing below skips a
+                    // recorded site. Without it the zeroing emptied the source
+                    // and the later read printed nothing on every compiled
+                    // surface while `--interp` printed the string.
+                    let val = self.uam_defensive_copy(value, val);
+                    let uam_copied = self
+                        .span_tables
+                        .uam_copied_sites
+                        .contains(&(value.span.offset, value.span.length));
                     // B-2026-08-01-21 — displaced STRUCT/ENUM element:
                     // `v[i] = <new>` freed a direct {ptr,len,cap} element but
                     // never walked a struct element's heap FIELDS (a
@@ -16471,7 +16483,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(soa) = self.active_soa_layout(container) {
                             if let ExprKind::Identifier(src) = &value.kind {
                                 if !self.borrow_vars.ref_params.contains_key(src) {
-                                    if let Some(src_slot) = self.variables.get(src).copied() {
+                                    if let Some(src_slot) =
+                                        self.variables.get(src).copied().filter(|_| !uam_copied)
+                                    {
                                         // B-2026-09-02-20 — see the helper.
                                         let vp = self.move_suppression_value_ptr(src, src_slot.ptr);
                                         self.zero_struct_move_caps(vp, &soa.struct_name);
@@ -16562,7 +16576,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 _ => true,
                             };
                             if let Some(sname) = elem_struct.filter(|_| container_owns) {
-                                if let Some(src_slot) = self.variables.get(src).copied() {
+                                // B-2026-09-20-36 — a copied site keeps the
+                                // source's buffers: it still frees them.
+                                if let Some(src_slot) =
+                                    self.variables.get(src).copied().filter(|_| !uam_copied)
+                                {
                                     // B-2026-09-02-20 — see the helper.
                                     let vp = self.move_suppression_value_ptr(src, src_slot.ptr);
                                     let subst = elem_inst
@@ -16585,7 +16603,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // (B-2026-07-30-11); this arm is the
                                 // index-store peer that never got it. The
                                 // interpreter is already correct here.
-                                self.suppress_user_drop_for_var(src);
+                                //
+                                // B-2026-09-20-36 — at a copied site the
+                                // source still owns its memory, so only the
+                                // bodies go (its own and its fields' walk):
+                                // the slot's copy runs them.
+                                if uam_copied {
+                                    self.suppress_user_drop_body_keeping_memory(src);
+                                    self.suppress_struct_field_bodies_for_var(src);
+                                } else {
+                                    self.suppress_user_drop_for_var(src);
+                                }
                             }
                         }
                     }
