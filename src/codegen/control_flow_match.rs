@@ -16688,10 +16688,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // machinery rather than any walker this predicate gates. Admitting them
         // here disarmed that machinery — 25 `Option`/`Result` boxed-payload and
         // arm-consumption fixtures, caught by the suite.
+        let declared_params = self.enum_generic_param_names(enum_name);
         let own_params = if matches!(enum_name, "Option" | "Result") {
             Vec::new()
         } else {
-            self.enum_generic_param_names(enum_name)
+            declared_params.clone()
         };
         consumed.into_iter().any(|pos| {
             // B-2026-09-19-46 — a declared TUPLE payload is consumed when any
@@ -16719,7 +16720,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => None,
                 })
                 .is_some_and(|n| {
-                    own_params.contains(&n) || self.type_runs_user_drop(&n, &mut Vec::new())
+                    // B-2026-10-01-50 — a payload spelled as one of the enum's
+                    // generic params names THAT param, never a user type that
+                    // happens to share its name. The seeded pair's params are
+                    // deliberately not `own_params` (above), so they fell
+                    // through to the name lookup, and any user `struct T` or
+                    // `enum T` whose values run a `Drop` body captured
+                    // `Option[+T]`'s payload: every `Some(w)` arm then read as
+                    // consuming, its per-path bodies bit cleared the
+                    // scrutinee's box interior at the arm's entry, and an arm
+                    // that discarded `w` only on one path leaked the payload
+                    // on the other (31 B on `if c { let _ = Some(w); }` at
+                    // `c = false`). Without such a declaration the same
+                    // program was clean.
+                    own_params.contains(&n)
+                        || (!declared_params.contains(&n)
+                            && self.type_runs_user_drop(&n, &mut Vec::new()))
                 })
         })
     }
