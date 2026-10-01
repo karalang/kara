@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 632 |
+| miscompile | 633 |
 | run-vs-build | 568 |
-| leak | 521 |
+| leak | 522 |
 | double-free | 389 |
 | missing-feature | 215 |
 | codegen-gap | 208 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2541 |
+| codegen | 2543 |
 | interp | 769 |
 | typecheck | 321 |
 | other | 112 |
@@ -456,8 +456,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-2 | 2026-10-01 | codegen | medium | A partial destructure of a BOXED struct payload leaks the taken leaf's buffer compiled in two spellings the named read-only arm does not -- over `struct H2 { v: R, r: R }`, `let o = Option.Some(H2 {..}); match o { Option.Some(H2 { v, .. }) => take(v), .. }` (by-value `fn take(x: R)`) loses 31 B at -O0, and a FRESH-TEMP scrutinee `match Option.Some(H2 {..}) { Option.Some(H2 { v, .. }) => v.id, .. }` loses 31 B (33 B for `H2 { r, .. }`), where the named `Option.Some(H2 { v, .. }) => v.id` is clean; the generic `G2[R]` matches each cell exactly | — |
 | B-2026-10-01-3 | 2026-10-01 | codegen | low | A by-value user-enum param whose variant carries a GENERIC struct (`e: E[G[String]]` over `enum E[T] { A { x: T, k: i64 }, B }`) leaks the struct's heap field when an arm destructures it without binding that field -- `match e { E.A { x: G { v: _, n }, k } => n + k, .. }` and `E.A { x: G { n, .. }, k }` lose 31 B at -O0 on every compiled surface; the remainder of B-2026-09-30-77 after its `Option` half was fixed | — |
 | B-2026-10-01-4 | 2026-10-01 | codegen | medium | A `match` arm whose value is ONE scalar projection through an `Option` TUPLE payload binding (`Some(p) => p.0.id`) leaks the payload at -O0, and over `Option[(R, R)]` also runs NEITHER element's `Drop` body compiled -- `let o = Option.Some((mk(6), mk(66))); match o { Option.Some(p) => p.0.id, .. }` prints `6 after` on -O0 (63 B lost) against `--interp`'s `d6 d66 6 after`; `p.1.id` and `Option[(R, i64)]`'s `p.0.id` run the bodies but lose 32 B / 31 B | — |
-| B-2026-10-01-10 | 2026-10-01 | codegen | low | AN INLINE (UNBOXED) `Result` PAYLOAD BINDING DISCARDED IN AN ARM RUNS ITS `Drop` BODY AT ARM END COMPILED -- `match r { Ok(w) => { let _ = w; println("arm") }, Err(_) => {} }` over `Result[W1, i64]` prints `arm dW1_3 end` on the JIT, -O2 and -O2 auto-par against `dW1_3 arm end` under `--interp`, valgrind clean; the boxed `Option[W1]` spelling is right since B-2026-09-30-105 | — |
-| B-2026-10-01-13 | 2026-10-01 | codegen | low | A FIELD READ THROUGH AN UNANNOTATED TUPLE BOUND FROM A `match` DOES NOT LOWER -- `let t = match o { Some(w) => (w, 1), None => (mk(0), 0) }; println(f"{t.0.v}")` fails `cannot resolve field 'v' on this receiver` under `karac run` and `karac build` while `--interp` prints `8`; reading only `t.1` works and runs the body once since B-2026-09-30-106, and `let t: (W1, i64) = ..` works | — |
 | B-2026-10-01-14 | 2026-10-01 | interp+codegen | high | REMAINDER OF B-2026-09-30-64: A CLOSURE THAT HANDS BACK ITS BY-VALUE PARAM RUNS THE `Drop` BODY TWICE OR DOUBLE-FREES, ON EVERY SURFACE -- `let h = |x: R| x; let r3 = h(mk(73))` aborts `free(): double free` under the JIT and AOT (`--interp` `dR73 r73 dR73`), and `let f = |x: Array[R, 1]| x; let r = f([w])` runs `dR71` twice under `--interp` while the compiled surfaces run it once at the call instead of at `r`'s death; `r[0].id` on the compiled result does not build | — |
 | B-2026-10-01-15 | 2026-10-01 | codegen | medium | A FIXED `Array` RESULT BOUND THROUGH AN `if` INITIALIZER, OR ITERATED BY `for`, CANNOT HAVE AN ELEMENT FIELD READ COMPILED -- `let z = if c { fr(60) } else { fr(61) }; z[0].id` and `let l = f2(80); for q in l { q.id }` over `fn fr(i: i64) -> Array[R, 1]` fail `karac build` with `cannot resolve field 'id' on this receiver`, where `--interp` prints the right values | — |
 | B-2026-10-01-5 | 2026-10-01 | codegen | medium | REMAINDER OF B-2026-09-20-30: A `Result[shared]` OR GENERIC ENUM OF A `shared` PAYLOAD THAT REACHES ITS BINDING THROUGH A `break` VALUE OR A PLAIN REBIND IS STILL NEVER RELEASED ON ANY COMPILED SURFACE, WHERE THE `Option` TWINS ARE CLEAN -- `let b: Box2[Sh] = loop { break freemk(50) }`, `let b: Box2[Sh] = outer: { break outer freemk(63) }` and `let r: Result[Sh, i64] = freeres(62); let c = r;` each print `x` with no `dSh` body on the JIT, -O0 and -O2 and lose 16 B in 1 block at -O0, while `--interp` prints `x dSh..`; `let o: Option[Sh] = loop { break Some(..) }` and `let o = Some(..); let c = o;` are right everywhere | — |
@@ -486,6 +484,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-47 | 2026-10-01 | codegen | medium | AN OWNED-`self` METHOD THAT BINDS A BOXED GENERIC PAYLOAD'S `Array[D, N]` / `Vec[D]` RUNS NONE OF THE ELEMENTS' `Drop` BODIES ON THE COMPILED SURFACES -- `fn m(self) -> i64 { match self { G.Y(v) => { println("seen"); return 4; } .. } }` over `G[Array[D, 2]]` prints `seen r=4 end` where `--interp` prints `seen dD1 dD2 r=4 end`, memory clean, on the `impl[T] G[T]` and the concrete `impl G[Array[D, 2]]` blocks alike | — |
 | B-2026-10-01-48 | 2026-10-01 | typecheck | low | IN A CONCRETE IMPL ON A GENERIC ENUM, `let w = v` OF AN ARM-BOUND PAYLOAD IS REFUSED WITH "cannot infer type parameter 'T'" -- `impl G[String] { fn m(self) -> i64 { match self { G.Y(v) => { let w = v; return 5; } .. } } }` fails `karac check` at the `let`, while `println(v)` in the same arm checks, `let w: String = v` checks and runs, and the `impl[T] G[T]` spelling checks | — |
 | B-2026-10-01-55 | 2026-10-01 | codegen | high | A HEAP ELEMENT READ OUT OF A NAMED FIXED `Array` INTO ANY OWNING SINK IS AN ALIAS, SO THE ARRAY AND THE DESTINATION FREE ONE BUFFER -- `fn f(p: ref Array[String, 2]) -> String { return p[0]; }`, `return (a[0], 3)`, `Some(a[1])`, `v.push(a[0])` and `return a[i]` each report `Invalid free()` under valgrind at -O0 on the compiled surfaces while `--interp` is right; 41 of 54 cells bad across {local, by-value param, `ref` param} x {String, plain struct, `Drop` struct} x {const return, dynamic return, tail, tuple, `Some`, `push`}, and only a constant-index `return`/tail over an owned root is clean | — |
+| B-2026-10-01-49 | 2026-10-01 | codegen | medium | A PAYLOAD BINDING NESTED ONE TUPLE DEEPER AT AN ARM'S TAIL LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE -- `let t = match o { Some(w) => ((w, 1), 2), None => ((mk(0), 0), 0) }` over a local `Option[W1]` prints `6 2 end` on the JIT, -O2 and -O2 auto-par against `6 2 dW1_6 end` under `--interp`, valgrind clean; the one-level `(w, 1)` is right since B-2026-10-01-13 | — |
+| B-2026-10-01-50 | 2026-10-01 | codegen | medium | A BOXED PAYLOAD BINDING RE-WRAPPED IN A DISCARDED CONSTRUCTOR INSIDE AN `if` IN ITS ARM LEAKS THE PAYLOAD'S HEAP ON THE PATH THAT SKIPS THE `if` -- `match o { Some(w) => { if c { let _ = Some(w); .. }; println("b") }, None => {} }` over a local `Option[W1]` with `c = false` prints the right output on every surface but valgrind at -O0 reports 31 bytes definitely lost; the same for `E.A(w)`, and the taken path is clean | — |
 
 ### Relocated
 
@@ -3506,8 +3506,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-7 | codegen | high | A BY-VALUE BOXED `Option[R]` PARAM RETURNED DIRECTLY INSIDE A COLLECTION LITERAL SEGFAULTS ON EVERY COMPILED SURFACE, BOUND OR DISCARDED -- `fn ov(x:… | 9457e9075 |
 | B-2026-10-01-8 | codegen | high | A NAMED `Array[R, 2]` LOCAL PASSED TO A GENERIC PASS-THROUGH `fn pg[T](x: T) -> T` DOUBLE-FREES AT -O0, SO UNDER THE JIT TOO -- `let a: Array[R, 2] =… | 6aa3e6e58 |
 | B-2026-10-01-9 | interp+codegen | medium | A BY-VALUE PARAM MOVED INTO A COLLECTION LITERAL BOUND TO A `let mut` LOCAL AND RETURNED RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `fn f1(x: R)… | 49cff9e64 |
+| B-2026-10-01-10 | codegen | low | AN INLINE (UNBOXED) `Result` PAYLOAD BINDING DISCARDED IN AN ARM RUNS ITS `Drop` BODY AT ARM END COMPILED -- `match r { Ok(w) => { let _ = w; println… | da5f3c214 |
 | B-2026-10-01-11 | codegen | high | RE-WRAPPING A BOXED `Option` PAYLOAD BINDING IN `Some` INSIDE ITS OWN ARM DOUBLE FREES ON THE JIT -- `let t = match o { Some(w) => Some(w), None => N… | 88835d717 |
 | B-2026-10-01-12 | interp | medium | UNDER `--interp` A BY-VALUE `Option` PARAM'S PAYLOAD MOVED INTO AN ARRAY LITERAL THAT IS THE `match` VALUE RUNS ITS `Drop` BODY TWICE -- `fn f(o: Opt… | 77ccda935 |
+| B-2026-10-01-13 | codegen | low | A FIELD READ THROUGH AN UNANNOTATED TUPLE BOUND FROM A `match` DOES NOT LOWER -- `let t = match o { Some(w) => (w, 1), None => (mk(0), 0) }; println(… | 47cef6f37 |
 | B-2026-10-01-17 | codegen | high | A `?` THAT CONVERTS A NAMED `Result` THROUGH `From` (`let r = mke(k); let x = r?;`) READS FREED MEMORY, PRINTS GARBAGE OR LEAKS, BY SOURCE SHAPE -- t… | 50addfbe7 |
 | B-2026-10-01-18 | interp+codegen | medium | A `?` THAT CONVERTS ITS ERROR THROUGH `From` NEVER RUNS THE SOURCE ERROR'S `Drop` BODY, ON BOTH BACKENDS -- `struct S { id: i64, v: String }` with a… | abae89141 |
 | B-2026-10-01-19 | codegen | high | MOVING A STRUCT FIELD OUT OF A BOXED `Err` PAYLOAD IN A `match` ARM (`Result.Err(e) => { let i = e.inner; . | f51cc9c12 |
