@@ -95,9 +95,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 619 |
 | run-vs-build | 565 |
 | leak | 512 |
-| double-free | 383 |
+| double-free | 384 |
 | missing-feature | 215 |
-| codegen-gap | 207 |
+| codegen-gap | 208 |
 | other | 164 |
 | diagnostics | 138 |
 | perf | 117 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2512 |
-| interp | 757 |
+| codegen | 2514 |
+| interp | 758 |
 | typecheck | 320 |
 | other | 112 |
 | ownership | 79 |
@@ -426,7 +426,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-2 | 2026-09-30 | interp+codegen | medium | AN ELEMENT PUSHED INTO A REBOUND BY-VALUE `Vec` PARAM RUNS NO `Drop` BODY ON ANY SURFACE -- `fn pv(v: Vec[D]) -> i64 { let mut b = v; b.push(mkd(9)); return b.len() }` called with a named `Vec[D]` prints `3 dD1 dD2 end` on `--interp` and every compiled surface, where a `dD9` is also due; the same push into a leaf of a by-value tuple param (`let (a, j) = t; let mut b = a; b.push(mkd(9))`) loses it the same way. Memory balanced (valgrind 0) | — |
 | B-2026-09-30-21 | 2026-09-30 | interp+codegen | medium | A LEAF DESTRUCTURED OUT OF A `filter`ED BORROWED LOOP ELEMENT RUNS ITS `Drop` BODY AT THE LEAF AND AGAIN AT THE COLLECTION'S DEATH, ON EVERY SURFACE -- `for pair in v.iter().filter(|p| p.1 > 1) { let (a, j) = pair; .. }` over `Vec[(D, i64)]` prints `2 2 dD2 x2 dD1 dD2 end` on `--interp` and all three compiled surfaces, where `2 2 x2 dD1 dD2 end` is due; the unfiltered `v.iter()` and the `enumerate` / `rev` / `skip` / `take` adaptors are right. Memory balanced (valgrind 0) | — |
 | B-2026-09-30-5 | 2026-09-30 | interp+codegen | high | A nested struct with BOTH a `shared` field and a `Drop`-bodied field, bound out of a by-value struct param with a `shared` field by a `match` and handed back (`fn g(q: Q) -> Hs { match q { Q { hs, .. } => hs } }`), double-frees at -O0 and -O2, and the interpreter runs the inner `Drop` body TWICE per call (`d1 d1 a62`) -- the remainder of B-2026-09-29-105, which declines to copy a struct with a `Drop` body | — |
-| B-2026-09-30-25 | 2026-09-30 | codegen | medium | AN ASSOCIATED FUNCTION'S `Array[R, N]` RESULT BOUND TO AN UNANNOTATED LOCAL RUNS NO ELEMENT `Drop` BODY COMPILED AND LEAKS ITS HEAP -- `let a = K.fr(1)` over `fn fr(i: i64) -> Array[R, 1] { return [mk(i)]; }` prints nothing where `--interp` prints `dR1`, 2 B definitely lost at -O0; the annotated `let a: Array[R, 1] = K.fr(1)`, a free function and a method are right, and reading `a[0].id` fails to build | — |
 | B-2026-09-30-36 | 2026-09-30 | codegen | medium | A TUPLE LITERAL PASSED BY VALUE LEAKS A GENERIC ENUM ELEMENT'S PAYLOAD BOX AND LOSES ITS `Drop` BODY -- `taket((mk(1), 7))` over `fn taket(t: (G1[W], i64))`, where `G1[W]` heap-boxes its payload, loses 32 B and never prints `dW1`; the named spelling `let t = (mk(1), 7); taket(t)` is clean | — |
 | B-2026-09-30-37 | 2026-09-30 | codegen | medium | A GENERIC STRUCT LITERAL PASSED BY VALUE LOSES ITS BOXED ENUM PAYLOAD'S `Drop` BODY -- `takest(S { g: mk(1), k: 7 })` over `fn takest(s: S[W])` prints `tt7 end` where `--interp` prints `tt7 dW1 end`; memory is balanced since B-2026-09-20-14, and the named spelling and the concrete holder are both correct | — |
 | B-2026-09-30-38 | 2026-09-30 | codegen | medium | A TUPLE PATTERN THAT BINDS TWO ENUM PAYLOADS RUNS THEIR `Drop` BODIES IN REVERSE, AND TWICE EACH FOR A NON-GENERIC ENUM -- `match u { (C1.Y(w), C1.Y(v)) => .. }` prints `dW4 dW3 dW3 dW4` where `--interp` prints `dW3 dW4`, with memory balanced; the generic `G1[W]` twin prints each body once but in reverse | — |
@@ -440,7 +439,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-54 | 2026-09-30 | interp+codegen | medium | SHADOWING A REBIND OF A BOXED `Option` TUPLE PAYLOAD LOSES `Drop` BODIES ON BOTH BACKENDS, DIFFERENTLY -- `let u = t; let k = u.0; let u = mkh(8); println(f"k{k.id}"); return u;` prints `k5 got:8 dH8 end` interpreted (both payload bodies lost) and `k5 dH5 got:8 dH8 end` compiled (`dH6` lost) against the due `k5 dH5 dH6 got:8 dH8 end` | — |
 | B-2026-09-30-55 | 2026-09-30 | codegen | medium | A `Result` WHOSE `Ok` AND `Err` PAYLOADS ARE BOTH BOXED TUPLES RUNS A PROJECTED PART'S `Drop` BODY TWICE COMPILED -- `match o { Ok(t) => { return t.0; } Err(e) => { return e.1; } }` over `Result[(H, H), (H, H)]` prints `dH5 dH6 got:5 dH5 end` compiled against `--interp`'s correct `dH6 got:5 dH5 end` | — |
 | B-2026-09-30-61 | 2026-09-30 | interp | low | AN ARM LOCAL TAKEN FROM AN `Option` TUPLE PAYLOAD AND HANDED OUT ONLY UNDER A CONDITION RUNS ITS `Drop` BODY LATER INTERPRETED THAN COMPILED ON THE PATH THAT DOES NOT HAND IT OUT -- `let x = t.0; if c { return x; } println("no"); return mkh(9);` at `c = false` prints `no dH5 dH6` on `--interp` and `dH5 no dH6` at `build -O0`; each body runs once on both, and the compiled position is the one the live-range rule and the existing pins give (INFERRED) | — |
-| B-2026-09-30-64 | 2026-09-30 | interp+codegen | medium | A FIELD READ THROUGH AN INDEX OF AN `Array` HANDED BACK BY AN ASSOCIATED FUNCTION OR A CLOSURE FAILS TO COMPILE -- `let r = Z.pa([w]); r[0].v` and `let r = f([w]); r[0].v` (with `f = |x: Array[W1, 1]| x`) both stop codegen with `cannot resolve field 'v' on this receiver (its type was not recorded for codegen)`; the closure spelling ALSO runs `w`'s `Drop` body twice under `--interp` (`dW1_71 r:71 dW1_71 end`) | — |
 | B-2026-09-30-65 | 2026-09-30 | codegen | low | A METHOD THAT CONDITIONALLY HANDS BACK AN `Array` LITERAL ARGUMENT WRAPPED IN `Some` LEAKS ONE BLOCK WHEN THE HAND-BACK BRANCH IS TAKEN -- `k.pc([w], true)` over `fn pc(ref self, x: Array[W1, 1], c: bool) -> Option[Array[W1, 1]] { if c { return Some(x) } return None }` prints the right bodies on every surface and valgrind reports 1 block lost; the free-function twin is clean | — |
 | B-2026-09-30-62 | 2026-09-30 | interp | medium | A PART OF AN `Option` TUPLE PAYLOAD HANDED OUT INSIDE A CONSTRUCTOR (`return Option.Some(t.0)`) RUNS ITS `Drop` BODY TWICE INTERPRETED -- `fn ct(o: Option[(R, R)]) -> Option[R]` prints `dR5 dR6 dR5 got` on `--interp` against the compiled side's correct `dR6 dR5 got`, at fresh-temp and named-local arguments alike; the GENERIC twin with a named argument doubles on BOTH backends | — |
 | B-2026-09-30-63 | 2026-09-30 | codegen | medium | A GENERIC CALLEE THAT HANDS ONE PART OF A FRESH `Option[(T, T)]` ARGUMENT OUT INSIDE A CONSTRUCTOR LOSES THE OTHER PART'S `Drop` BODY COMPILED -- `gt(Option.Some((mkr(5), mkr(6))))` over `fn gt[T](o: Option[(T, T)]) -> Option[T] { .. return Option.Some(t.0) .. }` prints `dR5 got end` at `build -O0`, element 1's body never running, where the concrete twin is correct | — |
@@ -482,6 +480,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-11 | 2026-10-01 | codegen | high | RE-WRAPPING A BOXED `Option` PAYLOAD BINDING IN `Some` INSIDE ITS OWN ARM DOUBLE FREES ON THE JIT -- `let t = match o { Some(w) => Some(w), None => None }` over a local `Option[W1]` (`W1` holds a `String`, so the payload boxes) aborts `free(): double free detected in tcache 2` under `karac run` and reports an invalid free under valgrind at -O0, while -O2 and -O2 auto-par print what `--interp` prints; braced `{ Some(w) }` and `{ let q = Some(w); q }` do the same, an inline `Option[W2]` payload is clean | — |
 | B-2026-10-01-12 | 2026-10-01 | interp | medium | UNDER `--interp` A BY-VALUE `Option` PARAM'S PAYLOAD MOVED INTO AN ARRAY LITERAL THAT IS THE `match` VALUE RUNS ITS `Drop` BODY TWICE -- `fn f(o: Option[W1]) { let t = match o { Some(w) => [w], None => [mk(0)] }; println(f"{t[0].v}") }` prints `4 dW1_4 dW1_4` under `--interp` and `4 dW1_4` on the JIT, -O2 and -O2 auto-par; a local scrutinee, a tuple, a struct literal and a bare `w` are right | — |
 | B-2026-10-01-13 | 2026-10-01 | codegen | low | A FIELD READ THROUGH AN UNANNOTATED TUPLE BOUND FROM A `match` DOES NOT LOWER -- `let t = match o { Some(w) => (w, 1), None => (mk(0), 0) }; println(f"{t.0.v}")` fails `cannot resolve field 'v' on this receiver` under `karac run` and `karac build` while `--interp` prints `8`; reading only `t.1` works and runs the body once since B-2026-09-30-106, and `let t: (W1, i64) = ..` works | — |
+| B-2026-10-01-14 | 2026-10-01 | interp+codegen | high | REMAINDER OF B-2026-09-30-64: A CLOSURE THAT HANDS BACK ITS BY-VALUE PARAM RUNS THE `Drop` BODY TWICE OR DOUBLE-FREES, ON EVERY SURFACE -- `let h = |x: R| x; let r3 = h(mk(73))` aborts `free(): double free` under the JIT and AOT (`--interp` `dR73 r73 dR73`), and `let f = |x: Array[R, 1]| x; let r = f([w])` runs `dR71` twice under `--interp` while the compiled surfaces run it once at the call instead of at `r`'s death; `r[0].id` on the compiled result does not build | — |
+| B-2026-10-01-15 | 2026-10-01 | codegen | medium | A FIXED `Array` RESULT BOUND THROUGH AN `if` INITIALIZER, OR ITERATED BY `for`, CANNOT HAVE AN ELEMENT FIELD READ COMPILED -- `let z = if c { fr(60) } else { fr(61) }; z[0].id` and `let l = f2(80); for q in l { q.id }` over `fn fr(i: i64) -> Array[R, 1]` fail `karac build` with `cannot resolve field 'id' on this receiver`, where `--interp` prints the right values | — |
 
 ### Relocated
 
@@ -3449,6 +3449,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-35 | interp+codegen | medium | A DISCARDED `Vec` CALL RESULT RUNS NO ELEMENT `Drop` BODY -- `let _ = mkv();` over `fn mkv() -> Vec[W1]` prints `end` on all three compiled surfaces… | 69e5a5f1d |
 | B-2026-09-30-22 | interp+codegen | high | A WHOLE BY-VALUE PARAM MOVED INTO A RETURNED ARRAY LITERAL RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, INTERPRETER INCLUDED -- `fn arrc(a: R, b: R)… | 80f3e1dcd |
 | B-2026-09-30-23 | interp+codegen | medium | A GENERIC CALLEE'S `Array[T, N]` OR TUPLE RESULT BOUND TO A LOCAL RUNS NO ELEMENT `Drop` BODY ON THE COMPILED SURFACES AND LEAKS EVERY ELEMENT'S HEAP… | bcf4cd7ee |
+| B-2026-09-30-25 | codegen | medium | AN ASSOCIATED FUNCTION'S `Array[R, N]` RESULT BOUND TO AN UNANNOTATED LOCAL RUNS NO ELEMENT `Drop` BODY COMPILED AND LEAKS ITS HEAP -- `let a = K.fr(… | 82097e763 |
 | B-2026-09-30-26 | interp+codegen | high | THE `Vec` TWIN OF B-2026-09-30-22: A WHOLE BY-VALUE PARAM MOVED INTO A RETURNED `Vec` LITERAL RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, INTERPRETE… | 4fb8d4a07 |
 | B-2026-09-30-27 | interp+codegen | high | WHOLE BY-VALUE PARAMS MOVED INTO A LOCAL `Array` OR `Vec` THAT IS THEN RETURNED RUN THEIR `Drop` BODIES TWICE ON EVERY SURFACE, INTERPRETER INCLUDED… | 2e077d4fe |
 | B-2026-09-30-47 | codegen | medium | REMAINDER OF B-2026-09-30-12: A PAYLOAD-BINDING `match` ARM THAT TAKES ONLY SOME FIELDS OF ITS VARIANT, ON A LOCAL, INSIDE A BRANCH THAT MAY NOT RUN,… | 045323731 |
@@ -3463,6 +3464,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-58 | codegen | low | A BRANCHING ARGUMENT WHOSE TAILS ARE COLLECTION LITERALS, OR MIX A BLOCK-LOCAL BINDING WITH A CALL, LEAKS ITS `Vec` BUFFER ON EVERY COMPILED SURFACE,… | 5cb90bb57 |
 | B-2026-09-30-59 | codegen | medium | TWO MORE SPELLINGS OF A HEAP-OWNING VALUE MOVED INTO AN `Array` LITERAL LEAK ITS HEAP ON EVERY COMPILED SURFACE, the remainder of B-2026-09-30-34 --… | c49b41db7 |
 | B-2026-09-30-60 | codegen | medium | A DISCARDED `Array[..]` PREFIX LITERAL RUNS NO ELEMENT `Drop` BODY COMPILED AND LEAKS THE ELEMENT'S HEAP -- `let _ = Array[W1 { v: 7, s: f"a{7}" }];`… | cda97db9e |
+| B-2026-09-30-64 | interp+codegen | medium | A FIELD READ THROUGH AN INDEX OF AN `Array` HANDED BACK BY AN ASSOCIATED FUNCTION OR A CLOSURE FAILS TO COMPILE -- `let r = Z.pa([w]); r[0].v` and `l… | 82097e763 |
 | B-2026-09-30-66 | codegen | high | A `match` PAYLOAD BINDING MOVED INTO AN `Array` LITERAL ARGUMENT THAT THE CALLEE HANDS BACK DOUBLE-FREES UNDER THE JIT AND RUNS ITS `Drop` BODY TWICE… | 5e36c7dc9 |
 | B-2026-09-30-50 | interp+codegen | medium | A BY-VALUE PARAM RETURNED THROUGH A WRAPPING LOCAL ON ONLY SOME PATHS RUNS ITS `Drop` BODY TWICE OR NOT AT ALL ON EVERY SURFACE, BY SPELLING -- `fn c… | 10273ee63 |
 | B-2026-09-30-67 | interp+codegen | medium | BY-VALUE PARAMS FORWARDED INTO A CALLEE THAT HANDS THEM BACK INSIDE AN `Array` OR `Vec` RUN THEIR `Drop` BODIES TWICE ON THE COMPILED SURFACES, AND T… | c9fa7f8b2 |
