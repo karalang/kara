@@ -19804,9 +19804,12 @@ impl<'ctx> super::Codegen<'ctx> {
         for b in Self::variant_arm_binds(pattern) {
             self.payload_vars.param_payload_arm_views.remove(&b);
         }
+        // B-2026-09-30-91 — the scrutinee's payload type for this variant, so a
+        // destructure of a GENERIC struct reads its fields at the instantiation.
+        let payload_te = self.optres_scrutinee_variant_payload_te(&name, path);
         if !patterns
             .iter()
-            .any(|sub| self.optres_sub_takes_drop_bearing(sub))
+            .any(|sub| self.optres_sub_takes_drop_bearing(sub, payload_te.as_ref()))
         {
             return;
         }
@@ -20226,7 +20229,14 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Interpreter twin: `optres_sub_takes_drop_bearing` in `pattern_match.rs`,
     /// arm-for-arm the same and reading the same two declaration sources.
-    fn optres_sub_takes_drop_bearing(&self, sub: &Pattern) -> bool {
+    ///
+    /// B-2026-09-30-91 — `payload_te` is the scrutinee's payload type for the
+    /// arm's variant, when known. A destructure of a GENERIC struct reads its
+    /// declared fields with that instantiation's arguments substituted in: by
+    /// declaration alone `G[R]`'s `v: T` runs nothing, so `Ok(G { v, n })`
+    /// left the source's body walk armed beside the leaf `v`'s own body, and
+    /// `R`'s body ran twice. The non-generic `H { v: R, n: i64 }` was right.
+    fn optres_sub_takes_drop_bearing(&self, sub: &Pattern, payload_te: Option<&TypeExpr>) -> bool {
         let PatternKind::Struct { path, fields, .. } = &sub.kind else {
             return pattern_consumes_field(sub);
         };
@@ -20235,12 +20245,37 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(decls) = self.destructured_field_decls(path) else {
             return pattern_consumes_field(sub);
         };
+        let subst = match (path.last(), payload_te) {
+            (Some(sname), Some(te)) => self.generic_struct_subst_from_inst(sname, te),
+            _ => std::collections::HashMap::new(),
+        };
         fields.iter().any(|fp| {
             fp.pattern.as_ref().is_none_or(pattern_consumes_field)
                 && decls.iter().any(|(n, te)| {
-                    n.as_deref() == Some(fp.name.as_str()) && self.elem_te_runs_user_drop(te)
+                    n.as_deref() == Some(fp.name.as_str())
+                        && self.elem_te_runs_user_drop(
+                            &crate::codegen::helpers::subst_type_params_in_type_expr(te, &subst),
+                        )
                 })
         })
+    }
+
+    /// B-2026-09-30-91 — the payload type of the `Some` / `Ok` / `Err` variant
+    /// named by `path`, read off the `Option`/`Result` binding `name`'s recorded
+    /// type. `None` when no record is held.
+    fn optres_scrutinee_variant_payload_te(&self, name: &str, path: &[String]) -> Option<TypeExpr> {
+        let te = self
+            .type_decls
+            .enum_inst_var_types
+            .get(name)
+            .or_else(|| self.var_types.optres_var_payload_tes.get(name))
+            .or_else(|| self.payload_vars.inline_optres_var_tes.get(name))?;
+        match path.last().map(String::as_str) {
+            Some("Some") => Self::option_payload_te(te),
+            Some("Ok") => Self::result_payload_tes(te).map(|(ok, _)| ok),
+            Some("Err") => Self::result_payload_tes(te).map(|(_, err)| err),
+            _ => None,
+        }
     }
 
     /// Field declarations behind a struct-destructure pattern's path — a plain

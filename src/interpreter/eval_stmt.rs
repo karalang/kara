@@ -10806,7 +10806,9 @@ impl<'a> super::Interpreter<'a> {
                 });
             }
         }
-        self.type_expr_runs_user_drop(pt)
+        // B-2026-09-30-91 — a generic struct payload (`Option[G[R]]`) at its
+        // instantiation, as codegen's `elem_te_runs_user_drop` asks it.
+        self.type_expr_runs_user_drop_inst(pt)
     }
 
     /// The ELEMENT `TypeExpr` of a CONTAINER payload: a fixed `Array[T, N]` in
@@ -10847,7 +10849,7 @@ impl<'a> super::Interpreter<'a> {
     /// position — `Some`/`Ok` at index 0, `Err` at index 1. Shared by the
     /// walker's entry and its envelope recursion so both read the declared
     /// payload the same way.
-    fn optres_payload_te_at(te: &TypeExpr, variant: &str) -> Option<TypeExpr> {
+    pub(super) fn optres_payload_te_at(te: &TypeExpr, variant: &str) -> Option<TypeExpr> {
         let TypeKind::Path(p) = &te.kind else {
             return None;
         };

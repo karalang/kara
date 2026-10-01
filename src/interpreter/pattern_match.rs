@@ -345,6 +345,7 @@ impl<'a> super::Interpreter<'a> {
                         scrutinee_place.is_some_and(Self::place_walk_is_retractable)
                             && !self.match_disarms_payload_walk(
                                 enum_name,
+                                self.optres_place_te(scrutinee_place).as_ref(),
                                 // Asked over the SAME arm set the disarm used,
                                 // which is the lockstep this pair has always
                                 // needed: taken-arm-only for `Option`/`Result`,
@@ -855,7 +856,7 @@ impl<'a> super::Interpreter<'a> {
                 // body, which no arm binding could ever have taken over:
                 // `match t.0 { E.A(r) => println(r.id) }` printed `v8 dR8` with
                 // `dE` gone, against `v8 dE dR8` on both compiled backends.
-                if self.match_disarms_payload_walk(&enum_name, arms) {
+                if self.match_disarms_payload_walk(&enum_name, None, arms) {
                     // B-2026-08-29-33 — a USER enum takes the PAYLOAD-ONLY set,
                     // not the whole-element one. Retracting the element
                     // wholesale also silenced the enum's OWN body, which no arm
@@ -900,7 +901,7 @@ impl<'a> super::Interpreter<'a> {
                 // that path byte-identical rather than half-masking it.
                 if enum_name != "Option"
                     && enum_name != "Result"
-                    && self.match_disarms_payload_walk(&enum_name, arms)
+                    && self.match_disarms_payload_walk(&enum_name, None, arms)
                 {
                     self.moved_out_struct_field_payload_bodies
                         .insert((src, field_path));
@@ -1045,7 +1046,8 @@ impl<'a> super::Interpreter<'a> {
             }
             return;
         }
-        if self.match_disarms_payload_walk(&enum_name, arms)
+        let scrut_te = self.optres_payload_bodies_tes.get(&name).cloned();
+        if self.match_disarms_payload_walk(&enum_name, scrut_te.as_ref(), arms)
             && !self.frame_is_sole_owner_of_param(&name)
         {
             // B-2026-09-16-12 — disarm the POSITIONS the arms take, not the
@@ -1070,13 +1072,16 @@ impl<'a> super::Interpreter<'a> {
             let taken: std::collections::HashSet<(String, usize)> = arms
                 .iter()
                 .filter(|arm| {
-                    self.pattern_consumes_user_drop_payload(&enum_name, &arm.pattern)
-                        && !self.arm_only_reads_payload_through(
-                            &enum_name,
-                            &arm.pattern,
-                            &arm.body,
-                            arm.guard.as_ref(),
-                        )
+                    self.pattern_consumes_user_drop_payload(
+                        &enum_name,
+                        &arm.pattern,
+                        scrut_te.as_ref(),
+                    ) && !self.arm_only_reads_payload_through(
+                        &enum_name,
+                        &arm.pattern,
+                        &arm.body,
+                        arm.guard.as_ref(),
+                    )
                 })
                 .flat_map(|arm| {
                     self.pattern_consumed_user_drop_payload_positions(&enum_name, &arm.pattern)
@@ -1226,8 +1231,9 @@ impl<'a> super::Interpreter<'a> {
         // owner's walk must stop running its body while still running the
         // enum's own; without them the `if let` spelling doubled where the
         // `match` spelling of the same code ran one body.
+        let scrut_te = self.optres_place_te(Some(scrutinee_place));
         let takes_payload = |me: &mut Self, en: &str| -> bool {
-            me.pattern_consumes_user_drop_payload(en, pattern)
+            me.pattern_consumes_user_drop_payload(en, pattern, scrut_te.as_ref())
                 && !scope.is_some_and(|b| me.let_form_only_reads_payload_through(en, pattern, b))
         };
         match &scrutinee_place.kind {
@@ -2109,9 +2115,17 @@ impl<'a> super::Interpreter<'a> {
             .collect()
     }
 
-    fn match_disarms_payload_walk(&self, enum_name: &str, arms: &[MatchArm]) -> bool {
+    /// `scrut_te` is the scrutinee's recorded `Option`/`Result` type when it is
+    /// a named place with one (B-2026-09-30-91), so a destructure of a generic
+    /// struct payload is read at its instantiation.
+    fn match_disarms_payload_walk(
+        &self,
+        enum_name: &str,
+        scrut_te: Option<&TypeExpr>,
+        arms: &[MatchArm],
+    ) -> bool {
         arms.iter().any(|arm| {
-            self.pattern_consumes_user_drop_payload(enum_name, &arm.pattern)
+            self.pattern_consumes_user_drop_payload(enum_name, &arm.pattern, scrut_te)
                 && !self.arm_only_reads_payload_through(
                     enum_name,
                     &arm.pattern,
@@ -2728,7 +2742,12 @@ impl<'a> super::Interpreter<'a> {
     /// `enum_pattern_consumes_user_drop_payload`, down to consulting the
     /// DECLARED payload type rather than the runtime value — an erased generic
     /// payload is invisible to codegen at emit time, so both backends skip it.
-    fn pattern_consumes_user_drop_payload(&self, enum_name: &str, pattern: &Pattern) -> bool {
+    fn pattern_consumes_user_drop_payload(
+        &self,
+        enum_name: &str,
+        pattern: &Pattern,
+        scrut_te: Option<&TypeExpr>,
+    ) -> bool {
         let variant = match &pattern.kind {
             PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
                 match path.last() {
@@ -2749,10 +2768,12 @@ impl<'a> super::Interpreter<'a> {
         if enum_name == "Option" || enum_name == "Result" {
             return match &pattern.kind {
                 PatternKind::TupleVariant { patterns, .. } => {
+                    let payload_te =
+                        scrut_te.and_then(|te| Self::optres_payload_te_at(te, &variant));
                     matches!(variant.as_str(), "Some" | "Ok" | "Err")
                         && patterns
                             .iter()
-                            .any(|sub| self.optres_sub_takes_drop_bearing(sub))
+                            .any(|sub| self.optres_sub_takes_drop_bearing(sub, payload_te.as_ref()))
                 }
                 _ => false,
             };
@@ -2853,23 +2874,46 @@ impl<'a> super::Interpreter<'a> {
     ///
     /// Codegen twin: `optres_sub_takes_drop_bearing` in `control_flow_match.rs`,
     /// arm-for-arm the same, reading the same two declaration sources.
-    fn optres_sub_takes_drop_bearing(&self, sub: &Pattern) -> bool {
+    ///
+    /// B-2026-09-30-91 — `payload_te` is the scrutinee's payload type for the
+    /// arm's variant when known, and a GENERIC struct destructure reads its
+    /// fields at that instantiation, as codegen's twin does.
+    fn optres_sub_takes_drop_bearing(&self, sub: &Pattern, payload_te: Option<&TypeExpr>) -> bool {
         let PatternKind::Struct { path, fields, .. } = &sub.kind else {
             return Self::pattern_claims_ownership(sub);
         };
         // An unknown name (a builtin, an opaque type) has no field types to
         // read, so it keeps the shape answer rather than silently declining.
-        let Some(decls) = self.destructured_field_decls(path) else {
+        let Some(mut decls) = self.destructured_field_decls(path) else {
             return Self::pattern_claims_ownership(sub);
         };
+        if let Some(inst) = payload_te
+            .filter(|te| matches!(&te.kind, TypeKind::Path(p) if p.segments.last() == path.last()))
+            .and_then(|te| self.generic_struct_inst_field_tes(te))
+        {
+            if inst.len() == decls.len() {
+                for (d, te) in decls.iter_mut().zip(inst) {
+                    d.1 = te;
+                }
+            }
+        }
         fields.iter().any(|fp| {
             fp.pattern
                 .as_ref()
                 .is_none_or(Self::pattern_claims_ownership)
                 && decls.iter().any(|(n, te)| {
-                    n.as_deref() == Some(fp.name.as_str()) && self.type_expr_runs_user_drop(te)
+                    n.as_deref() == Some(fp.name.as_str()) && self.type_expr_runs_user_drop_inst(te)
                 })
         })
+    }
+
+    /// B-2026-09-30-91 — the recorded `Option`/`Result` type of a NAMED
+    /// scrutinee place, or `None` for any other place.
+    fn optres_place_te(&self, place: Option<&Expr>) -> Option<TypeExpr> {
+        match place.map(|p| &p.kind) {
+            Some(ExprKind::Identifier(n)) => self.optres_payload_bodies_tes.get(n).cloned(),
+            _ => None,
+        }
     }
 
     /// Field declarations behind a struct-destructure pattern's path — a plain
@@ -2932,6 +2976,56 @@ impl<'a> super::Interpreter<'a> {
             }),
             PatternKind::Or(pats) => pats.iter().any(Self::pattern_claims_ownership),
         }
+    }
+
+    /// B-2026-09-30-91 — the declared field types of a GENERIC struct
+    /// instantiation (`G[R]`) with its arguments substituted in, or `None` when
+    /// `te` is not a user generic struct written with arguments. The
+    /// interpreter twin of the subst codegen's `payload_type_subst` /
+    /// `type_runs_user_drop_mono` apply: by declaration alone `G`'s `v: T`
+    /// names no type, so every head-name question answers "no Drop" for any
+    /// instantiation.
+    pub(crate) fn generic_struct_inst_field_tes(&self, te: &TypeExpr) -> Option<Vec<TypeExpr>> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let args = p.generic_args.as_ref()?;
+        let name = p.segments.last()?;
+        let sd = self.program.items.iter().find_map(|item| match item {
+            Item::StructDef(s) if s.name == *name => Some(s),
+            _ => None,
+        })?;
+        let params = &sd.generic_params.as_ref()?.params;
+        if params.is_empty() {
+            return None;
+        }
+        let subst: std::collections::HashMap<String, TypeExpr> = params
+            .iter()
+            .zip(args.iter())
+            .filter_map(|(gp, a)| match a {
+                crate::ast::GenericArg::Type(t) => Some((gp.name.clone(), t.clone())),
+                _ => None,
+            })
+            .collect();
+        Some(
+            sd.fields
+                .iter()
+                .map(|f| crate::desugar::subst_type_expr(&f.ty, &subst))
+                .collect(),
+        )
+    }
+
+    /// B-2026-09-30-91 — [`Self::type_expr_runs_user_drop`] asked at a generic
+    /// struct's INSTANTIATION: the head name first, then each substituted field
+    /// through the same field predicate the head-name walk uses.
+    pub(crate) fn type_expr_runs_user_drop_inst(&self, te: &TypeExpr) -> bool {
+        if self.type_expr_runs_user_drop(te) {
+            return true;
+        }
+        self.generic_struct_inst_field_tes(te).is_some_and(|ftes| {
+            ftes.iter()
+                .any(|fte| self.field_te_runs_user_drop(fte, &mut Vec::new()))
+        })
     }
 
     /// Does the head type of `te` name a struct that runs a user `impl Drop`
