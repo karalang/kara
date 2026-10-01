@@ -18015,6 +18015,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => false,
                 })
             }
+            // B-2026-09-30-102 — a STRUCT destructure whose every named field
+            // is a primitive leaf or `_` (`Ok(H { n, .. })`, `Ok(G { v: _, n })`)
+            // takes none of the payload's heap either. Falling through to
+            // `false` zeroed the source's payload words while nothing took the
+            // `R` in `v`: its memory leaked and the source's body walk ran on
+            // the zeroed words (`d0` for `d4`). A field whose declared type is
+            // not a primitive name (a bare type parameter included) keeps the
+            // old answer.
+            PatternKind::Struct { path, fields, .. } => {
+                let Some(decls) = self.destructured_field_decls(path) else {
+                    return false;
+                };
+                fields
+                    .iter()
+                    .all(|fp| match fp.pattern.as_ref().map(|p| &p.kind) {
+                        Some(PatternKind::Wildcard) => true,
+                        None | Some(PatternKind::Binding(_)) => decls.iter().any(|(n, te)| {
+                            n.as_deref() == Some(fp.name.as_str())
+                                && matches!(&te.kind, TypeKind::Path(p)
+                                if p.segments.len() == 1
+                                    && p.generic_args.is_none()
+                                    && crate::codegen::param_own::is_primitive_type_name(
+                                        &p.segments[0]))
+                        }),
+                        _ => false,
+                    })
+            }
             _ => false,
         })
     }
