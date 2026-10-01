@@ -8036,6 +8036,41 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => {}
         }
+        // B-2026-10-01-19 — `s` was DEBOXED out of an `Option`/`Result` payload box,
+        // so everything above zeroed this frame's private copy while the
+        // box's own memory drop reads the box: `Err(e) => { let i = e.inner; }`
+        // over a boxed `E2 { inner: S }` freed `inner`'s buffers through `i`
+        // and again through the box, an invalid free with no output at -O0.
+        // The `{ptr,len,cap}` field spelling (`let v = e.v`) already mirrors
+        // its zero through this pointer in
+        // `suppress_source_vec_cleanup_for_arg_ex`; a struct-typed destination
+        // reaches this helper instead and never did. The pointer is recorded
+        // only when no payload-BODIES walk reads the box (the deferred channel
+        // owns that case), so the zero is neutralization, not a corrupt read.
+        // A BORROW-path binding is excluded: the destination got a copy
+        // (B-2026-09-24-22's `let d = n.doc` over a by-value enum param) and
+        // the box still owns its field, so a zero there leaked it.
+        let box_ptr = self
+            .payload_vars
+            .deboxed_payload_box_ptrs
+            .get(&slot.ptr)
+            .copied()
+            .filter(|_| {
+                !self
+                    .borrow_vars
+                    .borrowed_agg_payload_struct_vars
+                    .contains(s)
+            });
+        if let Some(box_ptr) = box_ptr {
+            let inst = self.type_decls.enum_inst_var_types.get(s).cloned();
+            self.zero_struct_field_move_cap_inst(
+                box_ptr,
+                &sname,
+                field,
+                Some(agg_ty),
+                inst.as_ref(),
+            );
+        }
     }
 
     /// #27 (B-2026-06-14-8) — `let tk = h.ps.0.tok`: an enum field moved OUT of
