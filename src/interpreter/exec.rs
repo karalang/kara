@@ -710,6 +710,14 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, Vec<usize
             }
         }
     };
+    // B-2026-09-20-42 — borrower name -> the owned bindings its `ref` place is
+    // rooted at. A live borrow is part of the borrowed binding's live range
+    // (design.md § Drop ordering within a branch: a destructor fires at the
+    // binding's LIVE-RANGE END), so every later mention of the borrower counts
+    // as a mention of what it borrows. Without this, `let e: ref Vec[D] = ref
+    // d[0]; println(f"{e[0].id}")` ended `d`'s range at the `let` and ran the
+    // element's `Drop` body BEFORE the read through `e`, on every backend.
+    let mut borrows: HashMap<String, Vec<String>> = HashMap::new();
     for (idx, stmt) in block.stmts.iter().enumerate() {
         let mut idents: Vec<String> = Vec::new();
         match &stmt.kind {
@@ -722,7 +730,7 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, Vec<usize
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
                 let mut bound: HashSet<String> = HashSet::new();
                 collect_free_idents_block(body, &mut bound, &mut idents);
-                for name in idents {
+                for name in with_borrowed_roots(idents, &borrows) {
                     if owned.contains(&name) {
                         last_use.insert(name, scope_exit);
                     }
@@ -751,6 +759,22 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, Vec<usize
                 collect_free_idents_expr(expr, &mut bound, &mut idents);
             }
         }
+        // A `let` re-binds its names: a shadowing borrower borrows what ITS
+        // initializer roots at (or nothing), never what the old generation did.
+        // The initializer's own mentions were collected above, against the
+        // borrows in force BEFORE this statement, which is the right order.
+        let idents = with_borrowed_roots(idents, &borrows);
+        if let StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } =
+            &stmt.kind
+        {
+            let names = pattern.binding_names();
+            for n in &names {
+                borrows.remove(n);
+            }
+            if let ([n], Some(roots)) = (names.as_slice(), ref_borrow_roots(value, &borrows)) {
+                borrows.insert(n.clone(), roots);
+            }
+        }
         for name in idents {
             // B-2026-09-02-16 — every reference index, not just the latest.
             // The per-generation post-pass below needs to ask "was this name
@@ -770,7 +794,7 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, Vec<usize
         let mut idents: Vec<String> = Vec::new();
         let mut bound: HashSet<String> = HashSet::new();
         collect_free_idents_expr(final_expr, &mut bound, &mut idents);
-        for name in idents {
+        for name in with_borrowed_roots(idents, &borrows) {
             if owned.contains(&name) {
                 last_use.insert(name, scope_exit);
             }
@@ -817,6 +841,49 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, Vec<usize
         }
     }
     generation_endpoints(block, &owned, &last_use, &all_refs, scope_exit)
+}
+
+/// B-2026-09-20-42 — `idents` plus every binding a borrower among them borrows
+/// from. `borrows` is already transitively closed (see `ref_borrow_roots`), so
+/// one level of expansion is the whole closure.
+fn with_borrowed_roots(idents: Vec<String>, borrows: &HashMap<String, Vec<String>>) -> Vec<String> {
+    let mut out = Vec::with_capacity(idents.len());
+    for name in idents {
+        if let Some(roots) = borrows.get(&name) {
+            out.extend(roots.iter().cloned());
+        }
+        out.push(name);
+    }
+    out
+}
+
+/// B-2026-09-20-42 — the bindings a `ref <place>` initializer borrows from: the
+/// place's root name, plus whatever that root itself borrows when it is a
+/// borrower too (`let f = ref e[0]` with `e = ref d[0]` keeps `d` live through
+/// `f`). `None` when the initializer is not a `ref` of a name-rooted place.
+fn ref_borrow_roots(value: &Expr, borrows: &HashMap<String, Vec<String>>) -> Option<Vec<String>> {
+    let ExprKind::Unary {
+        op: UnaryOp::Ref,
+        operand,
+    } = &value.kind
+    else {
+        return None;
+    };
+    let mut place: &Expr = operand;
+    let root = loop {
+        match &place.kind {
+            ExprKind::Index { object, .. }
+            | ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. } => place = object,
+            ExprKind::Identifier(name) => break name,
+            _ => return None,
+        }
+    };
+    let mut roots = vec![root.clone()];
+    if let Some(inner) = borrows.get(root) {
+        roots.extend(inner.iter().cloned());
+    }
+    Some(roots)
 }
 
 /// B-2026-09-02-16 — turn the NAME-keyed endpoint map into a GENERATION-keyed
