@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 618 |
-| run-vs-build | 564 |
+| miscompile | 619 |
+| run-vs-build | 565 |
 | leak | 512 |
-| double-free | 382 |
+| double-free | 383 |
 | missing-feature | 215 |
-| codegen-gap | 206 |
+| codegen-gap | 207 |
 | other | 164 |
 | diagnostics | 138 |
 | perf | 117 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2509 |
-| interp | 756 |
+| codegen | 2512 |
+| interp | 757 |
 | typecheck | 320 |
 | other | 112 |
 | ownership | 79 |
@@ -461,7 +461,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-96 | 2026-09-30 | interp+codegen | medium | A BY-VALUE PARAM WRAPPED INTO A LOCAL STRUCT OR TUPLE THAT IS THEN STORED IN A CALLER-HELD CONTAINER RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, EVEN UNCONDITIONALLY -- `fn w4(a: R, xs: mut ref Vec[P]) { let x = P { r: a, n: 1 }; xs.push(x); }` prints `dR7` when the call returns and `dR7` again when `xs` dies; pushing the literal directly (`xs.push(P { r: a, n: 1 })`) runs it once | — |
 | B-2026-09-30-97 | 2026-09-30 | codegen+interp | high | A BY-VALUE PARAM MOVED INTO A LITERAL IS OWNED TWICE OR NOT AT ALL, the param half of B-2026-09-30-59 -- a discarded tuple or struct literal (`fn f(w: W1) { let _ = (w, 1); println("in") }`) runs `w`'s `Drop` body TWICE on all four surfaces (`dW1_7 in dW1_7`); the `[w]` / `Array[w]` spelling runs it twice under `--interp` and once compiled but leaks 1 block; and `return take([w])` leaks 1 block compiled with the right output | — |
 | B-2026-09-30-87 | 2026-09-30 | codegen | low | A `?` THAT CONVERTS ITS ERROR THROUGH `From` LEAKS THE SOURCE ERROR'S HEAP on every compiled surface -- `fn f() -> Result[i64, E2] { let x = mke(8)?; Result.Ok(x) }` with `impl From[S] for E2` over `struct S { v: String }` loses 31 B at -O0 on the error path. `E2.from` entry-copies its by-value `s` and drops the copy, and nothing at the `?` site frees the original | — |
-| B-2026-09-30-105 | 2026-09-30 | codegen | medium | AN `Option` PAYLOAD BINDING DISCARDED IN A `match` ARM RUNS ITS `Drop` BODY LATE AND LEAKS -- `Some(w) => { let _ = w; println("arm") }` and `Some(w) => { let _ = [w]; println("arm") }` print `dW1_3 arm end` under `--interp` but `arm dW1_3 end` on the JIT, -O2 and -O2 auto-par, with 1 block lost; the tuple spelling `let _ = (w, 1)` is right since B-2026-09-30-98 | — |
 | B-2026-09-30-106 | 2026-09-30 | codegen | medium | A TUPLE BUILT FROM AN `Option` PAYLOAD AS A `match` VALUE ARM TAIL RUNS ITS `Drop` BODY BEFORE THE TUPLE IS USED -- `let t = match o { Some(w) => (w, 1), None => (mk(0), 0) }; println(f"{t.1}")` prints `1 dW1_8 end` under `--interp` but `dW1_8 1 end` compiled, valgrind clean; it double-freed before B-2026-09-30-98 | — |
 | B-2026-09-30-107 | 2026-09-30 | interp | medium | UNDER `--interp`, A METHOD THAT HANDS BACK A LITERAL HOLDING A PAYLOAD BINDING RUNS THE BODY TWICE -- `Some(x) => { let z = k.pass([x]); println(f"z:{z[0].v}") }` over `fn pass(ref self, x: Array[W1, 1]) -> Array[W1, 1] { return x }` prints `z:2 dW1_2 dW1_2 end` under `--interp`; compiled prints `z:2 dW1_2 end`, valgrind clean | — |
 | B-2026-09-30-88 | 2026-09-30 | codegen | low | AN INDEX-ASSIGN INTO AN `Array` HELD IN A TUPLE ELEMENT FAILS `karac build` -- `a.0[0] = P { n: 9 }` and `a.0[0] = 9` over `(Array[_, 1], i64)` pass `karac check`, run under `--interp`, and fail with `Index assignment target must be a variable`; the `Vec` spelling is fixed (B-2026-08-10-5) and the field store `a.0[0].n = 9` builds since B-2026-09-20-25 | — |
@@ -479,6 +478,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-7 | 2026-10-01 | codegen | high | A BY-VALUE BOXED `Option[R]` PARAM RETURNED DIRECTLY INSIDE A COLLECTION LITERAL SEGFAULTS ON EVERY COMPILED SURFACE, BOUND OR DISCARDED -- `fn ov(x: Option[R]) -> Vec[Option[R]] { return Vec[x] }` and `return [x]`, called as `let a = ov(Some(mk(1)))`, crash with exit 139 and no output under the JIT and AOT, where `--interp` prints `k1 dR1`; pushing the param (`v.push(x); return v`) works | — |
 | B-2026-10-01-8 | 2026-10-01 | codegen | high | A NAMED `Array[R, 2]` LOCAL PASSED TO A GENERIC PASS-THROUGH `fn pg[T](x: T) -> T` DOUBLE-FREES AT -O0, SO UNDER THE JIT TOO -- `let a: Array[R, 2] = [mk(42), mk(43)]; pg(a);` aborts with `free(): double free detected in tcache 2` under `karac run` and shows 2 invalid frees under valgrind at -O0 AOT, bound (`let c = pg(b)`) or discarded, while -O2 is clean and every surface prints `dR42 dR43` once each | — |
 | B-2026-10-01-9 | 2026-10-01 | interp+codegen | medium | A BY-VALUE PARAM MOVED INTO A COLLECTION LITERAL BOUND TO A `let mut` LOCAL AND RETURNED RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `fn f1(x: R) -> Vec[R] { let mut v = Vec[x]; return v }` with `let a = f1(mk(1))` prints `dR1 k1 dR1`; the immutable `let v = Vec[x]; return v` runs it once | — |
+| B-2026-10-01-10 | 2026-10-01 | codegen | low | AN INLINE (UNBOXED) `Result` PAYLOAD BINDING DISCARDED IN AN ARM RUNS ITS `Drop` BODY AT ARM END COMPILED -- `match r { Ok(w) => { let _ = w; println("arm") }, Err(_) => {} }` over `Result[W1, i64]` prints `arm dW1_3 end` on the JIT, -O2 and -O2 auto-par against `dW1_3 arm end` under `--interp`, valgrind clean; the boxed `Option[W1]` spelling is right since B-2026-09-30-105 | — |
+| B-2026-10-01-11 | 2026-10-01 | codegen | high | RE-WRAPPING A BOXED `Option` PAYLOAD BINDING IN `Some` INSIDE ITS OWN ARM DOUBLE FREES ON THE JIT -- `let t = match o { Some(w) => Some(w), None => None }` over a local `Option[W1]` (`W1` holds a `String`, so the payload boxes) aborts `free(): double free detected in tcache 2` under `karac run` and reports an invalid free under valgrind at -O0, while -O2 and -O2 auto-par print what `--interp` prints; braced `{ Some(w) }` and `{ let q = Some(w); q }` do the same, an inline `Option[W2]` payload is clean | — |
+| B-2026-10-01-12 | 2026-10-01 | interp | medium | UNDER `--interp` A BY-VALUE `Option` PARAM'S PAYLOAD MOVED INTO AN ARRAY LITERAL THAT IS THE `match` VALUE RUNS ITS `Drop` BODY TWICE -- `fn f(o: Option[W1]) { let t = match o { Some(w) => [w], None => [mk(0)] }; println(f"{t[0].v}") }` prints `4 dW1_4 dW1_4` under `--interp` and `4 dW1_4` on the JIT, -O2 and -O2 auto-par; a local scrutinee, a tuple, a struct literal and a bare `w` are right | — |
+| B-2026-10-01-13 | 2026-10-01 | codegen | low | A FIELD READ THROUGH AN UNANNOTATED TUPLE BOUND FROM A `match` DOES NOT LOWER -- `let t = match o { Some(w) => (w, 1), None => (mk(0), 0) }; println(f"{t.0.v}")` fails `cannot resolve field 'v' on this receiver` under `karac run` and `karac build` while `--interp` prints `8`; reading only `t.1` works and runs the body once since B-2026-09-30-106, and `let t: (W1, i64) = ..` works | — |
 
 ### Relocated
 
@@ -3473,6 +3476,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-86 | codegen | high | `r.unwrap()` ON A `Result` WHOSE INLINE PAYLOAD IS WIDER THAN THREE WORDS RETURNS A WRONG VALUE on every compiled surface -- over `struct S { v: Stri… | 33fe00f92 |
 | B-2026-09-30-91 | codegen+interp | medium | A nested destructure of a local `Result[G[R], i64]` runs the leaf's `Drop` body TWICE compiled and ZERO times interpreted -- `let o: Result[G[R], i64… | 0bfcff2e0 |
 | B-2026-09-30-102 | codegen | medium | An `Ok`/`Err` arm that destructures only a struct payload's SCALAR fields zeroes the source's payload as if it took the heap, on every compiled surfa… | 2334733b6 |
+| B-2026-09-30-105 | codegen | medium | AN `Option` PAYLOAD BINDING DISCARDED IN A `match` ARM RUNS ITS `Drop` BODY LATE AND LEAKS -- `Some(w) => { let _ = w; println("arm") }` and `Some(w)… | 38b48b12a |
 | B-2026-09-30-83 | codegen | high | A FIELD STORE THROUGH AN `Array[T, N]` ELEMENT IS SILENTLY DROPPED ON EVERY COMPILED SURFACE -- `let mut a: Array[P, 1] = [P { n: 5 }]; a[0].n = 9` r… | 3643daa |
 | B-2026-09-30-84 | codegen | high | A CONTAINER ELEMENT HANDED TO A `ref` OR `mut ref` PARAMETER IS SHALLOW-COPIED AND FREED AS A CALL TEMP UNLESS THE CONTAINER IS A `Vec` LOCAL -- `rd(… | 7ffd2c2 |
 | B-2026-09-30-104 | codegen | high | A GENERIC struct with two heap fields in an `Option`/`Result` payload (`G2[R]` over `struct G2[T] { v: T, r: R }`) double-frees on every compiled sur… | d3477587e |
