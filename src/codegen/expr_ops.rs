@@ -5467,16 +5467,28 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::TupleIndex { object, index } => {
                 if let Some(elems) = self.place_chain_tuple_tes(object) {
                     if let Some(TypeKind::Path(p)) = elems.get(*index as usize).map(|t| &t.kind) {
-                        return p.segments.last().cloned();
+                        // B-2026-10-01-13 — not the EMPTY path a branch tail
+                        // records for an element it cannot name (an arm's own
+                        // payload binding); that one falls through to the
+                        // typechecker's answer at the end of this arm.
+                        if let Some(n) = p.segments.last().filter(|n| !n.is_empty()) {
+                            return Some(n.clone());
+                        }
                     }
                 }
                 if let ExprKind::Identifier(t) = &object.kind {
-                    return self
+                    // B-2026-10-01-13 — a recorded `None` falls through to the
+                    // typechecker's own answer at the end of this arm rather
+                    // than refusing here.
+                    if let Some(n) = self
                         .var_types
                         .tuple_var_elem_type_names
                         .get(t.as_str())
                         .and_then(|names| names.get(*index as usize))
-                        .and_then(|n| n.clone());
+                        .and_then(|n| n.clone())
+                    {
+                        return Some(n);
+                    }
                 }
                 // B-2026-08-28-3 — an UNBOUND call result (`make().0.id`).
                 // Neither source above can see it: a call is not a place, and
@@ -5583,7 +5595,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(n) = self.arm_bound_nested_tuple_elem_type_name(object, *index) {
                     return Some(n);
                 }
-                None
+                // B-2026-10-01-13 — LAST, the typechecker's type for this exact
+                // projection. A tuple whose element no codegen registry can name
+                // (`let t = match r { Ok(w) => (w, 1), Err(w) => (w, 2) }`, where
+                // every arm's element is its own payload binding, or the nested
+                // `((w, 1), 2)`) reached the loud "cannot resolve field" gap while
+                // `--interp` answered it. A `TupleIndex` spans its whole
+                // projection (B-2026-08-18-33), so the key cannot collide with
+                // its object's or a field read's on it. Pure resolution, and
+                // fail-closed to a NON-GENERIC struct codegen has a layout for:
+                // the table carries the bare name, and a generic struct's layout
+                // depends on arguments it does not record.
+                self.span_tables
+                    .expr_struct_type_names
+                    .get(&(expr.span.offset, expr.span.length))
+                    .filter(|n| {
+                        self.type_decls.struct_field_names.contains_key(n.as_str())
+                            && self
+                                .type_decls
+                                .struct_generic_params
+                                .get(n.as_str())
+                                .is_none_or(|ps| ps.is_empty())
+                    })
+                    .cloned()
             }
             // #32 — element struct type of an indexed collection. For an
             // Identifier root (`v[i]`) read the recorded element TypeExpr; for a

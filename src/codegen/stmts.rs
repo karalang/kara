@@ -11213,6 +11213,41 @@ impl<'ctx> super::Codegen<'ctx> {
                                     })
                                     .collect()
                             })
+                        })
+                        // B-2026-10-01-13 — a BRANCH-EXPRESSION source
+                        // (`let t = match o { Some(w) => (w, 1), None => (mk(0), 0) };`).
+                        // The bodies walker already types this binding through
+                        // `tuple_binding_elem_tes`, which looks through every
+                        // tail and fills a position the first tail cannot name
+                        // (an arm's own payload binding) from the next one that
+                        // does; this registry had no branch arm at all, so
+                        // `t.0.v` hit the loud "cannot resolve field" gap
+                        // whichever arm came first. A position no tail names
+                        // stays `None` and keeps refusing loudly.
+                        .or_else(|| {
+                            if !matches!(
+                                &value.kind,
+                                ExprKind::If { .. }
+                                    | ExprKind::IfLet { .. }
+                                    | ExprKind::Match { .. }
+                                    | ExprKind::Block(_)
+                                    | ExprKind::Seq(_)
+                                    | ExprKind::Unsafe(_)
+                                    | ExprKind::LabeledBlock { .. }
+                            ) {
+                                return None;
+                            }
+                            self.tuple_binding_elem_tes(None, value).map(|elems| {
+                                elems
+                                    .iter()
+                                    .map(|e| match &e.kind {
+                                        TypeKind::Path(p) => {
+                                            p.segments.last().filter(|s| !s.is_empty()).cloned()
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect()
+                            })
                         });
                     if let Some(names) = elem_names {
                         self.var_types
@@ -22207,7 +22242,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .or_else(|| all_tails.iter().find_map(|tail| tuple_tes(self, tail)))
             {
                 if tes.iter().any(Self::te_is_unnamed) {
-                    for tail in all_tails {
+                    for tail in &all_tails {
                         let Some(other) = tuple_tes(self, tail) else {
                             continue;
                         };
@@ -22218,6 +22253,47 @@ impl<'ctx> super::Codegen<'ctx> {
                             if Self::te_is_unnamed(slot) && !Self::te_is_unnamed(&te) {
                                 *slot = te;
                             }
+                        }
+                    }
+                    // B-2026-10-01-13 — a position EVERY tail fills with its
+                    // own payload binding (`Ok(w) => (w, 1), Err(w) => (w, 2)`)
+                    // has no tail to borrow a name from. The typechecker typed
+                    // each such element; take its answer when it is a
+                    // non-generic struct codegen has a layout for, the same
+                    // fail-closed gate `type_name_of_expr` applies to this table.
+                    for (k, slot) in tes.iter_mut().enumerate() {
+                        if !matches!(&slot.kind, TypeKind::Path(p)
+                            if p.segments.len() == 1 && p.segments[0].is_empty())
+                        {
+                            continue;
+                        }
+                        let named = all_tails.iter().find_map(|tail| {
+                            let ExprKind::Tuple(elems) = &tail.kind else {
+                                return None;
+                            };
+                            let el = elems.get(k)?;
+                            self.span_tables
+                                .expr_struct_type_names
+                                .get(&(el.span.offset, el.span.length))
+                                .filter(|n| {
+                                    self.type_decls.struct_field_names.contains_key(n.as_str())
+                                        && self
+                                            .type_decls
+                                            .struct_generic_params
+                                            .get(n.as_str())
+                                            .is_none_or(|ps| ps.is_empty())
+                                })
+                                .cloned()
+                        });
+                        if let Some(n) = named {
+                            *slot = TypeExpr {
+                                kind: TypeKind::Path(crate::ast::PathExpr {
+                                    segments: vec![n],
+                                    generic_args: None,
+                                    span: slot.span,
+                                }),
+                                span: slot.span,
+                            };
                         }
                     }
                 }
