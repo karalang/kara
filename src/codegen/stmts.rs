@@ -29233,9 +29233,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// statement spelling, and against `--interp`'s one each for `let _ =`
     /// and the associated-function spelling. Registered through the same
     /// walker a discarded `Vec` LITERAL uses (above), keyed on the callee's
-    /// DECLARED return. A generic callee declines here and in the interpreter
-    /// alike: its `Vec[T]` names no element walker, the reason the tuple and
-    /// array arms give (B-2026-09-16-37, B-2026-09-27-71).
+    /// DECLARED return. A generic callee's return is read at the call
+    /// (B-2026-09-30-68), on both backends.
     ///
     /// Interpreter twin: the `Identifier`-callee statement arm in
     /// `eval_stmt.rs`, keyed on `user_fn_returns_vec`; the `Path` arm there
@@ -29284,17 +29283,32 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         let f = self.discarded_callee_fn(tail)?;
-        if f.generic_params.is_some() {
-            return None;
-        }
-        let ret = f.return_type.as_ref()?;
+        let declared = f.return_type.as_ref()?;
+        // B-2026-09-30-68 — a GENERIC callee's return is read at THIS call,
+        // through the typechecker's per-call solution, the way the array arm's
+        // `discarded_call_array_parts` does: `gv(mk(7))` over
+        // `fn gv[T](x: T) -> Vec[T]` is a `Vec[R]` here, and `pg([..])` over
+        // `fn pg[T](x: T) -> T` is a `Vec[R]` only here, its declared return
+        // naming no aggregate at all. Declining is still right while any type
+        // parameter survives the substitution: no element walker can be named.
+        let ret = match &f.generic_params {
+            None => declared.clone(),
+            Some(gp) => {
+                let inst = self.callee_param_te_for_call_propagated(declared, &tail.span);
+                let params: Vec<String> = gp.params.iter().map(|p| p.name.clone()).collect();
+                if Self::type_expr_mentions_param(&inst, &params) {
+                    return None;
+                }
+                inst
+            }
+        };
         // `Vec` only: the shared recognizer also answers for a `VecDeque`,
         // whose ring buffer the walker does not read.
         if !matches!(&ret.kind, TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Vec")
         {
             return None;
         }
-        super::helpers::vec_inner_type_expr(ret)
+        super::helpers::vec_inner_type_expr(&ret)
     }
 
     /// The shared tail of the two discarded-`Vec` bodies registrars: `val` is

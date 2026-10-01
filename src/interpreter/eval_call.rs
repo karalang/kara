@@ -6872,6 +6872,73 @@ impl<'a> super::Interpreter<'a> {
     /// is not `shared`? The same admission codegen's
     /// `track_discarded_vec_return_bodies` makes, so a discarded `Vec` result
     /// runs its element bodies on both backends or on neither.
+    /// B-2026-09-30-68 — the GENERIC twin of the two admissions above, for a
+    /// discarded `Value::Array` from a generic user fn whose declared return
+    /// is a bare type parameter or an `Array` / `Vec` of one (`pg([..]);` over
+    /// `fn pg[T](x: T) -> T`, `gv(mk(7));` over `fn gv[T](x: T) -> Vec[T]`).
+    /// The declared return erases the element type, so the VALUE answers what
+    /// codegen reads off the per-call substitution: every element a user
+    /// struct or value enum that is not `shared` and not `Option` / `Result`,
+    /// the element admission `track_discarded_vec_handle_bodies` makes.
+    pub(crate) fn generic_fn_discard_owes_elem_bodies(&self, fn_name: &str, v: &Value) -> bool {
+        use crate::ast::{Item, TypeKind};
+        let Value::Array(items) = v else {
+            return false;
+        };
+        let Some(f) = self.program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == fn_name => Some(f),
+            _ => None,
+        }) else {
+            return false;
+        };
+        let Some(gp) = f.generic_params.as_ref() else {
+            return false;
+        };
+        let is_param = |te: &crate::ast::TypeExpr| {
+            matches!(&te.kind, TypeKind::Path(p) if p.segments.len() == 1
+                && p.generic_args.is_none()
+                && gp.params.iter().any(|g| g.name == p.segments[0]))
+        };
+        let Some(ret) = f.return_type.as_ref() else {
+            return false;
+        };
+        let shape_ok = is_param(ret)
+            || match &ret.kind {
+                TypeKind::Array { element, .. } => is_param(element),
+                TypeKind::Path(p)
+                    if p.segments.len() == 1
+                        && matches!(p.segments[0].as_str(), "Vec" | "Array") =>
+                {
+                    matches!(p.generic_args.as_deref(),
+                        Some([crate::ast::GenericArg::Type(e), ..]) if is_param(e))
+                }
+                _ => false,
+            };
+        if !shape_ok {
+            return false;
+        }
+        let user_type = |name: &str| {
+            name != "Option"
+                && name != "Result"
+                && self.program.items.iter().any(|item| match item {
+                    Item::StructDef(sd) => sd.name == name && !sd.is_shared,
+                    Item::EnumDef(ed) => ed.name == name && !ed.is_shared,
+                    _ => false,
+                })
+        };
+        let items = items.read().unwrap();
+        !items.is_empty()
+            && items.iter().all(|e| match e {
+                Value::Struct { name, .. } => user_type(name),
+                Value::EnumVariant {
+                    enum_name,
+                    rc: None,
+                    ..
+                } => user_type(enum_name),
+                _ => false,
+            })
+    }
+
     pub(crate) fn user_fn_returns_vec_of_user_type(&self, fn_name: &str) -> bool {
         use crate::ast::{Item, TypeKind};
         let Some(f) = self.program.items.iter().find_map(|item| match item {

@@ -12793,7 +12793,10 @@ impl<'a> super::Interpreter<'a> {
                             } else if matches!(&discarded, Value::Tuple(_))
                                 || (matches!(&discarded, Value::Array(_))
                                     && (self.user_fn_returns_fixed_array(fn_name)
-                                        || self.user_fn_returns_vec_of_user_type(fn_name)))
+                                        || self.user_fn_returns_vec_of_user_type(fn_name)
+                                        || self.generic_fn_discard_owes_elem_bodies(
+                                            fn_name, &discarded,
+                                        )))
                             {
                                 // B-2026-09-27-72 — and a discarded `Vec`
                                 // return whose element is a user type (`mv();`
