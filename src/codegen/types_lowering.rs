@@ -1339,6 +1339,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let key = match &expr.kind {
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(fname) => fname.clone(),
+                // B-2026-09-30-25 — an associated function (`K.fr(1)`), keyed
+                // `Type.method` as `declare_function` keys it, the arm the
+                // tuple twin `call_return_tuple_tes` already has. Without it an
+                // unannotated `let a = K.fr(1)` recorded no element type, so
+                // the binding walked no element body and leaked its heap, and
+                // `a[0].id` could not resolve its receiver.
+                ExprKind::Path { segments, .. } if segments.len() == 2 => segments.join("."),
                 _ => return None,
             },
             ExprKind::MethodCall { object, method, .. } => {
