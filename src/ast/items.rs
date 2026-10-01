@@ -10291,6 +10291,14 @@ fn payload_yields(e: &Expr, name: &str, rule: CallYieldRule<'_>) -> bool {
             fields.iter().any(|f| payload_yields(&f.value, name, rule))
         }
         ExprKind::Tuple(elems) => elems.iter().any(|el| payload_yields(el, name, rule)),
+        // B-2026-10-01-12 — a collection LITERAL holding the binding moves it
+        // into the collection exactly as a tuple does: `Some(w) => [w]` hands
+        // the payload to whatever owns the array, and answering "stays" left
+        // the caller's fresh-temp walk running the body a second time on the
+        // interpreter.
+        ExprKind::ArrayLiteral(items) | ExprKind::PrefixCollectionLiteral { items, .. } => {
+            items.iter().any(|el| payload_yields(el, name, rule))
+        }
         ExprKind::Call { callee, args, .. } => args.iter().enumerate().any(|(j, a)| {
             if !payload_yields(&a.value, name, rule) {
                 return false;
