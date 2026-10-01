@@ -9921,6 +9921,17 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         arg: &Expr,
     ) {
+        // B-2026-10-01-25 — a struct field or variant payload moved in from a
+        // param VIEW carries a body the CALLER runs when the call returns
+        // (design.md § Drop ordering, rule 3), so the discarded temp masks it
+        // out of its walk, as the `let`-bound literal does
+        // (`mask_param_view_struct_literal_fields`,
+        // `enum_ctor_param_view_payload_slots`). Bodies only: the registrar
+        // still frees the part's memory, which is this frame's copy. Left in,
+        // `let _ = S2 { r: w, k: 1 };` and `let _ = E.A(w);` over a by-value
+        // `w` ran its body here and again in the caller on every surface.
+        let view_paths = self.discarded_struct_literal_param_view_paths(arg);
+        let view_slots = self.discarded_ctor_param_view_payload_skip(arg);
         self.track_inline_owned_aggregate_arg_inst(
             val,
             arg,
@@ -9928,11 +9939,44 @@ impl<'ctx> super::Codegen<'ctx> {
             true,
             None,
             false,
-            &[],
+            &view_paths,
             &[],
             None,
-            None,
+            view_slots,
         );
+    }
+
+    /// B-2026-10-01-25 — the fields of a discarded STRUCT literal that a param
+    /// VIEW fills, as escaping paths for the registrar's body mask.
+    fn discarded_struct_literal_param_view_paths(&self, arg: &Expr) -> Vec<crate::ast::ParamPath> {
+        let ExprKind::StructLiteral {
+            fields,
+            spread: None,
+            ..
+        } = &arg.kind
+        else {
+            return Vec::new();
+        };
+        fields
+            .iter()
+            .filter(|f| self.literal_elem_is_param_view(&f.value))
+            .map(|f| vec![crate::ast::ParamPart::Field(f.name.clone())])
+            .collect()
+    }
+
+    /// B-2026-10-01-25 — the payload slots of a discarded user-enum
+    /// constructor that a param VIEW fills, as the registrar's payload skip
+    /// set. `None` when there are none, which walks every payload as before.
+    fn discarded_ctor_param_view_payload_skip(
+        &self,
+        arg: &Expr,
+    ) -> Option<std::collections::BTreeSet<(String, usize)>> {
+        let enum_name = self.enum_name_of_expr(arg)?;
+        if enum_name == "Option" || enum_name == "Result" {
+            return None;
+        }
+        let (variant, views, _) = self.enum_ctor_param_view_payload_slots(&enum_name, arg)?;
+        (!views.is_empty()).then(|| views.into_iter().map(|i| (variant.clone(), i)).collect())
     }
 
     /// [`Self::track_inline_owned_aggregate_arg`] carrying the callee's

@@ -69,6 +69,7 @@ pub(crate) fn binding_only_borrowed_with(
         callee_owns_arg: &|_, _| false,
         follow_let_rebinds: false,
         follow_typed_rebinds: false,
+        discards_die_in_frame: false,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -95,6 +96,7 @@ pub(crate) fn binding_only_borrowed_escape_with(
         callee_owns_arg: &capitalized_callee_constructs,
         follow_let_rebinds,
         follow_typed_rebinds: false,
+        discards_die_in_frame: follow_let_rebinds,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -113,6 +115,7 @@ pub(crate) fn binding_only_borrowed_block_escape_with(
         callee_owns_arg: &capitalized_callee_constructs,
         follow_let_rebinds,
         follow_typed_rebinds: false,
+        discards_die_in_frame: follow_let_rebinds,
     };
     !block_consumes(&c, b)
 }
@@ -146,6 +149,7 @@ pub(crate) fn binding_only_borrowed_with_callee_owns(
         callee_owns_arg,
         follow_let_rebinds: false,
         follow_typed_rebinds: false,
+        discards_die_in_frame: false,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -180,6 +184,7 @@ pub(crate) fn binding_only_borrowed_following_rebinds_with(
         callee_owns_arg: &|c, i| capitalized_callee_constructs(c, i) || callee_owns_arg(c, i),
         follow_let_rebinds: true,
         follow_typed_rebinds: true,
+        discards_die_in_frame: false,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -199,6 +204,7 @@ pub(crate) fn binding_only_borrowed_block_following_rebinds_with(
         callee_owns_arg: &|c, i| capitalized_callee_constructs(c, i) || callee_owns_arg(c, i),
         follow_let_rebinds: true,
         follow_typed_rebinds: true,
+        discards_die_in_frame: false,
     };
     !block_consumes(&c, b)
 }
@@ -216,6 +222,7 @@ pub(crate) fn binding_only_borrowed_block_with(
         callee_owns_arg: &|_, _| false,
         follow_let_rebinds: false,
         follow_typed_rebinds: false,
+        discards_die_in_frame: false,
     };
     !block_consumes(&c, b)
 }
@@ -263,6 +270,7 @@ pub(crate) fn binding_materialized(
         callee_owns_arg: &|_, _| false,
         follow_let_rebinds: false,
         follow_typed_rebinds: false,
+        discards_die_in_frame: false,
     };
     value_derived_from(&c, e) || has_consuming_sink(&c, e)
 }
@@ -281,6 +289,7 @@ pub(crate) fn binding_materialized_block(
         callee_owns_arg: &|_, _| false,
         follow_let_rebinds: false,
         follow_typed_rebinds: false,
+        discards_die_in_frame: false,
     };
     block_consumes(&c, b)
 }
@@ -346,6 +355,14 @@ struct Ctx<'a> {
     /// it: there the annotation changes nothing about who holds the value,
     /// whereas the escape question was written and measured without it.
     follow_typed_rebinds: bool,
+    /// B-2026-10-01-25 — score a DISCARDED construction (`let _ = [y];`,
+    /// `(y, 1);`, `let _ = E.A(y);`) that holds the tracked name directly as
+    /// no sink: the value dies inside the frame, so it outlives nothing, the
+    /// rebind rule's argument one shape over. Set only by the ESCAPE question
+    /// ([`binding_only_borrowed_escape_with`] and its block sibling). The
+    /// boxed-payload RESIDENCY question must not set it: a discard does take
+    /// the payload out of its box.
+    discards_die_in_frame: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -357,6 +374,7 @@ impl<'a> Ctx<'a> {
             callee_owns_arg: &|_, _| false,
             follow_let_rebinds: false,
             follow_typed_rebinds: false,
+            discards_die_in_frame: false,
         }
     }
 }
@@ -598,14 +616,70 @@ fn stmts_have_sink(
                 callee_owns_arg: c.callee_owns_arg,
                 follow_let_rebinds: true,
                 follow_typed_rebinds: c.follow_typed_rebinds,
+                discards_die_in_frame: c.discards_die_in_frame,
             };
             return stmts_have_sink(&wc, &stmts[i + 1..], final_expr, true);
+        }
+        // B-2026-10-01-25 — see `Ctx::discards_die_in_frame`.
+        if let Some(sink) = discarded_construction_sink(c, s) {
+            if sink {
+                return true;
+            }
+            continue;
         }
         if stmt_has_sink(c, s) {
             return true;
         }
     }
     final_expr.is_some_and(|e| (tail_moves && value_derived_from(c, e)) || has_consuming_sink(c, e))
+}
+
+/// B-2026-10-01-25 — when `c` lets discards die in the frame, the verdict for
+/// a statement that DISCARDS the tracked name or a construction holding it
+/// (`let _ = <lit>;` or `<lit>;`, with `<lit>` the name itself, a tuple,
+/// array, `Vec`-prefix or struct literal, or a capitalized constructor call). An element that IS the tracked name dies
+/// with the value and is no sink; every other element is judged as usual.
+/// `None` for any other statement, which keeps its ordinary answer.
+fn discarded_construction_sink(c: &Ctx<'_>, s: &Stmt) -> Option<bool> {
+    if !c.discards_die_in_frame {
+        return None;
+    }
+    let value = match &s.kind {
+        StmtKind::Let { pattern, value, .. }
+            if matches!(pattern.kind, crate::ast::PatternKind::Wildcard) =>
+        {
+            value
+        }
+        StmtKind::Expr(e) => e,
+        _ => return None,
+    };
+    let parts: Vec<&Expr> = match &value.kind {
+        // The bare discard (`let _ = y;`, `y;`) is the degenerate case.
+        ExprKind::Identifier(n) if n == c.name => return Some(false),
+        ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => items.iter().collect(),
+        ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().collect(),
+        ExprKind::StructLiteral {
+            fields,
+            spread: None,
+            ..
+        } => fields.iter().map(|f| &f.value).collect(),
+        ExprKind::Call { callee, args } => {
+            let head = match &callee.kind {
+                ExprKind::Identifier(n) => n.as_str(),
+                ExprKind::Path { segments, .. } => segments.last()?.as_str(),
+                _ => return None,
+            };
+            if !head.starts_with(|ch: char| ch.is_ascii_uppercase()) {
+                return None;
+            }
+            args.iter().map(|a| &a.value).collect()
+        }
+        _ => return None,
+    };
+    Some(parts.iter().any(|p| {
+        !matches!(&p.kind, ExprKind::Identifier(n) if n == c.name)
+            && (value_derived_from(c, p) || has_consuming_sink(c, p))
+    }))
 }
 
 /// The name an immutable `let <w> = <tracked name>;` binds, when `c` follows

@@ -7884,6 +7884,138 @@ impl<'a> super::Interpreter<'a> {
         self.suppress_tail_expr_user_drop(inner_expr, cleanup);
     }
 
+    /// B-2026-10-01-25 — run the bodies a DISCARDED literal or constructor
+    /// owns, leaving out every element that is a by-value param VIEW. Returns
+    /// whether it handled the discard; `false` (no view among the elements, or
+    /// a shape it does not know) leaves the caller's own walk to run.
+    ///
+    /// A view's body is the caller's: it runs when the call returns
+    /// (design.md § Drop ordering, rule 3), so a discard inside the callee
+    /// that ran it too ran it twice. `fn d(w: W1) { let _ = (w, 1); .. }`
+    /// printed `dW1 in dW1`, and so did the array, `Vec[..]`, struct-literal
+    /// and enum-constructor spellings and the payload binding of a by-value
+    /// `Option` or enum param (`Some(w) => { let _ = [w]; .. }`). The same
+    /// literal BOUND to a local masks its views at the `let`
+    /// (`mask_param_view_*`); this is that mask for the two discard
+    /// spellings, which have no binding to key it on. Codegen's twin is
+    /// `discarded_literal_param_view_mask` in `stmts.rs`.
+    ///
+    /// The value is masked rather than walked per element so each shape keeps
+    /// its own walk: a tuple or enum slot becomes a unit, which every walk
+    /// skips, an array loses the element, and a struct loses the field, the
+    /// device `drop_user_drop_fields_of_value` already honours. A type's OWN
+    /// body still sees the whole value.
+    fn run_discarded_literal_masking_param_views(&mut self, rhs: &Expr, val: &Value) -> bool {
+        // Same method-frame guard as the let-site masks (B-2026-08-27-48).
+        if self.owned_param_frame_is_method.last().copied() == Some(true) {
+            return false;
+        }
+        let lit = Self::arm_tail_expr(rhs);
+        match (&lit.kind, val) {
+            (ExprKind::Tuple(elems), Value::Tuple(items)) if elems.len() == items.len() => {
+                let views: Vec<bool> = elems
+                    .iter()
+                    .map(|e| self.literal_elem_is_param_view(e))
+                    .collect();
+                if !views.contains(&true) {
+                    return false;
+                }
+                let owned = items
+                    .iter()
+                    .zip(&views)
+                    .map(|(v, is_view)| if *is_view { Value::Unit } else { v.clone() })
+                    .collect();
+                self.run_discarded_value_user_drops(Value::Tuple(owned));
+                true
+            }
+            (
+                ExprKind::ArrayLiteral(elems)
+                | ExprKind::PrefixCollectionLiteral { items: elems, .. },
+                Value::Array(rc),
+            ) => {
+                let views: Vec<bool> = elems
+                    .iter()
+                    .map(|e| self.literal_elem_is_param_view(e))
+                    .collect();
+                if !views.contains(&true) {
+                    return false;
+                }
+                let items: Vec<Value> = rc.read().map(|g| g.clone()).unwrap_or_default();
+                if items.len() != views.len() {
+                    return false;
+                }
+                for (v, is_view) in items.into_iter().zip(views) {
+                    if !is_view {
+                        self.run_discarded_value_user_drops(v);
+                    }
+                }
+                true
+            }
+            (
+                ExprKind::StructLiteral {
+                    fields,
+                    spread: None,
+                    ..
+                },
+                Value::Struct { name, .. },
+            ) => {
+                let view_fields: Vec<String> = fields
+                    .iter()
+                    .filter(|f| self.literal_elem_is_param_view(&f.value))
+                    .map(|f| f.name.clone())
+                    .collect();
+                if view_fields.is_empty() {
+                    return false;
+                }
+                let tn = name.clone();
+                if self.program.drop_method_keys.contains_key(&tn) {
+                    self.run_user_drop_body_only(&tn, val.clone());
+                }
+                let mut masked = val.clone();
+                for f in &view_fields {
+                    Self::remove_field_at_path(&mut masked, std::slice::from_ref(f));
+                }
+                self.drop_user_drop_fields_of_value(&masked);
+                true
+            }
+            (
+                ExprKind::Call { args, .. },
+                Value::EnumVariant {
+                    enum_name,
+                    variant,
+                    data: EnumData::Tuple(vs),
+                    rc: None,
+                },
+            ) if !matches!(enum_name.as_str(), "Option" | "Result") && vs.len() == args.len() => {
+                let views: Vec<bool> = args
+                    .iter()
+                    .map(|a| self.literal_elem_is_param_view(&a.value))
+                    .collect();
+                if !views.contains(&true) {
+                    return false;
+                }
+                let tn = enum_name.clone();
+                if self.program.drop_method_keys.contains_key(&tn) {
+                    self.run_user_drop_body_only(&tn, val.clone());
+                }
+                let masked = Value::EnumVariant {
+                    enum_name: tn,
+                    variant: variant.clone(),
+                    data: EnumData::Tuple(
+                        vs.iter()
+                            .zip(&views)
+                            .map(|(v, is_view)| if *is_view { Value::Unit } else { v.clone() })
+                            .collect(),
+                    ),
+                    rc: None,
+                };
+                self.run_enum_payload_user_drops_value(&masked);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Move-suppression for `let g = f;` patterns where `f` is a
     /// binding whose type has a user `impl Drop`. The source `f`'s
     /// CleanupAction::Drop is removed from the current cleanup frame
@@ -11631,7 +11763,12 @@ impl<'a> super::Interpreter<'a> {
                         }
                         _ => val.clone(),
                     };
-                    self.run_discarded_value_user_drops(owned_val);
+                    // B-2026-10-01-25 — a literal holding a param VIEW runs
+                    // only the bodies it owns.
+                    let masked_views = self.run_discarded_literal_masking_param_views(value, &val);
+                    if !masked_views {
+                        self.run_discarded_value_user_drops(owned_val);
+                    }
                     // B-2026-08-31-35 — this site now owns the value, so the
                     // taken arm's consumed locals must not run a second body.
                     self.disarm_discarded_tail_sources(value);
@@ -11722,7 +11859,7 @@ impl<'a> super::Interpreter<'a> {
                                 if self.user_method_returns_owned_type(method, enum_name)));
                     let inline_ctor =
                         method_producer || self.discard_taken_producer_runs_payload_walk(value);
-                    if inline_ctor {
+                    if inline_ctor && !masked_views {
                         if let Value::EnumVariant { enum_name, .. } = &val {
                             if self.program.drop_method_keys.contains_key(enum_name) {
                                 let v = val.clone();
@@ -12768,6 +12905,11 @@ impl<'a> super::Interpreter<'a> {
                             // last-reference test; see
                             // `run_discarded_shared_user_drop`. Inert for the
                             // enum shapes these arms are otherwise about.
+                            // B-2026-10-01-25 — a constructor over a param VIEW
+                            // runs only the bodies it owns.
+                            if self.run_discarded_literal_masking_param_views(shape, &discarded) {
+                                return Ok(Value::Unit);
+                            }
                             self.run_discarded_shared_user_drop(&discarded);
                             let payload_src = discarded.clone();
                             self.run_discarded_value_user_drops(discarded);
@@ -12801,6 +12943,11 @@ impl<'a> super::Interpreter<'a> {
                             if self.find_enum_for_variant(fn_name).is_some()
                                 || matches!(fn_name.as_str(), "Some" | "Ok" | "Err")
                             {
+                                // B-2026-10-01-25 — as the qualified arm above.
+                                if self.run_discarded_literal_masking_param_views(shape, &discarded)
+                                {
+                                    return Ok(Value::Unit);
+                                }
                                 let payload_src = discarded.clone();
                                 self.run_discarded_value_user_drops(discarded);
                                 if let Value::EnumVariant { enum_name, .. } = &payload_src {
@@ -13308,7 +13455,10 @@ impl<'a> super::Interpreter<'a> {
                     | ExprKind::PrefixCollectionLiteral { .. }
                         if self.discard_rhs_produces_owned_value(expr, &discarded) =>
                     {
-                        self.run_discarded_value_user_drops(discarded);
+                        // B-2026-10-01-25 — less any param VIEW it holds.
+                        if !self.run_discarded_literal_masking_param_views(expr, &discarded) {
+                            self.run_discarded_value_user_drops(discarded);
+                        }
                     }
                     ExprKind::Identifier(n) if self.fresh_bare_unit_variant_enum(n).is_some() => {
                         self.run_discarded_value_user_drops(discarded);

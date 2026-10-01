@@ -5008,7 +5008,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         .any(|e| self.tuple_elem_is_movable_drop_struct_place(e));
                     if any_place {
                         let elems = elems.clone();
-                        self.track_discarded_tuple_elem_bodies(&elems, val, &[]);
+                        // B-2026-10-01-25 — less the param VIEWS, whose bodies
+                        // the caller runs.
+                        let views = self.tuple_literal_param_view_elem_indices(&elems);
+                        self.track_discarded_tuple_elem_bodies(&elems, val, &views);
                     }
                 }
                 // B-2026-09-30-32 — and the `Vec` BUFFER a bare `[..]` literal
@@ -14222,7 +14225,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             .any(|e| self.tuple_elem_is_movable_drop_struct_place(e));
                         if any_place {
                             let elems = elems.clone();
-                            self.track_discarded_tuple_elem_bodies(&elems, val, &[]);
+                            // B-2026-10-01-25 — less the param VIEWS, whose
+                            // bodies the caller runs.
+                            let views = self.tuple_literal_param_view_elem_indices(&elems);
+                            self.track_discarded_tuple_elem_bodies(&elems, val, &views);
                         }
                     }
                     // B-2026-09-13-26 — the ARRAY peer, the bare-statement twin
@@ -29235,21 +29241,30 @@ impl<'ctx> super::Codegen<'ctx> {
             // struct arm above takes it: `let _ = [w];` moved `w` into a buffer
             // no registrar claimed, so the buffer and the String it now held
             // leaked while `w`'s own drop ran over the zeroed slot.
+            // B-2026-10-01-25 — or, where the caller retracts, a literal made
+            // ENTIRELY of param VIEWS (`let _ = [w];` over a by-value `w`).
+            // Declined, nothing owned the literal and its buffer and this
+            // frame's copy of the element leaked; admitted, it frees them and
+            // runs no body (`discarded_array_literal_is_all_param_views`), the
+            // caller running the view's. All-or-nothing, as the `let`-bound
+            // literal's mask is: the element walk cannot skip one slot.
             ExprKind::ArrayLiteral(elems)
                 if !elems.is_empty()
-                    && elems.iter().all(|e| {
+                    && (elems.iter().all(|e| {
                         self.discard_tuple_elem_is_fresh_expr(e)
                             || (allow_movable_place && self.array_item_is_movable_local(e))
-                    }) =>
+                    }) || (allow_movable_place
+                        && self.container_literal_elems_are_all_param_views(expr))) =>
             {
                 Some(expr)
             }
             ExprKind::PrefixCollectionLiteral { items, .. }
                 if !items.is_empty()
-                    && items.iter().all(|e| {
+                    && (items.iter().all(|e| {
                         self.discard_tuple_elem_is_fresh_expr(e)
                             || (allow_movable_place && self.array_item_is_movable_local(e))
-                    }) =>
+                    }) || (allow_movable_place
+                        && self.container_literal_elems_are_all_param_views(expr))) =>
             {
                 Some(expr)
             }
@@ -29262,6 +29277,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 .and_then(|e| self.discarded_literal_tail_inner(e, allow_movable_place)),
             _ => None,
         }
+    }
+
+    /// B-2026-10-01-25 — the elements of a discarded TUPLE literal that a param
+    /// VIEW fills: the caller runs their bodies, so the temp's walk skips them.
+    pub(super) fn tuple_literal_param_view_elem_indices(&self, elems: &[Expr]) -> Vec<usize> {
+        elems
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| self.literal_elem_is_param_view(e))
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// B-2026-09-30-59 — the movable-place test the ARRAY arms of
@@ -29493,10 +29519,15 @@ impl<'ctx> super::Codegen<'ctx> {
         if n == 0 || items.len() != n as usize {
             return;
         }
-        if !items.iter().all(|it| {
-            self.discarded_array_item_is_fresh(it)
-                || (places_retracted && self.tuple_elem_is_movable_drop_struct_place(it))
-        }) {
+        // B-2026-10-01-25 — an all-param-VIEW literal frees its copy and runs
+        // no body: the caller runs the views' bodies.
+        let all_views = places_retracted && self.container_literal_elems_are_all_param_views(tail);
+        if !all_views
+            && !items.iter().all(|it| {
+                self.discarded_array_item_is_fresh(it)
+                    || (places_retracted && self.tuple_elem_is_movable_drop_struct_place(it))
+            })
+        {
             return;
         }
         // The literal's own instantiation when the typechecker recorded one,
@@ -29527,7 +29558,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // Both emitters may synthesize a function and move the builder, so
         // they run before the alloca and store.
         let drop_fn = self.synthesize_array_drop_fn_te(elem_ty, &elem_te, n);
-        let bodies = self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem_te, n);
+        let bodies = if all_views {
+            None
+        } else {
+            self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem_te, n)
+        };
         if drop_fn.is_none() && bodies.is_none() {
             return;
         }
@@ -29634,7 +29669,9 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::PrefixCollectionLiteral { items, .. } => items,
             _ => return,
         };
-        if items.is_empty() {
+        // B-2026-10-01-25 — an all-param-VIEW literal's bodies are the
+        // caller's.
+        if items.is_empty() || self.container_literal_elems_are_all_param_views(tail) {
             return;
         }
         // A bare `[..]` / `Vec[..]` literal in a discarded position lowers to a
