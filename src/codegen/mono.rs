@@ -4033,6 +4033,55 @@ impl<'ctx> super::Codegen<'ctx> {
                 let copied = self.uam_array_defensive_copy(&a.value, arg_vals[i]);
                 arg_vals[i] = copied;
                 self.suppress_array_binding_move_arg(&a.value);
+            } else if let ExprKind::Identifier(_) = &a.value.kind {
+                // B-2026-10-01-8 — the monomorph leg of B-2026-09-23-12's
+                // hand-back retraction (`move_declined_copy_struct_arg_for`).
+                // A caller-retained array (a user-`Drop` element, which
+                // `array_transfer` declines by design) that the callee hands
+                // back whole on every exit is owned by the RESULT, but the
+                // concrete path's retraction is reached only with a callee in
+                // hand and the monomorph never passed one. So `let a:
+                // Array[R, 2] = [..]; pg(a)` over `fn pg[T](x: T) -> T` kept
+                // `a`'s drop beside the result's, and both freed the element
+                // heap: `free(): double free` under the JIT and two invalid
+                // frees at -O0, while the concrete `pa(a)` was clean. No-ops
+                // for anything but an owned array local.
+                let ast_i = self
+                    .program_snapshot
+                    .as_deref()
+                    .and_then(|p| super::declarations::find_function_ast(p, name))
+                    .and_then(|f| {
+                        if f.self_param.is_some() {
+                            i.checked_sub(1)
+                        } else {
+                            Some(i)
+                        }
+                    });
+                // Only a return spelled as the param's own type (`-> T` over
+                // `x: T`). The concrete predicate also admits a result that
+                // OWNS the param as a part (`-> (T, i64)`), but a monomorph's
+                // tuple of a substituted array does not free the element heap,
+                // so retracting there turned a clean cell into a 6 B leak.
+                let whole_return = ast_i.is_some_and(|ai| {
+                    self.program_snapshot
+                        .as_deref()
+                        .and_then(|p| super::declarations::find_function_ast(p, name))
+                        .is_some_and(|f| match (f.params.get(ai), f.return_type.as_ref()) {
+                            (Some(prm), Some(rt)) => {
+                                crate::formatter::render_type_expr(&prm.ty)
+                                    == crate::formatter::render_type_expr(rt)
+                            }
+                            _ => false,
+                        })
+                });
+                if whole_return
+                    && ast_i.is_some_and(|ai| self.callee_always_hands_array_arg_back(name, ai))
+                {
+                    self.suppress_array_binding_move(
+                        &a.value,
+                        super::param_own::ArrayMoveDest::HandedBack,
+                    );
+                }
             }
             // B-2026-09-05-31 — the monomorph leg of `compile_call`'s
             // caller-side stand-down for a NAMED-LOCAL argument the callee
