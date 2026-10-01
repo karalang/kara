@@ -560,6 +560,12 @@ pub struct Interpreter<'a> {
     /// `let x = s.a;` may register a body of its own. Rides the per-frame
     /// save/restore with the masks, being name-keyed like them.
     pub(crate) param_view_struct_fields: HashSet<(String, String)>,
+    /// B-2026-10-01-42 — the locals bound or assigned a container literal of
+    /// param VIEWS (`let w = Vec[y]`), whose element walk the container mask
+    /// silences. The mask alone cannot say WHY (a move-out writes it too), and
+    /// a later `v = w` has to know it is handing on a view. Name-keyed and
+    /// isolated per frame like the masks.
+    pub(crate) param_view_container_locals: HashSet<String>,
     /// B-2026-09-01-3 — the TUPLE peer of the record above: `(binding,
     /// element index)` pairs a tuple literal filled from a param VIEW.
     /// Codegen's twin is `param_view_tuple_elems`.
@@ -1439,6 +1445,7 @@ impl<'a> Interpreter<'a> {
             rc_promoted_consume_spans: HashSet::new(),
             param_view_struct_fields: HashSet::new(),
             param_view_tuple_elems: HashSet::new(),
+            param_view_container_locals: HashSet::new(),
             moved_out_struct_field_payload_bodies: HashSet::new(),
             moved_out_nested_field_bodies: HashSet::new(),
             pending_shared_releases: Vec::new(),

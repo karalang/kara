@@ -4281,6 +4281,16 @@ impl<'a> super::Interpreter<'a> {
         let PatternKind::Binding(bname) = &pattern.kind else {
             return;
         };
+        self.mask_param_view_container_literal_value(bname, value);
+    }
+
+    /// The value half of [`Self::mask_param_view_container_literal_elems`],
+    /// shared with a whole ASSIGNMENT (`v = Vec[y]`) — B-2026-10-01-41 /
+    /// B-2026-10-01-42. A reassigned local that receives a literal of param
+    /// views holds the caller's values exactly as a `let` of one does, so its
+    /// element walk is masked the same way; codegen's twin is the per-path bit
+    /// `set_reassigned_view_container_flag` clears.
+    fn mask_param_view_container_literal_value(&mut self, bname: &str, value: &Expr) {
         let elems: &[Expr] = match &value.kind {
             ExprKind::ArrayLiteral(elems) => elems,
             ExprKind::PrefixCollectionLiteral { items, .. } => items,
@@ -4300,7 +4310,8 @@ impl<'a> super::Interpreter<'a> {
             return;
         }
         self.moved_out_container_bodies_bindings
-            .insert(bname.clone());
+            .insert(bname.to_string());
+        self.param_view_container_locals.insert(bname.to_string());
     }
 
     fn mask_param_view_tuple_literal_elems(&mut self, stmt: &Stmt) {
@@ -10070,6 +10081,7 @@ impl<'a> super::Interpreter<'a> {
     /// of the same name must not silence the new value's walks.
     pub(super) fn rearm_container_bodies_for_name(&mut self, name: &str) {
         self.moved_out_container_bodies_bindings.remove(name);
+        self.param_view_container_locals.remove(name);
         self.moved_out_tuple_elem_bodies.retain(|(n, _)| n != name);
         // B-2026-09-03-11 — the deep sibling clears with the flat ones.
         self.moved_out_nested_field_bodies
@@ -12179,6 +12191,10 @@ impl<'a> super::Interpreter<'a> {
                 // `f = g;` — g's container value moves into f. Record g so
                 // its walks skip (codegen's Assign-arm disarm twin), and
                 // re-arm f below once the store lands.
+                // B-2026-10-01-42 — read BEFORE the move below masks the
+                // source: `v = w` over a view local hands on a view.
+                let rhs_is_view_container = matches!(&value.kind,
+                    ExprKind::Identifier(src) if self.param_view_container_locals.contains(src.as_str()));
                 self.record_container_bodies_move_sources(value);
                 let val = self.eval_expr_inner(value);
                 // B-2026-08-14-6 — an INT RHS landing in a FLOAT slot
@@ -12736,6 +12752,13 @@ impl<'a> super::Interpreter<'a> {
                     // the view record has to be taken afterwards or it is wiped
                     // by the statement that establishes it.
                     self.record_assign_of_param_view(&t, value);
+                    // B-2026-10-01-41 / B-2026-10-01-42 — and a literal of
+                    // param views, as its `let` twin is masked.
+                    self.mask_param_view_container_literal_value(&t, value);
+                    if rhs_is_view_container {
+                        self.moved_out_container_bodies_bindings.insert(t.clone());
+                        self.param_view_container_locals.insert(t);
+                    }
                 } else if let ExprKind::FieldAccess { object, field } = &target.kind {
                     // B-2026-08-30-54 — the FIELD sibling of the two calls
                     // above, expressed over `moved_out_struct_field_bodies`

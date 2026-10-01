@@ -4785,6 +4785,8 @@ impl<'a> super::Interpreter<'a> {
             std::mem::take(&mut self.param_view_struct_fields),
             // B-2026-09-01-3 — the tuple peer, isolated beside it.
             std::mem::take(&mut self.param_view_tuple_elems),
+            // B-2026-10-01-42 — the container peer.
+            std::mem::take(&mut self.param_view_container_locals),
             // B-2026-09-14-7 — the consumed-part mask, name-keyed like
             // every mask above and isolated for B-2026-08-09-10's
             // reason: it is written in the CALLER's frame after a call
@@ -4839,6 +4841,7 @@ impl<'a> super::Interpreter<'a> {
             self.moved_out_enum_payload_body_slots,
             self.param_view_struct_fields,
             self.param_view_tuple_elems,
+            self.param_view_container_locals,
             self.moved_out_optres_payload_bodies,
         ) = saved_moved_out;
         // B-2026-08-30-33 — restore with the rest of the per-frame

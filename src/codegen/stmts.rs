@@ -14985,6 +14985,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     //
                     // Runs BEFORE the RHS store below, while the displaced
                     // elements are still live in the slot.
+                    // B-2026-10-01-41 — a local that STARTED owned and is
+                    // given a param-view container here gets the same per-path
+                    // bit -21 mints at the let site for one that started as a
+                    // view: without it the scope exit walked the view's
+                    // elements and ran the caller's bodies in this frame.
+                    if !rhs_is_self_alias {
+                        self.mint_reassigned_view_container_flag(name.as_str(), value);
+                    }
                     if rhs_is_container_literal && !lhs_is_tracked_vec && !rhs_is_self_alias {
                         if let (Some(elem_te), Some(slot)) = (
                             self.var_types
@@ -25721,6 +25729,57 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_call(bodies, &[ptr.into()], "").unwrap();
         self.builder.build_unconditional_branch(join).unwrap();
         self.builder.position_at_end(join);
+    }
+
+    /// B-2026-10-01-41 — before a whole reassignment of an OWNED container
+    /// local `name` to a value built from param views, give it the per-path
+    /// bit that gates its element-bodies walk. The bit starts set (the entry
+    /// store of [`Self::cond_move_drop_flag_for`]), so the displaced owned
+    /// value's walk still runs; [`Self::set_reassigned_view_container_flag`]
+    /// then clears it for the view. Only for a local whose element-bodies walk
+    /// is registered and whose name carries no bit of another meaning.
+    fn mint_reassigned_view_container_flag(&mut self, name: &str, value: &Expr) {
+        if self
+            .drop_rc
+            .reassigned_view_container_flags
+            .contains_key(name)
+            || self.drop_rc.cond_move_drop_flags.contains_key(name)
+            || self.fn_ctx.current_fn_param_names.contains(name)
+        {
+            return;
+        }
+        // A `Vec` or fixed `Array` local only: a struct or generic local's
+        // walk is the field walk, whose displacement has its own protocol
+        // (B-2026-09-27-50's `let mut c = a; c = b` lost both bodies here).
+        if !self.var_types.var_elem_type_exprs.contains_key(name)
+            && !self.var_types.array_elem_type_exprs.contains_key(name)
+        {
+            return;
+        }
+        let is_view = self.container_literal_elems_are_all_param_views(value)
+            || matches!(&value.kind, ExprKind::Identifier(src)
+                if self.fn_ctx.current_fn_param_names.contains(src.as_str())
+                    || self.payload_vars.param_view_locals.contains(src.as_str()));
+        if !is_view {
+            return;
+        }
+        let has_walk = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .any(|a| {
+                matches!(a, super::state::CleanupAction::UserDrop { binding_name, kind, .. }
+                if binding_name == name && *kind == UserDropKind::ContainerElemBodies)
+            });
+        if !has_walk {
+            return;
+        }
+        if let Some(flag) = self.cond_move_drop_flag_for(name) {
+            self.drop_rc
+                .reassigned_view_container_flags
+                .insert(name.to_string(), flag);
+        }
     }
 
     /// B-2026-10-01-21 — after a whole reassignment of `name`, record whether
