@@ -11501,6 +11501,14 @@ pub fn fn_reassigns_param_rebind(f: &Function, arg_index: usize) -> bool {
     param_reassigned_rebind_local(f, arg_index).is_some()
 }
 
+/// B-2026-10-01-21 — is the local `name` assigned WHOLE anywhere in `f`
+/// (`name = ..`, or one target of a multi-assign)? Read off the same rebind
+/// walk the hand-back predicates use, so the two agree on what an assignment
+/// is.
+pub fn fn_assigns_local_whole(f: &Function, name: &str) -> bool {
+    rebind_walk_raw(f).assigned.contains(name)
+}
+
 /// The local [`fn_reassigns_param_rebind`] finds: the `c` of `let mut c = a;`.
 pub fn param_reassigned_rebind_local(f: &Function, arg_index: usize) -> Option<&str> {
     let param = f.params.get(arg_index)?;

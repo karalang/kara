@@ -153,6 +153,15 @@ pub(crate) struct DropRc<'ctx> {
     /// exactly as they did before. That is what keeps this slice off the
     /// predicate question the row warns about.
     pub(crate) cond_move_drop_flags: HashMap<String, PointerValue<'ctx>>,
+    /// B-2026-10-01-21 — a `let mut` container local built entirely from
+    /// param VIEWS (`let mut v = Vec[x]`) that the function also reassigns
+    /// whole, mapped to the `cond_move_drop_flags` bit that now gates its
+    /// element-bodies walk. The bit starts cleared at the `let` (the caller
+    /// runs the views' bodies) and each reassignment sets it to whether the
+    /// NEW value owns its bodies, so the displaced value's walk and the scope
+    /// exit both ask the value the slot holds rather than the one the `let`
+    /// stored. Read only where the bit is still this name's live flag.
+    pub(crate) reassigned_view_container_flags: HashMap<String, PointerValue<'ctx>>,
     /// B-2026-09-29-116 — the `cond_move_drop_flags` bits a whole-value
     /// hand-off in an enclosing-frame branch cleared
     /// (`suppress_container_elem_bodies_for_receiver`), by name. A later

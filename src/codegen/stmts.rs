@@ -12232,7 +12232,31 @@ impl<'ctx> super::Codegen<'ctx> {
                             // action of its own to retract; the double body comes
                             // from the caller's fire plus this walk.
                             if self.container_literal_elems_are_all_param_views(value) {
-                                self.suppress_container_elem_bodies_for_var(var_name);
+                                // B-2026-10-01-21 — a `let mut` the function
+                                // reassigns whole keeps its walk behind a bit
+                                // cleared here, which the reassignment then
+                                // sets for the value it stores: retracting
+                                // the walk left the REPLACEMENT with no body,
+                                // and the displaced views' walk ran the
+                                // caller's bodies in this frame.
+                                let flag =
+                                    if *is_mut && self.current_fn_assigns_local_whole(var_name) {
+                                        self.cond_move_drop_flag_for(var_name)
+                                    } else {
+                                        None
+                                    };
+                                match flag {
+                                    Some(flag) => {
+                                        let bool_t = self.context.bool_type();
+                                        let _ = self
+                                            .builder
+                                            .build_store(flag, bool_t.const_int(0, false));
+                                        self.drop_rc
+                                            .reassigned_view_container_flags
+                                            .insert(var_name.clone(), flag);
+                                    }
+                                    None => self.suppress_container_elem_bodies_for_var(var_name),
+                                }
                                 self.payload_vars.param_view_locals.insert(var_name.clone());
                             } else {
                                 let mut elem_sources = Vec::new();
@@ -14969,9 +14993,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if let Some(bodies) =
                                     self.emit_array_elem_user_drop_bodies_fn(elem_ty, &elem_te, n)
                                 {
-                                    self.builder
-                                        .build_call(bodies, &[slot.ptr.into()], "")
-                                        .unwrap();
+                                    self.emit_displaced_container_bodies_call(
+                                        name.as_str(),
+                                        bodies,
+                                        slot.ptr,
+                                    );
                                 }
                                 // B-2026-09-15-20 — the MEMORY peer of the
                                 // bodies call above, and the reason it is a
@@ -15052,9 +15078,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .cloned()
                                 .and_then(|te| self.emit_nested_vec_elem_bodies_fn(&te))
                             {
-                                self.builder
-                                    .build_call(bodies, &[slot.ptr.into()], "")
-                                    .unwrap();
+                                self.emit_displaced_container_bodies_call(
+                                    name.as_str(),
+                                    bodies,
+                                    slot.ptr,
+                                );
                             }
                             // B-2026-07-12-30: for a `Vec[shared]` /
                             // `Vec[Option[shared]]` (any Vec whose element carries
@@ -15088,6 +15116,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-10-01-21 — the displaced value's walk above read
+                    // the bit; the value stored now decides it from here on.
+                    self.set_reassigned_view_container_flag(name.as_str(), value);
                     // B-2026-07-15-25: Map/Set VARIABLE reassignment (`m = m2`,
                     // `set_a = set_b`). The Vec/String eager-free above is gated on
                     // `lhs_is_tracked_vec`, which is false for a Map/Set var, so the
@@ -15939,6 +15970,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         .cond_move_drop_flags
                         .get(name.as_str())
                         .copied()
+                        // B-2026-10-01-21 — a reassigned view-container
+                        // local's bit was already set to the NEW value's
+                        // ownership above; re-arming it here undid that for a
+                        // view RHS (`v = Vec[y]`), and the scope exit ran the
+                        // param's body the caller runs too.
+                        .filter(|f| {
+                            self.drop_rc
+                                .reassigned_view_container_flags
+                                .get(name.as_str())
+                                != Some(f)
+                        })
                     {
                         // B-2026-08-30-53 second measurement — RE-ARM the flag
                         // when the same target later receives a value that is
@@ -25597,6 +25639,68 @@ impl<'ctx> super::Codegen<'ctx> {
     /// An rhs that reaches the container through a call is already refused
     /// upstream by the alias guard, so a `Call` that gets this far cannot be
     /// handing back the displaced element itself.
+    /// B-2026-10-01-21 — the live bit gating `name`'s element-bodies walk, when
+    /// `name` is a reassigned `let mut` param-view container
+    /// ([`super::drop_rc::DropRc::reassigned_view_container_flags`]) and that
+    /// bit is still the one the scope exit reads.
+    fn live_reassigned_view_container_flag(&self, name: &str) -> Option<PointerValue<'ctx>> {
+        let flag = *self.drop_rc.reassigned_view_container_flags.get(name)?;
+        (self.drop_rc.cond_move_drop_flags.get(name) == Some(&flag)).then_some(flag)
+    }
+
+    /// B-2026-10-01-21 — call a DISPLACED container value's element-bodies
+    /// walker, behind `name`'s bit when it has one: a value built from param
+    /// views carries bodies the caller runs, so the walk must not run them
+    /// here, while a value a reassignment stored owns its own.
+    fn emit_displaced_container_bodies_call(
+        &mut self,
+        name: &str,
+        bodies: inkwell::values::FunctionValue<'ctx>,
+        ptr: PointerValue<'ctx>,
+    ) {
+        let Some(flag) = self.live_reassigned_view_container_flag(name) else {
+            self.builder.build_call(bodies, &[ptr.into()], "").unwrap();
+            return;
+        };
+        let cur_fn = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .expect("reassignment inside a function");
+        let bool_t = self.context.bool_type();
+        let on = self
+            .builder
+            .build_load(bool_t, flag, "disp.bodies.on")
+            .unwrap()
+            .into_int_value();
+        let run = self.context.append_basic_block(cur_fn, "disp.bodies.run");
+        let join = self.context.append_basic_block(cur_fn, "disp.bodies.join");
+        self.builder
+            .build_conditional_branch(on, run, join)
+            .unwrap();
+        self.builder.position_at_end(run);
+        self.builder.build_call(bodies, &[ptr.into()], "").unwrap();
+        self.builder.build_unconditional_branch(join).unwrap();
+        self.builder.position_at_end(join);
+    }
+
+    /// B-2026-10-01-21 — after a whole reassignment of `name`, record whether
+    /// the stored value owns its element bodies: not when it is itself built
+    /// from param views, or is a param or a view local.
+    fn set_reassigned_view_container_flag(&mut self, name: &str, value: &Expr) {
+        let Some(flag) = self.live_reassigned_view_container_flag(name) else {
+            return;
+        };
+        let is_view = self.container_literal_elems_are_all_param_views(value)
+            || matches!(&value.kind, ExprKind::Identifier(src)
+                if self.fn_ctx.current_fn_param_names.contains(src.as_str())
+                    || self.payload_vars.param_view_locals.contains(src.as_str()));
+        let bool_t = self.context.bool_type();
+        let _ = self
+            .builder
+            .build_store(flag, bool_t.const_int(u64::from(!is_view), false));
+    }
+
     fn store_destroys_displaced(rhs: &Expr) -> bool {
         matches!(
             rhs.kind,

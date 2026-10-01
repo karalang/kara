@@ -6568,6 +6568,7 @@ impl<'ctx> Codegen<'ctx> {
                 cond_move_return_sites: std::collections::HashSet::new(),
                 seeding_return_sites: false,
                 cond_move_drop_flags: HashMap::new(),
+                reassigned_view_container_flags: HashMap::new(),
                 handoff_flags: HashMap::new(),
                 user_drop_slots: HashMap::new(),
                 shadow_flag_saves: HashMap::new(),

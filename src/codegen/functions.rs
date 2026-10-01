@@ -1524,6 +1524,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // site's escaping-ness is a static property of the source location, so
         // it stays true across monomorphizations of the same body.)
         self.drop_rc.cond_move_drop_flags.clear();
+        self.drop_rc.reassigned_view_container_flags.clear();
         self.drop_rc.mut_let_names.clear();
         self.drop_rc.assigned_names.clear();
         self.drop_rc.handoff_flags.clear();

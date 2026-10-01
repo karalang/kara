@@ -10539,6 +10539,18 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-10-01-21 — does the function being compiled assign the local
+    /// `name` whole anywhere ([`crate::ast::fn_assigns_local_whole`])? `false`
+    /// when the function's AST is not found by its name (a closure body, a
+    /// monomorph), which keeps the let site's older all-paths retraction.
+    pub(super) fn current_fn_assigns_local_whole(&self, name: &str) -> bool {
+        let Some(p) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        super::declarations::find_function_ast(p, &self.fn_ctx.current_fn_name)
+            .is_some_and(|f| crate::ast::fn_assigns_local_whole(f, name))
+    }
+
     pub(super) fn ident_is_whole_param_alias(&self, src: &str) -> bool {
         if self.borrow_vars.ref_params.contains_key(src) {
             return false;
