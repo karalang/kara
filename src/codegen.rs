@@ -7099,6 +7099,7 @@ impl<'ctx> Codegen<'ctx> {
                 stats_elem_types: HashMap::new(),
                 string_typed_exprs: HashSet::new(),
                 char_typed_exprs: HashSet::new(),
+                scalar_typed_exprs: HashSet::new(),
                 borrow_vec_typed_exprs: HashSet::new(),
                 mut_ref_typed_exprs: HashSet::new(),
                 iterator_typed_exprs: HashSet::new(),
@@ -8497,6 +8498,7 @@ impl<'ctx> Codegen<'ctx> {
         // 3-word types, so the value alone can't distinguish them.
         self.span_tables.string_typed_exprs = program.string_typed_exprs.clone();
         self.span_tables.char_typed_exprs = program.char_typed_exprs.clone();
+        self.span_tables.scalar_typed_exprs = program.scalar_typed_exprs.clone();
         self.span_tables.borrow_vec_typed_exprs = program.borrow_vec_typed_exprs.clone();
         self.span_tables.mut_ref_typed_exprs = program.mut_ref_typed_exprs.clone();
         self.span_tables.iterator_typed_exprs = program.iterator_typed_exprs.clone();
@@ -10237,6 +10239,7 @@ impl<'ctx> Codegen<'ctx> {
         // presented as a size-dependent, unreducible failure.
         let mut t_method_impl_dispatch = tp.method_impl_dispatch.clone();
         let mut t_char_typed_exprs = tp.char_typed_exprs.clone();
+        let mut t_scalar_typed_exprs = tp.scalar_typed_exprs.clone();
         let mut t_iterator_typed_exprs = tp.iterator_typed_exprs.clone();
         let mut t_fn_value_typed_exprs = tp.fn_value_typed_exprs.clone();
         let mut t_dbg_arg_type_exprs = tp.dbg_arg_type_exprs.clone();
@@ -10457,6 +10460,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.span_tables.char_typed_exprs,
                     &mut t_char_typed_exprs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.scalar_typed_exprs,
+                    &mut t_scalar_typed_exprs,
                 );
                 std::mem::swap(
                     &mut self.span_tables.iterator_typed_exprs,

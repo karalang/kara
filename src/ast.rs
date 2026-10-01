@@ -1079,6 +1079,14 @@ pub struct Program {
     /// `String` vs `Vec[T]`.
     pub char_typed_exprs: StringTypedExprsTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: spans of
+    /// every expression whose Kāra type is a primitive SCALAR (an integer,
+    /// float, `bool`, `char`, `()` or `!`). A value of such a type owns no
+    /// heap, so codegen can ask the typechecker whether an expression could
+    /// carry a buffer out of its operands instead of enumerating syntax
+    /// (B-2026-09-20-34: a method call's return type is written nowhere
+    /// codegen can read it).
+    pub scalar_typed_exprs: StringTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: spans of
     /// every expression whose Kāra type is a BORROW of a `Vec` / `VecDeque` /
     /// `Slice` (`Ref(Vec[T])` / `MutRef(..)`). Lets codegen recognise a
     /// whole-collection re-borrow — `let ps = params` where `params: ref

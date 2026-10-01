@@ -132,6 +132,9 @@ pub(crate) struct SpanTables {
     /// `Program.char_typed_exprs`. Consulted by `expr_is_char` ahead of its
     /// syntactic arms (B-2026-08-26-20).
     pub(crate) char_typed_exprs: HashSet<(usize, usize)>,
+    /// Spans of every primitive-scalar-typed expression, from
+    /// `Program.scalar_typed_exprs` (B-2026-09-20-34).
+    pub(crate) scalar_typed_exprs: HashSet<(usize, usize)>,
     /// Spans of every expression typed `Ref`/`MutRef` of a `Vec`/`VecDeque`/
     /// `Slice` (from `Program.borrow_vec_typed_exprs`). The Let path consults
     /// it so a whole-collection re-borrow (`let ps = params`, `params: ref

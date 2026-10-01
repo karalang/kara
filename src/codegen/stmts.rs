@@ -25196,6 +25196,23 @@ impl<'ctx> super::Codegen<'ctx> {
         if !crate::deque_head::expr_mentions_name_deep(e, container) {
             return true;
         }
+        // B-2026-09-20-34 — ask the TYPECHECKER before the syntax. A value
+        // whose type is a primitive scalar owns no heap, so it cannot carry the
+        // container's buffer out however it reaches into the container. The
+        // arms below answer from DECLARED types (an element's, a field's, a
+        // tuple component's), and a method's return type is declared nowhere
+        // they can read: `a[0] = S { s: f"..", k: a[0].s.len() }` and
+        // `k: a.len()` reached the `_ => false` tail and stood the displaced
+        // element's release down, leaking its `String` (18 B at `-O0`) where
+        // `k: a[0].k + 1` was clean. An arm per method name would be the next
+        // three rows; the type is the question every spelling shares.
+        if self
+            .span_tables
+            .scalar_typed_exprs
+            .contains(&(e.span.offset, e.span.length))
+        {
+            return true;
+        }
         match &e.kind {
             ExprKind::Integer(..)
             | ExprKind::Float(..)

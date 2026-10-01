@@ -712,6 +712,25 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             }
         })
         .collect();
+    // B-2026-09-20-34 — spans of every primitive-SCALAR-typed expression; see
+    // `Program::scalar_typed_exprs`.
+    program.scalar_typed_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| {
+            matches!(
+                ty,
+                Type::Int(_)
+                    | Type::UInt(_)
+                    | Type::Float(_)
+                    | Type::Bool
+                    | Type::Char
+                    | Type::Unit
+                    | Type::Never
+            )
+            .then_some((k.0, k.1))
+        })
+        .collect();
     // Sibling to `string_typed_exprs`: spans of every expression typed as a
     // BORROW of a `Vec`/`VecDeque`/`Slice`. Codegen consults it to bind a
     // whole-collection re-borrow (`let ps = params`, `params: ref Vec[T]`) as
