@@ -217,6 +217,23 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         };
+        // B-2026-10-01-16 — see `compile_match`'s twin: the husk walk of a
+        // fresh-temp payload the pattern destructures, fired with the other
+        // scrutinee-temporary drops below.
+        let freshtemp_optres_struct = {
+            let read = |n: &str| crate::binding_use::binding_only_read_through_block(n, then_block);
+            self.plan_freshtemp_optres_struct_destructure(
+                value,
+                &[(pattern, &read)],
+                freshtemp_boxed_slot,
+            )
+        };
+        if let Some((slot, walkers)) = &freshtemp_optres_struct {
+            self.register_freshtemp_optres_struct_walker(*slot, walkers);
+        }
+        let freshtemp_optres_view = freshtemp_optres_struct
+            .as_ref()
+            .is_some_and(|(_, w)| w.first().is_some_and(|(view, _)| *view));
         // Fresh-temp INLINE-heap `Result` scrutinee (`if let Ok(_) = cell.set(v)`)
         // and fresh-temp `Option[shared]` scrutinee (`if let Some(n) = st.pop()`)
         // — the `match` path (compile_match) registers both, but the if-let path
@@ -290,6 +307,7 @@ impl<'ctx> super::Codegen<'ctx> {
             r
         };
         self.pattern_state.pattern_binding_is_borrow = self.pattern_state.pattern_binding_is_borrow
+            || freshtemp_optres_view
             || self.scrutinee_is_borrowed_binding(value)
             || self.scrutinee_is_borrow_call(value)
             // B-2026-08-08-25 leg 3 (if-let leg) — the USER-ENUM classifier.
@@ -324,6 +342,12 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let saved_shape_flags =
             self.set_scrutinee_shape_flags_for_pattern(pattern, value, freshtemp_boxed_slot);
+        // B-2026-10-01-16 — the husk walks the payload; a leaf owns only its
+        // own field's body.
+        if freshtemp_optres_struct.is_some() {
+            self.pattern_state
+                .pattern_binding_scrutinee_payload_bodies_src = None;
+        }
         // B-2026-08-28-63 — the `if let` / `while let` copy of the `match`
         // arm's borrowed-only set. Same gate, same reason: a payload binding
         // the block CONSUMES has handed its `Drop` body to whoever took it.
@@ -946,6 +970,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .or_else(|| {
                 freshtemp_struct.as_ref().and_then(|(alloca, _)| {
                     self.take_freshtemp_scrutinee_drop(*alloca, "__freshtemp_struct_scrut")
+                })
+            })
+            .or_else(|| {
+                freshtemp_optres_struct.as_ref().and_then(|(slot, _)| {
+                    self.take_freshtemp_scrutinee_drop(*slot, "__freshtemp_optres_struct")
                 })
             });
         if !then_terminated {

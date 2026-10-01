@@ -1422,7 +1422,7 @@ impl<'a> super::Interpreter<'a> {
                             // B-2026-09-30-103 — less the read-only leaves of
                             // an `Option`/`Result` struct destructure, which
                             // stay with the husk; see the `match` stash's twin.
-                            let leaf_views = self.optres_struct_leaf_views(
+                            let mut leaf_views = self.optres_struct_leaf_views(
                                 enum_name,
                                 pattern,
                                 Some(value),
@@ -1433,6 +1433,25 @@ impl<'a> super::Interpreter<'a> {
                                     )
                                 },
                             );
+                            // B-2026-10-01-16 — a fresh temp's husk; see the
+                            // `match` stash's twin.
+                            if let Some((views, owned_fields, payload)) = self
+                                .freshtemp_optres_struct_arm_plan(
+                                    Some(value),
+                                    &val,
+                                    &[pattern],
+                                    0,
+                                    |n| {
+                                        crate::binding_use::binding_only_read_through_block(
+                                            n, then_block,
+                                        )
+                                    },
+                                )
+                            {
+                                leaf_views.extend(views);
+                                self.pending_arm_unbound_struct =
+                                    Some((payload, owned_fields, true));
+                            }
                             // B-2026-09-20-26 — see the `match` stash's twin.
                             self.arm_moved_user_drop_payload_bindings_admitting(
                                 enum_name,

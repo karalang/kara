@@ -590,7 +590,7 @@ impl<'a> super::Interpreter<'a> {
                         // `Option`/`Result` struct destructure stays with the
                         // husk (see `optres_struct_leaf_views`), so it gets no
                         // slot of its own; the disarm leaves its field armed.
-                        let leaf_views = self.optres_struct_leaf_views(
+                        let mut leaf_views = self.optres_struct_leaf_views(
                             enum_name,
                             &arm.pattern,
                             scrutinee_place,
@@ -602,6 +602,31 @@ impl<'a> super::Interpreter<'a> {
                                     })
                             },
                         );
+                        // B-2026-10-01-16 — a fresh temp's husk: its read-only
+                        // leaves are views too, and the fields no leaf owns are
+                        // walked after the arm, as the named husk walks them.
+                        let taken_idx = arms
+                            .iter()
+                            .position(|a| std::ptr::eq(a, arm))
+                            .unwrap_or(usize::MAX);
+                        let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+                        if let Some((views, owned_fields, payload)) = self
+                            .freshtemp_optres_struct_arm_plan(
+                                scrutinee_place,
+                                scrutinee,
+                                &pats,
+                                taken_idx,
+                                |n| {
+                                    crate::binding_use::binding_only_read_through(n, &arm.body)
+                                        && arm.guard.as_ref().is_none_or(|g| {
+                                            crate::binding_use::binding_only_read_through(n, g)
+                                        })
+                                },
+                            )
+                        {
+                            leaf_views.extend(views);
+                            self.pending_arm_unbound_struct = Some((payload, owned_fields, true));
+                        }
                         for n in self.arm_moved_user_drop_payload_bindings_admitting(
                             enum_name,
                             &arm.pattern,
@@ -1206,6 +1231,158 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn is_plain_struct_pattern(&self, p: &Pattern) -> bool {
         matches!(&p.kind, PatternKind::Struct { path, .. }
             if path.len() == 1 && self.find_struct_def(&path[0]).is_some())
+    }
+
+    /// B-2026-10-01-16 — the interpreter twin of codegen's
+    /// `plan_freshtemp_optres_struct_destructure`: a FRESH-TEMP
+    /// `Option`/`Result` scrutinee (`match mo(3) { Some(H2 { v, .. }) => .. }`)
+    /// whose arms destructure a plain struct payload keeps the husk walk the
+    /// NAMED spelling has (B-2026-09-30-103), run after the arm.
+    ///
+    /// Returns, for the arm `taken` (the one that matched), `(view leaf names,
+    /// fields the husk must NOT walk, the payload struct)`. A read-only arm's
+    /// `Drop` leaves are all views and the husk walks every field; otherwise
+    /// each `Drop` leaf owns its field and the husk walks the rest. `None`
+    /// keeps today's behaviour, and declines on exactly the shapes codegen
+    /// declines on: a scrutinee that is not a plain call, or a call handing an
+    /// argument back whole, an arm
+    /// that binds a `Drop` payload any other way (whole, or a catch-all), two
+    /// variants with struct arms, or a sibling variant that carries bodies.
+    pub(super) fn freshtemp_optres_struct_arm_plan(
+        &self,
+        place: Option<&Expr>,
+        scrutinee: &Value,
+        patterns: &[&Pattern],
+        taken: usize,
+        only_read: impl Fn(&str) -> bool,
+    ) -> Option<(HashSet<String>, HashSet<String>, Value)> {
+        let place = place?;
+        // A method call is declined on both backends: a by-value receiver's
+        // result already loses its bodies on both today, whole binding and
+        // named spelling alike, which is its own row. A call handing an
+        // argument back whole is that argument's value, not a fresh one.
+        if !matches!(place.kind, ExprKind::Call { .. })
+            || crate::ast::call_hands_back_optres_arg_whole(self.program, place).is_some()
+        {
+            return None;
+        }
+        let Value::EnumVariant {
+            enum_name,
+            data: crate::interpreter::value::EnumData::Tuple(vals),
+            ..
+        } = scrutinee
+        else {
+            return None;
+        };
+        if !matches!(enum_name.as_str(), "Option" | "Result") {
+            return None;
+        }
+        let key = crate::resolver::SpanKey(place.span.offset, place.span.length);
+        let variant_runs = |v: &str| -> bool {
+            let Some(crate::typechecker::Type::Named { args, .. }) =
+                self.typecheck_result.expr_types.get(&key)
+            else {
+                return true;
+            };
+            let idx = usize::from(v == "Err");
+            args.get(idx)
+                .is_none_or(|t| self.checked_type_runs_user_drop(t))
+        };
+        let mut struct_variant: Option<&str> = None;
+        let mut taken_struct: Option<&Pattern> = None;
+        for (i, pat) in patterns.iter().enumerate() {
+            if matches!(&pat.kind, PatternKind::Binding(n) if n == "None" || n.contains('.')) {
+                continue;
+            }
+            if pat.binding_names().is_empty() && !matches!(pat.kind, PatternKind::Binding(_)) {
+                continue;
+            }
+            let PatternKind::TupleVariant { path, patterns } = &pat.kind else {
+                return None;
+            };
+            let variant = path.last()?.as_str();
+            let [sub] = patterns.as_slice() else {
+                return None;
+            };
+            let PatternKind::Struct {
+                path: spath,
+                fields,
+                ..
+            } = &sub.kind
+            else {
+                if variant_runs(variant) {
+                    return None;
+                }
+                continue;
+            };
+            if spath.len() != 1
+                || !self.is_plain_struct_pattern(sub)
+                || fields.iter().any(|fp| {
+                    !matches!(
+                        fp.pattern.as_ref().map(|p| &p.kind),
+                        None | Some(PatternKind::Binding(_)) | Some(PatternKind::Wildcard)
+                    )
+                })
+                || struct_variant.is_some_and(|v| v != variant)
+            {
+                return None;
+            }
+            struct_variant = Some(variant);
+            if i == taken {
+                taken_struct = Some(sub);
+            }
+        }
+        let other = match struct_variant? {
+            "Ok" => Some("Err"),
+            "Err" => Some("Ok"),
+            _ => None,
+        };
+        if other.is_some_and(variant_runs) {
+            return None;
+        }
+        let sub = taken_struct?;
+        let payload = vals.first()?;
+        let Value::Struct { fields: pf, .. } = payload else {
+            return None;
+        };
+        let leaves: Vec<(String, String)> = Self::struct_pattern_whole_field_bindings(sub)
+            .into_iter()
+            .filter(|(f, _)| {
+                pf.get(f)
+                    .is_some_and(|v| self.field_value_carries_user_drop(v))
+            })
+            .collect();
+        let views = !leaves.is_empty() && leaves.iter().all(|(_, n)| only_read(n));
+        if views {
+            Some((
+                leaves.into_iter().map(|(_, n)| n).collect(),
+                HashSet::new(),
+                payload.clone(),
+            ))
+        } else {
+            Some((
+                HashSet::new(),
+                leaves.into_iter().map(|(f, _)| f).collect(),
+                payload.clone(),
+            ))
+        }
+    }
+
+    /// B-2026-10-01-16 — does a value of the CHECKED type `t` run a user
+    /// `Drop` body anywhere inside it? The typechecker's spelling of
+    /// [`Self::type_name_runs_user_drop`], for a fresh temp, which has no
+    /// binding to look a `TypeExpr` up by.
+    fn checked_type_runs_user_drop(&self, t: &crate::typechecker::Type) -> bool {
+        use crate::typechecker::Type;
+        match t {
+            Type::Named { name, args } => {
+                self.type_name_runs_user_drop(name, &mut Vec::new())
+                    || args.iter().any(|a| self.checked_type_runs_user_drop(a))
+            }
+            Type::Tuple(items) => items.iter().any(|a| self.checked_type_runs_user_drop(a)),
+            Type::Array { element, .. } => self.checked_type_runs_user_drop(element),
+            _ => false,
+        }
     }
 
     /// B-2026-09-30-103 — the leaves of an `Option`/`Result` pattern's STRUCT

@@ -27,6 +27,10 @@ use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, Point
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
+/// B-2026-10-01-16 — "does this arm only read binding `n`?", one per arm of a
+/// fresh-temp `Option`/`Result` struct destructure.
+pub(super) type ArmReadCheck<'a> = dyn Fn(&str) -> bool + 'a;
+
 /// A qualifying string-literal `match` selected for switch-tree dispatch
 /// (the #1 real-world codegen lever — `docs/spikes/selfhost-lexer-profile.md`).
 /// `arms` pairs each string-literal arm's keyword with its index into the
@@ -355,6 +359,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 }
             }
+        }
+        // B-2026-10-01-16 — the husk walk of a fresh-temp `Option`/`Result`
+        // whose arms destructure a plain struct payload; see the planner.
+        let freshtemp_optres_struct = {
+            let reads: Vec<Box<ArmReadCheck>> = arms
+                .iter()
+                .map(|a| {
+                    Box::new(move |n: &str| {
+                        crate::binding_use::binding_only_read_through(n, &a.body)
+                            && a.guard
+                                .as_ref()
+                                .is_none_or(|g| crate::binding_use::binding_only_read_through(n, g))
+                    }) as Box<ArmReadCheck>
+                })
+                .collect();
+            let pairs: Vec<(&Pattern, &ArmReadCheck)> = arms
+                .iter()
+                .zip(reads.iter())
+                .map(|(a, r)| (&a.pattern, r.as_ref()))
+                .collect();
+            self.plan_freshtemp_optres_struct_destructure(scrutinee, &pairs, freshtemp_boxed_slot)
+        };
+        if let Some((slot, walkers)) = &freshtemp_optres_struct {
+            self.register_freshtemp_optres_struct_walker(*slot, walkers);
         }
         // Fresh-temp INLINE-heap `Result` scrutinee (`match cell.set(v) { Err(_)
         // => {} }`, B-2026-07-12-2 gap 2a): neither the enum-drop nor boxed path
@@ -706,6 +734,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .pattern_binding_scrutinee_payload_bodies_src =
             match self.scrutinee_armed_payload_bodies_action(scrutinee) {
                 Some(found) => Some(found),
+                // B-2026-10-01-16 — the husk walks it; a leaf owns only its
+                // own field's body.
+                None if freshtemp_optres_struct.is_some() => None,
                 None => self.freshtemp_payload_bodies_action(scrutinee, freshtemp_boxed_slot),
             };
         // B-2026-08-04-2 — the scrutinee's slot, tracked separately from the
@@ -784,6 +815,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // it and masked an element whose body nothing else ran.
         let saved_boxed_payload_moved_fields = self.type_decls.boxed_payload_moved_fields.clone();
         for (i, arm) in arms.iter().enumerate() {
+            // B-2026-10-01-16 — this arm's husk-walk plan, if the match has one.
+            let freshtemp_optres_arm = freshtemp_optres_struct
+                .as_ref()
+                .and_then(|(slot, w)| w.get(i).map(|e| (*slot, *e)));
+            let saved_borrow_for_optres_view = self.pattern_state.pattern_binding_is_borrow;
             self.borrow_vars.borrowed_agg_payload_struct_vars =
                 saved_borrowed_agg_payload_vars.clone();
             self.payload_vars.boxed_payload_alias = saved_boxed_payload_alias.clone();
@@ -978,6 +1014,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             &arm.body,
                         )
                         .is_some();
+                // B-2026-10-01-16 — a read-only destructure of a fresh-temp
+                // payload binds VIEWS of the husk, which walks every field:
+                // nothing is zeroed in the box or registered on a leaf, as for
+                // a borrow. Restored after this arm's suppressors.
+                if freshtemp_optres_arm.is_some_and(|(_, (view, _))| view) {
+                    self.pattern_state.pattern_binding_is_borrow = true;
+                }
                 let handled_via_ptr = if let Some((scrut_ptr, pointee_ty)) = scrut_ref_ptr {
                     self.bind_pattern_values_via_ptr(&arm.pattern, scrut_ptr, pointee_ty)?
                         .is_some()
@@ -1521,6 +1564,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 self.register_freshtemp_shared_genum_array_alias(scrutinee, scrut, &arm.pattern);
+            }
+            if let Some((slot, (_, walker))) = freshtemp_optres_arm {
+                self.pattern_state.pattern_binding_is_borrow = saved_borrow_for_optres_view;
+                self.select_freshtemp_optres_struct_arm_walker(slot, walker);
             }
 
             // B-2026-09-17-14 — a read-only destructure of a boxed tuple
@@ -2185,6 +2232,9 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some((alloca, _)) = freshtemp_struct {
                 self.fire_freshtemp_scrutinee_body_at_exit(alloca, "__freshtemp_struct_scrut");
             }
+            if let Some((slot, _)) = &freshtemp_optres_struct {
+                self.fire_freshtemp_scrutinee_body_at_exit(*slot, "__freshtemp_optres_struct");
+            }
             if let Some(ptr) = freshtemp_shared_enum {
                 self.fire_freshtemp_shared_scrutinee_dec_at_exit(ptr, "__freshtemp_shared_enum");
             }
@@ -2196,6 +2246,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let Some((alloca, _)) = freshtemp_struct {
             self.fire_freshtemp_scrutinee_body_at_exit(alloca, "__freshtemp_struct_scrut");
+        }
+        if let Some((slot, _)) = &freshtemp_optres_struct {
+            self.fire_freshtemp_scrutinee_body_at_exit(*slot, "__freshtemp_optres_struct");
         }
         if let Some(ptr) = freshtemp_shared_enum {
             self.fire_freshtemp_shared_scrutinee_dec_at_exit(ptr, "__freshtemp_shared_enum");
@@ -24438,6 +24491,237 @@ impl<'ctx> super::Codegen<'ctx> {
             "__freshtemp_struct_scrut",
             super::state::UserDropKind::StructFieldBodies,
             w,
+        );
+    }
+
+    /// B-2026-10-01-16 — a FRESH-TEMP `Option`/`Result` scrutinee whose arms
+    /// destructure a plain struct payload (`match mo(3) { Some(H2 { v, .. })
+    /// => v.id, None => 0 }`) gets the husk walk the NAMED spelling has
+    /// (B-2026-09-30-103), fired at match exit.
+    ///
+    /// Before this a fresh temp had no walk of its own, so each `Drop`-bearing
+    /// leaf was handed the WHOLE payload's walker instead: two leaves ran every
+    /// body twice (`Some(H2 { v, r, n })` printed `d30 d3 d30 d3`), a leaf the
+    /// arm moved on (`let w = v`) took every sibling's body with it, an arm
+    /// binding no `Drop` leaf ran none at all, and the hand-over was gated on
+    /// the LEAF's width against the envelope's area, so a narrow leaf (`R` in
+    /// `Result`'s five words) lost its siblings. A read-only leaf's walk also
+    /// ran against the box after the destructure had zeroed that field
+    /// (`d3:0` for a body printing its string's length).
+    ///
+    /// Per arm, the named convention: a leaf the arm only reads is a view of
+    /// the husk (bound as a borrow, nothing zeroed or registered) and the husk
+    /// walks every field; otherwise each `Drop` leaf owns its field and the
+    /// husk walks the rest. Returns `(slot, per-arm (is_view_arm, walker))`.
+    /// Declines (`None`, leaving today's channels untouched) unless every arm
+    /// is such a destructure or binds no `Drop` payload, and at least one is
+    /// a destructure; a whole-payload binding or a wildcard over a `Drop`
+    /// payload keeps its own channel. The `--interp` twin is the
+    /// `pending_arm_unbound_struct` stash in `pattern_match.rs`, which asks the
+    /// same questions through the same `binding_use` read classifier.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn plan_freshtemp_optres_struct_destructure(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[(&Pattern, &ArmReadCheck)],
+        staged: Option<PointerValue<'ctx>>,
+    ) -> Option<(PointerValue<'ctx>, Vec<(bool, FunctionValue<'ctx>)>)> {
+        let slot = staged?;
+        // A method call is declined on both backends (see the interpreter
+        // twin), as is a call handing an argument back whole.
+        if !matches!(scrutinee.kind, ExprKind::Call { .. })
+            || self.program_snapshot.as_deref().is_none_or(|p| {
+                crate::ast::call_hands_back_optres_arg_whole(p, scrutinee).is_some()
+            })
+            || !self.expr_yields_fresh_owned_temp(scrutinee)
+            || self.call_result_aliases_armed_binding(scrutinee)
+            || self.handback_call_owned_param_arg(scrutinee).is_some()
+            || self.call_passthrough_armed_any_source(scrutinee).is_some()
+            || self.optres_temp_is_param_view(scrutinee)
+            || self.scrutinee_aliases_caller_box(scrutinee)
+        {
+            return None;
+        }
+        let te = self.optres_scrutinee_type_expr(scrutinee)?;
+        let TypeKind::Path(tp) = &te.kind else {
+            return None;
+        };
+        let enum_name = tp.segments.last()?.clone();
+        if !matches!(enum_name.as_str(), "Option" | "Result") {
+            return None;
+        }
+        let variant_runs = |me: &Self, v: &str| -> bool {
+            me.optres_scrutinee_payload_te_for(scrutinee, v)
+                .is_some_and(|pt| me.elem_te_runs_user_drop(&pt))
+        };
+        let mut plans: Vec<Option<(String, String, std::collections::BTreeSet<usize>, bool)>> =
+            Vec::new();
+        let mut struct_variant: Option<String> = None;
+        for (pat, only_read) in arms {
+            // A unit variant parses as a binding of its (qualified) name; it
+            // binds nothing. A bare catch-all binding takes the whole payload.
+            let unit_variant = matches!(&pat.kind, PatternKind::Binding(n)
+                if n == "None" || n.contains('.'));
+            if unit_variant
+                || (!Self::pattern_binds_anything(pat)
+                    && !matches!(pat.kind, PatternKind::Binding(_)))
+            {
+                plans.push(None);
+                continue;
+            }
+            let PatternKind::TupleVariant { path, patterns } = &pat.kind else {
+                return None;
+            };
+            let variant = path.last()?.clone();
+            let [sub] = patterns.as_slice() else {
+                return None;
+            };
+            let PatternKind::Struct {
+                path: spath,
+                fields,
+                ..
+            } = &sub.kind
+            else {
+                if variant_runs(self, &variant) {
+                    return None;
+                }
+                plans.push(None);
+                continue;
+            };
+            if spath.len() != 1 || !self.struct_pattern_names_a_user_struct(sub) {
+                return None;
+            }
+            let sname = spath[0].clone();
+            let payload_te = self.optres_scrutinee_payload_te_for(scrutinee, &variant)?;
+            let TypeKind::Path(pp) = &payload_te.kind else {
+                return None;
+            };
+            if pp.segments.last() != Some(&sname) {
+                return None;
+            }
+            if struct_variant.as_ref().is_some_and(|v| v != &variant) {
+                return None;
+            }
+            struct_variant = Some(variant.clone());
+            let decls = self.destructured_field_decls(spath)?;
+            let field_names = self
+                .type_decls
+                .struct_field_names
+                .get(sname.as_str())?
+                .clone();
+            let subst = self.generic_struct_subst_from_inst(&sname, &payload_te);
+            let runs = |me: &Self, field: &str| -> bool {
+                decls.iter().any(|(n, fte)| {
+                    n.as_deref() == Some(field)
+                        && me.elem_te_runs_user_drop(
+                            &crate::codegen::helpers::subst_type_params_in_type_expr(fte, &subst),
+                        )
+                })
+            };
+            let mut leaves: Vec<(String, usize)> = Vec::new();
+            for fp in fields {
+                let bound = match fp.pattern.as_ref().map(|p| &p.kind) {
+                    None => fp.name.clone(),
+                    Some(PatternKind::Binding(b)) => b.clone(),
+                    Some(PatternKind::Wildcard) => continue,
+                    Some(_) => return None,
+                };
+                if !runs(self, &fp.name) {
+                    continue;
+                }
+                let idx = field_names.iter().position(|f| f == &fp.name)?;
+                leaves.push((bound, idx));
+            }
+            let views = !leaves.is_empty() && leaves.iter().all(|(n, _)| only_read(n));
+            let masked: std::collections::BTreeSet<usize> = if views {
+                std::collections::BTreeSet::new()
+            } else {
+                leaves.iter().map(|(_, i)| *i).collect()
+            };
+            plans.push(Some((variant, sname, masked, views)));
+        }
+        let struct_variant = struct_variant?;
+        // The walker covers every variant's payload, so a sibling variant that
+        // also carries bodies would be walked under an arm that bound it.
+        let other = match struct_variant.as_str() {
+            "Ok" => Some("Err"),
+            "Err" => Some("Ok"),
+            _ => None,
+        };
+        if other.is_some_and(|o| variant_runs(self, o)) {
+            return None;
+        }
+        let mut out: Vec<(bool, FunctionValue<'ctx>)> = Vec::new();
+        for plan in plans {
+            let entry = match plan {
+                None => (false, self.noop_dropbodies_fn()),
+                Some((_, sname, masked, views)) => {
+                    let w = if masked.is_empty() {
+                        self.emit_optres_payload_user_drop_bodies_fn(&te)
+                    } else {
+                        self.emit_optres_payload_user_drop_bodies_fn_ex_with_mask(
+                            &te,
+                            true,
+                            super::synth_drop::PayloadBodiesMask::StructFields(&sname, &masked),
+                        )
+                    };
+                    (views, w.unwrap_or_else(|| self.noop_dropbodies_fn()))
+                }
+            };
+            out.push(entry);
+        }
+        Some((slot, out))
+    }
+
+    /// B-2026-10-01-16 — register the husk walk
+    /// [`Self::plan_freshtemp_optres_struct_destructure`] planned, with the
+    /// FIRST arm's walker, plus the selection slot each arm stores its own
+    /// walker into when there is more than one (the B-2026-09-21-2 pattern).
+    pub(super) fn register_freshtemp_optres_struct_walker(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        walkers: &[(bool, FunctionValue<'ctx>)],
+    ) {
+        let Some(&(_, first)) = walkers.first() else {
+            return;
+        };
+        self.track_user_drop_var_with_fn(
+            "",
+            "__freshtemp_optres_struct",
+            slot,
+            first,
+            super::state::UserDropKind::ContainerElemBodies,
+        );
+        if walkers.len() > 1 {
+            let Some(fn_val) = self.current_fn else {
+                return;
+            };
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let sel =
+                self.create_entry_alloca(fn_val, "__freshtemp_optres_struct_walker", ptr_ty.into());
+            let _ = self
+                .builder
+                .build_store(sel, first.as_global_value().as_pointer_value());
+            self.drop_rc.arm_selected_bodies_walker.insert(slot, sel);
+        }
+    }
+
+    /// B-2026-10-01-16 — point the husk walk at THIS arm's walker, on both of
+    /// its exits (see [`Self::select_freshtemp_struct_arm_bodies_walker`]).
+    pub(super) fn select_freshtemp_optres_struct_arm_walker(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        walker: FunctionValue<'ctx>,
+    ) {
+        if let Some(sel) = self.drop_rc.arm_selected_bodies_walker.get(&slot).copied() {
+            let _ = self
+                .builder
+                .build_store(sel, walker.as_global_value().as_pointer_value());
+        }
+        self.replace_user_drop_fn_for_var(
+            "__freshtemp_optres_struct",
+            super::state::UserDropKind::ContainerElemBodies,
+            walker,
         );
     }
 
