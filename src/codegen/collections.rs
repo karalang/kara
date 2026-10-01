@@ -4380,17 +4380,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // diverging from it, which is also what the language says: a read off a
         // container is a COPY on both backends (mutating `let mut p = xs[0]`
         // leaves the lender's element untouched — measured, both containers).
+        //
+        // B-2026-10-01-30 — and a local `Array`, whose element type lives in
+        // `array_elem_type_exprs` rather than the Vec registries. Its elements
+        // are inline and owned by the array's own drop, so an uncloned field
+        // read was the same shallow alias: `let x = a[1].s` over `Array[S, 2]`
+        // freed the buffer through `x` and through the array.
         if let ExprKind::Identifier(cname) = &container.kind {
             if !self.var_types.slice_elem_types.contains_key(cname.as_str())
                 && !self.mapset.map_key_types.contains_key(cname.as_str())
                 && !self.var_types.vec_elem_types.contains_key(cname.as_str())
+                && !self
+                    .var_types
+                    .array_elem_type_exprs
+                    .contains_key(cname.as_str())
             {
                 return Ok(val);
             }
         }
         // The element must be a non-shared user struct, and the field a direct
         // `{ptr,len,cap}` heap value — the shape whose alias was measured.
-        let Some(elem_te) = self.vec_index_elem_type_expr(container) else {
+        let Some(elem_te) = self
+            .vec_index_elem_type_expr(container)
+            .or_else(|| self.array_index_target_elem_type_expr(container))
+        else {
             return Ok(val);
         };
         // The walk carries a `TypeExpr` rather than a struct NAME, because a
@@ -4836,15 +4849,24 @@ impl<'ctx> super::Codegen<'ctx> {
         let (ExprKind::Identifier(_) | ExprKind::FieldAccess { .. }) = &container.kind else {
             return Ok(val);
         };
+        // B-2026-10-01-30 — and a local `Array`, in lockstep with the
+        // sibling above (`let x = a[1].0` over `Array[(String, i64), 2]`).
         if let ExprKind::Identifier(cname) = &container.kind {
             if !self.var_types.slice_elem_types.contains_key(cname.as_str())
                 && !self.mapset.map_key_types.contains_key(cname.as_str())
                 && !self.var_types.vec_elem_types.contains_key(cname.as_str())
+                && !self
+                    .var_types
+                    .array_elem_type_exprs
+                    .contains_key(cname.as_str())
             {
                 return Ok(val);
             }
         }
-        let Some(mut mte) = self.vec_index_elem_type_expr(container) else {
+        let Some(mut mte) = self
+            .vec_index_elem_type_expr(container)
+            .or_else(|| self.array_index_target_elem_type_expr(container))
+        else {
             return Ok(val);
         };
         for &hop in &path {
