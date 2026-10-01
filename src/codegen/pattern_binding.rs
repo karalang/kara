@@ -1928,7 +1928,20 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .map(|l| Self::llvm_type_word_count(l.llvm_type.into()))
                                 })
                                 .is_some_and(|w| w > area);
-                            let is_boxed_optres_drop_payload = self
+                            // B-2026-09-23-4 — a payload slot holding a
+                            // caller-retained struct param VIEW (`match
+                            // Some(a)` in `fn f(a: R)`) is the caller's to
+                            // run, so it funds no bodies here; the view mark
+                            // below hands a rebind the memory alone.
+                            let payload_is_masked_view = self
+                                .pattern_state
+                                .pattern_binding_masked_view_names
+                                .contains(name.as_str());
+                            if payload_is_masked_view {
+                                self.payload_vars.param_view_locals.insert(name.clone());
+                            }
+                            let is_boxed_optres_drop_payload = !payload_is_masked_view
+                                && self
                                 .pattern_state
                                 .pattern_binding_scrutinee_is_option_result
                                 && (self

@@ -1908,6 +1908,119 @@ impl<'ctx> super::Codegen<'ctx> {
             .or_else(|| self.untyped_let_boxed_enum_te(e))
     }
 
+    /// B-2026-09-23-4 — the names `patterns` bind out of a FRESH constructor
+    /// scrutinee's payload slots that hold a by-value STRUCT param the caller
+    /// retains: `match Option.Some(a) { Some(v) => .. }` inside `fn f(a: R)`.
+    ///
+    /// Under caller-retains the caller runs `a`'s `Drop` body after the call,
+    /// so `v` is a view of it exactly as a payload bound out of a named
+    /// `let o = Some(a)` is (that spelling marks its envelope a view at the
+    /// `let`, which is why it was already right). The fresh temp had no name
+    /// to carry the mark, so the arm bound `v` as an owner and its body ran a
+    /// second time at the arm's end: `d1 d1` on every surface against the
+    /// by-value control's one `d1`, with memory balanced, because only the
+    /// BODY was doubled. Adding the names here routes the binding to the
+    /// memory-only registration and into `param_view_locals`, the masked-slot
+    /// path the named spelling already takes.
+    ///
+    /// Struct payloads only: an `Array`/`Vec` param has its own seeded gate
+    /// (`seeded_array_payload_stays_with_caller`). A param this frame owns per
+    /// path (`cond_returned_body_params`) is not a view, the exception
+    /// `literal_elem_is_param_view` makes for the same reason. The
+    /// interpreter's twin is `seeded_ctor_param_view_names`.
+    pub(super) fn fresh_ctor_struct_param_view_names(
+        &self,
+        scrutinee: &Expr,
+        patterns: &[&Pattern],
+        out: &mut std::collections::HashSet<String>,
+    ) {
+        let ExprKind::Call { callee, args } = &scrutinee.kind else {
+            return;
+        };
+        let (variant, view_slots): (String, Vec<usize>) =
+            if let Some((variant, parg)) = Self::seeded_variant_arg_payload(scrutinee) {
+                if !self.fresh_ctor_arg_is_struct_param_view(parg) {
+                    return;
+                }
+                (variant.to_string(), vec![0])
+            } else {
+                let ExprKind::Path { segments, .. } = &callee.kind else {
+                    return;
+                };
+                let [enum_name, variant] = segments.as_slice() else {
+                    return;
+                };
+                if self
+                    .type_decls
+                    .shared_types
+                    .contains_key(enum_name.as_str())
+                {
+                    return;
+                }
+                let Some((_, _, tes)) = self
+                    .enum_variant_field_type_exprs(enum_name)
+                    .into_iter()
+                    .find(|(_, v, _)| v == variant)
+                else {
+                    return;
+                };
+                let generic_params = self.enum_generic_param_names(enum_name);
+                let slots = tes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, te)| {
+                        matches!(&te.kind, TypeKind::Path(p)
+                            if p.segments.first().is_some_and(|n| !generic_params.contains(n)))
+                            && args
+                                .get(*i)
+                                .is_some_and(|a| self.fresh_ctor_arg_is_struct_param_view(&a.value))
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                (variant.clone(), slots)
+            };
+        if view_slots.is_empty() {
+            return;
+        }
+        for pat in patterns {
+            let PatternKind::TupleVariant {
+                path,
+                patterns: subs,
+                ..
+            } = &pat.kind
+            else {
+                continue;
+            };
+            if path.last() != Some(&variant) || subs.len() != args.len() {
+                continue;
+            }
+            for i in &view_slots {
+                if let Some(sub) = subs.get(*i) {
+                    out.extend(sub.binding_names());
+                }
+            }
+        }
+    }
+
+    /// B-2026-09-23-4 — is this constructor argument a by-value STRUCT param
+    /// (or a view local of one) whose `Drop` bodies the caller still runs?
+    fn fresh_ctor_arg_is_struct_param_view(&self, e: &Expr) -> bool {
+        let ExprKind::Identifier(n) = &e.kind else {
+            return false;
+        };
+        self.literal_elem_is_param_view(e)
+            && self
+                .var_types
+                .var_type_names
+                .get(n.as_str())
+                .is_some_and(|t| {
+                    self.type_decls.struct_types.contains_key(t.as_str())
+                        && !self.type_decls.shared_types.contains_key(t.as_str())
+                        && self.type_runs_user_drop(t, &mut Vec::new())
+                })
+            && !self.scrutinee_is_transfer_owned_struct_param(e)
+    }
+
     /// B-2026-08-01-13 — is the scrutinee an Identifier naming an OWNED
     /// (by-value, non-`ref`) parameter of the current function? Payload
     /// bindings destructured from one are views of the callee's entry copy
@@ -1941,6 +2054,10 @@ impl<'ctx> super::Codegen<'ctx> {
         patterns: &[&Pattern],
     ) -> std::collections::HashSet<String> {
         let mut out = std::collections::HashSet::new();
+        if matches!(scrutinee.kind, ExprKind::Call { .. }) {
+            self.fresh_ctor_struct_param_view_names(scrutinee, patterns, &mut out);
+            return out;
+        }
         let ExprKind::Identifier(src) = &scrutinee.kind else {
             return out;
         };

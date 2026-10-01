@@ -2443,10 +2443,11 @@ impl<'a> super::Interpreter<'a> {
     /// in codegen) is the twin of this.
     ///
     /// Per slot, so a FRESH argument beside the param keeps its slot. Limited to
-    /// an `Array`/`Vec` param, the shape codegen already answers this way: a
-    /// bare STRUCT param runs its body twice on EVERY surface, so standing the
-    /// arm down here alone would manufacture a run-vs-build divergence out of an
-    /// agreed defect. A method frame is admitted only where its caller retains
+    /// an `Array`/`Vec` param or a STRUCT param that runs a body, the shapes
+    /// codegen answers this way (the struct since B-2026-09-23-4, which moved
+    /// both halves together: until then a bare struct param ran its body twice
+    /// on EVERY surface, and standing only this arm down would have turned an
+    /// agreed defect into a run-vs-build divergence). A method frame is admitted only where its caller retains
     /// the arguments, and a `shared` enum is not resolved by
     /// `fresh_bare_variant_ctor_enum`, so it is never admitted.
     pub(super) fn seeded_ctor_param_view_names(
@@ -2502,8 +2503,15 @@ impl<'a> super::Interpreter<'a> {
             .filter(|(i, _)| {
                 args.get(*i).is_some_and(|a| {
                     matches!(&a.value.kind, ExprKind::Identifier(src)
-                        if params.contains(src.as_str())
-                            && matches!(self.env.get(src), Some(Value::Array(_))))
+                    if params.contains(src.as_str())
+                        && match self.env.get(src) {
+                            Some(Value::Array(_)) => true,
+                            // B-2026-09-23-4 -- a STRUCT param whose
+                            // body the caller runs, moved with codegen's
+                            // `fresh_ctor_struct_param_view_names`.
+                            Some(v @ Value::Struct { .. }) => self.value_runs_user_drop(&v),
+                            _ => false,
+                        })
                 })
             })
             .flat_map(|(_, p)| p.binding_names())
