@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 622 |
+| miscompile | 624 |
 | run-vs-build | 565 |
 | leak | 514 |
 | double-free | 385 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2520 |
-| interp | 760 |
+| codegen | 2522 |
+| interp | 761 |
 | typecheck | 320 |
 | other | 112 |
 | ownership | 79 |
@@ -468,8 +468,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-3 | 2026-10-01 | codegen | low | A by-value user-enum param whose variant carries a GENERIC struct (`e: E[G[String]]` over `enum E[T] { A { x: T, k: i64 }, B }`) leaks the struct's heap field when an arm destructures it without binding that field -- `match e { E.A { x: G { v: _, n }, k } => n + k, .. }` and `E.A { x: G { n, .. }, k }` lose 31 B at -O0 on every compiled surface; the remainder of B-2026-09-30-77 after its `Option` half was fixed | — |
 | B-2026-10-01-4 | 2026-10-01 | codegen | medium | A `match` arm whose value is ONE scalar projection through an `Option` TUPLE payload binding (`Some(p) => p.0.id`) leaks the payload at -O0, and over `Option[(R, R)]` also runs NEITHER element's `Drop` body compiled -- `let o = Option.Some((mk(6), mk(66))); match o { Option.Some(p) => p.0.id, .. }` prints `6 after` on -O0 (63 B lost) against `--interp`'s `d6 d66 6 after`; `p.1.id` and `Option[(R, i64)]`'s `p.0.id` run the bodies but lose 32 B / 31 B | — |
 | B-2026-10-01-7 | 2026-10-01 | codegen | high | A BY-VALUE BOXED `Option[R]` PARAM RETURNED DIRECTLY INSIDE A COLLECTION LITERAL SEGFAULTS ON EVERY COMPILED SURFACE, BOUND OR DISCARDED -- `fn ov(x: Option[R]) -> Vec[Option[R]] { return Vec[x] }` and `return [x]`, called as `let a = ov(Some(mk(1)))`, crash with exit 139 and no output under the JIT and AOT, where `--interp` prints `k1 dR1`; pushing the param (`v.push(x); return v`) works | — |
-| B-2026-10-01-8 | 2026-10-01 | codegen | high | A NAMED `Array[R, 2]` LOCAL PASSED TO A GENERIC PASS-THROUGH `fn pg[T](x: T) -> T` DOUBLE-FREES AT -O0, SO UNDER THE JIT TOO -- `let a: Array[R, 2] = [mk(42), mk(43)]; pg(a);` aborts with `free(): double free detected in tcache 2` under `karac run` and shows 2 invalid frees under valgrind at -O0 AOT, bound (`let c = pg(b)`) or discarded, while -O2 is clean and every surface prints `dR42 dR43` once each | — |
-| B-2026-10-01-9 | 2026-10-01 | interp+codegen | medium | A BY-VALUE PARAM MOVED INTO A COLLECTION LITERAL BOUND TO A `let mut` LOCAL AND RETURNED RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `fn f1(x: R) -> Vec[R] { let mut v = Vec[x]; return v }` with `let a = f1(mk(1))` prints `dR1 k1 dR1`; the immutable `let v = Vec[x]; return v` runs it once | — |
 | B-2026-10-01-10 | 2026-10-01 | codegen | low | AN INLINE (UNBOXED) `Result` PAYLOAD BINDING DISCARDED IN AN ARM RUNS ITS `Drop` BODY AT ARM END COMPILED -- `match r { Ok(w) => { let _ = w; println("arm") }, Err(_) => {} }` over `Result[W1, i64]` prints `arm dW1_3 end` on the JIT, -O2 and -O2 auto-par against `dW1_3 arm end` under `--interp`, valgrind clean; the boxed `Option[W1]` spelling is right since B-2026-09-30-105 | — |
 | B-2026-10-01-11 | 2026-10-01 | codegen | high | RE-WRAPPING A BOXED `Option` PAYLOAD BINDING IN `Some` INSIDE ITS OWN ARM DOUBLE FREES ON THE JIT -- `let t = match o { Some(w) => Some(w), None => None }` over a local `Option[W1]` (`W1` holds a `String`, so the payload boxes) aborts `free(): double free detected in tcache 2` under `karac run` and reports an invalid free under valgrind at -O0, while -O2 and -O2 auto-par print what `--interp` prints; braced `{ Some(w) }` and `{ let q = Some(w); q }` do the same, an inline `Option[W2]` payload is clean | — |
 | B-2026-10-01-12 | 2026-10-01 | interp | medium | UNDER `--interp` A BY-VALUE `Option` PARAM'S PAYLOAD MOVED INTO AN ARRAY LITERAL THAT IS THE `match` VALUE RUNS ITS `Drop` BODY TWICE -- `fn f(o: Option[W1]) { let t = match o { Some(w) => [w], None => [mk(0)] }; println(f"{t[0].v}") }` prints `4 dW1_4 dW1_4` under `--interp` and `4 dW1_4` on the JIT, -O2 and -O2 auto-par; a local scrutinee, a tuple, a struct literal and a bare `w` are right | — |
@@ -483,6 +481,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-18 | 2026-10-01 | interp+codegen | medium | A `?` THAT CONVERTS ITS ERROR THROUGH `From` NEVER RUNS THE SOURCE ERROR'S `Drop` BODY, ON BOTH BACKENDS -- `struct S { id: i64, v: String }` with a printing `Drop` prints `back 8 end` where the caller-side convention gives `dS8 back 8 end` | — |
 | B-2026-10-01-19 | 2026-10-01 | codegen | high | MOVING A STRUCT FIELD OUT OF A BOXED `Err` PAYLOAD IN A `match` ARM (`Result.Err(e) => { let i = e.inner; .. }`) DOUBLE-FREES -- a six-word `S { v: String, w: Vec[i64] }` inside `E2 { inner: S }` aborts with no output at -O0 | — |
 | B-2026-10-01-20 | 2026-10-01 | codegen | medium | A VIEW OF AN ALL-SCALAR CONCRETE ENUM PAYLOAD BOUND OUT OF A BY-VALUE PARAM AND THEN CONSUMED -- REBOUND (`let x = w`) OR HANDED TO A BY-VALUE CALLEE (`sinkn(w)`) -- RUNS ITS `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `fn g(b: En) { match b { En.A(w) => { let x = w; .. } .. } }` over `enum En { A(Cn), B }`, `struct Cn { r: R, n: i64 }`, prints `lt dR2 ret dR2` on the JIT, `-O0` and `-O2` against `--interp`'s `lt ret dR2`; valgrind clean, so only a printed body count sees it; the heap-bearing twin (`Ch { r: R, s: String }`, transfer-owned) is right, and the GENERIC spelling of both was fixed by B-2026-09-20-33's commit, so this is the concrete caller-retained channel alone | — |
+| B-2026-10-01-21 | 2026-10-01 | codegen | high | REASSIGNING A `let mut` LOCAL WHOSE COLLECTION LITERAL HOLDS A BY-VALUE PARAM RUNS THE PARAM'S `Drop` BODY TWICE COMPILED, AND THE REPLACEMENT'S NEVER -- `fn g7(x: R) { let mut v = Vec[x]; v = Vec[mk(8)]; println("in") }` prints `dR6 in dR6` under the JIT and AOT where `--interp` prints `dR8 in dR6` | — |
+| B-2026-10-01-22 | 2026-10-01 | interp+codegen | medium | REMAINDER OF B-2026-10-01-9: A `let mut` LITERAL HOLDING A BY-VALUE PARAM AND RETURNED ON SOME EXITS ONLY RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY SURFACE -- `fn cm(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { return v } return Vec[mk(9)] }` with `cm(mk(1), true)` prints `dR1 k1 dR1`; the immutable `let v = Vec[x]` runs it once | — |
 
 ### Relocated
 
@@ -3489,6 +3489,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-84 | codegen | high | A CONTAINER ELEMENT HANDED TO A `ref` OR `mut ref` PARAMETER IS SHALLOW-COPIED AND FREED AS A CALL TEMP UNLESS THE CONTAINER IS A `Vec` LOCAL -- `rd(… | 7ffd2c2 |
 | B-2026-09-30-103 | codegen+interp | medium | A destructure of an `Option`/`Result` STRUCT payload that takes only SOME of two `Drop`-bearing fields disagrees between backends -- over `struct H2… | 796891ea3 |
 | B-2026-09-30-104 | codegen | high | A GENERIC struct with two heap fields in an `Option`/`Result` payload (`G2[R]` over `struct G2[T] { v: T, r: R }`) double-frees on every compiled sur… | d3477587e |
+| B-2026-10-01-8 | codegen | high | A NAMED `Array[R, 2]` LOCAL PASSED TO A GENERIC PASS-THROUGH `fn pg[T](x: T) -> T` DOUBLE-FREES AT -O0, SO UNDER THE JIT TOO -- `let a: Array[R, 2] =… | 6aa3e6e58 |
+| B-2026-10-01-9 | interp+codegen | medium | A BY-VALUE PARAM MOVED INTO A COLLECTION LITERAL BOUND TO A `let mut` LOCAL AND RETURNED RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `fn f1(x: R)… | 49cff9e64 |
 
 </details>
 
