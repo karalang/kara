@@ -5263,6 +5263,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else if let ExprKind::Identifier(n) = &value.kind {
                     self.fire_container_elem_bodies_now(n);
                 }
+                // B-2026-10-01-10 — the same discard over any binding whose
+                // body an ENCLOSING frame owns fires at the statement too.
+                if wildcard_of_local && !discards_payload_view {
+                    if let ExprKind::Identifier(n) = &value.kind {
+                        self.fire_discarded_binding_drops_now(n);
+                    }
+                }
                 // B-2026-09-30-66 — and one moved into a collection LITERAL the
                 // binding owns (`Some(x) => { let z = [x]; .. }`): `z`'s walk
                 // frees the payload's heap, so the box must not free it too (a

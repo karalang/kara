@@ -17934,6 +17934,128 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-10-01-10 — fire the `Drop` bodies of a binding `let _ = x;`
+    /// discards AT the statement, where the interpreter destroys the value.
+    /// NLL already does this for a binding the enclosing block DECLARES, and
+    /// only for that one: `compute_block_last_use` maps the block's own `let`s
+    /// and `fire_due_user_drops` reads the innermost frame. Two shapes fell
+    /// outside and ran the body at a later statement's end on every compiled
+    /// surface:
+    ///
+    /// * the action sits in an ENCLOSING frame (`if c { let _ = a; .. }`, a
+    ///   bare `{ .. }` block, a match arm's block over its payload binding).
+    ///   The discard may be on one path only, so the action stays and `x`'s
+    ///   move bit is cleared on this path, the way a nested `return` does
+    ///   (`guard_user_drop_for_nested_return`); the drain fires it only where
+    ///   the bit still stands. DECLINED where that bit would also stand a
+    ///   MEMORY action down (`cond_move_mem_drop_flags`, an RC-fallback box).
+    /// * the action sits in the INNERMOST frame but the block did not declare
+    ///   the binding (an `if let` binding, whose frame its body shares). The
+    ///   statement runs on every path that reaches the frame's end, so the
+    ///   action is retired here exactly as NLL retires one it fired.
+    ///
+    /// Only the actions `nll_fireable_binding` admits, and only the binding's
+    /// newest frame; anything else `x` holds stays at scope exit, exactly as
+    /// after a top-level discard.
+    pub(super) fn fire_discarded_binding_drops_now(&mut self, name: &str) -> bool {
+        let owns = |a: &CleanupAction<'ctx>| matches!(a, CleanupAction::UserDrop { binding_name, .. } if binding_name == name);
+        let Some(fi) = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .rposition(|f| f.iter().any(owns))
+        else {
+            return false;
+        };
+        let innermost = fi + 1 == self.drop_rc.scope_cleanup_actions.len();
+        let slot = self.variables.get(name).map(|v| v.ptr);
+        let frame = &self.drop_rc.scope_cleanup_actions[fi];
+        let on_slot = frame.iter().any(|a| {
+            matches!(a, CleanupAction::UserDrop { binding_name, binding_ptr, .. }
+                if binding_name == name && Some(*binding_ptr) == slot)
+        });
+        let mut due: Vec<(
+            PointerValue<'ctx>,
+            FunctionValue<'ctx>,
+            String,
+            UserDropKind,
+        )> = Vec::new();
+        for a in frame.iter().rev().filter(|a| owns(a)) {
+            if self.nll_fireable_binding(a).is_none() {
+                return false;
+            }
+            if let CleanupAction::UserDrop {
+                binding_ptr,
+                drop_fn,
+                type_name,
+                kind,
+                ..
+            } = a
+            {
+                if !on_slot || Some(*binding_ptr) == slot {
+                    due.push((*binding_ptr, *drop_fn, type_name.clone(), *kind));
+                }
+            }
+        }
+        if due.is_empty() {
+            return false;
+        }
+        let flag = if innermost {
+            None
+        } else {
+            if self.drop_rc.rc_fallback_heap_types.contains_key(name)
+                || due
+                    .iter()
+                    .any(|(p, ..)| self.drop_rc.cond_move_mem_drop_flags.contains_key(p))
+            {
+                return false;
+            }
+            match self.cond_move_drop_flag_for(name) {
+                Some(f) => Some(f),
+                None => return false,
+            }
+        };
+        if crate::codegen::drop_obs::armed() {
+            if let Some(fn_val) = self.current_fn {
+                let f = fn_val.get_name().to_str().unwrap_or("");
+                crate::codegen::drop_obs::record(f, "heap", name);
+            }
+        }
+        for (ptr, drop_fn, type_name, kind) in &due {
+            self.emit_user_drop_bodies_call_field_view_selected(
+                name,
+                type_name,
+                *kind,
+                *drop_fn,
+                *ptr,
+                "discard.now",
+            );
+        }
+        match flag {
+            Some(flag) => {
+                let bool_t = self.context.bool_type();
+                let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
+            }
+            None => {
+                self.drop_rc.scope_cleanup_actions[fi].retain(|a| match a {
+                    CleanupAction::UserDrop {
+                        binding_name,
+                        binding_ptr,
+                        drop_fn,
+                        ..
+                    } => {
+                        binding_name != name
+                            || !due
+                                .iter()
+                                .any(|(p, f, ..)| p == binding_ptr && f == drop_fn)
+                    }
+                    _ => true,
+                });
+            }
+        }
+        true
+    }
+
     pub(super) fn suppress_struct_field_bodies_for_var(&mut self, name: &str) {
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {
