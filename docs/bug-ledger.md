@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 619 |
+| miscompile | 621 |
 | run-vs-build | 565 |
 | leak | 514 |
-| double-free | 384 |
+| double-free | 385 |
 | missing-feature | 215 |
 | codegen-gap | 208 |
 | other | 164 |
@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 116 |
 | crash | 105 |
 | soundness | 97 |
-| use-after-free | 72 |
+| use-after-free | 73 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2516 |
-| interp | 758 |
+| codegen | 2519 |
+| interp | 760 |
 | typecheck | 320 |
 | other | 112 |
 | ownership | 79 |
@@ -464,7 +464,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-99 | 2026-09-30 | codegen | medium | THE ARM BINDING OF A NESTED `Array[Array[R, 1], 2]` ENUM PAYLOAD READS ITS ELEMENTS AS ZEROES AT -O0 AND -O2 -- `match e { En.A(v) => { let k = v; .. } }` prints `dR0 dR0` from `k`'s walk, then the scrutinee's `dR1 dR2`, where `--interp` prints `dR1 dR2` once; a read-only arm is correct, and memory is clean under valgrind at -O0 | — |
 | B-2026-09-30-100 | 2026-09-30 | interp | medium | `--interp` RUNS NO ELEMENT `Drop` BODY FOR A USER ENUM'S `Array` PAYLOAD WHOSE ELEMENT IS A TUPLE OR AN `Option` -- `let f = Ec.A([Some(R { id: 1 }), Some(R { id: 2 })])` over `enum Ec { A(Array[Option[R], 2]), B }` prints nothing where -O0 prints `dR1 dR2`, matched or not | — |
 | B-2026-09-30-101 | 2026-09-30 | codegen | medium | A USER ENUM'S `Vec` PAYLOAD BOUND OUT BY A MATCH ARM AND HANDED TO A BY-VALUE CALLEE RUNS NO ELEMENT `Drop` BODY AT -O0 AND -O2 -- `match e { EVec.V(v) => { eat(v) } .. }` over a let-bound `enum EVec { V(Vec[R]), B }` prints `ate1 end` where `--interp` prints `ate1 dR1 dR2 end`; the `Array` spelling is correct, and memory is clean under valgrind | — |
-| B-2026-09-30-103 | 2026-09-30 | codegen+interp | medium | A destructure of an `Option`/`Result` STRUCT payload that takes only SOME of two `Drop`-bearing fields disagrees between backends -- over `struct H2 { v: R, r: R, n: i64 }`, `match o { Option.Some(H2 { v, .. }) => v.id, .. }` prints `d1 1 after` under `--interp` (r's body lost) and `d11 d1 1 after` compiled; `Some(H2 { v, r, .. })` runs both bodies in OPPOSITE orders (`d2 d22` interp, `d22 d2` compiled); `if let Some(H2 { v, .. })` loses r's body interpreted; `Result.Ok(H2 { r, .. })` and a rebound `v` lose a body on BOTH backends; the user-enum spelling, on which both backends agree, makes the compiled order the right one | — |
 | B-2026-09-30-108 | 2026-09-30 | interp+codegen | medium | REMAINDER OF B-2026-09-30-67: A MIXED `Array` OR `Vec` THAT HOLDS A BY-VALUE PARAM BESIDE A FRESH ELEMENT RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY SURFACE, LITERAL AND HAND-BACK ALIKE -- `fn la(a: R) -> i64 { let e = [a, mk(50)]; return 1; }` and `fn outa(a: R) -> i64 { let e = arrc(a, mk(50)); return 1; }` over `fn arrc(a: R, b: R) -> Array[R, 2] { return [a, b]; }` both print `dR1 dR50 dR1`; and a `let mut` `Vec` literal of params loses a pushed element's body on every surface (`let mut v: Vec[R] = [a, b]; v.push(mk(60))` prints no `dR60`) | — |
 | B-2026-10-01-1 | 2026-10-01 | interp+codegen | medium | A CATCH-ALL arm (`_` or a bare binding) over a FRESH-TEMP `Option` whose payload is BOXED leaks the box and its interior compiled and runs the payload's `Drop` body on no surface -- `let k = match mo(1) { _ => 1 }` over `fn mo(k: i64) -> Option[R]` (`R { id: i64, s: String }` with a `Drop` body) prints `1 end` everywhere and loses 63 B (32 direct, 31 indirect) at -O0; `match mo(6) { o => 6 }` does the same, where `match mo(5) { Option.Some(r) => r.id, .. }` prints `d5 5 end` and is clean | — |
 | B-2026-10-01-2 | 2026-10-01 | codegen | medium | A partial destructure of a BOXED struct payload leaks the taken leaf's buffer compiled in two spellings the named read-only arm does not -- over `struct H2 { v: R, r: R }`, `let o = Option.Some(H2 {..}); match o { Option.Some(H2 { v, .. }) => take(v), .. }` (by-value `fn take(x: R)`) loses 31 B at -O0, and a FRESH-TEMP scrutinee `match Option.Some(H2 {..}) { Option.Some(H2 { v, .. }) => v.id, .. }` loses 31 B (33 B for `H2 { r, .. }`), where the named `Option.Some(H2 { v, .. }) => v.id` is clean; the generic `G2[R]` matches each cell exactly | — |
@@ -481,6 +480,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-15 | 2026-10-01 | codegen | medium | A FIXED `Array` RESULT BOUND THROUGH AN `if` INITIALIZER, OR ITERATED BY `for`, CANNOT HAVE AN ELEMENT FIELD READ COMPILED -- `let z = if c { fr(60) } else { fr(61) }; z[0].id` and `let l = f2(80); for q in l { q.id }` over `fn fr(i: i64) -> Array[R, 1]` fail `karac build` with `cannot resolve field 'id' on this receiver`, where `--interp` prints the right values | — |
 | B-2026-10-01-5 | 2026-10-01 | codegen | medium | REMAINDER OF B-2026-09-20-30: A `Result[shared]` OR GENERIC ENUM OF A `shared` PAYLOAD THAT REACHES ITS BINDING THROUGH A `break` VALUE OR A PLAIN REBIND IS STILL NEVER RELEASED ON ANY COMPILED SURFACE, WHERE THE `Option` TWINS ARE CLEAN -- `let b: Box2[Sh] = loop { break freemk(50) }`, `let b: Box2[Sh] = outer: { break outer freemk(63) }` and `let r: Result[Sh, i64] = freeres(62); let c = r;` each print `x` with no `dSh` body on the JIT, -O0 and -O2 and lose 16 B in 1 block at -O0, while `--interp` prints `x dSh..`; `let o: Option[Sh] = loop { break Some(..) }` and `let o = Some(..); let c = o;` are right everywhere | — |
 | B-2026-10-01-6 | 2026-10-01 | codegen | medium | A `Result[shared]` OR A GENERIC ENUM OF A `shared` PAYLOAD HELD IN A STRUCT FIELD OR A `Vec` ELEMENT IS NEVER RELEASED ON ANY COMPILED SURFACE, WHERE THE `Option[shared]` TWIN IS CLEAN -- `let h = Hr { r: freeres(81) }` over `struct Hr { r: Result[Sh, i64] }`, the same with `struct Hb { b: Box2[Sh] }`, and `v.push(freeres(84))` / `v.push(freemk(85))` into a `Vec[Result[Sh, i64]]` / `Vec[Box2[Sh]]` each print `x` with no `dSh` body on the JIT, -O0 and -O2 and lose 16 B in 1 block at -O0; `struct Ho { o: Option[Sh] }` and `Vec[Option[Sh]]` print `x dSh..` everywhere, valgrind clean | — |
+| B-2026-10-01-16 | 2026-10-01 | interp | medium | REMAINDER OF B-2026-09-30-103: A FRESH-TEMP `Option` SCRUTINEE WHOSE STRUCT PAYLOAD IS PARTIALLY DESTRUCTURED LOSES THE UNBOUND FIELDS' BODIES UNDER `--interp` -- `match mo(3) { Option.Some(H2 { v, .. }) => v.id, Option.None => 0 }` prints `d3 3` against compiled `d30 d3 3` | — |
+| B-2026-10-01-17 | 2026-10-01 | codegen | high | A `?` THAT CONVERTS A NAMED `Result` THROUGH `From` (`let r = mke(k); let x = r?;`) READS FREED MEMORY, PRINTS GARBAGE OR LEAKS, BY SOURCE SHAPE -- the fresh-call spelling `mke(k)?` is B-2026-09-30-87 | — |
+| B-2026-10-01-18 | 2026-10-01 | interp+codegen | medium | A `?` THAT CONVERTS ITS ERROR THROUGH `From` NEVER RUNS THE SOURCE ERROR'S `Drop` BODY, ON BOTH BACKENDS -- `struct S { id: i64, v: String }` with a printing `Drop` prints `back 8 end` where the caller-side convention gives `dS8 back 8 end` | — |
+| B-2026-10-01-19 | 2026-10-01 | codegen | high | MOVING A STRUCT FIELD OUT OF A BOXED `Err` PAYLOAD IN A `match` ARM (`Result.Err(e) => { let i = e.inner; .. }`) DOUBLE-FREES -- a six-word `S { v: String, w: Vec[i64] }` inside `E2 { inner: S }` aborts with no output at -O0 | — |
 
 ### Relocated
 
@@ -3483,6 +3486,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-106 | codegen | medium | A TUPLE BUILT FROM AN `Option` PAYLOAD AS A `match` VALUE ARM TAIL RUNS ITS `Drop` BODY BEFORE THE TUPLE IS USED -- `let t = match o { Some(w) => (w,… | efd7c4530 |
 | B-2026-09-30-83 | codegen | high | A FIELD STORE THROUGH AN `Array[T, N]` ELEMENT IS SILENTLY DROPPED ON EVERY COMPILED SURFACE -- `let mut a: Array[P, 1] = [P { n: 5 }]; a[0].n = 9` r… | 3643daa |
 | B-2026-09-30-84 | codegen | high | A CONTAINER ELEMENT HANDED TO A `ref` OR `mut ref` PARAMETER IS SHALLOW-COPIED AND FREED AS A CALL TEMP UNLESS THE CONTAINER IS A `Vec` LOCAL -- `rd(… | 7ffd2c2 |
+| B-2026-09-30-103 | codegen+interp | medium | A destructure of an `Option`/`Result` STRUCT payload that takes only SOME of two `Drop`-bearing fields disagrees between backends -- over `struct H2… | 796891ea3 |
 | B-2026-09-30-104 | codegen | high | A GENERIC struct with two heap fields in an `Option`/`Result` payload (`G2[R]` over `struct G2[T] { v: T, r: R }`) double-frees on every compiled sur… | d3477587e |
 
 </details>
