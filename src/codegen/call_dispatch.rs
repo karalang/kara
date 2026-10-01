@@ -2960,6 +2960,14 @@ impl<'ctx> super::Codegen<'ctx> {
             if !borrow_skip && whole_escape {
                 self.stand_down_literal_arg_places(&a.value);
             }
+            // B-2026-10-01-11 — a boxed payload view re-wrapped as the
+            // argument (`eat(Some(w))`): the fresh `Option` owns the payload's
+            // heap from here, whoever frees it (the callee for a by-value
+            // param, this frame's temp for a `ref` one), so the scrutinee's box
+            // stands its interior down.
+            if self.rewrapping_ctor_payloads(&a.value).is_some() {
+                self.suppress_boxed_payload_view_move(&a.value);
+            }
             // B-2026-09-20-52 — COLLECT AN ARGUMENT BINDING WHOSE BOX THIS
             // CALL MAY HAND BACK, so the disarm below can ask the returned
             // VALUE rather than the callee's signature.

@@ -1,0 +1,127 @@
+//! B-2026-10-01-11 -- a boxed `Option`/`Result` payload binding re-wrapped
+//! in an enum constructor is freed once.
+
+use super::*;
+
+/// B-2026-10-01-11 — the scrutinee's box and the re-wrapped value's box both
+/// freed the payload's `String`. Same program as the codegen twin.
+#[test]
+fn asan_payload_view_rewrapped_in_ctor_freed_once() {
+    assert_clean_asan_run(
+        r#"struct W1 { v: i64, s: String }
+impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
+fn mk(n: i64) -> W1 { return W1 { v: n, s: f"ssssssssssssssssssssssssssssss{n}" } }
+enum E { A(W1), B }
+struct H { o: Option[W1], k: i64 }
+fn eat(o: Option[W1]) { println("eat") }
+fn peek(o: ref Option[W1]) { println("peek") }
+fn pass(o: Option[W1]) -> Option[W1] { return o }
+fn ate(e: E) { println("ate") }
+fn let_some(n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { let q = Some(w); println("ls") }, None => {} }
+}
+fn arg_by_value(n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { eat(Some(w)) }, None => {} }
+}
+fn arg_by_ref(n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { peek(Some(w)); println("pk") }, None => {} }
+}
+fn discard(n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { let _ = Some(w); println("ds") }, None => {} }
+}
+fn in_tuple(n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { let t = (Some(w), 1); println(f"tp{t.1}") }, None => {} }
+}
+fn pushed(n: i64) {
+    let o = Some(mk(n));
+    let mut v: Vec[Option[W1]] = Vec.new();
+    match o { Some(w) => { v.push(Some(w)) }, None => {} }
+    println(f"pu{v.len()}")
+}
+fn in_struct(n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { let h = H { o: Some(w), k: 1 }; println(f"st{h.k}") }, None => {} }
+}
+fn arm_tail(n: i64) {
+    let o = Some(mk(n));
+    let t = match o { Some(w) => Some(w), None => None };
+    println("at");
+    if let Some(z) = t { println(f"at{z.v}") }
+}
+fn if_let_tail(n: i64) {
+    let o = Some(mk(n));
+    let t = if let Some(w) = o { Some(w) } else { None };
+    if let Some(z) = t { println(f"il{z.v}") }
+}
+fn from_result(n: i64) {
+    let o: Result[W1, i64] = Ok(mk(n));
+    match o { Ok(w) => { let q = Some(w); println("fr") }, Err(_) => {} }
+}
+fn as_ok_err(n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { let q: Result[W1, i64] = Ok(w); println("ok") }, None => {} }
+    let p = Some(mk(n + 1));
+    match p { Some(w) => { let q: Result[i64, W1] = Err(w); println("er") }, None => {} }
+}
+fn nested(n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { let q = Some(Some(w)); println("ne") }, None => {} }
+}
+fn branch(c: bool, n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { if c { let q = Some(w); println("q") }; println("br") }, None => {} }
+}
+fn through(n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { let q = pass(Some(w)); println("th") }, None => {} }
+}
+fn user_enum(n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { let q = E.A(w); println("ue") }, None => {} }
+    let p = Some(mk(n + 1));
+    match p { Some(w) => { ate(E.A(w)) }, None => {} }
+    let r = Some(mk(n + 2));
+    let t = match r { Some(w) => E.A(w), None => E.B };
+    println("ut");
+}
+fn main() {
+    let_some(1);
+    arg_by_value(2);
+    arg_by_ref(3);
+    discard(4);
+    in_tuple(5);
+    pushed(6);
+    in_struct(7);
+    arm_tail(8);
+    if_let_tail(9);
+    from_result(10);
+    as_ok_err(11);
+    nested(13);
+    branch(true, 14);
+    branch(false, 15);
+    through(16);
+    user_enum(17);
+    let mut i = 20;
+    while i < 22 {
+        let o = Some(mk(i));
+        match o { Some(w) => { eat(Some(w)) }, None => {} };
+        i = i + 1;
+    }
+    println("end")
+}
+"#,
+        &[
+            "dW1_1", "ls", "eat", "dW1_2", "peek", "dW1_3", "pk", "dW1_4", "ds", "tp1", "dW1_5",
+            "pu1", "dW1_6", "st1", "dW1_7", "at", "at8", "dW1_8", "il9", "dW1_9", "dW1_10", "fr",
+            "dW1_11", "ok", "dW1_12", "er", "dW1_13", "ne", "dW1_14", "q", "br", "br", "dW1_15",
+            "dW1_16", "th", "dW1_17", "ue", "ate", "dW1_18", "dW1_19", "ut", "eat", "dW1_20",
+            "eat", "dW1_21", "end",
+        ],
+        "payload_view_rewrapped_in_ctor",
+    );
+}

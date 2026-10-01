@@ -27526,6 +27526,12 @@ impl<'ctx> super::Codegen<'ctx> {
             && !handled_boxed_result
             && not_borrow
             && self.try_track_discarded_boxed_option(tail, val);
+        // B-2026-10-01-11 — the temp now frees its box's interior, so a boxed
+        // payload view it re-wraps (`let _ = Some(w);`, `Some(w);`) leaves
+        // the scrutinee's box, which freed the same heap a second time.
+        if handled_boxed_option || handled_boxed_result {
+            self.suppress_boxed_payload_view_move(tail);
+        }
         // B-2026-09-28-5 — a discarded BORROW accessor (`v.first();`) owns
         // none of its payload's interior, but a wide payload's box is fresh
         // per call and was freed by nobody. Box-only; the container keeps the

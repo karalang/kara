@@ -21171,7 +21171,34 @@ impl<'ctx> super::Codegen<'ctx> {
             );
     }
 
+    /// B-2026-10-01-11 — the payload arguments of an enum constructor that
+    /// copies them into a value of its own: `Some(w)` / `Ok(w)` / `Err(w)`,
+    /// or a user variant (`E.A(w)`). `None` for anything else.
+    pub(super) fn rewrapping_ctor_payloads<'e>(&self, value: &'e Expr) -> Option<Vec<&'e Expr>> {
+        if let Some(payload) = crate::ast::option_result_ctor_payload(value) {
+            return Some(vec![payload]);
+        }
+        if let ExprKind::Call { args, .. } = &value.kind {
+            if self.variant_ctor_enum_of_expr(value).is_some() {
+                return Some(args.iter().map(|a| &a.value).collect());
+            }
+        }
+        None
+    }
+
     pub(super) fn suppress_boxed_payload_view_move(&mut self, value: &Expr) {
+        // B-2026-10-01-11 — a view RE-WRAPPED in an `Option`/`Result`
+        // constructor (`Some(w)`) is copied whole into the new value's own
+        // box, which then owns the payload's heap exactly as a tuple or a
+        // struct literal does. Left armed, the scrutinee's box freed it too:
+        // `free(): double free detected in tcache 2` on the JIT. Every caller
+        // is a position whose destination takes the value over.
+        if let Some(payloads) = self.rewrapping_ctor_payloads(value) {
+            for payload in payloads {
+                self.suppress_boxed_payload_view_move(payload);
+            }
+            return;
+        }
         let ExprKind::Identifier(name) = &value.kind else {
             return;
         };
