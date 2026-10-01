@@ -27797,6 +27797,18 @@ impl<'ctx> super::Codegen<'ctx> {
         if handled_boxed_option || handled_boxed_result {
             self.suppress_boxed_payload_view_move(tail);
         }
+        // B-2026-10-01-23 — the USER-enum re-wrap (`let _ = E.A(w);`). The
+        // discarded variant temp's own drop frees its payload, so the boxed
+        // view it copied leaves the scrutinee's box the same way.
+        if not_borrow
+            && !handled_boxed_option
+            && !handled_boxed_result
+            && crate::ast::option_result_ctor_payload(tail).is_none()
+            && matches!(&tail.kind, ExprKind::Call { .. })
+            && self.variant_ctor_enum_of_expr(tail).is_some()
+        {
+            self.suppress_boxed_payload_view_move(tail);
+        }
         // B-2026-09-28-5 — a discarded BORROW accessor (`v.first();`) owns
         // none of its payload's interior, but a wide payload's box is fresh
         // per call and was freed by nobody. Box-only; the container keeps the
