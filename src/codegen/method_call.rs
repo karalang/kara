@@ -7721,7 +7721,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         // payload's interior exactly as the monomorph's does;
                         // the box itself stays the caller's. A no-op for a
                         // receiver with no box.
-                        self.clear_boxed_enum_inner_drop(&recv_name, false);
+                        // B-2026-09-20-39 — only where the arm TAKES the
+                        // interior; see the generic-impl twin below.
+                        self.clear_boxed_enum_inner_drop(&recv_name, true);
                     }
                 }
                 // B-2026-09-06-42 — the callee REBINDS `self` whole
@@ -10150,7 +10152,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         let recv_name = recv_name.clone();
                         self.suppress_container_elem_bodies_for_var(&recv_name);
-                        self.clear_boxed_enum_inner_drop(&recv_name, false);
+                        // B-2026-09-20-39 — `true`: clear the interior only
+                        // where an arm TAKES it (`interior_arm_owned`, i.e.
+                        // `boxed_payload_interior_taken_by_arm`). An `Array` /
+                        // tuple payload is not taken -- its arm binding
+                        // registers no free, the husk keeps the interior -- so
+                        // clearing it here left the elements' heap owned by
+                        // nobody: 6 B in 2 blocks for `G[Array[String, 2]]`
+                        // under `match self { G.Y(v) => .. }`, on the generic
+                        // AND the concrete `impl G[Array[String, 2]]` block.
+                        self.clear_boxed_enum_inner_drop(&recv_name, true);
                     }
                 }
             }

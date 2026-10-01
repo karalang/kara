@@ -4525,7 +4525,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &e.kind else {
             return;
         };
-        let Some(te) = self
+        let Some(mut te) = self
             .mono_state
             .mono_payload_binding_display_types
             .get(name.as_str())
@@ -4533,6 +4533,26 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        // B-2026-09-20-39 — the normalisation the arm below promises. A generic
+        // impl method's `T` now arrives from the receiver's ANNOTATION, so it is
+        // the `Path("Array", [T, N])` spelling, which the `TypeKind::Array` arm
+        // did not match: the hole fell to the scalar renderer and failed module
+        // verification (`karac_runtime_i64_to_str([2 x i64] ..)`).
+        if let TypeKind::Path(p) = &te.kind {
+            if p.segments.len() == 1 && p.segments[0] == "Array" {
+                if let Some([GenericArg::Type(elem), GenericArg::Const(size)]) =
+                    p.generic_args.as_deref()
+                {
+                    te = TypeExpr {
+                        kind: TypeKind::Array {
+                            element: Box::new(elem.clone()),
+                            size: Box::new(size.clone()),
+                        },
+                        span: te.span,
+                    };
+                }
+            }
+        }
         // The record is keyed by NAME and outlives the arm that made it, so
         // confirm the name still denotes THAT binding before trusting it. The
         // slot's LLVM type is the check: `Some(t) => …` followed by `let t:

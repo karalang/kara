@@ -1225,6 +1225,46 @@ impl<'ctx> super::Codegen<'ctx> {
         matches!(te.kind, TypeKind::Tuple(_))
     }
 
+    /// B-2026-09-20-39 — is `te` a BUILTIN generic type argument, one whose
+    /// head name (`Vec`, `Array`, `Map`) is all the name channel keeps? A user
+    /// generic struct or enum, `Option` and `Result` are excluded: they have
+    /// their own instantiation channels, and widening them here would move
+    /// bodies this row never measured.
+    fn builtin_generic_type_arg(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Array { .. } => true,
+            TypeKind::Path(p) => {
+                p.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+                    && p.segments.len() == 1
+                    && !self.type_decls.struct_types.contains_key(&p.segments[0])
+                    && !self.type_decls.enum_layouts.contains_key(&p.segments[0])
+                    && !matches!(p.segments[0].as_str(), "Option" | "Result")
+            }
+            _ => false,
+        }
+    }
+
+    /// B-2026-09-20-39 — the mangle token of an ARRAY type argument, in either
+    /// surface spelling: `Path("Array", [T, N])` from an annotation or
+    /// `TypeKind::Array` from inference. Both lengths and elements take part,
+    /// so `Array[String, 2]` and `Array[i64, 3]` stop sharing a body; the
+    /// `Path` spelling is rewritten to the `TypeKind::Array` token so the two
+    /// spellings of one type land on one symbol.
+    fn array_type_arg_mangle_token(&self, te: &TypeExpr) -> Option<String> {
+        match &te.kind {
+            TypeKind::Array { .. } => Some(Self::mono_mangle_token_for_type_expr(te)),
+            TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Array" => {
+                let (elem, n) = self.array_elem_and_len(te)?;
+                Some(format!(
+                    "arr_{}_{}",
+                    n,
+                    Self::mono_mangle_token_for_type_expr(&elem)
+                ))
+            }
+            _ => None,
+        }
+    }
+
     /// Fold nameless type arguments (see
     /// [`Self::type_expr_is_structural_type_arg`]) into the element-aware
     /// substitution map, which — unlike the name map — can express them.
@@ -1323,6 +1363,13 @@ impl<'ctx> super::Codegen<'ctx> {
             let token = match te_source {
                 Some(te) if Self::type_expr_is_structural_type_arg(te) => {
                     Self::mono_mangle_token_for_type_expr(te)
+                }
+                // B-2026-09-20-39 — an ARRAY argument in the element-aware
+                // channel. Its LLVM token is the opaque `ArrayType` one and its
+                // name is the bare `Array`, so without this two instantiations
+                // shared a symbol once the body started reading the real type.
+                Some(te) if self.array_type_arg_mangle_token(te).is_some() => {
+                    self.array_type_arg_mangle_token(te).unwrap_or_default()
                 }
                 // Fallback: a STRUCT-shaped binding whose `subst_names` entry
                 // does not name a real type. "Absent" is not the right test and
@@ -3403,6 +3450,24 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         } else if Self::type_expr_is_structural_type_arg(t) {
                             structural_type_args.push((param.name.clone(), t.clone()));
+                        }
+                        // B-2026-09-20-39 — a builtin GENERIC type argument
+                        // (`Vec[i64]`, `Array[String, 2]`) records only its
+                        // head in the name channel above. A generic impl
+                        // method's `T` arrives here from the receiver
+                        // (`c: G[Array[String, 2]]`), and nothing else binds
+                        // it, so the body's `match self { G.Y(v) => .. }`
+                        // typed `v` at the erased one-word width: an
+                        // `Array[String, 2]` payload was never dropped (the
+                        // leak) and printed as its box POINTER, a `Vec`
+                        // payload printed as raw bytes (B-2026-09-27-121), and
+                        // every `Vec` (and every `Array`) instantiation shared
+                        // one symbol. Flattened through the caller's live
+                        // substitution, and merged with `or_insert` below so
+                        // every resolver's entry still wins.
+                        if self.builtin_generic_type_arg(t) {
+                            structural_type_args
+                                .push((param.name.clone(), self.subst_monomorph_type_params(t)));
                         }
                     }
                     GenericArg::Const(e) => {
