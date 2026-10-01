@@ -9388,8 +9388,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .result_shared_nonescaping_let_spans
                                 .contains(&value_key);
                         if consumed_in_place {
+                            // B-2026-09-20-30 — a USER method's by-value
+                            // return (and a block / branch / `unsafe` tail of
+                            // one) is as fresh as the free call the base
+                            // predicate admits; see
+                            // `rhs_is_fresh_owned_enum_incl_methods`.
                             let owned_rhs = matches!(value.kind, ExprKind::Index { .. })
-                                || self.rhs_is_fresh_inline_enum(value);
+                                || self.rhs_is_fresh_owned_enum_incl_methods(value);
                             if owned_rhs {
                                 let res_te = ty.clone().or_else(|| {
                                     self.type_decls

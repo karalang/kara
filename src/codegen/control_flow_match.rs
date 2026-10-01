@@ -23086,7 +23086,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// are borrows). The detectors themselves still reject borrow (`ref T`)
     /// and non-heap payloads, so this only adds the move/alias guard.
     pub(super) fn rhs_is_fresh_inline_enum(&self, e: &Expr) -> bool {
-        self.fresh_inline_enum_value(e, false)
+        self.fresh_inline_enum_value(e, false, false)
+    }
+
+    /// [`Self::rhs_is_fresh_inline_enum`] widened for the `Result[shared]` /
+    /// generic-enum let registrar (B-2026-09-20-30): a USER method's by-value
+    /// return is a leaf as fresh as the free call the base predicate admits,
+    /// and an `unsafe { .. }` block is a carrier like any other block. The
+    /// same method call in argument position was already released by the
+    /// by-value param registrar, so declining it here was a position gap,
+    /// not a decision. Builtin methods stay out (`passthrough_callee_key`
+    /// resolves only a Kāra-defined function AST, so `pop` / `get` / `first`
+    /// never match), and so does a `-> ref` method, whose result is a borrow.
+    ///
+    /// A separate entry rather than a change to the base predicate because
+    /// the inline Option/Result callers of that one make their own
+    /// `MethodCall` decisions beside it (B-2026-09-24-15's
+    /// `passthrough_callee_key` arm, the `.map` alias branch), so widening it
+    /// there would answer a question they already answer differently.
+    pub(super) fn rhs_is_fresh_owned_enum_incl_methods(&self, e: &Expr) -> bool {
+        self.fresh_inline_enum_value(e, false, true)
     }
 
     /// The body of [`Self::rhs_is_fresh_inline_enum`]. `in_branch` is true
@@ -23097,9 +23116,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// one. Before that suppressor the leaf freed at the local's scope exit and
     /// this answered "not fresh" to avoid a second free; with it, answering the
     /// same leaked the buffer on every path whose consumer only read it.
-    fn fresh_inline_enum_value(&self, e: &Expr, in_branch: bool) -> bool {
+    fn fresh_inline_enum_value(&self, e: &Expr, in_branch: bool, methods: bool) -> bool {
         match &e.kind {
             ExprKind::Call { .. } => true,
+            ExprKind::MethodCall { .. } if methods => {
+                self.passthrough_callee_key(e).is_some()
+                    && !self.is_borrow_returning_user_method_call(e)
+            }
+            ExprKind::Unsafe(b) if methods => b
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| self.fresh_inline_enum_value(t, in_branch, methods)),
             ExprKind::If {
                 then_block,
                 else_branch,
@@ -23113,25 +23140,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 then_block
                     .final_expr
                     .as_deref()
-                    .is_some_and(|t| self.fresh_inline_enum_value(t, true))
+                    .is_some_and(|t| self.fresh_inline_enum_value(t, true, methods))
                     && else_branch
                         .as_deref()
-                        .is_some_and(|t| self.fresh_inline_enum_value(t, true))
+                        .is_some_and(|t| self.fresh_inline_enum_value(t, true, methods))
             }
             ExprKind::Match { arms, .. } => {
                 !arms.is_empty()
                     && arms
                         .iter()
-                        .all(|a| self.fresh_inline_enum_value(&a.body, true))
+                        .all(|a| self.fresh_inline_enum_value(&a.body, true, methods))
             }
             ExprKind::Block(b) | ExprKind::Seq(b) => b
                 .final_expr
                 .as_deref()
-                .is_some_and(|t| self.fresh_inline_enum_value(t, in_branch)),
+                .is_some_and(|t| self.fresh_inline_enum_value(t, in_branch, methods)),
             ExprKind::LabeledBlock { body, .. } => body
                 .final_expr
                 .as_deref()
-                .is_some_and(|t| self.fresh_inline_enum_value(t, in_branch)),
+                .is_some_and(|t| self.fresh_inline_enum_value(t, in_branch, methods)),
             // `None` / nullary variant constructor: not a tracked binding,
             // empty payload → fresh-safe (a taken `None` leaf frees nothing).
             // A bound identifier is a move/alias of an existing enum → NOT
