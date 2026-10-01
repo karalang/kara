@@ -2590,95 +2590,110 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // The converted TARGET error value (`Target.from(source)`), or `None`
         // when this `?` needs no cross-error conversion.
-        let converted_err: Option<BasicValueEnum<'ctx>> =
-            if let Some(target) = self.span_tables.question_conversions.get(&key).cloned() {
-                let qualified = format!("{}.from", target);
-                self.module.get_function(&qualified).map(|from_fn| {
-                    // Reconstruct the SOURCE error at `from`'s param type from
-                    // ALL its words (a `String` param is the 3-word
-                    // `{ptr,len,cap}`, not a single `i64`), then convert.
-                    let arg_ty = from_fn.get_nth_param(0).unwrap().get_type();
-                    // B-2026-09-30-87 — a source error WIDER than the payload area
-                    // is heap-BOXED: word 0 is the box pointer, not the error's
-                    // first word. Rebuilding from the words read that pointer as
-                    // the first field, so `from` saw garbage (`s.v.len() +
-                    // s.w.len()` printed 0 against `--interp`'s 32 for a six-word
-                    // `S { v: String, w: Vec[i64] }`). De-box it, as the errdefer
-                    // staging and `match`'s arm reconstruction already do, by the
-                    // pack side's own width predicate.
-                    //
-                    // Only a FRESH temp source (`mke(k)?`) is handled here. A named
-                    // one (`let r = mke(k); r?`) or a place keeps its own cleanup,
-                    // and its interplay with this site is B-2026-10-01-17: reading through
-                    // its box read freed memory, and freeing the argument here as
-                    // well doubled the free, so it keeps today's behaviour.
-                    let fresh_source = matches!(
-                        inner.kind,
-                        ExprKind::Call { .. } | ExprKind::MethodCall { .. }
-                    );
-                    let source_box = (fresh_source
-                        && Self::llvm_type_word_count(arg_ty) > inner_word_count
-                        && inner_word_count > 0)
-                        .then(|| {
-                            self.builder
-                                .build_int_to_ptr(
-                                    w0_i,
-                                    self.context.ptr_type(AddressSpace::default()),
-                                    "q_from.box",
-                                )
-                                .unwrap()
-                        });
-                    // B-2026-09-30-86 — and every word past the third.
-                    let arg = match source_box {
-                        Some(bp) => self
-                            .builder
-                            .build_load(arg_ty, bp, "q_from.box.ld")
-                            .unwrap(),
-                        None => self
-                            .rebuild_optres_payload_words(
-                                arg_ty,
-                                val.into_struct_value(),
+        let converted_err: Option<BasicValueEnum<'ctx>> = if let Some(target) =
+            self.span_tables.question_conversions.get(&key).cloned()
+        {
+            let qualified = format!("{}.from", target);
+            self.module.get_function(&qualified).map(|from_fn| {
+                // Reconstruct the SOURCE error at `from`'s param type from
+                // ALL its words (a `String` param is the 3-word
+                // `{ptr,len,cap}`, not a single `i64`), then convert.
+                let arg_ty = from_fn.get_nth_param(0).unwrap().get_type();
+                // B-2026-09-30-87 — a source error WIDER than the payload area
+                // is heap-BOXED: word 0 is the box pointer, not the error's
+                // first word. Rebuilding from the words read that pointer as
+                // the first field, so `from` saw garbage (`s.v.len() +
+                // s.w.len()` printed 0 against `--interp`'s 32 for a six-word
+                // `S { v: String, w: Vec[i64] }`). De-box it, as the errdefer
+                // staging and `match`'s arm reconstruction already do, by the
+                // pack side's own width predicate.
+                //
+                // Only a FRESH temp source (`mke(k)?`) is handled here. A named
+                // one (`let r = mke(k); r?`) or a place keeps its own cleanup,
+                // and its interplay with this site is B-2026-10-01-17: reading through
+                // its box read freed memory, and freeing the argument here as
+                // well doubled the free, so it keeps today's behaviour.
+                let fresh_source = matches!(
+                    inner.kind,
+                    ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+                );
+                let source_box = (fresh_source
+                    && Self::llvm_type_word_count(arg_ty) > inner_word_count
+                    && inner_word_count > 0)
+                    .then(|| {
+                        self.builder
+                            .build_int_to_ptr(
                                 w0_i,
-                                w1_i,
-                                w2_i,
+                                self.context.ptr_type(AddressSpace::default()),
+                                "q_from.box",
                             )
-                            .unwrap_or(w0),
-                    };
-                    let converted = self
+                            .unwrap()
+                    });
+                // B-2026-09-30-86 — and every word past the third.
+                let arg = match source_box {
+                    Some(bp) => self
                         .builder
-                        .build_call(from_fn, &[arg.into()], "q_from")
-                        .unwrap()
-                        .try_as_basic_value()
-                        .unwrap_basic();
-                    // B-2026-09-30-87 — the rebuilt argument is a fresh temp with
-                    // no binding, so nothing else frees what `from` leaves with
-                    // the caller: 29 B per error for `S { v: String }`. Whether
-                    // `from` leaves it is the question an ordinary
-                    // `E2.from(<temp>)` call answers per parameter shape; see
-                    // `question_from_arg_stays_with_caller`.
-                    if let Some(te) = self
-                        .question_from_arg_stays_with_caller(&qualified)
-                        .filter(|_| fresh_source)
-                    {
-                        let slot = self.create_entry_alloca(cur_fn, "q_from.arg", arg_ty);
-                        self.builder.build_store(slot, arg).unwrap();
-                        let drop_fn = self.emit_drop_fn_for_type_expr(&te);
-                        self.builder
-                            .build_call(drop_fn, &[slot.into()], "")
-                            .unwrap();
+                        .build_load(arg_ty, bp, "q_from.box.ld")
+                        .unwrap(),
+                    None => self
+                        .rebuild_optres_payload_words(
+                            arg_ty,
+                            val.into_struct_value(),
+                            w0_i,
+                            w1_i,
+                            w2_i,
+                        )
+                        .unwrap_or(w0),
+                };
+                let converted = self
+                    .builder
+                    .build_call(from_fn, &[arg.into()], "q_from")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic();
+                // B-2026-09-30-87 — the rebuilt argument is a fresh temp with
+                // no binding, so nothing else frees what `from` leaves with
+                // the caller: 29 B per error for `S { v: String }`. Whether
+                // `from` leaves it is the question an ordinary
+                // `E2.from(<temp>)` call answers per parameter shape; see
+                // `question_from_arg_stays_with_caller`.
+                if let Some((te, run_bodies)) = self
+                    .question_from_arg_stays_with_caller(&qualified)
+                    .filter(|_| fresh_source)
+                {
+                    let slot = self.create_entry_alloca(cur_fn, "q_from.arg", arg_ty);
+                    self.builder.build_store(slot, arg).unwrap();
+                    // B-2026-10-01-18 — and its user `Drop` bodies first,
+                    // as an ordinary `Target.from(<temp>)` runs them at
+                    // the end of the call (the caller-side convention of
+                    // B-2026-09-17-35). The drop below is memory only, so
+                    // the source's body never ran on either backend. Own
+                    // body, then field / payload bodies, then the memory:
+                    // a body still reads its buffers.
+                    if let (true, TypeKind::Path(p)) = (run_bodies, &te.kind) {
+                        if let Some(name) = p.segments.last().cloned() {
+                            if let Some(bodies) = self.emit_struct_user_drop_bodies_only_fn(&name) {
+                                self.builder.build_call(bodies, &[slot.into()], "").unwrap();
+                            }
+                        }
                     }
-                    // The box itself was the source aggregate's, and a fresh
-                    // source is consumed here: its envelope has no other owner.
-                    if let Some(bp) = source_box {
-                        self.builder
-                            .build_call(self.runtime_fns.free_fn, &[bp.into()], "")
-                            .unwrap();
-                    }
-                    converted
-                })
-            } else {
-                None
-            };
+                    let drop_fn = self.emit_drop_fn_for_type_expr(&te);
+                    self.builder
+                        .build_call(drop_fn, &[slot.into()], "")
+                        .unwrap();
+                }
+                // The box itself was the source aggregate's, and a fresh
+                // source is consumed here: its envelope has no other owner.
+                if let Some(bp) = source_box {
+                    self.builder
+                        .build_call(self.runtime_fns.free_fn, &[bp.into()], "")
+                        .unwrap();
+                }
+                converted
+            })
+        } else {
+            None
+        };
 
         // Payload words to write into the returned Err slot. The number of slots
         // is the OUTER return enum's payload word count.
@@ -3255,7 +3270,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// A generic instantiation (asked by its erased name, which is not the
     /// layout the callee copies), a tuple, and anything else answer `None`,
     /// which is today's behaviour.
-    pub(super) fn question_from_arg_stays_with_caller(&self, qualified: &str) -> Option<TypeExpr> {
+    pub(super) fn question_from_arg_stays_with_caller(
+        &self,
+        qualified: &str,
+    ) -> Option<(TypeExpr, bool)> {
         let program = self.program_snapshot.as_deref()?;
         let f = super::declarations::find_function_ast(program, qualified)?;
         let param = f.params.first()?;
@@ -3293,7 +3311,11 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => false,
         };
-        stays.then(|| param.ty.clone())
+        // B-2026-10-01-18 — whether the caller also runs the argument's user
+        // `Drop` bodies. An entry-copied argument stays with the caller for
+        // MEMORY even when `from` stores it, but then the stored copy carries
+        // the bodies, so they run here only when nothing escapes.
+        stays.then(|| (param.ty.clone(), !escapes()))
     }
 
     /// B-2026-08-23-19. Reconstruct an `errdefer(e)` binding value from an

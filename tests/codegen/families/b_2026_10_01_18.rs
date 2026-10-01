@@ -1,0 +1,71 @@
+//! B-2026-10-01-18 — a `?` that converts its error through `From` with a
+//! fresh call as its source, where the source type (or a field of it) has a
+//! user `Drop` body. The `?` site owns the source when `from` only reads it,
+//! and B-2026-09-30-87 made it free the source's heap there, but neither
+//! backend ran the `Drop` bodies. The interpreter's `?` path also called
+//! `from` without the call frames an ordinary call pushes, so it ran a body
+//! twice when `from` rebound the parameter (`f4`). A source that `from` keeps
+//! (`f2`) runs its body once, when the error value dies.
+
+use super::*;
+
+/// B-2026-10-01-18 — a fresh `?`-From source runs its own and its fields' `Drop` bodies once, on both backends, whether `from` reads, rebinds, conditionally stores or keeps it.
+#[test]
+fn e2e_question_from_fresh_source_drop_bodies() {
+    let src = r#"
+struct S { id: i64, v: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct T { r: R, v: String }
+enum Q { A(R), B(i64) }
+impl Drop for Q { fn drop(mut ref self) { println("dQ") } }
+fn ms(k: i64) -> S { S { id: k, v: f"err-heap-string-long-enough-{k}" } }
+fn e_s(k: i64) -> Result[i64, S] { if k > 5 { Result.Err(ms(k)) } else { Result.Ok(k) } }
+fn e_t(k: i64) -> Result[i64, T] { if k > 5 { Result.Err(T { r: R { id: k }, v: f"err-heap-string-long-enough-{k}" }) } else { Result.Ok(k) } }
+fn e_q(k: i64) -> Result[i64, Q] { if k > 5 { Result.Err(Q.A(R { id: k })) } else { Result.Ok(k) } }
+struct M { k: i64 }
+impl M { fn get(self, k: i64) -> Result[i64, S] { e_s(k + self.k) } }
+struct E1 { n: i64 }
+impl From[S] for E1 { fn from(s: S) -> E1 { E1 { n: s.id } } }
+struct E2 { inner: S }
+impl From[S] for E2 { fn from(s: S) -> E2 { E2 { inner: s } } }
+struct E3 { n: i64, inner: Option[S] }
+impl From[S] for E3 { fn from(s: S) -> E3 { if s.id > 100 { E3 { n: 0, inner: Option.Some(s) } } else { E3 { n: s.id, inner: Option.None } } } }
+struct E4 { n: i64 }
+impl From[S] for E4 { fn from(s: S) -> E4 { let t = s; E4 { n: t.id } } }
+struct E5 { n: i64 }
+impl From[T] for E5 { fn from(t: T) -> E5 { E5 { n: t.v.len() } } }
+struct E6 { n: i64 }
+impl From[Q] for E6 { fn from(q: Q) -> E6 { E6 { n: 1 } } }
+fn f1(k: i64) -> Result[i64, E1] { let x = e_s(k)?; Result.Ok(x) }
+fn f2(k: i64) -> Result[i64, E2] { let x = e_s(k)?; Result.Ok(x) }
+fn f3(k: i64) -> Result[i64, E3] { let x = e_s(k)?; Result.Ok(x) }
+fn f4(k: i64) -> Result[i64, E4] { let x = e_s(k)?; Result.Ok(x) }
+fn f5(k: i64) -> Result[i64, E5] { let x = e_t(k)?; Result.Ok(x) }
+fn f6(k: i64) -> Result[i64, E6] { let x = e_q(k)?; Result.Ok(x) }
+fn f7(k: i64) -> Result[i64, E1] { let m = M { k: 1 }; let x = m.get(k)?; Result.Ok(x) }
+fn main() {
+    match f1(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
+    println("-")
+    match f1(2) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
+    println("-")
+    match f2(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.v) }
+    println("-")
+    match f3(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
+    println("-")
+    match f4(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
+    println("-")
+    match f5(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
+    println("-")
+    match f6(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
+    println("-")
+    match f7(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
+    println("end")
+}"#;
+    let want = "dS8\n8\n-\n2\n-\nerr-heap-string-long-enough-8\ndS8\n-\ndS8\n8\n-\ndS8\n8\n-\ndR8\n29\n-\ndQ\ndR8\n1\n-\ndS9\n9\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    assert_eq!(run_program(src).as_deref(), Some(want), "AOT");
+}

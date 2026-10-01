@@ -29,6 +29,10 @@ use super::method_call::result_ok;
 use super::value::narrow_to_i64;
 use super::value::{EnumData, Value};
 
+/// What [`super::Interpreter::eval_body_in_call_frames`] hands back: the body's
+/// result, and the payload escapes the call recorded for its argument walk.
+type CallFrameBodyResult = (Result<Value, ControlFlow>, Vec<(usize, Vec<String>)>);
+
 /// B-2026-09-19-55 — which impl a call's callee lives in, for the caller-side
 /// argument walk (`run_fresh_temp_arg_drops`) and the guards it consults.
 ///
@@ -2285,220 +2289,14 @@ impl<'a> super::Interpreter<'a> {
                 if is_stdlib_wrapper {
                     self.stdlib_wrapper_call_spans.push(*span);
                 }
-                // B-2026-08-01-12: expose the callee's OWNED param names to
-                // the body's let-destructure gate — a struct destructure of
-                // an owned by-value param binds views of the entry copy, and
-                // its Drop observability belongs to the caller (see
-                // `owned_param_names_stack`). Ref/mut-ref params are
-                // excluded at collection time; a closure (no program fn of
-                // this name) contributes an empty set, so the gate never
-                // fires inside closures.
-                let seed_params = self.owned_param_names_of_call(
+                let (result, call_payload_escapes) = self.eval_body_in_call_frames(
                     &fn_name,
                     assoc_owner,
                     &param_patterns,
                     closure_env.is_some(),
+                    contract_fault.is_some(),
+                    &body,
                 );
-                self.owned_param_names_stack.push(seed_params);
-                // B-2026-09-26-37 — see `PayloadEscapeFrame`.
-                let borrowed = if closure_env.is_some() {
-                    std::collections::HashSet::new()
-                } else {
-                    self.callee_fn_for_param_ownership_of(&fn_name, assoc_owner)
-                        .map(crate::ast::borrowed_param_names)
-                        .unwrap_or_default()
-                };
-                self.payload_escape_frames
-                    .push(crate::interpreter::PayloadEscapeFrame {
-                        borrowed,
-                        params: if closure_env.is_some() {
-                            Vec::new()
-                        } else {
-                            param_patterns
-                                .iter()
-                                .map(|p| match &p.kind {
-                                    crate::ast::PatternKind::Binding(n) => n.clone(),
-                                    _ => String::new(),
-                                })
-                                .collect()
-                        },
-                        ..Default::default()
-                    });
-                // B-2026-09-06-9 — the whole-alias sibling; see the field.
-                let whole_aliases = if closure_env.is_some() {
-                    std::collections::HashSet::new()
-                } else {
-                    self.callee_fn_for_param_ownership_of(&fn_name, assoc_owner)
-                        .map(|f| crate::ast::fn_whole_param_aliases(self.program, f))
-                        .unwrap_or_default()
-                };
-                self.whole_param_alias_stack.push(whole_aliases);
-                // B-2026-09-14-7 — the frame-entry half of the
-                // consumed-part channel. Computed HERE, by the caller, from
-                // the same predicate the caller's own mask reads, so the
-                // callee's slot decision and the caller's stand-down cannot
-                // disagree about which payload parts changed hands.
-                let consumed_locals = if closure_env.is_some() {
-                    std::collections::HashSet::new()
-                } else {
-                    self.callee_fn_for_param_ownership_of(&fn_name, assoc_owner)
-                        .map(Self::consumed_payload_local_names)
-                        .unwrap_or_default()
-                };
-                self.consumed_payload_local_names_stack
-                    .push(consumed_locals);
-                // B-2026-09-19-31 — see the field.
-                let owned_elems = if closure_env.is_some() {
-                    std::collections::HashSet::new()
-                } else {
-                    self.callee_fn_for_param_ownership_of(&fn_name, assoc_owner)
-                        .map(|f| {
-                            crate::ast::fn_callee_owned_payload_elem_names(self.program, f)
-                                .into_iter()
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                };
-                self.callee_owned_payload_elems_stack.push(owned_elems);
-                self.owned_param_frame_is_method.push(false);
-                // B-2026-08-09-10 — `moved_out_user_drop_bindings` is keyed by
-                // NAME with no frame scoping, so a callee that moves a payload
-                // out of its own binding silently disarmed an UNRELATED caller
-                // binding that happened to share the name. Measured: with the
-                // caller's local and the callee's param both spelled `b`, the
-                // caller's `Drop` body never ran; renaming either one to
-                // anything else made both backends agree. That is why the row
-                // read as "owned enum params don't fire" — the shape it was
-                // found in reused the name, as ordinary code routinely does.
-                //
-                // The callee opens with an EMPTY set (nothing in a fresh frame
-                // has been moved out yet) and the caller's is restored on the
-                // way out, so a move recorded inside the body can no longer
-                // escape the frame that made it. Not a stack, because the
-                // entries are consulted by bare name from many places; swapping
-                // the whole map is what makes the isolation total.
-                // B-2026-08-27-48 — the three CONTAINER/ELEMENT move sets join
-                // the isolation for the reason B-2026-08-09-10 gave for the
-                // first three: they are keyed by bare NAME with no frame
-                // scoping, so a callee acting on its own param silently
-                // disarmed an unrelated CALLER binding that happened to share
-                // the name. Measured on `fn take(p: (R, i64)) { let (r, n) =
-                // p; … }`: with the caller's local also spelled `p` the
-                // caller's tuple element walk went silent and the body ran
-                // once; renaming it to `q` — nothing else changed — ran it
-                // twice. Two defects cancelling looked like correct code.
-                let saved_moved_out = (
-                    std::mem::take(&mut self.moved_out_user_drop_bindings),
-                    std::mem::take(&mut self.moved_out_enum_payload_bindings),
-                    std::mem::take(&mut self.moved_out_drop_field_bindings),
-                    std::mem::take(&mut self.moved_out_container_bodies_bindings),
-                    std::mem::take(&mut self.moved_out_tuple_elem_bodies),
-                    std::mem::take(&mut self.moved_out_struct_field_bodies),
-                    // B-2026-08-29-33 — the two payload-only masks ride the
-                    // same per-frame save/restore for the same reason: they are
-                    // keyed by NAME, so a callee local sharing a caller
-                    // binding's name would otherwise disarm the caller's walk.
-                    std::mem::take(&mut self.moved_out_struct_field_payload_bodies),
-                    std::mem::take(&mut self.moved_out_tuple_elem_payload_bodies),
-                    // B-2026-08-29-24 — and the enum-payload SLOT mask, for the
-                    // same name-keyed reason.
-                    std::mem::take(&mut self.moved_out_enum_payload_slots),
-                    // B-2026-09-16-12 — the arm-move slot mask, name-keyed beside it.
-                    std::mem::take(&mut self.moved_out_enum_payload_body_slots),
-                    // B-2026-08-29-47 — the param-view FIELD record, name-keyed
-                    // like the masks above and isolated for the same reason.
-                    std::mem::take(&mut self.param_view_struct_fields),
-                    // B-2026-09-01-3 — the tuple peer, isolated beside it.
-                    std::mem::take(&mut self.param_view_tuple_elems),
-                    // B-2026-09-14-7 — the consumed-part mask, name-keyed like
-                    // every mask above and isolated for B-2026-08-09-10's
-                    // reason: it is written in the CALLER's frame after a call
-                    // returns, so a deeper frame's local sharing the binding's
-                    // name would otherwise have its own payload walk masked and
-                    // lose the body outright.
-                    std::mem::take(&mut self.moved_out_optres_payload_bodies),
-                );
-                // B-2026-08-28-22 — hand the callee ownership of the `Drop`
-                // BODY of any owned param it returns on some tail paths and not
-                // others. The caller has already declined its side for every
-                // path (`fn_returns_param` answers over the UNION of return
-                // sites), so without this the value that actually died inside
-                // the call ran no body at all. Seeded here, immediately before
-                // the body, so `eval_block_inner` adopts it into the body
-                // block's own cleanup; the arm tail that returns the param
-                // disarms it through `record_conditional_move_tail`.
-                self.pending_param_drop_bindings =
-                    self.cond_returned_param_drop_names(&fn_name, assoc_owner);
-                // B-2026-08-30-33 — keep the names for the whole frame; the
-                // list above is taken by the body block before any statement
-                // runs, and the per-path disarm needs to ask later.
-                // B-2026-09-23-26 — an adopted `Option` / `Result` param's
-                // payload walk is keyed on its declared type by NAME
-                // (`optres_payload_bodies_tes`), which a `let` records and a
-                // parameter never did. It only worked when the CALLER happened
-                // to hold a binding of the same name; a temporary argument ran
-                // no body. Seeded for this frame and restored after it, since
-                // the map is not frame-isolated.
-                let saved_optres_tes =
-                    self.seed_cond_returned_optres_param_tes(&fn_name, assoc_owner);
-                let saved_cond_store_params = std::mem::replace(
-                    &mut self.cond_store_param_names,
-                    self.pending_param_drop_bindings.iter().cloned().collect(),
-                );
-                let saved_part_aliases = std::mem::take(&mut self.cond_store_part_aliases);
-                let saved_view_aliases = std::mem::take(&mut self.cond_store_view_aliases);
-                let result = if contract_fault.is_some() {
-                    Ok(Value::Unit)
-                } else {
-                    self.eval_body_growing(&body)
-                };
-                (
-                    self.moved_out_user_drop_bindings,
-                    self.moved_out_enum_payload_bindings,
-                    self.moved_out_drop_field_bindings,
-                    self.moved_out_container_bodies_bindings,
-                    self.moved_out_tuple_elem_bodies,
-                    self.moved_out_struct_field_bodies,
-                    self.moved_out_struct_field_payload_bodies,
-                    self.moved_out_tuple_elem_payload_bodies,
-                    self.moved_out_enum_payload_slots,
-                    self.moved_out_enum_payload_body_slots,
-                    self.param_view_struct_fields,
-                    self.param_view_tuple_elems,
-                    self.moved_out_optres_payload_bodies,
-                ) = saved_moved_out;
-                // B-2026-08-30-33 — restore with the rest of the per-frame
-                // move bookkeeping. Left un-restored, a callee's parameter name
-                // stays live in the CALLER's frame, where any binding that
-                // happens to share the name would be disarmed by a hand-over
-                // that has nothing to do with it. No probe reproduced that --
-                // the same-name case measures identical before and after -- but
-                // every neighbour in this block is saved and restored, and a
-                // set that outlives its frame is a hazard whether or not one
-                // program has found it yet.
-                self.cond_store_param_names = saved_cond_store_params;
-                self.cond_store_part_aliases = saved_part_aliases;
-                self.cond_store_view_aliases = saved_view_aliases;
-                for (n, prev) in saved_optres_tes {
-                    match prev {
-                        Some(te) => {
-                            self.optres_payload_bodies_tes.insert(n, te);
-                        }
-                        None => {
-                            self.optres_payload_bodies_tes.remove(&n);
-                        }
-                    }
-                }
-                self.owned_param_names_stack.pop();
-                let call_payload_escapes = self
-                    .payload_escape_frames
-                    .pop()
-                    .map(|f| f.escapes)
-                    .unwrap_or_default();
-                self.whole_param_alias_stack.pop();
-                self.consumed_payload_local_names_stack.pop();
-                self.callee_owned_payload_elems_stack.pop();
-                self.owned_param_frame_is_method.pop();
                 if is_stdlib_wrapper {
                     self.stdlib_wrapper_call_spans.pop();
                 }
@@ -4732,6 +4530,320 @@ impl<'a> super::Interpreter<'a> {
             })
     }
 
+    /// The `?` operator's `From` conversion: `Target.from(source)`, run as an
+    /// ordinary call would run it.
+    ///
+    /// B-2026-10-01-18 — this used the raw `call_function`, which binds the
+    /// argument and evaluates the body with none of a call's ownership
+    /// machinery, so the argument walk an ordinary `Target.from(mke(k))` runs
+    /// after the call never ran either, and the source error's user `Drop`
+    /// body was lost (design.md's caller-side convention, B-2026-09-17-35).
+    /// The callee now runs inside the same frames (`eval_body_in_call_frames`)
+    /// and, when the source is a FRESH call result (`mke(k)?`), the walk runs
+    /// on it afterwards. A named source (`r?`) is left to the binding's own
+    /// cleanup, as the walk itself does for an identifier argument. The walk
+    /// cannot name the argument's type from the operand, which is
+    /// `Result`-typed, so the source value's own type is handed to it.
+    pub(crate) fn call_question_from(
+        &mut self,
+        target: &str,
+        inner: &Expr,
+        source: Value,
+    ) -> Value {
+        let qualified = format!("{target}.from");
+        let func = self.env.get(&qualified);
+        let Some(Value::Function {
+            param_patterns,
+            body,
+            closure_env,
+            ..
+        }) = func
+        else {
+            return self.call_function(&qualified, &[source]);
+        };
+        self.env.push_scope();
+        if let Some(ref captured) = closure_env {
+            for (k, v) in captured {
+                self.env.define(k.clone(), v.clone());
+            }
+        }
+        if let Some(pat) = param_patterns.first() {
+            self.bind_pattern(pat, source.clone());
+        }
+        let (result, escapes) = self.eval_body_in_call_frames(
+            "from",
+            Some(target),
+            &param_patterns,
+            closure_env.is_some(),
+            false,
+            &body,
+        );
+        self.env.pop_scope();
+        let converted = match result {
+            Ok(v) | Err(ControlFlow::Return(v)) => v,
+            Err(cf) => return self.set_cf(cf),
+        };
+        if matches!(
+            inner.kind,
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+        ) {
+            let arg = crate::ast::CallArg {
+                label: None,
+                mut_marker: false,
+                mut_marker_span: None,
+                value: inner.clone(),
+                span: inner.span,
+            };
+            self.pending_call_payload_escapes = escapes;
+            self.fresh_arg_type_override = match &source {
+                Value::Struct { name, .. } => Some(name.clone()),
+                Value::EnumVariant { enum_name, .. } => Some(enum_name.clone()),
+                _ => None,
+            };
+            self.run_fresh_temp_arg_drops(
+                "from",
+                Some(CalleeOwner::Assoc(target)),
+                &[arg],
+                &[source],
+            );
+            self.fresh_arg_type_override = None;
+        }
+        converted
+    }
+
+    /// The ownership frames an ordinary call wraps around its callee's body
+    /// (owned-param names, payload escapes, whole-param aliases, consumed and
+    /// callee-owned payload parts, and a fresh set of moved-out records),
+    /// pushed before the body runs and popped after it. Returns the body's
+    /// result and the payload parts this run handed out through a `return`,
+    /// which the caller's post-call argument walk reads.
+    ///
+    /// B-2026-10-01-18 — split out of the call arm so the `?` From conversion
+    /// can run `Target.from` inside the same frames. Through the raw
+    /// `call_function` its by-value param had none, so a body that moved it
+    /// (`let t = s`) ran its `Drop` body in the callee as well as in the
+    /// caller's argument walk.
+    pub(crate) fn eval_body_in_call_frames(
+        &mut self,
+        fn_name: &str,
+        assoc_owner: Option<&str>,
+        param_patterns: &[crate::ast::Pattern],
+        is_closure: bool,
+        skip_body: bool,
+        body: &crate::ast::Block,
+    ) -> CallFrameBodyResult {
+        // B-2026-08-01-12: expose the callee's OWNED param names to
+        // the body's let-destructure gate — a struct destructure of
+        // an owned by-value param binds views of the entry copy, and
+        // its Drop observability belongs to the caller (see
+        // `owned_param_names_stack`). Ref/mut-ref params are
+        // excluded at collection time; a closure (no program fn of
+        // this name) contributes an empty set, so the gate never
+        // fires inside closures.
+        let seed_params =
+            self.owned_param_names_of_call(fn_name, assoc_owner, param_patterns, is_closure);
+        self.owned_param_names_stack.push(seed_params);
+        // B-2026-09-26-37 — see `PayloadEscapeFrame`.
+        let borrowed = if is_closure {
+            std::collections::HashSet::new()
+        } else {
+            self.callee_fn_for_param_ownership_of(fn_name, assoc_owner)
+                .map(crate::ast::borrowed_param_names)
+                .unwrap_or_default()
+        };
+        self.payload_escape_frames
+            .push(crate::interpreter::PayloadEscapeFrame {
+                borrowed,
+                params: if is_closure {
+                    Vec::new()
+                } else {
+                    param_patterns
+                        .iter()
+                        .map(|p| match &p.kind {
+                            crate::ast::PatternKind::Binding(n) => n.clone(),
+                            _ => String::new(),
+                        })
+                        .collect()
+                },
+                ..Default::default()
+            });
+        // B-2026-09-06-9 — the whole-alias sibling; see the field.
+        let whole_aliases = if is_closure {
+            std::collections::HashSet::new()
+        } else {
+            self.callee_fn_for_param_ownership_of(fn_name, assoc_owner)
+                .map(|f| crate::ast::fn_whole_param_aliases(self.program, f))
+                .unwrap_or_default()
+        };
+        self.whole_param_alias_stack.push(whole_aliases);
+        // B-2026-09-14-7 — the frame-entry half of the
+        // consumed-part channel. Computed HERE, by the caller, from
+        // the same predicate the caller's own mask reads, so the
+        // callee's slot decision and the caller's stand-down cannot
+        // disagree about which payload parts changed hands.
+        let consumed_locals = if is_closure {
+            std::collections::HashSet::new()
+        } else {
+            self.callee_fn_for_param_ownership_of(fn_name, assoc_owner)
+                .map(Self::consumed_payload_local_names)
+                .unwrap_or_default()
+        };
+        self.consumed_payload_local_names_stack
+            .push(consumed_locals);
+        // B-2026-09-19-31 — see the field.
+        let owned_elems = if is_closure {
+            std::collections::HashSet::new()
+        } else {
+            self.callee_fn_for_param_ownership_of(fn_name, assoc_owner)
+                .map(|f| {
+                    crate::ast::fn_callee_owned_payload_elem_names(self.program, f)
+                        .into_iter()
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        self.callee_owned_payload_elems_stack.push(owned_elems);
+        self.owned_param_frame_is_method.push(false);
+        // B-2026-08-09-10 — `moved_out_user_drop_bindings` is keyed by
+        // NAME with no frame scoping, so a callee that moves a payload
+        // out of its own binding silently disarmed an UNRELATED caller
+        // binding that happened to share the name. Measured: with the
+        // caller's local and the callee's param both spelled `b`, the
+        // caller's `Drop` body never ran; renaming either one to
+        // anything else made both backends agree. That is why the row
+        // read as "owned enum params don't fire" — the shape it was
+        // found in reused the name, as ordinary code routinely does.
+        //
+        // The callee opens with an EMPTY set (nothing in a fresh frame
+        // has been moved out yet) and the caller's is restored on the
+        // way out, so a move recorded inside the body can no longer
+        // escape the frame that made it. Not a stack, because the
+        // entries are consulted by bare name from many places; swapping
+        // the whole map is what makes the isolation total.
+        // B-2026-08-27-48 — the three CONTAINER/ELEMENT move sets join
+        // the isolation for the reason B-2026-08-09-10 gave for the
+        // first three: they are keyed by bare NAME with no frame
+        // scoping, so a callee acting on its own param silently
+        // disarmed an unrelated CALLER binding that happened to share
+        // the name. Measured on `fn take(p: (R, i64)) { let (r, n) =
+        // p; … }`: with the caller's local also spelled `p` the
+        // caller's tuple element walk went silent and the body ran
+        // once; renaming it to `q` — nothing else changed — ran it
+        // twice. Two defects cancelling looked like correct code.
+        let saved_moved_out = (
+            std::mem::take(&mut self.moved_out_user_drop_bindings),
+            std::mem::take(&mut self.moved_out_enum_payload_bindings),
+            std::mem::take(&mut self.moved_out_drop_field_bindings),
+            std::mem::take(&mut self.moved_out_container_bodies_bindings),
+            std::mem::take(&mut self.moved_out_tuple_elem_bodies),
+            std::mem::take(&mut self.moved_out_struct_field_bodies),
+            // B-2026-08-29-33 — the two payload-only masks ride the
+            // same per-frame save/restore for the same reason: they are
+            // keyed by NAME, so a callee local sharing a caller
+            // binding's name would otherwise disarm the caller's walk.
+            std::mem::take(&mut self.moved_out_struct_field_payload_bodies),
+            std::mem::take(&mut self.moved_out_tuple_elem_payload_bodies),
+            // B-2026-08-29-24 — and the enum-payload SLOT mask, for the
+            // same name-keyed reason.
+            std::mem::take(&mut self.moved_out_enum_payload_slots),
+            // B-2026-09-16-12 — the arm-move slot mask, name-keyed beside it.
+            std::mem::take(&mut self.moved_out_enum_payload_body_slots),
+            // B-2026-08-29-47 — the param-view FIELD record, name-keyed
+            // like the masks above and isolated for the same reason.
+            std::mem::take(&mut self.param_view_struct_fields),
+            // B-2026-09-01-3 — the tuple peer, isolated beside it.
+            std::mem::take(&mut self.param_view_tuple_elems),
+            // B-2026-09-14-7 — the consumed-part mask, name-keyed like
+            // every mask above and isolated for B-2026-08-09-10's
+            // reason: it is written in the CALLER's frame after a call
+            // returns, so a deeper frame's local sharing the binding's
+            // name would otherwise have its own payload walk masked and
+            // lose the body outright.
+            std::mem::take(&mut self.moved_out_optres_payload_bodies),
+        );
+        // B-2026-08-28-22 — hand the callee ownership of the `Drop`
+        // BODY of any owned param it returns on some tail paths and not
+        // others. The caller has already declined its side for every
+        // path (`fn_returns_param` answers over the UNION of return
+        // sites), so without this the value that actually died inside
+        // the call ran no body at all. Seeded here, immediately before
+        // the body, so `eval_block_inner` adopts it into the body
+        // block's own cleanup; the arm tail that returns the param
+        // disarms it through `record_conditional_move_tail`.
+        self.pending_param_drop_bindings =
+            self.cond_returned_param_drop_names(fn_name, assoc_owner);
+        // B-2026-08-30-33 — keep the names for the whole frame; the
+        // list above is taken by the body block before any statement
+        // runs, and the per-path disarm needs to ask later.
+        // B-2026-09-23-26 — an adopted `Option` / `Result` param's
+        // payload walk is keyed on its declared type by NAME
+        // (`optres_payload_bodies_tes`), which a `let` records and a
+        // parameter never did. It only worked when the CALLER happened
+        // to hold a binding of the same name; a temporary argument ran
+        // no body. Seeded for this frame and restored after it, since
+        // the map is not frame-isolated.
+        let saved_optres_tes = self.seed_cond_returned_optres_param_tes(fn_name, assoc_owner);
+        let saved_cond_store_params = std::mem::replace(
+            &mut self.cond_store_param_names,
+            self.pending_param_drop_bindings.iter().cloned().collect(),
+        );
+        let saved_part_aliases = std::mem::take(&mut self.cond_store_part_aliases);
+        let saved_view_aliases = std::mem::take(&mut self.cond_store_view_aliases);
+        let result = if skip_body {
+            Ok(Value::Unit)
+        } else {
+            self.eval_body_growing(body)
+        };
+        (
+            self.moved_out_user_drop_bindings,
+            self.moved_out_enum_payload_bindings,
+            self.moved_out_drop_field_bindings,
+            self.moved_out_container_bodies_bindings,
+            self.moved_out_tuple_elem_bodies,
+            self.moved_out_struct_field_bodies,
+            self.moved_out_struct_field_payload_bodies,
+            self.moved_out_tuple_elem_payload_bodies,
+            self.moved_out_enum_payload_slots,
+            self.moved_out_enum_payload_body_slots,
+            self.param_view_struct_fields,
+            self.param_view_tuple_elems,
+            self.moved_out_optres_payload_bodies,
+        ) = saved_moved_out;
+        // B-2026-08-30-33 — restore with the rest of the per-frame
+        // move bookkeeping. Left un-restored, a callee's parameter name
+        // stays live in the CALLER's frame, where any binding that
+        // happens to share the name would be disarmed by a hand-over
+        // that has nothing to do with it. No probe reproduced that --
+        // the same-name case measures identical before and after -- but
+        // every neighbour in this block is saved and restored, and a
+        // set that outlives its frame is a hazard whether or not one
+        // program has found it yet.
+        self.cond_store_param_names = saved_cond_store_params;
+        self.cond_store_part_aliases = saved_part_aliases;
+        self.cond_store_view_aliases = saved_view_aliases;
+        for (n, prev) in saved_optres_tes {
+            match prev {
+                Some(te) => {
+                    self.optres_payload_bodies_tes.insert(n, te);
+                }
+                None => {
+                    self.optres_payload_bodies_tes.remove(&n);
+                }
+            }
+        }
+        self.owned_param_names_stack.pop();
+        let call_payload_escapes = self
+            .payload_escape_frames
+            .pop()
+            .map(|f| f.escapes)
+            .unwrap_or_default();
+        self.whole_param_alias_stack.pop();
+        self.consumed_payload_local_names_stack.pop();
+        self.callee_owned_payload_elems_stack.pop();
+        self.owned_param_frame_is_method.pop();
+        (result, call_payload_escapes)
+    }
+
     /// `method_owner` is `Some(type)` when the call being walked is an INSTANCE
     /// METHOD call (B-2026-09-03-7). It selects exact `(type, method)` callee
     /// resolution for the guards below, and nothing else: the walk itself is
@@ -5435,7 +5547,9 @@ impl<'a> super::Interpreter<'a> {
             // the value's user `Drop` body never ran. Codegen twin: the redirect
             // at the head of `track_inline_owned_aggregate_arg_inst`.
             let type_name: Option<String> = self
-                .fresh_temp_arg_type_name(&arg.value)
+                .fresh_arg_type_override
+                .take()
+                .or_else(|| self.fresh_temp_arg_type_name(&arg.value))
                 .or_else(|| self.wrapper_tail_arg_type_name(&arg.value))
                 .or_else(|| self.owned_drop_projection_arg_type_name(&arg.value));
             let Some(tn) = type_name else { continue };

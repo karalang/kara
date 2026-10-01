@@ -2442,8 +2442,7 @@ impl<'a> super::Interpreter<'a> {
                                 } => vs.first().cloned().unwrap_or(Value::Unit),
                                 _ => Value::Unit,
                             };
-                            let converted =
-                                self.call_function(&format!("{}.from", target), &[inner_err]);
+                            let converted = self.call_question_from(&target, inner, inner_err);
                             Value::EnumVariant {
                                 enum_name: "Result".to_string(),
                                 variant: "Err".to_string(),

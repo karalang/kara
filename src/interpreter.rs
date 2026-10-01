@@ -1043,6 +1043,12 @@ pub struct Interpreter<'a> {
     /// to the caller's post-call argument walk (`run_fresh_temp_arg_drops`),
     /// which is the only reader and takes it.
     pub(crate) pending_call_payload_escapes: Vec<(usize, Vec<String>)>,
+    /// B-2026-10-01-18 — the argument's TYPE NAME for a post-call argument
+    /// walk whose argument expression does not name it. The `?` From site
+    /// hands `from` the source error, but the only expression it has is the
+    /// `Result`-typed operand, so the walk resolved `Result` and missed the
+    /// error type's own `Drop`. Set by that site alone, taken by the walk.
+    pub(crate) fresh_arg_type_override: Option<String>,
     /// B-2026-07-30-11 (Map-values leg) — the resolved `Map[K, V]`
     /// instantiation per let-bound variable, recorded through the SAME
     /// static chain codegen's `__karac_dropelems_map_*` registration uses
@@ -1479,6 +1485,7 @@ impl<'a> Interpreter<'a> {
             payload_escape_frames: Vec::new(),
             toplevel_loop_borrowed: std::collections::HashSet::new(),
             pending_call_payload_escapes: Vec::new(),
+            fresh_arg_type_override: None,
             map_val_bodies_tes: HashMap::new(),
             captured_let_values: HashMap::new(),
             test_deadline: None,
