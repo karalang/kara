@@ -1753,6 +1753,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     self.note_boxed_array_view_move(scrutinee, Self::block_tail_expr(&arm.body));
                     self.suppress_boxed_payload_view_move(Self::block_tail_expr(&arm.body));
+                    // B-2026-09-30-106 — and a view moved into a collection
+                    // LITERAL the result owns (`Some(w) => [w]`), the arm-tail
+                    // twin of the `let z = [x];` hand-over (B-2026-09-30-66).
+                    self.suppress_boxed_payload_view_literal_items(Self::block_tail_expr(
+                        &arm.body,
+                    ));
                     self.neutralize_aliased_box_payload_move(
                         scrutinee,
                         &arm.pattern,
@@ -1809,6 +1815,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.suppress_container_elem_bodies_for_var(&nm);
                         }
                         self.suppress_user_drop_for_arm_tail_binding(&arm.pattern, &nm);
+                    }
+                    // B-2026-09-30-106 — the same hand-out one aggregate
+                    // deeper: a bare arm whose VALUE is a literal built from
+                    // its own payload bindings (`Some(w) => (w, 1)`,
+                    // `Some(w) => P { w: w, k: 1 }`, `Some(w) => [w]`). The
+                    // literal moves `w` into the match result, whose owner
+                    // runs the body, but `w`'s own action stayed queued in
+                    // this arm's frame and ran the body at the arm's end too:
+                    // `dW1_8` before the result was read and again at its
+                    // last use. The braced spelling was already correct
+                    // (`clear_cond_move_flags_for_tail_sources` reaches a
+                    // binding in the ENCLOSING frame, which a bare arm's own
+                    // frame is not).
+                    if matches!(
+                        &arm.body.kind,
+                        ExprKind::Tuple(_)
+                            | ExprKind::StructLiteral { .. }
+                            | ExprKind::ArrayLiteral(_)
+                            | ExprKind::PrefixCollectionLiteral { .. }
+                    ) {
+                        self.disarm_arm_tail_literal_bindings(&arm.pattern, &arm.body);
                     }
                 }
                 // Move-aware, Map/Set variant: `match opt { Some(m) => m }`
@@ -19792,6 +19819,47 @@ impl<'ctx> super::Codegen<'ctx> {
         collect_pattern_bindings(pattern, &mut binds);
         if binds.iter().any(|b| b == nm) {
             self.suppress_user_drop_for_var(nm);
+        }
+    }
+
+    /// B-2026-09-30-106 — hand each boxed payload view written as an item of
+    /// the collection literal `tail` over to the literal's owner.
+    pub(super) fn suppress_boxed_payload_view_literal_items(&mut self, tail: &Expr) {
+        if let ExprKind::ArrayLiteral(items) | ExprKind::PrefixCollectionLiteral { items, .. } =
+            &tail.kind
+        {
+            for item in items {
+                self.suppress_boxed_payload_view_move(item);
+            }
+        }
+    }
+
+    /// B-2026-09-30-106 — stand down the drop of every binding `pattern`
+    /// introduced that the aggregate literal `tail` moves into the
+    /// construct's value. A boxed payload VIEW's body rides the scrutinee's
+    /// walk under the view's name and is disarmed per path (its action can
+    /// sit in an enclosing frame, shared with paths that never bound it);
+    /// any other binding owns an action in this arm's own frame, which only
+    /// this path drains, so the static retraction is path-exact.
+    pub(super) fn disarm_arm_tail_literal_bindings(&mut self, pattern: &Pattern, tail: &Expr) {
+        let mut binds: Vec<String> = Vec::new();
+        collect_pattern_bindings(pattern, &mut binds);
+        let mut sources: Vec<String> = Vec::new();
+        Self::collect_aggregate_literal_sources(tail, &mut sources);
+        for nm in sources {
+            if !binds.contains(&nm) {
+                continue;
+            }
+            if self
+                .payload_vars
+                .boxed_optres_payload_view_vars
+                .contains_key(nm.as_str())
+            {
+                self.disarm_container_elem_bodies_per_path(&nm);
+            } else {
+                self.suppress_container_elem_bodies_for_var(&nm);
+                self.suppress_user_drop_for_var(&nm);
+            }
         }
     }
 

@@ -678,6 +678,8 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(fe) = then_block.final_expr.as_deref() {
                 self.note_boxed_array_view_move(value, Self::block_tail_expr(fe));
                 self.suppress_boxed_payload_view_move(Self::block_tail_expr(fe));
+                // B-2026-09-30-106 — the `match` arm's collection-literal twin.
+                self.suppress_boxed_payload_view_literal_items(Self::block_tail_expr(fe));
             }
         }
         // B-2026-08-30-52 (b) — the `if let` twin of the match arm's borrow-mode
@@ -822,6 +824,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     if owns_result {
                         self.suppress_user_drop_for_arm_tail_binding(pattern, &nm);
                     }
+                }
+                // B-2026-09-30-106 — the `match` arm's aggregate-literal
+                // hand-out (`if let Some(w) = o { (w, 1) } else { .. }`). This
+                // then-block shares its frame with the pattern's bindings, so
+                // the block-level per-path clear never sees them as enclosing.
+                if owns_result
+                    && matches!(
+                        &fe.kind,
+                        ExprKind::Tuple(_)
+                            | ExprKind::StructLiteral { .. }
+                            | ExprKind::ArrayLiteral(_)
+                            | ExprKind::PrefixCollectionLiteral { .. }
+                    )
+                {
+                    self.disarm_arm_tail_literal_bindings(pattern, fe);
                 }
                 // B-2026-09-05-27 (B-2026-09-05-34, `if let` leg) — a
                 // bare-tuple element handed out as the then-block's value

@@ -1,0 +1,91 @@
+//! B-2026-09-30-106 -- an `Option`/`Result`/enum payload binding moved into
+//! an aggregate literal at a `match` arm's or `if let`'s tail: freed once.
+
+use super::*;
+
+/// B-2026-09-30-106 — the memory half: `Some(w) => [w]` (bare and braced)
+/// left the box's interior walk armed beside the array's, a double free on the
+/// JIT. Same program as the codegen twin.
+#[test]
+fn asan_payload_binding_moved_into_arm_tail_literal_freed_once() {
+    assert_clean_asan_run(
+        r#"struct W1 { v: i64, s: String }
+impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
+fn mk(n: i64) -> W1 { return W1 { v: n, s: f"ssssssssssssssssssssssssssssss{n}" } }
+struct W2 { v: i64 }
+impl Drop for W2 { fn drop(mut ref self) { println(f"dW2_{self.v}") } }
+struct P { w: W1, k: i64 }
+enum E { A(W1), B }
+fn bare_tuple(o: Option[W1]) {
+    let t = match o { Some(w) => (w, 1), None => (mk(0), 0) };
+    println(f"bt{t.1}")
+}
+fn read_tuple(o: Option[W1]) {
+    let t: (W1, i64) = match o { Some(w) => (w, 1), None => (mk(0), 0) };
+    println(f"rt{t.0.v} {t.1}")
+}
+fn struct_tail(o: Option[W1]) {
+    let t = match o { Some(w) => P { w: w, k: 1 }, None => P { w: mk(0), k: 0 } };
+    println(f"st{t.w.v} {t.k}")
+}
+fn array_tail(n: i64) {
+    let o = Some(mk(n));
+    let t = match o { Some(w) => [w], None => [mk(0)] };
+    println(f"at{t[0].v}")
+}
+fn braced_array(n: i64) {
+    let o = Some(mk(n));
+    let t = match o { Some(w) => { [w] }, None => [mk(0)] };
+    println(f"ba{t[0].v}")
+}
+fn inline_payload(o: Option[W2]) {
+    let t: (W2, i64) = match o { Some(w) => (w, 1), None => (W2 { v: 0 }, 0) };
+    println(f"ip{t.0.v} {t.1}")
+}
+fn user_enum(o: E) {
+    let t: (W1, i64) = match o { E.A(w) => (w, 1), E.B => (mk(0), 0) };
+    println(f"ue{t.0.v} {t.1}")
+}
+fn result_tail(o: Result[W1, i64]) {
+    let t: (W1, i64) = match o { Ok(w) => (w, 1), Err(_) => (mk(0), 0) };
+    println(f"rs{t.0.v} {t.1}")
+}
+fn if_let_tail(o: Option[W1]) {
+    let t: (W1, i64) = if let Some(w) = o { (w, 1) } else { (mk(0), 0) };
+    println(f"il{t.0.v} {t.1}")
+}
+fn if_let_bare(o: Option[W1]) {
+    let t = if let Some(w) = o { (w, 1) } else { (mk(0), 0) };
+    println(f"ib{t.1}")
+}
+fn main() {
+    bare_tuple(Some(mk(1)));
+    bare_tuple(None);
+    read_tuple(Some(mk(2)));
+    struct_tail(Some(mk(3)));
+    array_tail(4);
+    braced_array(5);
+    inline_payload(Some(W2 { v: 6 }));
+    user_enum(E.A(mk(7)));
+    result_tail(Ok(mk(8)));
+    if_let_tail(Some(mk(9)));
+    if_let_tail(None);
+    if_let_bare(Some(mk(12)));
+    let mut i = 10;
+    while i < 12 {
+        let o = Some(mk(i));
+        let t: (W1, i64) = match o { Some(w) => (w, 1), None => (mk(0), 0) };
+        println(f"lp{t.0.v}");
+        i = i + 1;
+    }
+    println("end")
+}
+"#,
+        &[
+            "bt1", "dW1_1", "bt0", "dW1_0", "rt2 1", "dW1_2", "st3 1", "dW1_3", "at4", "dW1_4",
+            "ba5", "dW1_5", "ip6 1", "dW2_6", "ue7 1", "dW1_7", "rs8 1", "dW1_8", "il9 1", "dW1_9",
+            "il0 0", "dW1_0", "ib1", "dW1_12", "lp10", "dW1_10", "lp11", "dW1_11", "end",
+        ],
+        "payload_binding_moved_into_arm_tail_literal",
+    );
+}

@@ -22137,27 +22137,63 @@ impl<'ctx> super::Codegen<'ctx> {
         // so the arms can differ in how they produce the element but not in
         // what it is. Gated on that tail being a tuple LITERAL, so any other
         // branch source keeps falling through to the arms below.
+        //
+        // B-2026-09-30-106 — sound for the TYPE, but not every arm can NAME
+        // it here: an element that is the arm's own payload binding
+        // (`Some(w) => (w, 1)`) is out of scope by the time the `let` asks,
+        // and comes back as the empty path. That left `t` with no bodies
+        // walker, so once the arm stopped running `w`'s body at its end the
+        // body ran nowhere. Each unnamed position is filled from the next
+        // tail that does name it (`None => (mk(0), 0)`), the same agreement
+        // argument applied per element. `if let` joins the roster for the
+        // same reason.
         if matches!(
             &value.kind,
             ExprKind::If { .. }
+                | ExprKind::IfLet { .. }
                 | ExprKind::Match { .. }
                 | ExprKind::Block(_)
                 | ExprKind::Seq(_)
                 | ExprKind::Unsafe(_)
                 | ExprKind::LabeledBlock { .. }
         ) {
-            if let Some(tail) = self.first_any_branch_tail(value) {
-                if let ExprKind::Tuple(elems) = &tail.kind {
-                    return Some(
-                        elems
-                            .iter()
-                            .map(|e| {
-                                self.refined_tuple_literal_elem_te(e)
-                                    .unwrap_or_else(|| self.infer_arg_elem_te(e))
-                            })
-                            .collect(),
-                    );
+            let tuple_tes = |this: &Self, tail: &Expr| -> Option<Vec<TypeExpr>> {
+                let ExprKind::Tuple(elems) = &tail.kind else {
+                    return None;
+                };
+                Some(
+                    elems
+                        .iter()
+                        .map(|e| {
+                            this.refined_tuple_literal_elem_te(e)
+                                .unwrap_or_else(|| this.infer_arg_elem_te(e))
+                        })
+                        .collect(),
+                )
+            };
+            let mut all_tails: Vec<&Expr> = Vec::new();
+            Self::collect_all_branch_tails(value, &mut all_tails);
+            if let Some(mut tes) = self
+                .first_any_branch_tail(value)
+                .and_then(|tail| tuple_tes(self, tail))
+                .or_else(|| all_tails.iter().find_map(|tail| tuple_tes(self, tail)))
+            {
+                if tes.iter().any(Self::te_is_unnamed) {
+                    for tail in all_tails {
+                        let Some(other) = tuple_tes(self, tail) else {
+                            continue;
+                        };
+                        if other.len() != tes.len() {
+                            continue;
+                        }
+                        for (slot, te) in tes.iter_mut().zip(other) {
+                            if Self::te_is_unnamed(slot) && !Self::te_is_unnamed(&te) {
+                                *slot = te;
+                            }
+                        }
+                    }
                 }
+                return Some(tes);
             }
         }
         // B-2026-09-03-12 — a PLACE source (`let x = h.pe;`, `let x = g.h.pe;`).
@@ -24876,6 +24912,54 @@ impl<'ctx> super::Codegen<'ctx> {
                 || matches!(&e.kind, ExprKind::Identifier(n)
                     if self.fresh_bare_unit_variant_enum(n).is_some()))
             .then_some(e),
+        }
+    }
+
+    /// B-2026-09-30-106 — is `te` the empty path `infer_arg_elem_te` returns
+    /// for an element it cannot name (or a tuple holding one)?
+    fn te_is_unnamed(te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Path(p) => p.segments.len() == 1 && p.segments[0].is_empty(),
+            TypeKind::Tuple(elems) => elems.iter().any(Self::te_is_unnamed),
+            _ => false,
+        }
+    }
+
+    /// B-2026-09-30-106 — every value tail of a branching construct: each
+    /// `match` arm, both sides of an `if` / `if let`, through blocks.
+    fn collect_all_branch_tails<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::LabeledBlock { body: b, .. } => {
+                if let Some(t) = b.final_expr.as_deref() {
+                    Self::collect_all_branch_tails(t, out);
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(t) = then_block.final_expr.as_deref() {
+                    Self::collect_all_branch_tails(t, out);
+                }
+                if let Some(eb) = else_branch {
+                    Self::collect_all_branch_tails(eb, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    Self::collect_all_branch_tails(&arm.body, out);
+                }
+            }
+            _ => out.push(e),
         }
     }
 
