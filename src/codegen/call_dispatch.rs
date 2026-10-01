@@ -10264,6 +10264,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.has_armed_own_user_drop(var_name) {
                     let var_name = var_name.clone();
                     self.suppress_user_drop_body_keeping_memory(&var_name);
+                } else if self
+                    .payload_vars
+                    .boxed_optres_payload_view_vars
+                    .contains_key(var_name.as_str())
+                {
+                    // B-2026-09-30-66 — a boxed `Option`/`Result` payload VIEW
+                    // (`Some(x) => { let z = pass([x]); .. }`). Its body is the
+                    // scrutinee's walker, registered on `x`, and its heap is
+                    // the box's interior; both now leave with the value, so
+                    // both stand down. Left armed, `z` and the box freed the
+                    // payload (a double free on the JIT) and `z` and `x` each
+                    // ran its body. A value that dies in the callee keeps both
+                    // (`take([x])`), which is what this whole-escape gate
+                    // decides.
+                    let var_name = var_name.clone();
+                    self.suppress_boxed_payload_view_move(item);
+                    self.suppress_container_elem_bodies_for_var(&var_name);
                 }
             }
         }

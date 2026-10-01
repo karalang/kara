@@ -1,0 +1,52 @@
+//! B-2026-09-30-66 -- an `Option`/`Result` payload binding moved into a
+//! collection literal: freed once, and its body runs once.
+
+use super::*;
+
+/// B-2026-09-30-66 — the memory half: the literal's new owner and the boxed
+/// payload's inner walk both freed the payload's `String`. Same program as the
+/// codegen twin.
+#[test]
+fn asan_payload_binding_moved_into_collection_literal_freed_once() {
+    assert_clean_asan_run(
+        r#"struct W1 { v: i64, s: String }
+impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
+fn pass(x: Array[W1, 1]) -> Array[W1, 1] { return x }
+fn take(x: Array[W1, 1]) -> i64 { return x[0].v }
+fn passv(x: Vec[W1]) -> Vec[W1] { return x }
+fn pg[T](x: T) -> T { return x }
+fn mk(n: i64) -> W1 { return W1 { v: n, s: f"ssssssssssssssssssssssssssssss{n}" } }
+fn main() {
+    let o1 = Some(mk(1));
+    match o1 { Some(x) => { let z = pass([x]); println(f"z:{z[0].v}") }, None => {} };
+    let o2 = Some(mk(2));
+    match o2 { Some(x) => { let r = take([x]); println(f"r:{r}") }, None => {} };
+    let o3 = Some(mk(3));
+    match o3 { Some(x) => { let z = passv([x]); println(f"z:{z[0].v}") }, None => {} };
+    let o4 = Some(mk(4));
+    match o4 { Some(x) => { let z = passv(Vec[x]); println(f"z:{z[0].v}") }, None => {} };
+    let o5 = Some(mk(5));
+    match o5 { Some(x) => { let z = pg([x]); println(f"z:{z[0].v}") }, None => {} };
+    let r6: Result[W1, i64] = Ok(mk(6));
+    match r6 { Ok(x) => { let z = pass([x]); println(f"z:{z[0].v}") }, Err(e) => { println(f"{e}") } };
+    let o7 = Some(mk(7));
+    if let Some(x) = o7 { let z = pass([x]); println(f"z:{z[0].v}") };
+    let o8 = Some(mk(8));
+    match o8 { Some(x) => { pass([x]); println("d8") }, None => {} };
+    let o9 = Some(mk(9));
+    match o9 { Some(x) => { let z = [x]; println(f"z:{z[0].v}") }, None => {} };
+    let o10 = Some(mk(10));
+    match o10 { Some(x) => { let z: Array[W1, 1] = Array[x]; let y = z; println(f"y:{y[0].v}") }, None => {} };
+    let o11 = Some(mk(11));
+    match o11 { Some(x) => { let z = Vec[x]; println(f"n:{z.len()}") }, None => {} };
+    println("end")
+}
+"#,
+        &[
+            "z:1", "dW1_1", "r:2", "dW1_2", "z:3", "dW1_3", "z:4", "dW1_4", "z:5", "dW1_5", "z:6",
+            "dW1_6", "z:7", "dW1_7", "dW1_8", "d8", "z:9", "dW1_9", "y:10", "dW1_10", "n:1",
+            "dW1_11", "end",
+        ],
+        "payload_binding_moved_into_collection_literal",
+    );
+}

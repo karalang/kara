@@ -5247,6 +5247,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // one covers args, aggregate-literal fields and container
                 // pushes) and not the match tail either.
                 self.suppress_boxed_payload_view_move(value);
+                // B-2026-09-30-66 — and one moved into a collection LITERAL the
+                // binding owns (`Some(x) => { let z = [x]; .. }`): `z`'s walk
+                // frees the payload's heap, so the box must not free it too (a
+                // double free on the JIT). A literal handed to a call is not
+                // here; `stand_down_literal_arg_places` decides that one by
+                // whether the value leaves through the callee.
+                if let ExprKind::ArrayLiteral(items)
+                | ExprKind::PrefixCollectionLiteral { items, .. } = &value.kind
+                {
+                    for item in items {
+                        self.suppress_boxed_payload_view_move(item);
+                    }
+                }
                 // B-2026-07-31-20 — a `with_provider(...)` RHS has no callee
                 // fn whose declared return type the derivations below could
                 // consult, so an unannotated heap-typed binding
