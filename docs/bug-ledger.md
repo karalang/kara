@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 612 |
-| run-vs-build | 559 |
-| leak | 507 |
+| miscompile | 613 |
+| run-vs-build | 560 |
+| leak | 508 |
 | double-free | 379 |
 | missing-feature | 215 |
 | codegen-gap | 206 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2491 |
-| interp | 750 |
+| codegen | 2493 |
+| interp | 751 |
 | typecheck | 319 |
 | other | 112 |
 | ownership | 79 |
@@ -469,10 +469,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-94 | 2026-09-30 | codegen+interp | medium | A REPEAT LITERAL OF A `Drop` VALUE (`let _ = Array[mk(6); 1];`) RUNS NO BODY ON ANY SURFACE AND LEAKS ITS HEAP COMPILED -- all five surfaces print `end` where one `dW1_6` is due, and valgrind reports 1 block lost | — |
 | B-2026-09-30-96 | 2026-09-30 | interp+codegen | medium | A BY-VALUE PARAM WRAPPED INTO A LOCAL STRUCT OR TUPLE THAT IS THEN STORED IN A CALLER-HELD CONTAINER RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, EVEN UNCONDITIONALLY -- `fn w4(a: R, xs: mut ref Vec[P]) { let x = P { r: a, n: 1 }; xs.push(x); }` prints `dR7` when the call returns and `dR7` again when `xs` dies; pushing the literal directly (`xs.push(P { r: a, n: 1 })`) runs it once | — |
 | B-2026-09-30-97 | 2026-09-30 | codegen+interp | high | A BY-VALUE PARAM MOVED INTO A LITERAL IS OWNED TWICE OR NOT AT ALL, the param half of B-2026-09-30-59 -- a discarded tuple or struct literal (`fn f(w: W1) { let _ = (w, 1); println("in") }`) runs `w`'s `Drop` body TWICE on all four surfaces (`dW1_7 in dW1_7`); the `[w]` / `Array[w]` spelling runs it twice under `--interp` and once compiled but leaks 1 block; and `return take([w])` leaks 1 block compiled with the right output | — |
-| B-2026-09-30-98 | 2026-09-30 | codegen | high | AN `Option`/`Result` PAYLOAD BINDING MOVED INTO A TUPLE IS FREED TWICE -- `match o { Some(w) => { let _ = (w, 1); println("arm") }, None => {} }` aborts `free(): double free detected in tcache 2` under `karac run` and valgrind reports an invalid free at -O0; the bound `let t = (w, 1)`, the bare `(w, 1);`, `if let` and an arm-tail `(w, 1)` do the same, and `v.push((w, 1))` double-frees at -O2 too. The struct spelling `S2 { r: w, k: 1 }` is clean. Separately, `let _ = [w]` and `let _ = w` in the arm leak 1 block and run the body after `arm` | — |
 | B-2026-09-30-87 | 2026-09-30 | codegen | low | A `?` THAT CONVERTS ITS ERROR THROUGH `From` LEAKS THE SOURCE ERROR'S HEAP on every compiled surface -- `fn f() -> Result[i64, E2] { let x = mke(8)?; Result.Ok(x) }` with `impl From[S] for E2` over `struct S { v: String }` loses 31 B at -O0 on the error path. `E2.from` entry-copies its by-value `s` and drops the copy, and nothing at the `?` site frees the original | — |
 | B-2026-09-30-91 | 2026-09-30 | codegen+interp | medium | A nested destructure of a local `Result[G[R], i64]` runs the leaf's `Drop` body TWICE compiled and ZERO times interpreted -- `let o: Result[G[R], i64] = Result.Ok(G { v: R { id: 4, .. }, n: 1 }); match o { Result.Ok(G { v, n }) => v.id + n, .. }` over `struct G[T] { v: T, n: i64 }` prints `d4 d0 5 after` at -O0 and -O2 (`d4 d4 5 after` before B-2026-09-30-85) against `--interp`'s `5 after`; the non-generic `H { v: R, n: i64 }` prints `d4 5 after` everywhere | — |
 | B-2026-09-30-102 | 2026-09-30 | codegen | medium | An `Ok`/`Err` arm that destructures only a struct payload's SCALAR fields zeroes the source's payload as if it took the heap, on every compiled surface -- `let o: Result[H, i64] = Result.Ok(H { v: mk(1), n: 10 }); match o { Result.Ok(H { n, .. }) => n, .. }` over `struct H { v: R, n: i64 }` prints `d0 10` (the body runs on zeroed words) and leaks R's 31 B, where `--interp` prints `d1 10`; `Ok(H { v: _, n })` and the `Err` side the same, and the generic `G[R]` joined it with B-2026-09-30-85 | — |
+| B-2026-09-30-105 | 2026-09-30 | codegen | medium | AN `Option` PAYLOAD BINDING DISCARDED IN A `match` ARM RUNS ITS `Drop` BODY LATE AND LEAKS -- `Some(w) => { let _ = w; println("arm") }` and `Some(w) => { let _ = [w]; println("arm") }` print `dW1_3 arm end` under `--interp` but `arm dW1_3 end` on the JIT, -O2 and -O2 auto-par, with 1 block lost; the tuple spelling `let _ = (w, 1)` is right since B-2026-09-30-98 | — |
+| B-2026-09-30-106 | 2026-09-30 | codegen | medium | A TUPLE BUILT FROM AN `Option` PAYLOAD AS A `match` VALUE ARM TAIL RUNS ITS `Drop` BODY BEFORE THE TUPLE IS USED -- `let t = match o { Some(w) => (w, 1), None => (mk(0), 0) }; println(f"{t.1}")` prints `1 dW1_8 end` under `--interp` but `dW1_8 1 end` compiled, valgrind clean; it double-freed before B-2026-09-30-98 | — |
+| B-2026-09-30-107 | 2026-09-30 | interp | medium | UNDER `--interp`, A METHOD THAT HANDS BACK A LITERAL HOLDING A PAYLOAD BINDING RUNS THE BODY TWICE -- `Some(x) => { let z = k.pass([x]); println(f"z:{z[0].v}") }` over `fn pass(ref self, x: Array[W1, 1]) -> Array[W1, 1] { return x }` prints `z:2 dW1_2 dW1_2 end` under `--interp`; compiled prints `z:2 dW1_2 end`, valgrind clean | — |
 
 ### Relocated
 
@@ -3454,6 +3456,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-76 | codegen | medium | A payload leaf whose type has its own `Drop` loses that body on every compiled surface when an arm over a by-value, TRANSFER-owned enum param MOVES t… | 5acabab44 |
 | B-2026-09-30-85 | codegen | medium | A GENERIC struct inline in a `Result` payload leaks its heap -- `let r: Result[G[String], i64] = Result.Ok(G { v: mk(1), n: 10 })` over `struct G[T]… | 989ad012e |
 | B-2026-09-30-95 | codegen | high | A VALUE MOVED INTO A STRUCT, TUPLE OR ARRAY LITERAL BOUND INSIDE A BRANCH LOSES ITS `Drop` BODY AND LEAKS ITS HEAP ON THE PATH THAT NEVER BUILT THE L… | 472771516 |
+| B-2026-09-30-98 | codegen | high | AN `Option`/`Result` PAYLOAD BINDING MOVED INTO A TUPLE IS FREED TWICE -- `match o { Some(w) => { let _ = (w, 1); println("arm") }, None => {} }` abo… | 4f56fcb92 |
 | B-2026-09-30-86 | codegen | high | `r.unwrap()` ON A `Result` WHOSE INLINE PAYLOAD IS WIDER THAN THREE WORDS RETURNS A WRONG VALUE on every compiled surface -- over `struct S { v: Stri… | 33fe00f92 |
 
 </details>
