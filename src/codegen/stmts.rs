@@ -16415,13 +16415,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     // before the store. Simple index shapes only (the element
                     // pointer is computed here AND in the store below, so the
                     // index expression must be re-evaluable without effects).
+                    // B-2026-09-20-35 — an RHS cleared ONLY because its reads
+                    // of the container were cloned (`a[0] = S { s: a[1].s }`)
+                    // releases the displaced memory but keeps its bodies off:
+                    // the interpreter skips the displaced value whenever the
+                    // RHS names the container, so running them here alone
+                    // would be a backend split.
+                    let clone_only_clearance = {
+                        let mut root: &Expr = object;
+                        while let ExprKind::FieldAccess { object: o, .. }
+                        | ExprKind::Index { object: o, .. } = &root.kind
+                        {
+                            root = o;
+                        }
+                        let no_clones = self.vec_elem_field_clone_log.len();
+                        match &root.kind {
+                            ExprKind::Identifier(r) => {
+                                !self.expr_cannot_carry_container_heap(value, r, no_clones)
+                                    && self.expr_cannot_carry_container_heap(
+                                        value,
+                                        r,
+                                        clone_log_mark,
+                                    )
+                            }
+                            _ => false,
+                        }
+                    };
                     self.emit_displaced_index_elem_drop(
                         object,
                         index,
                         value,
                         rhs_index_deep_cloned,
                         clone_log_mark,
-                        Self::store_destroys_displaced(value),
+                        Self::store_destroys_displaced(value) && !clone_only_clearance,
                     );
                     self.compile_index_store(object, index, val, rhs_is_fresh, Some(value))?;
                     // B-2026-09-26-12 — a named boxed-payload enum moved into a
@@ -25414,10 +25440,17 @@ impl<'ctx> super::Codegen<'ctx> {
             // composition either, so `a[0].t.1` declined while `a[0].k` was
             // cleared, both copying one `i64` out of the same element
             // (13 allocs / 13 frees against 13 / 12, 18 B lost at `-O0`).
-            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => self
-                .element_component_type_expr(e)
-                .as_ref()
-                .is_some_and(super::vec_method::is_trivially_copyable_te),
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                self.element_component_type_expr(e)
+                    .as_ref()
+                    .is_some_and(super::vec_method::is_trivially_copyable_te)
+                    // B-2026-09-20-35 — or the read was cloned at the read
+                    // (B-2026-08-12-27), so the RHS holds its own buffer and
+                    // the displaced element's is free to go. Before this
+                    // `a[0] = S { s: a[1].s, k: 2 }` stood the release down
+                    // and leaked the displaced `String`.
+                    || self.arg_deep_cloned_since(e, clone_log_mark)
+            }
             // B-2026-09-20-29 — AGGREGATE LITERALS. An aggregate literal
             // carries the container's heap exactly when one of its components
             // does, which is the same recursion the `Binary` arm above already
