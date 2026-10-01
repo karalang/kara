@@ -996,9 +996,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Reads the kinds the pack side already wrote (`field_drop_kinds` is built
     /// for shared enums too — the boxing passes in `declare_enums` carry no
     /// `is_shared` gate), so the free cannot disagree with the boxing decision.
-    /// `BoxedArray` ONLY: a `BoxedTuple` payload's box is already freed and its
-    /// INTERIOR is what leaks, which is the opposite channel and a different
-    /// row.
+    /// B-2026-09-20-56 — `BoxedTuple` too. The sentence that stood here said a
+    /// tuple's box was "already freed" and only its interior leaked; measured,
+    /// the 40-56 B box itself was lost on every spelling, so both channels were
+    /// open and this one owner closes both.
     fn emit_shared_enum_payload_box_free(
         &self,
         heap_type: StructType<'ctx>,
@@ -1037,7 +1038,14 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let mut words: Vec<u32> = Vec::new();
             for (fi, kind) in kinds.iter().enumerate() {
-                if *kind != super::state::EnumDropKind::BoxedArray {
+                // B-2026-09-20-56 — a `BoxedTuple` envelope too. Its box was
+                // unowned exactly as the array's was (measured: the whole
+                // 40-56 B envelope lost, plus every element string inside it),
+                // and the interior walk below frees the elements first.
+                if !matches!(
+                    kind,
+                    super::state::EnumDropKind::BoxedArray | super::state::EnumDropKind::BoxedTuple
+                ) {
                     continue;
                 }
                 if let Some((start_word, _)) = offs.get(fi) {
@@ -1253,7 +1261,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     continue;
                 };
                 for (fi, fty) in field_tys.into_iter().enumerate() {
-                    if kinds.get(fi) != Some(&super::state::EnumDropKind::BoxedArray) {
+                    // B-2026-09-20-56 — and a `BoxedTuple`, whose interior has
+                    // no other owner: a tuple source is already disarmed when
+                    // it moves into the constructor, so the box is the only
+                    // place its elements can be freed from.
+                    if !matches!(
+                        kinds.get(fi),
+                        Some(&super::state::EnumDropKind::BoxedArray)
+                            | Some(&super::state::EnumDropKind::BoxedTuple)
+                    ) {
                         continue;
                     }
                     let Some((start_word, _)) = offs.get(fi) else {
@@ -1366,8 +1382,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// INLINE ONLY. A tuple whose natural width exceeds the position's area is
     /// heap-boxed (`EnumDropKind::BoxedTuple`) and its payload word holds a box
     /// pointer, which this walk would read as the first element. Answering
-    /// `None` there leaves that spelling exactly as it is today — still
-    /// leaking, and still B-2026-09-20-49's remainder rather than a regression.
+    /// `None` there hands that spelling to the box free
+    /// (`emit_shared_enum_payload_box_free`, B-2026-09-20-56), which derefs the
+    /// word first.
     pub(super) fn shared_enum_inline_tuple_payload_walk(
         &self,
         te: &crate::ast::TypeExpr,

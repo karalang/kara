@@ -3835,7 +3835,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             .and_then(|offs| offs.get(fi))
                             .map(|(_, w)| *w)
                             .unwrap_or(1);
-                        let real = self.real_payload_words_for_type_expr(field_ty, &e.name, vname);
+                        let real = self.real_payload_words_for_type_expr(
+                            field_ty,
+                            &e.name,
+                            vname,
+                            e.is_shared || e.is_par,
+                        );
                         if real > field_words {
                             // B-2026-09-12-10 — `BoxedTuple` rather than `None`.
                             // The paragraph above is still the whole diagnosis:
@@ -4274,19 +4279,60 @@ impl<'ctx> super::Codegen<'ctx> {
         ty: &TypeExpr,
         outer_enum: &str,
         outer_variant: &str,
+        nested_enums: bool,
     ) -> usize {
         if let Some((elem, n)) = self.array_elem_and_len(ty) {
             if n > 0 {
-                return self.real_payload_words_for_type_expr(&elem, outer_enum, outer_variant)
-                    * (n as usize);
+                return self.real_payload_words_for_type_expr(
+                    &elem,
+                    outer_enum,
+                    outer_variant,
+                    nested_enums,
+                ) * (n as usize);
             }
         }
         if let TypeKind::Tuple(elems) = &ty.kind {
             if !elems.is_empty() {
                 return elems
                     .iter()
-                    .map(|t| self.real_payload_words_for_type_expr(t, outer_enum, outer_variant))
+                    .map(|t| {
+                        self.real_payload_words_for_type_expr(
+                            t,
+                            outer_enum,
+                            outer_variant,
+                            nested_enums,
+                        )
+                    })
                     .sum();
+            }
+        }
+        // B-2026-09-20-56 — a NESTED non-shared enum (`Option[String]` inside a
+        // tuple payload). The slot width answers 1 for it, the enum-in-enum
+        // carve-out, while the pack side reads the value's real LLVM width
+        // (`{tag, w0, w1, w2}` for an `Option`) and boxes the tuple. So
+        // `(Option[String], i64)` measured 2 here against 5 packed: the field
+        // stayed `NestedTuple`, the drop walked the BOX POINTER as the tuple's
+        // first word, and the box and its string leaked on both the plain and
+        // the `shared` spelling. The layout's own LLVM type is the width the
+        // pack sees. A layout not built yet keeps the slot answer, as before.
+        //
+        // `nested_enums` holds this to a `shared`/`par` outer enum, whose box
+        // free and arm-side re-own handle a `BoxedTuple` on every spelling
+        // measured. A PLAIN enum's `BoxedTuple` does not yet: an arm that moves
+        // the payload on (`return x`) double-frees it today for
+        // `(Array[String, 2], i64)` already, so reclassifying the Option shapes
+        // there would turn their leak into that double free. That half is
+        // filed on its own rather than widened into here.
+        if let (true, TypeKind::Path(p)) = (nested_enums, &ty.kind) {
+            let name = p.segments.first().map(|s| s.as_str()).unwrap_or("");
+            if !self.type_decls.shared_types.contains_key(name)
+                && !self.type_decls.shared_type_decl_names.contains(name)
+            {
+                if let Some(l) = self.type_decls.enum_layouts.get(name) {
+                    if !l.is_shared {
+                        return Self::llvm_type_word_count(l.llvm_type.into());
+                    }
+                }
             }
         }
         self.payload_word_count_for_type_expr(ty, outer_enum, outer_variant)

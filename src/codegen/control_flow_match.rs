@@ -15407,15 +15407,77 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             1
         };
-        let targets: Vec<(usize, Vec<crate::ast::TypeExpr>)> = consumed_positions
+        // `(start_word, elems, boxed)`. B-2026-09-20-56 — a heap-BOXED tuple
+        // payload re-owns the same way, one load further in: its word holds the
+        // box pointer and the box rc-drop now walks the interior behind it, so
+        // an arm that moves the payload on (`return x`) left the box and the
+        // new owner freeing the same element buffers. Gated on the ARMING, the
+        // registration the box free reads, so a box with no interior walk keeps
+        // its single owner and copies nothing.
+        let targets: Vec<(usize, Vec<crate::ast::TypeExpr>, bool)> = consumed_positions
             .iter()
             .filter_map(|pos| {
-                let elems =
-                    self.shared_enum_field_inline_tuple_walk(enum_name, &variant_name, *pos)?;
                 let (start_word, _) = offsets.get(*pos).copied()?;
-                Some((start_word, elems))
+                if let Some(elems) =
+                    self.shared_enum_field_inline_tuple_walk(enum_name, &variant_name, *pos)
+                {
+                    return Some((start_word, elems, false));
+                }
+                let boxed_tuple = self
+                    .type_decls
+                    .enum_layouts
+                    .get(enum_name)
+                    .and_then(|l| l.field_drop_kinds.get(&variant_name))
+                    .and_then(|k| k.get(*pos).copied())
+                    == Some(super::state::EnumDropKind::BoxedTuple);
+                if !boxed_tuple
+                    || !self.shared_enum_field_interior_is_armed(enum_name, &variant_name, *pos)
+                {
+                    return None;
+                }
+                let te = self
+                    .enum_variant_field_type_exprs(enum_name)
+                    .into_iter()
+                    .find(|(_, v, _)| v == &variant_name)
+                    .and_then(|(_, _, tes)| tes.get(*pos).cloned())?;
+                let crate::ast::TypeKind::Tuple(elems) = &te.kind else {
+                    return None;
+                };
+                Some((start_word, elems.clone(), true))
             })
             .collect();
+        // A BOXED payload's binding has no element types of its own, so a
+        // `let u = x` in the arm chose the LLVM-type drop, which sees no heap
+        // in `{[2 x {ptr,len,cap}], i64}` or behind an `Option`'s tag and
+        // registered NOTHING: `u` owned no drop, and the copy below would have
+        // left the originals with no owner at all. Recording the declared
+        // element types lets that `let` take the TypeExpr drop
+        // (`tuple_binding_elem_tes`), so the binding's originals and the box's
+        // copies each have exactly one owner. Boxed only: an inline payload's
+        // binding already reaches a drop through its visible `{ptr,len,cap}`
+        // fields, and a deeper one there would outrun the copy.
+        for (pos, elems) in targets
+            .iter()
+            .filter(|(_, _, boxed)| *boxed)
+            .filter_map(|(sw, elems, _)| {
+                let pos = offsets.iter().position(|(w, _)| w == sw)?;
+                Some((pos, elems.clone()))
+            })
+            .collect::<Vec<_>>()
+        {
+            let bound = match &pattern.kind {
+                PatternKind::TupleVariant { patterns, .. } => {
+                    match patterns.get(pos).map(|p| &p.kind) {
+                        Some(PatternKind::Binding(b)) => Some(b.clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(b) = bound {
+                self.var_types.tuple_var_elem_type_exprs.insert(b, elems);
+            }
+        }
         if targets.is_empty() {
             return;
         }
@@ -15448,13 +15510,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // leaving it set would change every later copy in this function body.
         let saved_rc_inc = self.drop_rc.deep_copy_rc_inc_bare_shared;
         self.drop_rc.deep_copy_rc_inc_bare_shared = true;
-        for (start_word, elems) in targets {
+        for (start_word, elems, boxed) in targets {
             let field_tys: Vec<inkwell::types::BasicTypeEnum<'ctx>> = elems
                 .iter()
                 .map(|e| self.llvm_type_for_type_expr(e))
                 .collect();
             let tuple_ty = self.context.struct_type(&field_tys, false);
-            let Ok(base) = self.builder.build_struct_gep(
+            let Ok(word_p) = self.builder.build_struct_gep(
                 info.heap_type,
                 boxp,
                 tag_idx + 1 + start_word as u32,
@@ -15462,13 +15524,76 @@ impl<'ctx> super::Codegen<'ctx> {
             ) else {
                 continue;
             };
-            for (i, ete) in elems.iter().enumerate() {
-                self.deep_copy_one_aggregate_field(base, tuple_ty, i as u32, ete);
+            if !boxed {
+                for (i, ete) in elems.iter().enumerate() {
+                    self.deep_copy_tuple_elem_for_reown(word_p, tuple_ty, i as u32, ete);
+                }
+                continue;
             }
+            // The word holds the tuple box's address, null when nothing was
+            // packed there; copy behind it only when it is set.
+            let w = self
+                .builder
+                .build_load(self.context.i64_type(), word_p, "shtup.reown.bw")
+                .unwrap()
+                .into_int_value();
+            let base = self
+                .builder
+                .build_int_to_ptr(w, ptr_ty, "shtup.reown.bp")
+                .unwrap();
+            let b_null = self
+                .builder
+                .build_is_null(base, "shtup.reown.bnull")
+                .unwrap();
+            let b_do = self.context.append_basic_block(cur_fn, "shtup.reown.bdo");
+            let b_join = self.context.append_basic_block(cur_fn, "shtup.reown.bjoin");
+            self.builder
+                .build_conditional_branch(b_null, b_join, b_do)
+                .unwrap();
+            self.builder.position_at_end(b_do);
+            for (i, ete) in elems.iter().enumerate() {
+                self.deep_copy_tuple_elem_for_reown(base, tuple_ty, i as u32, ete);
+            }
+            self.builder.build_unconditional_branch(b_join).unwrap();
+            self.builder.position_at_end(b_join);
         }
         self.drop_rc.deep_copy_rc_inc_bare_shared = saved_rc_inc;
         self.builder.build_unconditional_branch(join_bb).unwrap();
         self.builder.position_at_end(join_bb);
+    }
+
+    /// B-2026-09-20-56 — one element of a re-owned tuple payload.
+    /// `deep_copy_one_aggregate_field` has no fixed-array arm, so an
+    /// `Array[String, 2]` element copied NOTHING and the box kept the very
+    /// buffers the moved-on binding owned: `return x` then freed them twice.
+    /// An array element is walked element by element through the same emitter
+    /// instead, which is what the array use-after-move copy does.
+    fn deep_copy_tuple_elem_for_reown(
+        &mut self,
+        base: PointerValue<'ctx>,
+        tuple_ty: inkwell::types::StructType<'ctx>,
+        idx: u32,
+        ete: &crate::ast::TypeExpr,
+    ) {
+        if let Some((elem_te, n)) = self.array_elem_and_len(ete) {
+            if n == 0 || !self.array_uam_elem_copy_supported(&elem_te) {
+                return;
+            }
+            let Some(inkwell::types::BasicTypeEnum::ArrayType(at)) =
+                tuple_ty.get_field_type_at_index(idx)
+            else {
+                return;
+            };
+            let Ok(fp) = self
+                .builder
+                .build_struct_gep(tuple_ty, base, idx, "shtup.reown.arr")
+            else {
+                return;
+            };
+            self.deep_copy_array_elems_in_place(fp, at, &elem_te, n);
+            return;
+        }
+        self.deep_copy_one_aggregate_field(base, tuple_ty, idx, ete);
     }
 
     fn suppress_destructured_enum_payload_cleanup_at_limited(

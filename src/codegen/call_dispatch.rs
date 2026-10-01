@@ -20997,6 +20997,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     // differ), so routing this case through them regressed the
                     // by-value-tuple double-free guard.
                     self.zero_aggregate_field_caps(slot.ptr, agg_ty);
+                    // B-2026-09-20-56 — and THEN the element walk, for the
+                    // leaves the LLVM walk cannot see beside the ones it can.
+                    // An `Option[String]` element is four `i64`s with no
+                    // `vec_struct` in them, so `(Array[String, 2],
+                    // Option[String])` had its array disarmed here and its
+                    // Option left armed: `Sh.S(t)` / `E.S(t)` / `let u = t`
+                    // freed the Option's string from both the source and the
+                    // destination (measured: one `Invalid free` of the 26-byte
+                    // string, on the plain and the `shared` spelling alike,
+                    // where `(Option[String], i64)` alone — which takes the
+                    // branch below — was clean). Second, not instead: every
+                    // arm of `zero_tuple_elem_cap_at` is a move neutralizer,
+                    // so re-zeroing a cap the walk above already zeroed is a
+                    // no-op, and the Vec/String route it warns about is kept.
+                    if let Some(elem_tes) = self.tuple_var_elem_tes(var_name) {
+                        self.zero_tuple_elem_caps(slot.ptr, agg_ty, &elem_tes);
+                    }
                 } else if let Some(elem_tes) = self.tuple_var_elem_tes(var_name) {
                     // #23 — a Map/Set/enum-only tuple is INVISIBLE to the LLVM
                     // walk (all-i64 words, no `vec_struct` field). A tuple var

@@ -9096,7 +9096,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// emitter rather than re-deriving the dispatch is what keeps this copy
     /// symmetric with the drop for every element shape at once, present and
     /// future.
-    fn deep_copy_array_elems_in_place(
+    pub(super) fn deep_copy_array_elems_in_place(
         &mut self,
         base: PointerValue<'ctx>,
         arr_ty: ArrayType<'ctx>,
