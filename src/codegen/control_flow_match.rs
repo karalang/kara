@@ -20989,7 +20989,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // Nothing survives the mask, so the whole walk is the destination's
             // now. Leaving the unmasked one registered would double every body.
             self.suppress_container_elem_bodies_for_var(&env_name);
-            self.zero_boxed_payload_field_cap(slot, enum_ty, some_tag, &struct_name, field);
+            self.zero_boxed_payload_field_cap(
+                slot,
+                enum_ty,
+                some_tag,
+                &env_name,
+                &struct_name,
+                field,
+            );
             return true;
         };
         // EVERY matching action, under EITHER name, and both halves of that
@@ -21026,7 +21033,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // MEMORY.
-        self.zero_boxed_payload_field_cap(slot, enum_ty, some_tag, &struct_name, field);
+        self.zero_boxed_payload_field_cap(slot, enum_ty, some_tag, &env_name, &struct_name, field);
         true
     }
 
@@ -21870,6 +21877,7 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_slot: PointerValue<'ctx>,
         enum_ty: StructType<'ctx>,
         some_tag: u64,
+        env_name: &str,
         struct_name: &str,
         field: &str,
     ) {
@@ -21935,8 +21943,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(is_null, join_bb, do_bb)
             .unwrap();
         self.builder.position_at_end(do_bb);
-        let st = self.type_decls.struct_types.get(struct_name).copied();
-        self.zero_struct_field_move_cap_in(box_ptr, struct_name, field, st);
+        // B-2026-09-30-104 — the box holds the instantiated layout.
+        let st = self.boxed_payload_struct_llvm_ty(env_name, struct_name);
+        let inst = self.boxed_payload_struct_inst(env_name, struct_name);
+        self.zero_struct_field_move_cap_inst(box_ptr, struct_name, field, st, inst.as_ref());
         self.builder.build_unconditional_branch(join_bb).unwrap();
         self.builder.position_at_end(join_bb);
     }
@@ -22537,7 +22547,10 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
-        let Some(&st) = self.type_decls.struct_types.get(struct_name.as_str()) else {
+        // B-2026-09-30-104 — at the binding's instantiation: a generic
+        // struct's erased layout is narrower than the one in the box.
+        let Some(st) = self.boxed_payload_struct_llvm_ty(name.as_str(), struct_name.as_str())
+        else {
             return;
         };
         // Same boxing predicate as the sibling — an inline payload's w0 is not
@@ -22590,8 +22603,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(is_null, join_bb, do_bb)
             .unwrap();
         self.builder.position_at_end(do_bb);
+        let inst = self.boxed_payload_struct_inst(name.as_str(), struct_name.as_str());
         for field in &fields {
-            self.zero_struct_field_move_cap(box_ptr, &struct_name, field);
+            self.zero_struct_field_move_cap_inst(
+                box_ptr,
+                &struct_name,
+                field,
+                Some(st),
+                inst.as_ref(),
+            );
         }
         self.builder.build_unconditional_branch(join_bb).unwrap();
         self.builder.position_at_end(join_bb);
@@ -22633,7 +22653,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(name.as_str()).copied() else {
             return;
         };
-        self.suppress_boxed_payload_struct_destructure_at(slot.ptr, pattern, body);
+        // B-2026-09-30-104 — the payload's instantiation, off the binding.
+        let inst = Self::boxed_destructure_struct_name(pattern)
+            .and_then(|n| self.boxed_payload_struct_inst(name.as_str(), &n));
+        self.suppress_boxed_payload_struct_destructure_at(slot.ptr, pattern, body, inst);
     }
 
     /// B-2026-08-04-6 — the FRESH-TEMP twin of
@@ -22653,7 +22676,23 @@ impl<'ctx> super::Codegen<'ctx> {
         body: Option<&Expr>,
     ) {
         let Some(slot) = slot else { return };
-        self.suppress_boxed_payload_struct_destructure_at(slot, pattern, body);
+        let inst = self
+            .payload_vars
+            .freshtemp_boxed_payload_inst
+            .get(&slot)
+            .cloned();
+        self.suppress_boxed_payload_struct_destructure_at(slot, pattern, body, inst);
+    }
+
+    /// The payload struct a `Some(S { .. })` / `Ok(S { .. })` arm destructures.
+    fn boxed_destructure_struct_name(pattern: &Pattern) -> Option<String> {
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return None;
+        };
+        match &patterns.first()?.kind {
+            PatternKind::Struct { path, .. } => path.last().cloned(),
+            _ => None,
+        }
     }
 
     /// Shared body of the two entry points above: `slot` points at the
@@ -22663,6 +22702,9 @@ impl<'ctx> super::Codegen<'ctx> {
         slot_ptr: PointerValue<'ctx>,
         pattern: &Pattern,
         body: Option<&Expr>,
+        // B-2026-09-30-104 — the payload's instantiation (`G2[R]`), which lays
+        // out a generic payload struct; `None` keeps the name-keyed layout.
+        inst: Option<TypeExpr>,
     ) {
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
             return;
@@ -22713,7 +22755,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // corrupt memory.
         let payload_words = match &payload {
             BoxedPayloadShape::Struct(n) => {
-                let Some(&st) = self.type_decls.struct_types.get(n.as_str()) else {
+                // B-2026-09-30-104 — the instantiation's width, not the
+                // erased layout's: `G2[R]` is 8 words where `G2` is 5, so a
+                // `Result` arm read it as inline and disarmed nothing.
+                let Some(st) = self.struct_llvm_ty_at_inst(n, inst.as_ref()) else {
                     return;
                 };
                 Self::llvm_type_word_count(st.into())
@@ -22823,7 +22868,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             continue;
                         }
                     }
-                    self.zero_struct_field_move_cap(box_ptr, sname, &field_pat.name);
+                    let st = inst
+                        .is_some()
+                        .then(|| self.struct_llvm_ty_at_inst(sname, inst.as_ref()))
+                        .flatten();
+                    self.zero_struct_field_move_cap_inst(
+                        box_ptr,
+                        sname,
+                        &field_pat.name,
+                        st,
+                        inst.as_ref(),
+                    );
                 }
             }
             // The enum sibling reuses the NON-boxed path's own disarmer rather
@@ -24355,7 +24410,25 @@ impl<'ctx> super::Codegen<'ctx> {
             // width gate rejected the arm before the `inner_struct_name`
             // derivation below could see it. Size it from the SCRUTINEE's
             // instantiation instead, the same source that arm uses.
+            // B-2026-09-30-104 — a GENERIC payload struct is as wide as the
+            // temp's instantiation, which its erased layout understates
+            // (`G2[R]` is 8 words, `G2` 5, so a `Result` arm read it as
+            // inline and registered nothing).
+            let generic_te_words = self
+                .optres_scrutinee_payload_te_for(scrutinee, &variant)
+                .filter(|te| {
+                    matches!(&te.kind, TypeKind::Path(p)
+                    if p.generic_args.is_some()
+                        && p.segments.last().is_some_and(|n| {
+                            self.type_decls
+                                .struct_generic_params
+                                .get(n)
+                                .is_some_and(|g| !g.is_empty())
+                        }))
+                })
+                .map(|te| Self::llvm_type_word_count(self.llvm_type_for_type_expr(&te)));
             let payload_words = match &payload.kind {
+                _ if generic_te_words.is_some() => generic_te_words.unwrap_or(1),
                 PatternKind::Wildcard => self
                     .optres_scrutinee_payload_struct_name_for(scrutinee, &variant)
                     .and_then(|n| self.type_decls.struct_types.get(n.as_str()).copied())
@@ -24747,12 +24820,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 _ => None,
             };
-            self.track_boxed_enum_var(
+            // B-2026-09-30-104 — at the temp's instantiation, which no binding
+            // records: by name a generic payload struct resolves its erased
+            // layout, and `G2[R]`'s interior walk freed `R`'s length.
+            let inst = inner_struct_name.as_deref().and_then(|n| {
+                self.optres_scrutinee_payload_te_for(scrutinee, &variant)
+                    .filter(|te| !self.generic_struct_subst_from_inst(n, te).is_empty())
+            });
+            if let Some(te) = &inst {
+                self.payload_vars
+                    .freshtemp_boxed_payload_inst
+                    .insert(alloca, te.clone());
+            }
+            self.track_boxed_enum_var_inst(
                 &enum_name,
                 alloca,
                 &enum_name,
                 &variant,
                 inner_struct_name.as_deref(),
+                inst.as_ref(),
             );
             return Some(alloca);
         }

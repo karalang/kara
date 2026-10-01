@@ -9309,7 +9309,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// DECLINE TO ARM, per field.
     ///
     /// PER FIELD, and that is what makes this tractable where the enum sibling
-    /// (B-2026-09-22-9) is not: `emit_struct_drop_synthesis_skipping` already
+    /// (B-2026-09-22-9) is not: `emit_struct_drop_synthesis_mono_skipping` already
     /// masks individual field indices out of the memory walk and folds the mask
     /// into its cache key, so a multi-field struct keeps every other field's
     /// walk. The enum switch frees a variant's whole payload in ONE arm and has

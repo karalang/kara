@@ -4305,16 +4305,18 @@ impl<'ctx> super::Codegen<'ctx> {
         if moved.is_empty() {
             return;
         }
+        // B-2026-09-30-104 — at the local's instantiation, as its `let` was.
+        let subst = self.boxed_payload_struct_subst(arg_name, &struct_name);
         if !self
             .type_decls
             .struct_types
             .contains_key(struct_name.as_str())
-            || self.struct_owns_shared_field(&struct_name, &mut Vec::new())
+            || self.struct_owns_shared_field_subst(&struct_name, &mut Vec::new(), Some(&subst))
         {
             return;
         }
         // MEMORY.
-        let masked = self.emit_struct_drop_synthesis_skipping(&struct_name, &moved);
+        let masked = self.emit_struct_drop_synthesis_mono_skipping(&struct_name, &subst, &moved);
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
             for action in frame.iter_mut() {
                 if let super::state::CleanupAction::BoxedEnumDrop {
@@ -16880,6 +16882,10 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let var = var.clone();
         self.suppress_struct_cleanup_for_tail_identifier(&var);
+        // B-2026-09-30-104 — when `var` is a VIEW of a boxed `Option`/`Result`
+        // payload (`Some(g) => take(g)`), the cleanup the callee takes over is
+        // the box's interior walk, not the view's (it registers none).
+        self.suppress_boxed_payload_view_move(arg);
         // …and the user-`Drop` action with it. Under TRANSFER the callee owns
         // the value outright — body, fields AND memory — so every one of the
         // caller's cleanups has to go, not just the field walk.
@@ -17026,6 +17032,10 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let var = var.clone();
         self.suppress_struct_cleanup_for_tail_identifier(&var);
+        // B-2026-09-30-104 — when `var` is a VIEW of a boxed `Option`/`Result`
+        // payload (`Some(g) => take(g)`), the cleanup the callee takes over is
+        // the box's interior walk, not the view's (it registers none).
+        self.suppress_boxed_payload_view_move(arg);
         // B-2026-09-04-4 — …and the user-`Drop` action with it, for the class
         // that only now HAS one. This is the same half `move_transferred_struct_arg`
         // had to add for its own arm, and it fails the same way: the scan above

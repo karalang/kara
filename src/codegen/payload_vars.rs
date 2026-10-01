@@ -397,6 +397,13 @@ pub(crate) struct PayloadVars<'ctx> {
     /// Keyed by binding name and snapshotted with the rest of the per-arm var
     /// environment, so an arm's view cannot leak into a sibling arm.
     pub(crate) boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
+    /// B-2026-09-30-104 — the instantiated payload type of a FRESH-TEMP boxed
+    /// `Option`/`Result` scrutinee, keyed by the slot
+    /// `track_freshtemp_boxed_enum_scrutinee` staged it in. A temp has no
+    /// binding name to read the instantiation off, so the destructure
+    /// suppressor that later receives only the slot finds it here.
+    pub(crate) freshtemp_boxed_payload_inst:
+        HashMap<inkwell::values::PointerValue<'ctx>, crate::ast::TypeExpr>,
     /// B-2026-09-24-33 — a `match` / `if let` whose arm handed out a boxed
     /// `Array` payload view as its value, keyed by the SCRUTINEE's span (the
     /// key `branch_value_is_owned` uses): the element type and length. The arm

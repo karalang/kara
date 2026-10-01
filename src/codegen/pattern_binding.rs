@@ -1906,11 +1906,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .is_some_and(|l| !l.is_shared)))
                                     && !self.type_decls.shared_types.contains_key(tn);
                             let area = self.pattern_state.pattern_binding_scrutinee_optres_area;
-                            let tn_wider_than_area = self
-                                .type_decls
-                                .struct_types
-                                .get(tn)
-                                .map(|st| Self::llvm_type_word_count((*st).into()))
+                            // B-2026-09-30-104 — a GENERIC struct is as wide as
+                            // its instantiation: `G[R]` is 6 words where the
+                            // erased `G` is 2, so by name its boxed payload read
+                            // as inline and the binding funded no bodies.
+                            let tn_inst_words =
+                                self.generic_struct_binding_inst(name, tn).map(|inst| {
+                                    Self::llvm_type_word_count(self.llvm_type_for_type_expr(&inst))
+                                });
+                            let tn_wider_than_area = tn_inst_words
+                                .or_else(|| {
+                                    self.type_decls
+                                        .struct_types
+                                        .get(tn)
+                                        .map(|st| Self::llvm_type_word_count((*st).into()))
+                                })
                                 .or_else(|| {
                                     self.type_decls
                                         .enum_layouts
@@ -1996,11 +2006,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .is_some_and(|l| !l.is_shared)))
                                 && !self.type_decls.shared_types.contains_key(tn)
                                 && self.pattern_state.pattern_binding_scrutinee_optres_area > 0
-                                && self
-                                    .type_decls
-                                    .struct_types
-                                    .get(tn)
-                                    .map(|st| Self::llvm_type_word_count((*st).into()))
+                                && tn_inst_words
+                                    .or_else(|| {
+                                        self.type_decls
+                                            .struct_types
+                                            .get(tn)
+                                            .map(|st| Self::llvm_type_word_count((*st).into()))
+                                    })
                                     .or_else(|| {
                                         self.type_decls
                                             .enum_layouts

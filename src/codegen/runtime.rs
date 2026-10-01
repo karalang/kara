@@ -3146,6 +3146,83 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-30-104 — the generic-param subst of the user struct a boxed
+    /// `Option`/`Result` binding carries, read off the binding's recorded
+    /// instantiation (`Option[G2[R]]` gives `{T: R}` for `G2`). Empty for a
+    /// non-generic struct or an unrecorded binding, which every caller treats
+    /// as "use the name-keyed layout", so those keep their exact behaviour.
+    pub(super) fn boxed_payload_struct_subst(
+        &self,
+        var: &str,
+        struct_name: &str,
+    ) -> std::collections::HashMap<String, TypeExpr> {
+        self.boxed_payload_struct_inst(var, struct_name)
+            .map(|inst| self.generic_struct_subst_from_inst(struct_name, &inst))
+            .unwrap_or_default()
+    }
+
+    /// The struct layout at `inst` when it is a generic instantiation of
+    /// `struct_name`, the name-keyed layout otherwise.
+    pub(super) fn struct_llvm_ty_at_inst(
+        &self,
+        struct_name: &str,
+        inst: Option<&TypeExpr>,
+    ) -> Option<StructType<'ctx>> {
+        let subst = inst
+            .map(|i| self.generic_struct_subst_from_inst(struct_name, i))
+            .unwrap_or_default();
+        self.mono_struct_type_from_subst(struct_name, &subst)
+            .or_else(|| self.type_decls.struct_types.get(struct_name).copied())
+    }
+
+    /// The instantiated payload type itself (`G2[R]`), for the helpers that
+    /// take a `TypeExpr` rather than a subst. `None` exactly when
+    /// [`Self::boxed_payload_struct_subst`] is empty.
+    pub(super) fn boxed_payload_struct_inst(
+        &self,
+        var: &str,
+        struct_name: &str,
+    ) -> Option<TypeExpr> {
+        if self
+            .type_decls
+            .struct_generic_params
+            .get(struct_name)
+            .is_none_or(|p| p.is_empty())
+        {
+            return None;
+        }
+        let TypeKind::Path(p) = &self.type_decls.enum_inst_var_types.get(var)?.kind else {
+            return None;
+        };
+        if !matches!(
+            p.segments.last().map(String::as_str),
+            Some("Option" | "Result")
+        ) {
+            return None;
+        }
+        p.generic_args.iter().flatten().find_map(|a| match a {
+            GenericArg::Type(t)
+                if !self
+                    .generic_struct_subst_from_inst(struct_name, t)
+                    .is_empty() =>
+            {
+                Some(t.clone())
+            }
+            _ => None,
+        })
+    }
+
+    /// [`Self::boxed_payload_struct_subst`]'s LAYOUT: the instantiated struct
+    /// type when there is a subst, the name-keyed one otherwise.
+    pub(super) fn boxed_payload_struct_llvm_ty(
+        &self,
+        var: &str,
+        struct_name: &str,
+    ) -> Option<StructType<'ctx>> {
+        let inst = self.boxed_payload_struct_inst(var, struct_name);
+        self.struct_llvm_ty_at_inst(struct_name, inst.as_ref())
+    }
+
     /// Queue a scope-exit free of the heap box backing an enum binding
     /// whose payload `T` was too wide to inline (`Option[Wide]` /
     /// `Result[Wide, _]` — see `coerce_to_payload_words`'s boxing path).
@@ -3161,6 +3238,29 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
         payload_variant: &str,
         inner_struct_name: Option<&str>,
+    ) {
+        let inst = inner_struct_name.and_then(|n| self.boxed_payload_struct_inst(name, n));
+        self.track_boxed_enum_var_inst(
+            name,
+            enum_slot,
+            enum_name,
+            payload_variant,
+            inner_struct_name,
+            inst.as_ref(),
+        );
+    }
+
+    /// B-2026-09-30-104 — [`Self::track_boxed_enum_var`] with the payload's
+    /// instantiation handed over, for a FRESH-TEMP scrutinee, whose box has no
+    /// binding to read it off.
+    pub(super) fn track_boxed_enum_var_inst(
+        &mut self,
+        name: &str,
+        enum_slot: PointerValue<'ctx>,
+        enum_name: &str,
+        payload_variant: &str,
+        inner_struct_name: Option<&str>,
+        inst: Option<&TypeExpr>,
     ) {
         // B-2026-08-28-64 — a boxed payload name is a user struct OR a user
         // enum (`boxed_enum_payload_variants` admits both). The struct
@@ -3193,8 +3293,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // return takes `track_struct_var_inst`, which honours the contract.
         // `struct_owns_shared_field` reads `struct_field_type_exprs`, so it is
         // `false` for the enum payload name below and that arm is untouched.
+        //
+        // B-2026-09-30-104 — at the binding's INSTANTIATION. A generic
+        // struct's name resolves its erased layout, where `v: T` is one word,
+        // so `G2[R]`'s walk freed `R`'s length as a pointer (`Invalid free()`
+        // on every cell, a SIGSEGV at -O2) and `G[String]`'s owned no heap at
+        // all and leaked the buffer (B-2026-09-30-77). An empty subst is the
+        // name-keyed drop, byte-for-byte.
         let inner_drop_fn = inner_struct_name.and_then(|n| {
-            self.sole_owner_struct_memory_drop(n)
+            let subst = inst
+                .map(|i| self.generic_struct_subst_from_inst(n, i))
+                .unwrap_or_default();
+            self.sole_owner_struct_memory_drop_mono(n, &subst)
                 .or_else(|| self.emit_enum_drop_switch(n))
         });
         self.track_boxed_enum_var_with_inner_drop(
@@ -3273,10 +3383,13 @@ impl<'ctx> super::Codegen<'ctx> {
         inner_struct_name: Option<&str>,
         mask: &std::collections::BTreeSet<usize>,
     ) {
+        let subst = inner_struct_name
+            .map(|n| self.boxed_payload_struct_subst(name, n))
+            .unwrap_or_default();
         let can_mask = !mask.is_empty()
             && inner_struct_name.is_some_and(|n| {
                 self.type_decls.struct_types.contains_key(n)
-                    && !self.struct_owns_shared_field(n, &mut Vec::new())
+                    && !self.struct_owns_shared_field_subst(n, &mut Vec::new(), Some(&subst))
             });
         if !can_mask {
             self.track_boxed_enum_var(
@@ -3289,7 +3402,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         let inner = inner_struct_name.expect("can_mask implies a payload struct name");
-        let inner_drop_fn = self.emit_struct_drop_synthesis_skipping(inner, mask);
+        let inner_drop_fn = self.emit_struct_drop_synthesis_mono_skipping(inner, &subst, mask);
         self.track_boxed_enum_var_with_inner_drop(
             name,
             enum_slot,

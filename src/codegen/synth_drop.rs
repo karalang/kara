@@ -2115,14 +2115,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The mask is folded into the cache key, so a masked walker and the full
     /// one cannot collide in the module memo — the same discipline the bodies
     /// siblings use, and the reason a per-monomorph suffix exists there too.
-    pub(super) fn emit_struct_drop_synthesis_skipping(
-        &mut self,
-        struct_name: &str,
-        skip: &std::collections::BTreeSet<usize>,
-    ) -> Option<FunctionValue<'ctx>> {
-        self.emit_struct_drop_synthesis_impl(struct_name, None, skip)
-    }
-
+    ///
+    /// Spelled [`Self::emit_struct_drop_synthesis_mono_skipping`] with the
+    /// binding's subst (empty for a non-generic struct): B-2026-09-30-104
+    /// moved the last name-only caller onto the instantiation, because a
+    /// boxed generic payload walked at its erased layout frees `T`'s words as
+    /// the wrong type.
+    ///
     /// B-2026-07-11-35 (push leg) — per-MONOMORPH struct-drop synthesis. A
     /// generic container `S[T] { items: Vec[T] }` synthesizes ONE drop fn per
     /// struct NAME under `emit_struct_drop_synthesis`, resolving the `Vec[T]`
@@ -2140,7 +2139,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// before picking its per-element drop. Non-generic structs pass `None` and
     /// are byte-for-byte unchanged (empty subst → bare name, no resolution).
     /// B-2026-09-22-7 — [`Self::emit_struct_drop_synthesis_mono`] and
-    /// [`Self::emit_struct_drop_synthesis_skipping`] at once, for a binding
+    /// its name-only skipping form at once, for a binding
     /// that is both a (possibly generic) instantiation and missing some
     /// fields' memory walk. The two existed separately and no caller could
     /// have both; a generic struct with a caller-retained `Array` field needs
@@ -2405,7 +2404,7 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         subst: Option<&std::collections::HashMap<String, TypeExpr>>,
         // B-2026-09-17-34 — field indices whose memory this walker must NOT
-        // free; see `emit_struct_drop_synthesis_skipping`.
+        // free; see `emit_struct_drop_synthesis_mono_skipping`.
         skip: &std::collections::BTreeSet<usize>,
     ) -> Option<FunctionValue<'ctx>> {
         // Per-monomorph cache key + symbol suffix: for a generic struct with a
