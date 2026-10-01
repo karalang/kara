@@ -8878,6 +8878,17 @@ fn escaping_param_payload_variants_impl(
                     }
                 }
             }
+            // B-2026-10-01-36 — `p?` takes the payload of every variant that
+            // has one: `Ok`/`Some` into the unwrap binding, `Err` up to this
+            // frame's caller. It is `match p { Ok(v) => v, Err(e) => return
+            // Err(e) }` spelled short, which the arm above reports for both.
+            ExprKind::Question(inner) if scrutinee_is_param(inner) => {
+                for v in ["Ok", "Err", "Some"] {
+                    if !out.iter().any(|o| o == v) {
+                        out.push(v.to_string());
+                    }
+                }
+            }
             ExprKind::IfLet {
                 pattern,
                 value,
@@ -11683,6 +11694,8 @@ pub fn is_param_payload_take(value: &Expr, name: &str) -> bool {
     let bare = |e: &Expr| matches!(&e.kind, ExprKind::Identifier(n) if n == name);
     let m = |e: &Expr| crate::deque_head::expr_mentions_name_deep(e, name);
     match &value.kind {
+        // B-2026-10-01-36 — `name?` is the same take spelled short.
+        ExprKind::Question(inner) => bare(inner),
         ExprKind::Match { scrutinee, arms } => {
             bare(scrutinee)
                 && arms.iter().any(|a| yields_binding(&a.body, &a.pattern))

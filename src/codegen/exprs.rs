@@ -2421,7 +2421,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Result/Option VALUE has been captured into `val`; otherwise the
         // source double-frees the payload the unwrap binding (Ok) or the
         // caller (Err) takes ownership of. No-op for temp / non-inline operands.
-        self.suppress_question_source_inline_payload(inner);
+        let named_source_moved = self.suppress_question_source_inline_payload(inner);
         let i64_t = self.context.i64_type();
         // The early-return struct must match the enclosing function's
         // declared LLVM return type. Result keeps the legacy
@@ -2608,15 +2608,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // staging and `match`'s arm reconstruction already do, by the
                 // pack side's own width predicate.
                 //
-                // Only a FRESH temp source (`mke(k)?`) is handled here. A named
-                // one (`let r = mke(k); r?`) or a place keeps its own cleanup,
-                // and its interplay with this site is B-2026-10-01-17: reading through
-                // its box read freed memory, and freeing the argument here as
-                // well doubled the free, so it keeps today's behaviour.
-                let fresh_source = matches!(
-                    inner.kind,
-                    ExprKind::Call { .. } | ExprKind::MethodCall { .. }
-                );
+                // A FRESH temp source (`mke(k)?`) is this site's own, and so,
+                // B-2026-10-01-17, is a NAMED one whose cleanup the `?` just
+                // stood down (`let r = mke(k); r?`): reading through its box
+                // read freed memory, and the argument leaked or was freed
+                // twice, while the binding's own cleanup still ran. A place
+                // (`self.r?`) keeps its own cleanup and today's behaviour.
+                let fresh_source = named_source_moved
+                    || matches!(
+                        inner.kind,
+                        ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+                    );
                 let source_box = (fresh_source
                     && Self::llvm_type_word_count(arg_ty) > inner_word_count
                     && inner_word_count > 0)

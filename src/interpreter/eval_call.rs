@@ -4583,15 +4583,37 @@ impl<'a> super::Interpreter<'a> {
             Ok(v) | Err(ControlFlow::Return(v)) => v,
             Err(cf) => return self.set_cf(cf),
         };
-        if matches!(
-            inner.kind,
-            ExprKind::Call { .. } | ExprKind::MethodCall { .. }
-        ) {
+        // B-2026-10-01-17 — a NAMED source (`let r = mke(k); r?`) is the
+        // `?` site's too: `r?` recorded `r`'s payload as moved out, so its own
+        // walk no longer runs the body and the source is a temp of this site
+        // exactly as `mke(k)?`'s is. The walk skips a bare identifier argument
+        // (it drops through its binding), so it is handed as a block-wrapped
+        // temp.
+        let named_moved = matches!(&inner.kind, ExprKind::Identifier(n)
+            if self.moved_out_enum_payload_bindings.contains(n));
+        if named_moved
+            || matches!(
+                inner.kind,
+                ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+            )
+        {
+            let value = if named_moved {
+                Expr {
+                    kind: ExprKind::Block(crate::ast::Block {
+                        stmts: Vec::new(),
+                        final_expr: Some(Box::new(inner.clone())),
+                        span: inner.span,
+                    }),
+                    span: inner.span,
+                }
+            } else {
+                inner.clone()
+            };
             let arg = crate::ast::CallArg {
                 label: None,
                 mut_marker: false,
                 mut_marker_span: None,
-                value: inner.clone(),
+                value,
                 span: inner.span,
             };
             self.pending_call_payload_escapes = escapes;

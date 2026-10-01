@@ -1817,7 +1817,7 @@ impl<'a> super::Interpreter<'a> {
     /// throughout — a method whose arm binds nothing (`Box2.Full(_)`) and one
     /// that never matches at all — which is what localizes this to the
     /// binding arm.
-    fn frame_is_sole_owner_of_param(&self, name: &str) -> bool {
+    pub(super) fn frame_is_sole_owner_of_param(&self, name: &str) -> bool {
         self.method_frame_sole_owned
             .last()
             .is_some_and(|sole| sole.iter().any(|n| n == name))

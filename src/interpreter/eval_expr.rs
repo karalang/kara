@@ -2414,6 +2414,29 @@ impl<'a> super::Interpreter<'a> {
             // On None → return None from enclosing function
             ExprKind::Question(inner) => {
                 let val = self.eval_expr_inner(inner);
+                // B-2026-10-01-36 — `r?` MOVES the named `r`: its payload goes
+                // to the unwrap binding (`Ok`/`Some`) or up to the caller
+                // (`Err`), exactly as a consuming `match r { .. }` arm takes
+                // it. Without the record `r`'s payload walk still ran the
+                // payload's `Drop` body at its last use, and the new owner ran
+                // it again (`let x = r?;` over `Result[S, i64]` printed `dS8`
+                // twice). The guard is the match disarm's: an owned param
+                // whose frame is its sole owner keeps the walk.
+                if let (
+                    ExprKind::Identifier(name),
+                    Value::EnumVariant {
+                        enum_name,
+                        data: EnumData::Tuple(_),
+                        ..
+                    },
+                ) = (&inner.kind, &val)
+                {
+                    if matches!(enum_name.as_str(), "Option" | "Result")
+                        && !self.frame_is_sole_owner_of_param(name)
+                    {
+                        self.moved_out_enum_payload_bindings.insert(name.clone());
+                    }
+                }
                 match &val {
                     Value::EnumVariant {
                         variant,

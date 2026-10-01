@@ -43,6 +43,11 @@ struct StringDispatchPlan {
 /// lexer's ~90-arm `keyword_or_ident`) are worth the switch tree.
 const STRING_DISPATCH_MIN_ARMS: usize = 4;
 
+/// B-2026-10-01-36 — the tag a `?` writes over a named `Option`/`Result`
+/// source it consumed. No variant carries it, so every cleanup channel the
+/// binding registered (each guarded on a variant's tag) stands down.
+const QUESTION_MOVED_TAG: u64 = 0x7fff_ffff_ffff_fff0;
+
 impl<'ctx> super::Codegen<'ctx> {
     // ── Match ─────────────────────────────────────────────────────
 
@@ -23487,65 +23492,61 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the caller (Err) now owns — a double-free / UAF. The Option/Result
     /// inline-payload registration (B-2026-06-10-6) made this `?`-site
     /// suppression load-bearing; before it, no inline-payload free existed.
-    pub(super) fn suppress_question_source_inline_payload(&self, inner: &Expr) {
+    pub(super) fn suppress_question_source_inline_payload(&self, inner: &Expr) -> bool {
         let ExprKind::Identifier(name) = &inner.kind else {
-            return;
+            return false;
         };
         let Some(slot) = self.variables.get(name.as_str()) else {
-            return;
+            return false;
         };
         let i64_t = self.context.i64_type();
-        if self
-            .payload_vars
-            .inline_result_payload_vars
-            .contains(name.as_str())
-        {
-            if let Some(layout) = self.type_decls.enum_layouts.get("Result") {
-                if let Ok(cap_ptr) = self.builder.build_struct_gep(
-                    layout.llvm_type,
-                    slot.ptr,
-                    3,
-                    "q.respl.suppress.cap",
-                ) {
-                    let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
-                }
-            }
+        // B-2026-10-01-36 — every channel the binding owns, not one word of
+        // it. The `cap` this used to zero is word 3 of the slot, which is the
+        // payload's cap only for a bare `String`/`Vec`: for `struct S { n:
+        // i64, v: String }` it is `v`'s LEN, so the struct-drop arm freed `v`
+        // under the new owner -- and a boxed payload's `BoxedEnumDrop`, the
+        // `RcDecOption`, and the payload-bodies walk read nothing it zeroed at
+        // all. `let r = mk(k); let x = r?;` double-freed on both sides of the
+        // `?`. Overwrite the TAG with one no variant carries instead: every
+        // one of those channels is guarded on a variant's tag (and an enum
+        // drop switch defaults to its exit), so all of them stand down at once
+        // whatever the payload's layout, as a fully consuming `match` arm
+        // leaves its scrutinee. The value was captured before this runs.
+        if self.optres_slot_owns_cleanup(name, slot.ptr) {
+            // The tag is word 0 of every `Option`/`Result` layout.
+            let _ = self
+                .builder
+                .build_store(slot.ptr, i64_t.const_int(QUESTION_MOVED_TAG, false));
+            return true;
         }
-        if self
-            .payload_vars
-            .inline_option_payload_vars
-            .contains(name.as_str())
-        {
-            if let Some(layout) = self.type_decls.enum_layouts.get("Option") {
-                if let Ok(cap_ptr) = self.builder.build_struct_gep(
-                    layout.llvm_type,
-                    slot.ptr,
-                    3,
-                    "q.optpl.suppress.cap",
-                ) {
-                    let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
-                }
-            }
+        false
+    }
+
+    /// B-2026-10-01-36 — does a cleanup action registered for the named
+    /// `Option`/`Result` local `name` read its slot `slot`? The channels a
+    /// `?` on it has to stand down; a local with none (an all-scalar
+    /// `Result[i64, i64]`, a borrow) owns nothing the `?` could double.
+    ///
+    /// An `RcDecOption` local (`Option[Sh]` over a `shared` type) answers no:
+    /// the unwrap binding of `r?` takes no reference of its own, so `r`'s
+    /// release is the one that balances the count (`let x = r?;` leaked the
+    /// handle when it was stood down).
+    fn optres_slot_owns_cleanup(&self, name: &str, slot: PointerValue<'ctx>) -> bool {
+        use super::state::CleanupAction as A;
+        let actions = || self.drop_rc.scope_cleanup_actions.iter().flatten();
+        if actions().any(|a| matches!(a, A::RcDecOption { option_slot: p, .. } if *p == slot)) {
+            return false;
         }
-        if self
-            .payload_vars
-            .inline_option_map_payload_vars
-            .contains(name.as_str())
-        {
-            if let Some(layout) = self.type_decls.enum_layouts.get("Option") {
-                let none_tag = layout.tags.get("None").copied().unwrap_or(0);
-                if let Ok(tag_ptr) = self.builder.build_struct_gep(
-                    layout.llvm_type,
-                    slot.ptr,
-                    0,
-                    "q.optmap.suppress.tag",
-                ) {
-                    let _ = self
-                        .builder
-                        .build_store(tag_ptr, i64_t.const_int(none_tag, false));
-                }
-            }
-        }
+        actions().any(|a| match a {
+            A::FreeInlineResultPayload { result_slot: p, .. }
+            | A::FreeInlineOptionPayload { option_slot: p, .. }
+            | A::FreeInlineOptionMapPayload { option_slot: p, .. }
+            | A::BoxedEnumDrop { enum_slot: p, .. }
+            | A::NestedBoxedEnumDrop { enum_slot: p, .. }
+            | A::EnumDrop { enum_alloca: p, .. } => *p == slot,
+            A::UserDrop { binding_name, .. } => binding_name == name,
+            _ => false,
+        })
     }
 
     /// True when `e`'s value is a FRESH-owned enum — a variant constructor /
