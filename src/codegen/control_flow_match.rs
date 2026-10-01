@@ -13741,8 +13741,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // keeps nothing), and skipping here is still right: the mint's own
         // walk would be empty, so `emit_user_drop_field_bodies_fn_skipping`
         // answers `None` and the binding ends up owning nothing either way.
+        // B-2026-09-30-103 — and the FIFTH: a payload binding of a BORROW-mode
+        // match (`pattern_binding_is_borrow`, the read-only inline
+        // `Option`/`Result` path among them) aliases a payload the scrutinee
+        // still owns, so the scrutinee's walk runs every field body. A scalar
+        // field read in tail position (`Ok(g) => g.n`) reached here as a
+        // returned projection and minted `__karac_dropbodies_H$keep0$s1(g)`
+        // beside `__karac_dropelems_res_H_i64_v(o)`: `d1 d1` against
+        // `--interp`'s `d1`, for `Result[H, i64]` with an inline `H`.
         if !self.var_owns_struct_field_bodies(var_name)
             && (self.payload_vars.param_view_locals.contains(var_name)
+                || self
+                    .borrow_vars
+                    .borrowed_agg_payload_struct_vars
+                    .contains(var_name)
                 || self.fn_ctx.current_fn_param_names.contains(var_name)
                 || self.boxed_payload_view_envelope_owns_bodies_walk(var_name)
                 || (self
@@ -18205,6 +18217,42 @@ impl<'ctx> super::Codegen<'ctx> {
                     && crate::codegen::param_own::is_primitive_type_name(&p.segments[0]))
         };
         for sub in patterns {
+            // B-2026-09-30-103 — a WHOLE scalar payload binding too: `Err(e)
+            // => e` over `Result[H2, i64]` hands back an `i64`, a copy, and
+            // reading it as an escape took the `Ok` arm's read-only struct
+            // destructure off the borrow path, so the source's walk stood
+            // down and the leaves it did not bind lost their bodies.
+            if let PatternKind::Binding(n) = &sub.kind {
+                if surface_scalar(&sub.span) {
+                    out.insert(n.clone());
+                }
+                continue;
+            }
+            // ...and a scalar FIELD of a struct destructure (`Some(H2 { v, n,
+            // .. }) => { println(v.id); n }`), read off the declared field type.
+            if let PatternKind::Struct {
+                path: spath,
+                fields,
+                ..
+            } = &sub.kind
+            {
+                if let Some(decls) = self.destructured_field_decls(spath) {
+                    for fp in fields {
+                        let bound = match fp.pattern.as_ref().map(|p| &p.kind) {
+                            None => fp.name.clone(),
+                            Some(PatternKind::Binding(b)) => b.clone(),
+                            _ => continue,
+                        };
+                        if decls
+                            .iter()
+                            .any(|(n, te)| n.as_deref() == Some(fp.name.as_str()) && prim_te(te))
+                        {
+                            out.insert(bound);
+                        }
+                    }
+                }
+                continue;
+            }
             let PatternKind::Tuple(elems) = &sub.kind else {
                 continue;
             };
@@ -20129,6 +20177,13 @@ impl<'ctx> super::Codegen<'ctx> {
         //
         // Falls back to the removal when there is no flag to be had (no armed
         // action, or no current function), which is byte-identical to before.
+        //
+        // B-2026-09-30-103 — except for a STRUCT destructure that binds only
+        // SOME of the payload's `Drop`-bearing fields: those leaves own their
+        // fields, and the ones it leaves are still the place's to run.
+        if self.narrow_optres_struct_destructure_bodies(&name, patterns, payload_te.as_ref()) {
+            return;
+        }
         self.record_taken_tuple_payload_binding_tes(&name, pattern);
         if let Some(flag) = self.optres_payload_bodies_flag_for(&name) {
             let _ = self
@@ -20137,6 +20192,159 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         self.suppress_container_elem_bodies_for_var(&name);
+    }
+
+    /// B-2026-09-30-103 — narrow a named `Option`/`Result` place's payload
+    /// bodies walk to the struct fields a consuming arm's destructure does NOT
+    /// bind, instead of standing the whole walk down.
+    ///
+    /// `Some(H2 { v, .. }) => { let w = v; .. }` binds `v`, which owns its
+    /// field from here on and runs the body at its own end; `r` is bound by
+    /// nobody, and the place's walk was its only holder. Zeroing the bodies
+    /// flag ran it nowhere -- `d6 6` against the due `d6 d66 6` on every
+    /// compiled surface, and the `--interp` half of this row masks per field in
+    /// the same way (`disarm_moved_out_enum_payload`).
+    ///
+    /// Static and accumulated over the arms, as the tuple narrowing in
+    /// [`Self::narrow_callee_owned_tuple_payload_bodies_core`] is: the walk is
+    /// one registration whichever arm ran, and the interpreter masks the union
+    /// of the taking arms' fields too. Declines (returning `false`, so the
+    /// caller's whole-walk disarm runs exactly as before) for a nested or
+    /// non-binding sub-pattern, an arm that binds every `Drop`-bearing field,
+    /// and a place with no plain walker to replace.
+    fn narrow_optres_struct_destructure_bodies(
+        &mut self,
+        name: &str,
+        patterns: &[Pattern],
+        payload_te: Option<&TypeExpr>,
+    ) -> bool {
+        let [sub] = patterns else {
+            return false;
+        };
+        let PatternKind::Struct {
+            path: spath,
+            fields,
+            ..
+        } = &sub.kind
+        else {
+            return false;
+        };
+        let Some(sname) = spath.last().cloned() else {
+            return false;
+        };
+        let Some(decls) = self.destructured_field_decls(spath) else {
+            return false;
+        };
+        let Some(field_names) = self
+            .type_decls
+            .struct_field_names
+            .get(sname.as_str())
+            .cloned()
+        else {
+            return false;
+        };
+        let subst = payload_te
+            .map(|te| self.generic_struct_subst_from_inst(&sname, te))
+            .unwrap_or_default();
+        let runs = |me: &Self, field: &str| -> bool {
+            decls.iter().any(|(n, te)| {
+                n.as_deref() == Some(field)
+                    && me.elem_te_runs_user_drop(
+                        &crate::codegen::helpers::subst_type_params_in_type_expr(te, &subst),
+                    )
+            })
+        };
+        let all_drop: std::collections::BTreeSet<usize> = field_names
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| runs(self, f))
+            .map(|(i, _)| i)
+            .collect();
+        let mut taken = std::collections::BTreeSet::new();
+        for fp in fields {
+            match fp.pattern.as_ref().map(|p| &p.kind) {
+                None | Some(PatternKind::Binding(_)) => {}
+                Some(PatternKind::Wildcard) => continue,
+                Some(_) => return false,
+            }
+            if !runs(self, &fp.name) {
+                continue;
+            }
+            let Some(idx) = field_names.iter().position(|f| f == &fp.name) else {
+                return false;
+            };
+            taken.insert(idx);
+        }
+        if taken.is_empty() || all_drop.is_subset(&taken) {
+            return false;
+        }
+        let Some(env_te) = self.type_decls.enum_inst_var_types.get(name).cloned() else {
+            return false;
+        };
+        let mut include_vec = None;
+        for frame in self.drop_rc.scope_cleanup_actions.iter() {
+            for action in frame.iter() {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_name,
+                    kind: super::state::UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == name {
+                        let fname = drop_fn.get_name().to_string_lossy().into_owned();
+                        if fname.starts_with("__karac_dropelems_opt_")
+                            || fname.starts_with("__karac_dropelems_res_")
+                        {
+                            include_vec = Some(fname.ends_with("_v"));
+                        }
+                    }
+                }
+            }
+        }
+        let Some(include_vec) = include_vec else {
+            return false;
+        };
+        // Accumulate, then re-read: a second taking arm over the same place
+        // masks its fields too, and re-homing from this arm's set alone would
+        // put the earlier arm's back.
+        let masked = {
+            let acc = self
+                .type_decls
+                .boxed_payload_moved_fields
+                .entry(name.to_string())
+                .or_default();
+            acc.extend(taken.iter().copied());
+            acc.clone()
+        };
+        if all_drop.is_subset(&masked) {
+            return false;
+        }
+        let Some(walker) = self.emit_optres_payload_user_drop_bodies_fn_ex_with_mask(
+            &env_te,
+            include_vec,
+            super::synth_drop::PayloadBodiesMask::StructFields(&sname, &masked),
+        ) else {
+            return false;
+        };
+        let mut hit = false;
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_name,
+                    kind: super::state::UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == name {
+                        *drop_fn = walker;
+                        hit = true;
+                    }
+                }
+            }
+        }
+        hit
     }
 
     /// B-2026-09-17-16 — the place has just handed its TUPLE payload's bodies

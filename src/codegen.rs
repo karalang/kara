@@ -7051,6 +7051,7 @@ impl<'ctx> Codegen<'ctx> {
                 pattern_binding_inner_types: HashMap::new(),
                 pattern_binding_borrow_modes: HashMap::new(),
                 current_variant_payload_bindings: HashSet::new(),
+                plain_struct_destructure_depth: 0,
                 current_bare_tuple_bindings: HashSet::new(),
             },
             accel: Accel {

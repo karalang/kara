@@ -1419,12 +1419,29 @@ impl<'a> super::Interpreter<'a> {
                             // nothing for that reason.
                             pattern.binding_names()
                         } else if let Value::EnumVariant { ref enum_name, .. } = val {
+                            // B-2026-09-30-103 — less the read-only leaves of
+                            // an `Option`/`Result` struct destructure, which
+                            // stay with the husk; see the `match` stash's twin.
+                            let leaf_views = self.optres_struct_leaf_views(
+                                enum_name,
+                                pattern,
+                                Some(value),
+                                &val,
+                                |n| {
+                                    crate::binding_use::binding_only_read_through_block(
+                                        n, then_block,
+                                    )
+                                },
+                            );
                             // B-2026-09-20-26 — see the `match` stash's twin.
                             self.arm_moved_user_drop_payload_bindings_admitting(
                                 enum_name,
                                 pattern,
                                 Self::place_walk_is_retractable(value),
                             )
+                            .into_iter()
+                            .filter(|n| !leaf_views.contains(n))
+                            .collect()
                         } else {
                             Vec::new()
                         }
@@ -1954,12 +1971,23 @@ impl<'a> super::Interpreter<'a> {
                             // empty.
                             pattern.binding_names()
                         } else if let Value::EnumVariant { ref enum_name, .. } = val {
+                            // B-2026-09-30-103 — the `if let` leg's filter.
+                            let leaf_views = self.optres_struct_leaf_views(
+                                enum_name,
+                                pattern,
+                                Some(value),
+                                &val,
+                                |n| crate::binding_use::binding_only_read_through_block(n, body),
+                            );
                             // B-2026-09-20-26 — see the `match` stash's twin.
                             self.arm_moved_user_drop_payload_bindings_admitting(
                                 enum_name,
                                 pattern,
                                 Self::place_walk_is_retractable(value),
                             )
+                            .into_iter()
+                            .filter(|n| !leaf_views.contains(n))
+                            .collect()
                         } else {
                             Vec::new()
                         }

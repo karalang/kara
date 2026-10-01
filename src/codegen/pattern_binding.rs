@@ -2027,8 +2027,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .current_variant_payload_bindings
                                     .contains(name.as_str())
                             {
-                                if let Some(slot) =
-                                    self.pattern_state.pattern_binding_scrutinee_optres_slot
+                                // B-2026-09-30-103 — the payload WHOLE, never a
+                                // leaf of its destructure. A leaf
+                                // (`Some(H2 { v, .. })`) already owns its field:
+                                // the destructure zeroed that field's cap in the
+                                // box, which goes on freeing the rest. Recorded
+                                // as a view, a rebind of the leaf (`let w = v`)
+                                // retracted the box's whole interior walk and
+                                // leaked every field the arm did not bind. The
+                                // caller-retained half below is unaffected: a
+                                // leaf of a param's payload is still the
+                                // caller's to run.
+                                if let Some(slot) = self
+                                    .pattern_state
+                                    .pattern_binding_scrutinee_optres_slot
+                                    .filter(|_| {
+                                        self.pattern_state.plain_struct_destructure_depth == 0
+                                    })
                                 {
                                     self.payload_vars
                                         .boxed_optres_payload_view_vars
@@ -2070,6 +2085,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                             if is_boxed_optres_drop_payload {
+                                // B-2026-09-30-103 — the source's walker covers
+                                // the WHOLE payload, so only the whole payload
+                                // can take it over. A destructure LEAF
+                                // (`Some(H2 { v, .. })`) owns one field and runs
+                                // that field's body on its own slot; given the
+                                // envelope's walker it ran every sibling's body
+                                // too, beside the source's walk of them. A
+                                // FRESH temp has no walk of its own left to run
+                                // the siblings, so its leaf keeps the whole one.
+                                let rehome_src = rehome_src.filter(|_| {
+                                    self.pattern_state.plain_struct_destructure_depth == 0
+                                        || self
+                                            .pattern_state
+                                            .pattern_binding_scrutinee_is_fresh_owning_temp
+                                });
                                 if let Some((src_ptr, src_fn)) = rehome_src {
                                     let name_owned = name.clone();
                                     self.track_user_drop_var_with_fn(
@@ -2706,6 +2736,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             &mut self.pattern_state.pattern_binding_leaf_owns_view_copy,
                             owns_view_copy,
                         );
+                        self.pattern_state.plain_struct_destructure_depth += 1;
                         let bound = if let Some(sub_pat) = &field_pat.pattern {
                             self.bind_pattern_values(sub_pat, field_val)
                         } else {
@@ -2715,6 +2746,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             };
                             self.bind_pattern_values(&synthetic, field_val)
                         };
+                        self.pattern_state.plain_struct_destructure_depth -= 1;
                         self.pattern_state.pattern_binding_leaf_owns_view_copy =
                             saved_owns_view_copy;
                         bound?;

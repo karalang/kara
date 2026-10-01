@@ -586,6 +586,22 @@ impl<'a> super::Interpreter<'a> {
                         // `payload_te_runs_user_drop_admitting`.
                         let containers =
                             scrutinee_place.is_some_and(Self::place_walk_is_retractable);
+                        // B-2026-09-30-103 — a read-only leaf of an
+                        // `Option`/`Result` struct destructure stays with the
+                        // husk (see `optres_struct_leaf_views`), so it gets no
+                        // slot of its own; the disarm leaves its field armed.
+                        let leaf_views = self.optres_struct_leaf_views(
+                            enum_name,
+                            &arm.pattern,
+                            scrutinee_place,
+                            scrutinee,
+                            |n| {
+                                crate::binding_use::binding_only_read_through(n, &arm.body)
+                                    && arm.guard.as_ref().is_none_or(|g| {
+                                        crate::binding_use::binding_only_read_through(n, g)
+                                    })
+                            },
+                        );
                         for n in self.arm_moved_user_drop_payload_bindings_admitting(
                             enum_name,
                             &arm.pattern,
@@ -651,7 +667,10 @@ impl<'a> super::Interpreter<'a> {
                                 || takes_user_optres;
                             // B-2026-09-06-20 — not for a binding out of a
                             // masked slot; see `masked_view_names` above.
-                            if is_drop_binding && !masked_view_names.contains(&n) {
+                            if is_drop_binding
+                                && !masked_view_names.contains(&n)
+                                && !leaf_views.contains(&n)
+                            {
                                 self.pending_arm_drop_bindings.push(n);
                             }
                         }
@@ -1077,6 +1096,67 @@ impl<'a> super::Interpreter<'a> {
             // path-sensitive, and the two backends have to agree. Only the
             // per-POSITION half is new, and codegen gained the same half in the
             // same commit.
+            // B-2026-09-30-103 — an `Option`/`Result` payload STRUCT that the
+            // taking arms destructure (`Some(H2 { v, .. })`) keeps every field
+            // they do not TAKE: mask only the taken leaves out of the walk, as
+            // the tuple payload above masks its taken elements, rather than
+            // standing the whole walk down and losing `r`'s body. A leaf the
+            // arm only reads through is not taken either -- it is a view of
+            // the husk (`optres_struct_leaf_views`), so its field stays armed
+            // and dies with the rest in reverse field order, which is what
+            // both backends already do for a user enum's payload. Codegen
+            // keeps the same leaves as views (`plain_struct_destructure_depth`).
+            if matches!(enum_name.as_str(), "Option" | "Result") {
+                let taking: Vec<&MatchArm> = arms
+                    .iter()
+                    .filter(|arm| {
+                        self.pattern_consumes_user_drop_payload(
+                            &enum_name,
+                            &arm.pattern,
+                            scrut_te.as_ref(),
+                        )
+                    })
+                    .collect();
+                let struct_arms: Vec<(&MatchArm, &Pattern)> = taking
+                    .iter()
+                    .filter_map(|arm| match &arm.pattern.kind {
+                        PatternKind::TupleVariant { patterns, .. } => match patterns.as_slice() {
+                            [sub] if self.is_plain_struct_pattern(sub) => Some((*arm, sub)),
+                            _ => None,
+                        },
+                        _ => None,
+                    })
+                    .collect();
+                if !taking.is_empty() && struct_arms.len() == taking.len() {
+                    for (arm, sub) in struct_arms {
+                        let views = self.optres_struct_leaf_views(
+                            &enum_name,
+                            &arm.pattern,
+                            scrutinee_place,
+                            scrutinee,
+                            |n| {
+                                crate::binding_use::binding_only_read_through(n, &arm.body)
+                                    && arm.guard.as_ref().is_none_or(|g| {
+                                        crate::binding_use::binding_only_read_through(n, g)
+                                    })
+                            },
+                        );
+                        for (field, bound) in Self::struct_pattern_whole_field_bindings(sub) {
+                            if !views.contains(&bound) {
+                                self.moved_out_optres_payload_bodies
+                                    .insert((name.clone(), vec![field]));
+                            }
+                        }
+                        for (path, bound) in Self::struct_pattern_nested_field_bindings(sub) {
+                            if !views.contains(&bound) {
+                                self.moved_out_optres_payload_bodies
+                                    .insert((name.clone(), path));
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
             let taken: std::collections::HashSet<(String, usize)> = arms
                 .iter()
                 .filter(|arm| {
@@ -1116,6 +1196,94 @@ impl<'a> super::Interpreter<'a> {
     /// stays with the scrutinee and must keep riding its walk. That is the same
     /// line the codegen twin draws for its own whole-move test, and the same
     /// one the memory suppressor draws when it declines a partial destructure.
+    /// B-2026-09-30-103 — is `p` a destructure of a plain STRUCT, as opposed
+    /// to an enum STRUCT-VARIANT (`Some(E.A { r })`), which shares the
+    /// `PatternKind::Struct` shape? Only the former has fields the per-leaf
+    /// mask can name: the variant's payload is an enum value, so masking its
+    /// "fields" masked nothing and the whole-walk disarm it replaced never ran
+    /// (`a dRa dRa` against a due `a dRa`). A qualified path is declined
+    /// rather than resolved, which keeps that disarm.
+    pub(super) fn is_plain_struct_pattern(&self, p: &Pattern) -> bool {
+        matches!(&p.kind, PatternKind::Struct { path, .. }
+            if path.len() == 1 && self.find_struct_def(&path[0]).is_some())
+    }
+
+    /// B-2026-09-30-103 — the leaves of an `Option`/`Result` pattern's STRUCT
+    /// destructure (`Some(H2 { v, .. })`) that stay VIEWS of the husk: every
+    /// `Drop`-bearing leaf, when the arm only reads through all of them, and
+    /// none otherwise.
+    ///
+    /// A view leaves its field with the husk, which runs the body in reverse
+    /// field order with the rest: design.md § Match Arm Binding Modes
+    /// ("Bindings that are only read borrow from the already-owned value"),
+    /// and what both backends already did for the same destructure of a USER
+    /// enum's payload. ALL OR NOTHING per arm, because that is the line the
+    /// compiled side draws: its read-only classification is a property of the
+    /// match (`scrutinee_is_readonly_inline_optres_local`), and an arm that
+    /// takes one leaf takes the payload off that path for every leaf it binds.
+    /// Only a named local scrutinee has a husk walk to keep the leaf in.
+    pub(super) fn optres_struct_leaf_views(
+        &self,
+        enum_name: &str,
+        pattern: &Pattern,
+        scrutinee_place: Option<&Expr>,
+        scrutinee: &Value,
+        read: impl Fn(&str) -> bool,
+    ) -> std::collections::HashSet<String> {
+        let none = std::collections::HashSet::new;
+        if !matches!(enum_name, "Option" | "Result")
+            || !scrutinee_place.is_some_and(|p| matches!(p.kind, ExprKind::Identifier(_)))
+        {
+            return none();
+        }
+        let PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+            return none();
+        };
+        let [sub] = patterns.as_slice() else {
+            return none();
+        };
+        if !self.is_plain_struct_pattern(sub) {
+            return none();
+        }
+        let Value::EnumVariant {
+            data: crate::interpreter::value::EnumData::Tuple(vals),
+            ..
+        } = scrutinee
+        else {
+            return none();
+        };
+        let Some(payload) = vals.first() else {
+            return none();
+        };
+        let field_at = |path: &[String]| -> Option<&Value> {
+            let mut cur = payload;
+            for f in path {
+                let Value::Struct { fields, .. } = cur else {
+                    return None;
+                };
+                cur = fields.get(f)?;
+            }
+            Some(cur)
+        };
+        let mut leaves: Vec<String> = Vec::new();
+        for (field, bound) in Self::struct_pattern_whole_field_bindings(sub) {
+            if field_at(std::slice::from_ref(&field))
+                .is_some_and(|v| self.field_value_carries_user_drop(v))
+            {
+                leaves.push(bound);
+            }
+        }
+        for (path, bound) in Self::struct_pattern_nested_field_bindings(sub) {
+            if field_at(&path).is_some_and(|v| self.field_value_carries_user_drop(v)) {
+                leaves.push(bound);
+            }
+        }
+        if leaves.is_empty() || !leaves.iter().all(|n| read(n)) {
+            return none();
+        }
+        leaves.into_iter().collect()
+    }
+
     /// B-2026-09-06-35 — the DEEP sibling of
     /// [`Self::struct_pattern_whole_field_bindings`]: `(field-name PATH,
     /// binding name)` for each leaf a NESTED struct sub-pattern moves whole out
@@ -1341,6 +1509,48 @@ impl<'a> super::Interpreter<'a> {
                 .is_some_and(|b| !crate::binding_use::optres_block_takes_whole_payload(pattern, b))
         {
             return;
+        }
+        // B-2026-09-30-103, `if let` / `while let` leg — the `match` form's
+        // per-leaf mask for an `Option`/`Result` STRUCT destructure, kept in
+        // lockstep with it: the taken leaves leave the walk, the read-only
+        // ones stay with the husk. `scope: None` (`let … else`) keeps the
+        // whole-walk disarm below: its bindings escape into the enclosing
+        // block, and codegen's let-else leg is its own row (B-2026-09-20-65).
+        if matches!(enum_name.as_str(), "Option" | "Result")
+            && scope.is_some()
+            && takes_payload(self, &enum_name)
+            && !self.frame_is_sole_owner_of_param(&name)
+        {
+            if let PatternKind::TupleVariant { patterns, .. } = &pattern.kind {
+                if let [sub] = patterns.as_slice() {
+                    if self.is_plain_struct_pattern(sub) {
+                        let views = scope
+                            .map(|b| {
+                                self.optres_struct_leaf_views(
+                                    &enum_name,
+                                    pattern,
+                                    Some(scrutinee_place),
+                                    scrutinee,
+                                    |n| crate::binding_use::binding_only_read_through_block(n, b),
+                                )
+                            })
+                            .unwrap_or_default();
+                        for (field, bound) in Self::struct_pattern_whole_field_bindings(sub) {
+                            if !views.contains(&bound) {
+                                self.moved_out_optres_payload_bodies
+                                    .insert((name.clone(), vec![field]));
+                            }
+                        }
+                        for (path, bound) in Self::struct_pattern_nested_field_bindings(sub) {
+                            if !views.contains(&bound) {
+                                self.moved_out_optres_payload_bodies
+                                    .insert((name.clone(), path));
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
         }
         if takes_payload(self, &enum_name) && !self.frame_is_sole_owner_of_param(&name) {
             // B-2026-09-16-12 — the `if let` / `while let` / `let … else`

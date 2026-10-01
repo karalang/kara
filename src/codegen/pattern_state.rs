@@ -469,6 +469,10 @@ pub(crate) struct PatternState<'ctx> {
     /// StructDrop; set/cleared around each bind call by the match / if-let
     /// compilers. Empty everywhere else, so `let` destructures are untouched.
     pub(crate) current_variant_payload_bindings: HashSet<String>,
+    /// B-2026-09-30-103 — how many PLAIN-struct destructures the binder is
+    /// inside (`Some(H2 { v, .. })` binds `v` at depth 1). A binding at depth
+    /// > 0 is a leaf that owns its field, not a view of a boxed payload.
+    pub(crate) plain_struct_destructure_depth: u32,
     /// B-2026-09-02-23 — the BARE-TUPLE element binding names of the pattern
     /// currently being bound (`collect_bare_tuple_binding_names`), the exact
     /// complement of [`Self::current_variant_payload_bindings`] within a tuple
