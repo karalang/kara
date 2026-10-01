@@ -192,6 +192,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     && self.tuple_elem_is_movable_drop_struct_place(elem_expr))
             {
                 self.suppress_source_vec_cleanup_for_arg(elem_expr);
+                // B-2026-09-30-98 — and a boxed `Option`/`Result` payload VIEW
+                // (`Some(w) => { let t = (w, 1); }`) hands the box's interior
+                // to the tuple, exactly as `S2 { r: w, .. }` does through the
+                // struct-literal field loop. Left armed, the box's inner walk
+                // freed the `String` the tuple's drop had already freed:
+                // `free(): double free detected in tcache 2` on the JIT and an
+                // invalid free at -O0, while the struct spelling was clean.
+                self.suppress_boxed_payload_view_move(elem_expr);
             }
             // B-2026-09-26-54 — a NAMED `Array[T, N]` moved whole into the
             // literal hands its element drop over to the tuple, as
