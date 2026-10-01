@@ -25650,17 +25650,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         },
                         span: object.span,
                     };
-                    // `false`, as the one-level `Index` arm passes: the
-                    // interpreter runs no displaced body at a nested position
-                    // (B-2026-09-20-27), so running it here alone would turn
-                    // an agreed silence into a divergence.
                     self.emit_displaced_index_elem_drop(
                         &rebuilt,
                         index,
                         rhs,
                         rhs_index_deep_cloned,
                         clone_log_mark,
-                        false,
+                        run_bodies,
                     );
                 }
                 for synth in synths.iter().rev() {
@@ -25864,37 +25860,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind: ExprKind::Identifier(synth.clone()),
                 span: object.span,
             };
-            // MEMORY ONLY, DELIBERATELY -- `run_bodies: false` rather than the
-            // caller's flag. `run_bodies` gates only the bodies call here; the
-            // memory synthesizer is emitted unconditionally, so the two are
-            // separable at this site and the leak closes either way.
-            //
-            // Passing the caller's flag through instead was MEASURED and is the
-            // trade this family forbids. B-2026-09-16-2 moved codegen's gate
-            // and the interpreter's together on purpose, and its closing prose
-            // names the twins it wrote: "the interpreter's TWO index-assign
-            // displacement blocks (field-rooted and identifier-rooted)" -- in
-            // `eval_stmt.rs`, beside `value_runs_user_drop`. A NESTED index is
-            // neither, so the interpreter has no twin arm for this position and
-            // running bodies here agrees with nothing. Measured on
-            // `Vec[Vec[S]]` with `impl Drop for S`, four surfaces: the parent
-            // tree prints `dS2:10 end` on BOTH backends, and with bodies on the
-            // compiled side printed `dS1:5 dS2:10 end` while `--interp` was
-            // unchanged -- a 5-byte leak traded for a run-vs-build divergence,
-            // which is what `0eba4d1` did and was reverted for 28 minutes
-            // later. The same cell over `Vec[Vec[Array[D, 1]]]` behaved
-            // identically.
-            //
-            // So the displaced element's BODIES at a nested index stay silent,
-            // agreed, and are B-2026-09-16-2's to widen when the interpreter
-            // grows the matching arm. This row is the MEMORY half.
+            // B-2026-09-20-27 — the caller's `run_bodies`, now that the
+            // interpreter has the matching arm for a nested position (the
+            // place-walking block in `eval_stmt.rs`'s index-assign). Until it
+            // did, this passed `false`: running bodies here alone printed
+            // `dS1:5 dS2:10 end` compiled against `dS2:10 end` interpreted, a
+            // leak traded for a run-vs-build divergence (`0eba4d1`). The two
+            // halves land together.
             self.emit_displaced_index_elem_drop(
                 &synth_expr,
                 index,
                 rhs,
                 rhs_index_deep_cloned,
                 clone_log_mark,
-                false,
+                run_bodies,
             );
             self.variables.remove(&synth);
             self.var_types.vec_elem_types.remove(&synth);

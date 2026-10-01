@@ -2805,14 +2805,11 @@ fn asan_index_store_frees_the_displaced_vec_elements_own_elements() {
 /// container to release from; the single-level `a[i] = x` spelling was
 /// always correct, which is what the two controls below pin.
 ///
-/// The fix releases the displaced HEAP only. The displaced element's user
-/// `Drop` BODY still does not run at a nested store -- an AGREED FAULT on
-/// all four surfaces, so no A/B sees it -- and that half is a separate row:
-/// running it here on the compiled surfaces alone turned a silent leak into
-/// a run-vs-build divergence, which is strictly worse. The struct cells
-/// below therefore expect the ONE body they get today; when the bodies half
-/// lands, they gain the displaced element's body and these expectations
-/// move with it.
+/// That fix released the displaced HEAP only; the displaced element's user
+/// `Drop` BODY ran nowhere at a nested store, agreed on all four surfaces.
+/// B-2026-09-20-27 moved both backends together, so the struct cells below
+/// now expect the displaced element's body at the store and the survivor's
+/// after it.
 #[test]
 fn asan_nested_index_store_releases_the_displaced_element() {
     // The filed cell: a tuple element under `Vec[Vec[_]]`. Every printed
@@ -2846,8 +2843,8 @@ fn asan_nested_index_store_releases_the_displaced_element() {
 
     // A named struct element, and an `Array` INNER container -- the two
     // element shapes whose displaced buffers the `Identifier`-only
-    // destructure also stranded. The single body each prints is the
-    // survivor's at scope exit; see the note above.
+    // destructure also stranded. The displaced element's body runs at the
+    // store, the survivor's after it (B-2026-09-20-27).
     assert_clean_asan_run(
         "struct S { s: String, k: i64 }
              impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.k}:{self.s.len()}\") } }
@@ -2858,7 +2855,7 @@ fn asan_nested_index_store_releases_the_displaced_element() {
                  println(\"end\");
              }
 ",
-        &["dS2:23", "end"],
+        &["dS1:18", "dS2:23", "end"],
         "b2026-09-16-3-nested-struct-elem",
     );
 
@@ -2872,7 +2869,7 @@ fn asan_nested_index_store_releases_the_displaced_element() {
                  println(\"end\");
              }
 ",
-        &["dD23", "end"],
+        &["dD18", "dD23", "end"],
         "b2026-09-16-3-nested-array-inner",
     );
 

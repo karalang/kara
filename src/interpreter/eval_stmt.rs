@@ -5941,6 +5941,89 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-20-27 — the root name of an index/field place chain
+    /// (`d` of `d[0][1]`, `self` of `self.xs[0]`), or `None` past any other
+    /// step.
+    fn displaced_place_root(e: &Expr) -> Option<String> {
+        match &e.kind {
+            ExprKind::Identifier(n) => Some(n.clone()),
+            ExprKind::SelfValue => Some("self".to_string()),
+            ExprKind::Index { object, index } => {
+                if Self::assign_index_is_pure_scalar(index) {
+                    Self::displaced_place_root(object)
+                } else {
+                    None
+                }
+            }
+            ExprKind::FieldAccess { object, .. } => Self::displaced_place_root(object),
+            _ => None,
+        }
+    }
+
+    /// B-2026-09-20-27 — does `e` mention `self` anywhere? The name-keyed
+    /// mention walk has no `SelfValue` arm, so a self-rooted container needs
+    /// its own relocation guard (`self.xs[0][0] = self.xs[0][1]`).
+    fn expr_mentions_self(e: &Expr) -> bool {
+        format!("{e:?}").contains("SelfValue")
+    }
+
+    /// B-2026-09-20-27 — read the value at an index/field place chain without
+    /// evaluating it as an expression (no move, no copy-out check): the
+    /// container whose element a nested store is about to displace.
+    fn read_displaced_place(&mut self, e: &Expr) -> Option<Value> {
+        match &e.kind {
+            ExprKind::Identifier(n) => self.env.get(n),
+            ExprKind::SelfValue => self.env.get("self"),
+            ExprKind::Index { object, index } => {
+                let base = self.read_displaced_place(object)?;
+                let i = match self.eval_expr_inner(index) {
+                    Value::Int(i) if i >= 0 => i as usize,
+                    _ => return None,
+                };
+                match base {
+                    Value::Array(rc) => rc.read().unwrap().get(i).cloned(),
+                    _ => None,
+                }
+            }
+            ExprKind::FieldAccess { object, field } => match self.read_displaced_place(object)? {
+                Value::Struct { fields, .. } => fields
+                    .iter()
+                    .find(|(n, _)| n.as_str() == field.as_str())
+                    .map(|(_, v)| v.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// B-2026-09-20-27 — run a displaced container element's user `Drop`
+    /// bodies, as the identifier- and field-rooted index-assign blocks do.
+    fn fire_displaced_index_elem(&mut self, old: Value) {
+        match &old {
+            Value::Struct { name: tn, .. } => {
+                if self.program.drop_method_keys.contains_key(tn) {
+                    let tn = tn.clone();
+                    self.run_user_drop_body_on_value(&tn, old);
+                } else if self.value_runs_user_drop(&old) {
+                    self.drop_user_drop_fields_of_value(&old);
+                }
+            }
+            Value::EnumVariant { enum_name, .. }
+                if enum_name != "Option" && enum_name != "Result" =>
+            {
+                if self.program.drop_method_keys.contains_key(enum_name) {
+                    let tn = enum_name.clone();
+                    self.run_user_drop_body_on_value(&tn, old.clone());
+                }
+                self.run_enum_payload_user_drops_value(&old);
+            }
+            Value::Array(_) | Value::Tuple(_) => {
+                self.run_discarded_value_user_drops(old.clone());
+            }
+            _ => {}
+        }
+    }
+
     /// B-2026-08-01-30 leg B — an index expression the displaced-bodies
     /// branch may safely evaluate ahead of the store's own evaluation:
     /// pure scalar arithmetic over literals / identifiers / casts only.
@@ -12432,6 +12515,49 @@ impl<'a> super::Interpreter<'a> {
                                         self.run_discarded_value_user_drops(old.clone());
                                     }
                                     _ => {}
+                                }
+                            }
+                        }
+                    }
+                    // B-2026-09-20-27 — a NESTED container (`d[i][j] = x`,
+                    // `h.xs[i][j] = x`, `d[i].xs[j] = x`). The two blocks above
+                    // take only a bare-name or `name.field` container, so the
+                    // displaced element's `Drop` body ran nowhere on this
+                    // backend at a nested position, and codegen held its own
+                    // bodies back to agree. Walk the place to the container
+                    // value and fire the displaced element exactly as those
+                    // blocks do, with the same guards against the ROOT.
+                    // Codegen twin: the nested arms of
+                    // `emit_displaced_index_elem_drop`, which forward
+                    // `run_bodies` in the same commit.
+                    let nested = match &object.kind {
+                        ExprKind::Index { .. } => true,
+                        ExprKind::FieldAccess { object: inner, .. } => {
+                            !matches!(inner.kind, ExprKind::Identifier(_))
+                        }
+                        _ => false,
+                    };
+                    if nested && Self::assign_index_is_pure_scalar(index) {
+                        if let Some(root) = Self::displaced_place_root(object) {
+                            let self_relocates = root == "self" && Self::expr_mentions_self(value);
+                            if !self.moved_out_user_drop_bindings.contains(root.as_str())
+                                && !self.moved_out_drop_field_bindings.contains(root.as_str())
+                                && !crate::deque_head::expr_mentions_name_deep(value, &root)
+                                && !self_relocates
+                            {
+                                let idx = match self.eval_expr_inner(index) {
+                                    Value::Int(i) if i >= 0 => Some(i as usize),
+                                    _ => None,
+                                };
+                                let old_elem = match (idx, self.read_displaced_place(object)) {
+                                    (Some(i), Some(Value::Array(rc))) => {
+                                        let guard = rc.read().unwrap();
+                                        guard.get(i).cloned()
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(old) = old_elem {
+                                    self.fire_displaced_index_elem(old);
                                 }
                             }
                         }
