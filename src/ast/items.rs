@@ -3720,6 +3720,89 @@ pub fn fn_always_returns_param(
     fn_always_returns_param_ex(program, f, arg_index, false, false)
 }
 
+/// B-2026-09-30-67 — what each slot of the aggregate LITERAL a callee returns
+/// is made of, so a call site can tell a result that is wholly the caller's
+/// params (a VIEW) from one that also carries a value the callee minted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReturnedAggSlot {
+    /// The bare by-value parameter at this index.
+    Param(usize),
+    /// A scalar: a literal, or a slot the return type declares an owned
+    /// scalar. It runs no body, so it never makes the result a non-view.
+    Scalar,
+    /// Anything else: a value the callee built, whose body the result owns.
+    Owned,
+}
+
+/// B-2026-09-30-67 — the slot map of `f` when its body is exactly ONE exit
+/// (`return <lit>` or a tail `<lit>`, no other statement) yielding a tuple,
+/// array or prefix-collection (`vec![..]`) literal.
+///
+/// `fn_always_returns_param` says THAT a param comes back on every exit, which
+/// is all a call site needed while a returned aggregate either was the param
+/// or held only params. It cannot say WHICH slot, nor whether the callee added
+/// a fresh element beside it, and the call sites took any one handed-back
+/// param as a view of the whole result: `arrc(a, mk(50))` over `fn arrc(a: R,
+/// b: R) -> Array[R, 2] { return [a, b]; }` lost `mk(50)`'s body. The single-
+/// exit restriction is what makes the map exact without an alias analysis: a
+/// name in the literal can only be the parameter it spells, because nothing
+/// else in the body could have rebound it. Every other shape answers `None`,
+/// which leaves the call site's answer exactly as it was.
+pub fn fn_returned_aggregate_literal_slots(f: &Function) -> Option<Vec<ReturnedAggSlot>> {
+    let lit = match (f.body.stmts.as_slice(), f.body.final_expr.as_deref()) {
+        ([], Some(e)) => e,
+        ([s], None) => match &s.kind {
+            crate::ast::StmtKind::Expr(e) => match &e.kind {
+                ExprKind::Return(Some(e)) => e.as_ref(),
+                _ => return None,
+            },
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let elems: &[Expr] = match &lit.kind {
+        ExprKind::Tuple(elems) => elems,
+        ExprKind::ArrayLiteral(elems) | ExprKind::PrefixCollectionLiteral { items: elems, .. } => {
+            elems
+        }
+        _ => return None,
+    };
+    // Only a tuple declares a type per slot; an array's slots share one.
+    let slot_tys: &[TypeExpr] = match f.return_type.as_ref().map(|t| &t.kind) {
+        Some(crate::ast::TypeKind::Tuple(ts)) if matches!(lit.kind, ExprKind::Tuple(_)) => ts,
+        _ => &[],
+    };
+    if elems.is_empty() {
+        return None;
+    }
+    Some(
+        elems
+            .iter()
+            .enumerate()
+            .map(|(k, e)| match &e.kind {
+                ExprKind::Identifier(n) => f
+                    .params
+                    .iter()
+                    .position(|p| {
+                        matches!(&p.pattern.kind, PatternKind::Binding(b) if b == n)
+                            && !matches!(
+                                p.ty.kind,
+                                crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+                            )
+                    })
+                    .map_or(ReturnedAggSlot::Owned, ReturnedAggSlot::Param),
+                ExprKind::Integer(..) | ExprKind::Float(..) | ExprKind::Bool(_) => {
+                    ReturnedAggSlot::Scalar
+                }
+                _ if slot_tys.get(k).is_some_and(type_expr_is_owned_scalar) => {
+                    ReturnedAggSlot::Scalar
+                }
+                _ => ReturnedAggSlot::Owned,
+            })
+            .collect(),
+    )
+}
+
 /// B-2026-09-28-13 — does `e` denote the parameter `param` itself: the bare
 /// identifier, or an identity hand-back of it (`id(a)`,
 /// `result_escape::is_identity_handback_of`), whose result is the param's own

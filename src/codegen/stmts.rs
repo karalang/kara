@@ -10582,6 +10582,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // nothing to inherit and re-armed the walk.
                                     let mut view_elems: std::collections::HashSet<u32> =
                                         self.tuple_literal_param_view_elems(value);
+                                    // B-2026-09-30-67 — and the slots a CALL
+                                    // hands back from a view argument
+                                    // (`tupc(a, mk(51))`): the binding owns
+                                    // `mk(51)` but not `a`. Recorded for a
+                                    // wholly-view result too, so a later
+                                    // projection (`return t.1`) asks the same
+                                    // per-element question a literal's does.
+                                    if let Some(slots) = self.call_result_agg_slot_views(value) {
+                                        view_elems.extend(
+                                            slots
+                                                .iter()
+                                                .enumerate()
+                                                .filter(|(_, s)| **s == Some(true))
+                                                .map(|(k, _)| k as u32),
+                                        );
+                                    }
                                     // B-2026-09-01-3 — record the view
                                     // elements BEFORE the mask merge below,
                                     // and only the ones this LITERAL filled
@@ -12165,6 +12181,36 @@ impl<'ctx> super::Codegen<'ctx> {
                                     }
                                 }
                             }
+                        } else if !*is_mut
+                            // Not a `let mut`: a view runs no element body, so
+                            // an element pushed later would run none either
+                            // (the B-2026-09-30-2 family); the owner's double
+                            // is the direction that loses nothing.
+                            && (matches!(&value.kind, ExprKind::Call { .. })
+                                && self.let_call_result_is_param_view(value)
+                                // And a rebind of such a view (`let f = e;`),
+                                // which re-armed the walk it had withheld.
+                                // Only an `Array` / `Vec` source: an `Option`
+                                // wrap local (`let p = o;`) reaches this site
+                                // too, and its per-path hand-back owns the body.
+                                || matches!(&value.kind, ExprKind::Identifier(src)
+                                    if self.payload_vars.param_view_locals.contains(src.as_str())
+                                        && !self.fn_ctx.current_fn_param_names.contains(src.as_str())
+                                        && self.variables.get(src.as_str()).is_some_and(|v| {
+                                            v.ty.is_array_type()
+                                                || v.ty == self.vec_struct_type().into()
+                                        })))
+                        {
+                            // B-2026-09-30-67 — the same caller-retains rule for
+                            // a CALL that hands the params back inside the
+                            // container (`let e = arrc(a, b)` over `fn arrc(a: R,
+                            // b: R) -> Array[R, 2] { return [a, b]; }`). The tuple,
+                            // struct and enum let sites already asked
+                            // `let_call_result_is_param_view`; this one never did,
+                            // so the walk registered above ran every element body
+                            // and the caller ran them again.
+                            self.suppress_container_elem_bodies_for_var(var_name);
+                            self.payload_vars.param_view_locals.insert(var_name.clone());
                         }
                         // B-2026-09-30-46 — asked BEFORE the retraction below
                         // takes it: does the rebound source own its bodies
@@ -28011,6 +28057,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 return;
             }
         }
+        // B-2026-09-30-67 — a call that hands the caller's params back inside
+        // the array (`arrc(a, b);` over `fn arrc(a: R, b: R) -> Array[R, 2] {
+        // return [a, b]; }`) carries bodies the CALLER runs under
+        // caller-retains, as the bound spelling's view mark says; running
+        // them here too was four bodies where two are due.
+        if !in_branch && self.let_call_result_is_param_view(tail) {
+            return;
+        }
         let Some((elem_te, n)) = self.discarded_call_array_parts(tail) else {
             return;
         };
@@ -28220,6 +28274,24 @@ impl<'ctx> super::Codegen<'ctx> {
         if agg_ty == self.vec_struct_type() || agg_ty.count_fields() as usize != elem_tes.len() {
             return;
         }
+        // B-2026-09-30-67 — the slots a call hands back from the caller's
+        // params are the caller's to run (`tupc(a, b);` ran four bodies); a
+        // wholly-view result runs none here, and a mixed one only its own.
+        let mut skip: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        if !in_branch {
+            if self.let_call_result_is_param_view(tail) {
+                return;
+            }
+            if let Some(slots) = self.call_result_agg_slot_views(tail) {
+                skip.extend(
+                    slots
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| **s == Some(true))
+                        .map(|(k, _)| k as u32),
+                );
+            }
+        }
         let Some(cur_fn) = self
             .builder
             .get_insert_block()
@@ -28232,7 +28304,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // `vec_element_drain_fn`'s doc states for its own callers. The emitter
         // declines a tuple with no user-`Drop`-bearing element, which is the
         // type gate this function needs and does not repeat.
-        let Some(bodies) = self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &elem_tes) else {
+        let Some(bodies) =
+            self.emit_tuple_elem_user_drop_bodies_fn_skipping(agg_ty, &elem_tes, &skip)
+        else {
             return;
         };
         let slot = self.create_entry_alloca(cur_fn, "__disc_tuple_bodies", agg_ty.into());
@@ -29030,6 +29104,11 @@ impl<'ctx> super::Codegen<'ctx> {
         branch_tails: Option<&[&Expr]>,
         val: BasicValueEnum<'ctx>,
     ) {
+        // B-2026-09-30-67 — `vc(a, b);` hands the caller's params back; their
+        // bodies are the caller's, as at the array twin.
+        if branch_tails.is_none() && self.let_call_result_is_param_view(tail) {
+            return;
+        }
         let elem_te = match branch_tails {
             None => self.discarded_call_vec_elem_te(tail),
             Some(ts) => {

@@ -10272,6 +10272,44 @@ impl<'ctx> super::Codegen<'ctx> {
         crate::ast::fn_return_wraps_param_in_own_drop_type(program, f, idx)
     }
 
+    /// B-2026-09-30-67 — per slot of a call's aggregate result, when the
+    /// callee returns one literal (`crate::ast::fn_returned_aggregate_literal_slots`):
+    /// `Some(true)` for a param handed back from a whole-param VIEW argument,
+    /// whose body the caller runs; `Some(false)` for anything the result owns
+    /// (a fresh argument, a value the callee built); `None` for a scalar.
+    /// `None` overall when the callee has no such slot map.
+    pub(super) fn call_result_agg_slot_views(&self, e: &Expr) -> Option<Vec<Option<bool>>> {
+        let ExprKind::Call { callee, args } = &e.kind else {
+            return None;
+        };
+        let key = match &callee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::Path { segments, .. } => segments.join("."),
+            _ => return None,
+        };
+        let f = self
+            .program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, &key))?;
+        if f.self_param.is_some() {
+            return None;
+        }
+        let slots = crate::ast::fn_returned_aggregate_literal_slots(f)?;
+        Some(
+            slots
+                .iter()
+                .map(|s| match s {
+                    crate::ast::ReturnedAggSlot::Scalar => None,
+                    crate::ast::ReturnedAggSlot::Owned => Some(false),
+                    crate::ast::ReturnedAggSlot::Param(i) => Some(args.get(*i).is_some_and(|a| {
+                        matches!(&a.value.kind, ExprKind::Identifier(src)
+                            if self.ident_is_whole_param_alias(src))
+                    })),
+                })
+                .collect(),
+        )
+    }
+
     pub(super) fn call_result_param_view_source(&self, e: &Expr) -> Option<String> {
         let ExprKind::Call { callee, args } = &e.kind else {
             return None;
@@ -10286,6 +10324,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .as_deref()
             .and_then(|p| super::declarations::find_function_ast(p, &key))?;
         if f.self_param.is_some() {
+            return None;
+        }
+        // B-2026-09-30-67 — a result that ALSO carries a value the callee or
+        // this call minted is no view, however many params it hands back:
+        // `tupc(a, mk(51))` marked the tuple a view of `a` and `mk(51)`'s body
+        // ran nowhere. The interpreter's twin asks the same slot map.
+        if self
+            .call_result_agg_slot_views(e)
+            .is_some_and(|slots| slots.contains(&Some(false)))
+        {
             return None;
         }
         args.iter()

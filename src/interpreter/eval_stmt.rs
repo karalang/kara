@@ -4310,8 +4310,21 @@ impl<'a> super::Interpreter<'a> {
         let PatternKind::Binding(bname) = &pattern.kind else {
             return;
         };
-        let ExprKind::Tuple(elems) = &value.kind else {
-            return;
+        // B-2026-09-30-67 — or a CALL whose mixed result hands some slots back
+        // from view arguments (`tupc(a, mk(51))`); codegen's twin extends the
+        // tuple let site's `view_elems` from `call_result_agg_slot_views`.
+        let elem_views: Vec<bool> = match &value.kind {
+            ExprKind::Tuple(elems) => elems
+                .iter()
+                .map(|e| self.literal_elem_is_param_view(e))
+                .collect(),
+            ExprKind::Call { .. } if self.let_call_result_param_view_source(value).is_none() => {
+                match self.call_result_agg_slot_views(value) {
+                    Some(slots) => slots.iter().map(|s| *s == Some(true)).collect(),
+                    None => return,
+                }
+            }
+            _ => return,
         };
         // B-2026-08-27-48 — same method-frame guard as the siblings.
         if self.owned_param_frame_is_method.last().copied() == Some(true) {
@@ -4321,7 +4334,7 @@ impl<'a> super::Interpreter<'a> {
             return;
         };
         let mut views: Vec<usize> = Vec::new();
-        for (i, e) in elems.iter().enumerate() {
+        for (i, is_view) in elem_views.into_iter().enumerate() {
             let Some(ev) = bound.get(i) else {
                 return;
             };
@@ -4330,7 +4343,6 @@ impl<'a> super::Interpreter<'a> {
             if !self.ctor_payload_owes_user_drop(ev) {
                 continue;
             }
-            let is_view = self.literal_elem_is_param_view(e);
             if is_view {
                 views.push(i);
             }
@@ -4482,6 +4494,38 @@ impl<'a> super::Interpreter<'a> {
         matches!(v, Value::EnumVariant { enum_name, .. } if enum_name == "Option" || enum_name == "Result")
     }
 
+    /// B-2026-09-30-67 — per slot of a call's aggregate result, when the
+    /// callee returns one literal (`crate::ast::fn_returned_aggregate_literal_slots`):
+    /// `Some(true)` for a param handed back from a whole-param alias argument,
+    /// `Some(false)` for anything the result owns, `None` for a scalar.
+    /// Codegen's twin is `call_result_agg_slot_views` in `runtime.rs`.
+    fn call_result_agg_slot_views(&self, value: &Expr) -> Option<Vec<Option<bool>>> {
+        let ExprKind::Call { callee, args } = &value.kind else {
+            return None;
+        };
+        let name = match &callee.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::Path { segments, .. } => segments.last()?.as_str(),
+            _ => return None,
+        };
+        let f = self.callee_fn_for_param_ownership(name)?;
+        let whole = self.whole_param_alias_stack.last()?;
+        let slots = crate::ast::fn_returned_aggregate_literal_slots(f)?;
+        Some(
+            slots
+                .iter()
+                .map(|s| match s {
+                    crate::ast::ReturnedAggSlot::Scalar => None,
+                    crate::ast::ReturnedAggSlot::Owned => Some(false),
+                    crate::ast::ReturnedAggSlot::Param(i) => Some(args.get(*i).is_some_and(|a| {
+                        matches!(&a.value.kind, ExprKind::Identifier(src)
+                            if whole.contains(src.as_str()))
+                    })),
+                })
+                .collect(),
+        )
+    }
+
     fn let_call_result_param_view_source(&self, value: &Expr) -> Option<String> {
         let ExprKind::Call { callee, args } = &value.kind else {
             return None;
@@ -4497,6 +4541,14 @@ impl<'a> super::Interpreter<'a> {
         // stands down and the result binding owns the body (measured: marking
         // it a view too ran zero bodies).
         let whole = self.whole_param_alias_stack.last()?;
+        // B-2026-09-30-67 — not when the result also carries a value the
+        // callee or this call minted; codegen's twin asks the same slot map.
+        if self
+            .call_result_agg_slot_views(value)
+            .is_some_and(|slots| slots.contains(&Some(false)))
+        {
+            return None;
+        }
         args.iter()
             .enumerate()
             .find_map(|(i, a)| match &a.value.kind {
@@ -5260,6 +5312,18 @@ impl<'a> super::Interpreter<'a> {
             if let PatternKind::Binding(bname) = &pattern.kind {
                 if let Some(src) = self.let_call_result_param_view_source(value) {
                     if self.cond_store_param_names.contains(src.as_str()) {
+                        return false;
+                    }
+                    // B-2026-09-30-67 — nor a `let mut` container: a view runs
+                    // no element body, so an element pushed later would run
+                    // none. Codegen's array/`Vec` let site declines the same.
+                    // Only for a callee that BUILDS the container
+                    // (`call_result_agg_slot_views`): a param handed back whole
+                    // (`keepv(v)`) was already right here, pushes included.
+                    if matches!(stmt.kind, StmtKind::Let { is_mut: true, .. })
+                        && matches!(self.env.get(bname), Some(Value::Array(_)))
+                        && self.call_result_agg_slot_views(value).is_some()
+                    {
                         return false;
                     }
                     // B-2026-09-06-63 — the view is right about the FIELDS and
@@ -11430,6 +11494,10 @@ impl<'a> super::Interpreter<'a> {
                     // B-2026-09-28-4 — as the bare discard: a param VIEW's
                     // body is the caller's.
                     && !(Self::value_is_optres(&val) && self.optres_temp_is_param_view(value))
+                    // B-2026-09-30-67 — and a tuple / array / `Vec` a call
+                    // hands back built from the caller's params.
+                    && !(matches!(val, Value::Tuple(_) | Value::Array(_))
+                        && self.let_call_result_param_view_source(value).is_some())
                     // B-2026-09-28-13 — and so is an owned param's own
                     // (`let _ = a;`), which the bare `a;` already leaves to
                     // the caller; running it here as well doubled it
@@ -11440,7 +11508,29 @@ impl<'a> super::Interpreter<'a> {
                             .last()
                             .is_some_and(|params| params.contains(n.as_str())))
                 {
-                    self.run_discarded_value_user_drops(val.clone());
+                    // B-2026-09-30-67 — a MIXED tuple hand-back runs only the
+                    // slots it owns, as the bare discard does.
+                    let owned_val = match (&val, self.call_result_agg_slot_views(value)) {
+                        (Value::Tuple(items), Some(slots))
+                            if slots.contains(&Some(true)) && slots.len() == items.len() =>
+                        {
+                            Value::Tuple(
+                                items
+                                    .iter()
+                                    .zip(&slots)
+                                    .map(|(v, s)| {
+                                        if *s == Some(true) {
+                                            Value::Unit
+                                        } else {
+                                            v.clone()
+                                        }
+                                    })
+                                    .collect(),
+                            )
+                        }
+                        _ => val.clone(),
+                    };
+                    self.run_discarded_value_user_drops(owned_val);
                     // B-2026-08-31-35 — this site now owns the value, so the
                     // taken arm's consumed locals must not run a second body.
                     self.disarm_discarded_tail_sources(value);
@@ -12463,6 +12553,38 @@ impl<'a> super::Interpreter<'a> {
                 // Codegen twin: `track_discarded_optres_payload_bodies`.
                 if Self::value_is_optres(&discarded) && self.optres_temp_is_param_view(shape) {
                     return Ok(Value::Unit);
+                }
+                // B-2026-09-30-67 — a tuple / array / `Vec` a call hands back
+                // built from the caller's params (`arrc(a, b);`) is a view
+                // too: the caller runs those bodies, so the discard runs none.
+                // A mixed tuple (`tupc(a, mk(51));`) runs only the slots it
+                // owns. Codegen twins: `track_discarded_array_return_bodies`
+                // and `track_discarded_tuple_return_bodies`.
+                if matches!(discarded, Value::Tuple(_) | Value::Array(_))
+                    && matches!(shape.kind, ExprKind::Call { .. })
+                {
+                    if self.let_call_result_param_view_source(shape).is_some() {
+                        return Ok(Value::Unit);
+                    }
+                    if let (Value::Tuple(items), Some(slots)) =
+                        (&discarded, self.call_result_agg_slot_views(shape))
+                    {
+                        if slots.contains(&Some(true)) && slots.len() == items.len() {
+                            let owned: Vec<Value> = items
+                                .iter()
+                                .zip(&slots)
+                                .map(|(v, s)| {
+                                    if *s == Some(true) {
+                                        Value::Unit
+                                    } else {
+                                        v.clone()
+                                    }
+                                })
+                                .collect();
+                            self.run_discarded_value_user_drops(Value::Tuple(owned));
+                            return Ok(Value::Unit);
+                        }
+                    }
                 }
                 match &shape.kind {
                     ExprKind::Call { callee, .. } => {
