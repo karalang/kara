@@ -7108,16 +7108,12 @@ fn main() {
 /// defensive copy at the move site — so there was no Vec-element disarm to
 /// extend and that arm had to be written.
 ///
-/// THE `Drop` BODY STILL FIRES TWICE FOR THE MOVED-OUT ELEMENT, and the
-/// cells below PIN that as the current answer rather than as the right one.
-/// `dR1` appears before `got:1` and again after: the tuple's element-bodies
-/// walk runs on the element that left, and only the MEMORY channel has a
-/// move-out disarm — "bodies follow the move; memory does not"
-/// (B-2026-08-28-57), here with the two channels the other way round. It is
-/// NOT this fix's doing and NOT a backend divergence: `--interp` prints the
-/// same doubled body on `origin/main`, so all four surfaces have agreed on
-/// it all along. Filed separately; when it closes, these expectations lose
-/// one `dR1` each and that is the signal, not a break.
+/// THE `Drop` BODY FIRES TWICE FOR ONE READ, and that is the right answer.
+/// `dR1` appears before `got:1` and again after because an index read in a
+/// return position is a permitted COPY (design.md § "The index operator"):
+/// the tuple's element and the returned value are two values, each with its
+/// own body. All four surfaces agree on it. B-2026-09-20-54 read it as a
+/// moved-out element firing twice and was closed on that rule.
 ///
 /// What this fix does buy on those four cells is exact agreement with
 /// `--interp`, where before the compiled surfaces aborted and the
@@ -7221,12 +7217,13 @@ fn asan_tuple_container_elem_moved_out_has_one_owner() {
         "b165e-vec-moved-local-elem-tail",
     );
 
-    // USER `Drop` ELEMENTS. Memory clean, and the body expectations below
-    // PIN TODAY'S ANSWER, WHICH IS WRONG: `dR1` fires twice for the element
-    // that was moved out. See this fixture's doc — the doubled body is
-    // pre-existing on all four surfaces including `--interp`, is filed on
-    // its own row, and when it closes these two expectations each lose
-    // their trailing `dR1`.
+    // USER `Drop` ELEMENTS. Memory clean, and `dR1` fires twice for one
+    // read. That is CORRECT, not a pin: an index read in a return position is
+    // a permitted COPY (design.md § "The index operator";
+    // `index_move_rejects_where_a_borrow_is_available_and_permits_where_it_is_not`
+    // in tests/typechecker.rs), so the tuple's element and the returned value
+    // each run their own body. B-2026-09-20-54, which read this as a moved
+    // element firing twice, was closed on that rule.
     assert_clean_asan_run(
         "struct R2 { id: i64, s: String }\n\
              impl Drop for R2 { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\

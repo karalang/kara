@@ -8322,6 +8322,48 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value()
     }
 
+    /// The GATE of [`Self::suppress_array_elem_move_source`]: the root, element
+    /// type, length and index of a constant-index element read `a[k]` /
+    /// `self[k]` out of an owned `Array[T, N]` root that the disarm will hand
+    /// to its destination. `None` for every read that stays a copy.
+    ///
+    /// B-2026-10-01-55 — shared with [`Self::maybe_defensive_copy_param_arg`],
+    /// which deep-copies every OTHER heap element read into an owning sink.
+    /// The two must answer as one predicate: a read the disarm moves must not
+    /// also be cloned (the clone would be the destination's and the original
+    /// nobody's), and a read it does not move must be cloned (or the array and
+    /// the destination free one buffer).
+    pub(super) fn array_elem_move_out_target(
+        &self,
+        value: &Expr,
+    ) -> Option<(String, TypeExpr, u32, u32)> {
+        let ExprKind::Index { object, index } = &value.kind else {
+            return None;
+        };
+        // B-2026-09-01-5 — the array-element peer of the field-projection
+        // decline; see `in_discarded_aggregate_tail`.
+        if self.in_discarded_aggregate_tail(value) {
+            return None;
+        }
+        let ExprKind::Integer(k, _) = &index.kind else {
+            return None;
+        };
+        if *k < 0 {
+            return None;
+        }
+        let root = match &object.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return None,
+        };
+        let (elem_te, n) = self.borrow_vars.owned_array_params.get(&root).cloned()?;
+        let k = *k as u32;
+        if k >= n {
+            return None;
+        }
+        Some((root, elem_te, n, k))
+    }
+
     /// Move-out disarm for a constant-index element read out of an owned
     /// `Array[T, N]` root (B-2026-08-22-18 follow-up): when `a[k]` /`self[k]`
     /// (const `k`) is moved out as a `return` / `let` value and `a` carries the
@@ -8333,32 +8375,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// analog of [`Self::suppress_place_field_struct_move_source`]; constant
     /// index only (a dynamic-index move-out is a separate, pre-existing gap).
     pub(super) fn suppress_array_elem_move_source(&mut self, value: &Expr) {
-        let ExprKind::Index { object, index } = &value.kind else {
+        let Some((root, elem_te, n, k)) = self.array_elem_move_out_target(value) else {
             return;
         };
-        // B-2026-09-01-5 — the array-element peer of the field-projection
-        // decline; see `in_discarded_aggregate_tail`.
-        if self.in_discarded_aggregate_tail(value) {
-            return;
-        }
-        let ExprKind::Integer(k, _) = &index.kind else {
-            return;
-        };
-        if *k < 0 {
-            return;
-        }
-        let root = match &object.kind {
-            ExprKind::Identifier(n) => n.clone(),
-            ExprKind::SelfValue => "self".to_string(),
-            _ => return,
-        };
-        let Some((elem_te, n)) = self.borrow_vars.owned_array_params.get(&root).cloned() else {
-            return;
-        };
-        let k = *k as u32;
-        if k >= n {
-            return;
-        }
         let Some(slot) = self.variables.get(&root).map(|s| s.ptr) else {
             return;
         };

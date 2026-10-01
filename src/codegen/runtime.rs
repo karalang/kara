@@ -9451,6 +9451,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // non-range, non-trivially-copyable index and leaves the source intact,
         // so the container's single drop and the sink's clone free distinct
         // buffers. No-op for POD elements and non-index args.
+        // B-2026-10-01-55 — the fixed-`Array` twin of the arm below. A
+        // constant-index read the move-out disarm hands over (a `return`, a
+        // tail or a struct-literal field over an owned root —
+        // `array_elem_move_out_target`) is a MOVE and must not be cloned too;
+        // every other read stays a copy, so the destination gets its own.
+        if let Some(elem_te) = self.array_index_heap_elem_te(arg_expr) {
+            let disarm_follows = (self.in_return_defensive_copy
+                || self.in_struct_literal_field_copy)
+                && self.array_elem_move_out_target(arg_expr).is_some();
+            if !disarm_follows {
+                return self
+                    .clone_index_element_at(arg_expr, val, elem_te)
+                    .unwrap_or(val);
+            }
+        }
         if self.expr_is_heap_vec_index(arg_expr)
             || (!self.in_return_defensive_copy
                 && self.expr_is_heap_vec_index_field_rooted(arg_expr))

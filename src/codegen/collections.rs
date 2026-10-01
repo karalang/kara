@@ -4165,9 +4165,57 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(elem_te)
     }
 
+    /// B-2026-10-01-55 — the element `TypeExpr` of `a[i]` when `a` is a NAMED
+    /// fixed `Array` (a local, a by-value param or a `ref` param) whose element
+    /// owns heap: the `Array` twin of [`Self::expr_is_heap_vec_index`].
+    ///
+    /// The `Vec` predicate reads `var_elem_type_exprs`, and an `Array`'s element
+    /// lives in the separate `array_elem_type_exprs` table, so every owning sink
+    /// that deep-copies a `Vec` element (`return`, tuple literal, `Some`,
+    /// `push`, struct field, call argument) handed an `Array` element out as a
+    /// `{ptr,len,cap}` ALIAS. The array's own element drop and the destination
+    /// then freed one buffer: an `Invalid free()` on every compiled surface,
+    /// for a local, a by-value param and a `ref` param alike. A `shared` or
+    /// `weak` element is left to the refcount machinery.
+    pub(super) fn array_index_heap_elem_te(&self, expr: &Expr) -> Option<TypeExpr> {
+        let ExprKind::Index { object, index } = &expr.kind else {
+            return None;
+        };
+        if matches!(&index.kind, ExprKind::Range { .. }) {
+            return None;
+        }
+        let ExprKind::Identifier(name) = &object.kind else {
+            return None;
+        };
+        if self
+            .var_types
+            .var_elem_type_exprs
+            .contains_key(name.as_str())
+        {
+            return None;
+        }
+        let elem_te = self
+            .var_types
+            .array_elem_type_exprs
+            .get(name.as_str())
+            .cloned()?;
+        let elem_te = self.subst_monomorph_type_params(&elem_te);
+        if super::vec_method::is_trivially_copyable_te(&elem_te)
+            || matches!(elem_te.kind, TypeKind::Weak(_))
+            || self.shared_heap_type_for_type_expr(&elem_te).is_some()
+            || matches!(&elem_te.kind, TypeKind::Path(p)
+            if p.segments.last().is_some_and(|n| {
+                self.type_decls.shared_type_names.contains(n.as_str())
+            }))
+        {
+            return None;
+        }
+        Some(elem_te)
+    }
+
     /// The deep clone behind [`Self::clone_owned_vec_index_element`], at an
     /// element type the caller already resolved.
-    fn clone_index_element_at(
+    pub(super) fn clone_index_element_at(
         &mut self,
         value: &Expr,
         val: BasicValueEnum<'ctx>,

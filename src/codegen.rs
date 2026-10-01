@@ -2024,6 +2024,11 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) deferred_shared_temp_release:
         Option<(inkwell::types::StructType<'ctx>, PointerValue<'ctx>)>,
     pub(crate) in_return_defensive_copy: bool,
+    /// B-2026-10-01-55 — set while a (non-`shared`) struct literal's field
+    /// initializer runs its defensive copy, because that position, like a
+    /// return, is followed by the `Array` element move-out disarm
+    /// (`suppress_array_elem_move_source`).
+    pub(crate) in_struct_literal_field_copy: bool,
     /// B-2026-09-14-27 — suppress the fixed-`Array` leg of
     /// [`Self::maybe_defensive_copy_param_arg`] for a destination that does
     /// NOT take ownership of an array it is handed.
@@ -6640,6 +6645,7 @@ impl<'ctx> Codegen<'ctx> {
             vec_elem_field_clone_log: Vec::new(),
             tidx_read_clone_skip: std::collections::HashSet::new(),
             in_return_defensive_copy: false,
+            in_struct_literal_field_copy: false,
             uam_array_copy_declined: false,
             tracing: Tracing {
                 strip_error_trace: read_strip_error_trace_env(),

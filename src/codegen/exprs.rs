@@ -3970,7 +3970,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.restore_declared_aggregate_te(saved_agg_te);
                 // Owned String/Vec PARAM captured into a field — deep-copy,
                 // same rationale as the shared-struct branch above.
+                let saved_flc = std::mem::replace(&mut self.in_struct_literal_field_copy, true);
                 let val = self.maybe_defensive_copy_param_arg(&field_init.value, val);
+                self.in_struct_literal_field_copy = saved_flc;
                 // B-2026-08-10-21 (struct-literal consume site) — see the
                 // shared-struct branch above for the rationale.
                 let val = self.uam_defensive_copy(&field_init.value, val);
