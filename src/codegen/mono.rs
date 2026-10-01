@@ -2888,7 +2888,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.callee_param_te_for_call(&p.ty, call_span)
                     };
-                    !self.user_enum_boxed_payload_variants(&inst).is_empty()
+                    // B-2026-10-01-7 — a boxed `Option` / `Result` handed back
+                    // WRAPPED (`fn gv[T](x: T) -> Vec[T] { return Vec[x] }`):
+                    // the result's element frees the box the argument still
+                    // holds. A whole hand-back (`-> T`) keeps the route it has.
+                    let wrapped_optres = !is_recv
+                        && generic_fn.return_type.as_ref().is_some_and(|rt| {
+                            crate::formatter::render_type_expr(rt)
+                                != crate::formatter::render_type_expr(&p.ty)
+                        })
+                        && !self.boxed_enum_payload_variants(&inst).is_empty();
+                    wrapped_optres || !self.user_enum_boxed_payload_variants(&inst).is_empty()
                 });
             if param_box_maybe_handed_back {
                 if let ExprKind::Identifier(n) = &a.value.kind {
@@ -5056,11 +5066,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
             }
             // B-2026-09-17-7 — see the mixed-path arm in the argument loop.
+            // B-2026-10-01-7 — and inside a returned `Vec`'s elements, the
+            // element type read off this call's instantiated return.
+            let vec_elem = generic_fn.return_type.as_ref().and_then(|rt| {
+                let inst_rt = self.callee_param_te_for_call(rt, call_span);
+                match &inst_rt.kind {
+                    TypeKind::Path(rp) if rp.segments.last().map(String::as_str) == Some("Vec") => {
+                        self.extract_vec_elem_type(&inst_rt)
+                    }
+                    _ => None,
+                }
+            });
             for src in &maybe_handed_back_args {
-                self.zero_boxed_binding_if_call_returned_its_box(src, v);
+                self.zero_boxed_binding_if_call_returned_its_box(src, v, vec_elem);
             }
             for (ptr, ty) in &maybe_handed_back_slots {
-                self.zero_boxed_slot_if_call_returned_its_box(*ptr, *ty, v);
+                self.zero_boxed_slot_if_call_returned_its_box(*ptr, *ty, v, vec_elem);
             }
             // LazyFrame codegen twin — rule 3, the generic-call twin of the
             // `compile_call` hook: a generic fn DECLARED to return LazyExpr/

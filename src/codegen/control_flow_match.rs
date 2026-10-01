@@ -19551,11 +19551,12 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         src: &str,
         ret: inkwell::values::BasicValueEnum<'ctx>,
+        vec_elem: Option<inkwell::types::BasicTypeEnum<'ctx>>,
     ) {
         let Some(slot) = self.variables.get(src).copied() else {
             return;
         };
-        self.zero_boxed_slot_if_call_returned_its_box(slot.ptr, slot.ty, ret);
+        self.zero_boxed_slot_if_call_returned_its_box(slot.ptr, slot.ty, ret, vec_elem);
     }
 
     /// B-2026-09-19-22 — queue a by-value NAMED boxed-enum argument's payload
@@ -19745,12 +19746,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// B-2026-09-27-94 — [`Self::zero_boxed_binding_if_call_returned_its_box`]
     /// over a slot rather than a named binding, so a FRESH TEMP's box
     /// registration (`register_boxed_optres_arg_temp`) can be disarmed by the
-    /// same compare. The body is that function's, unchanged.
+    /// same compare. The body is that function's.
+    ///
+    /// B-2026-10-01-7 — it also searches the ELEMENTS of a returned `Vec` when
+    /// `vec_elem` names its element type. `fn ov(x: Option[R]) ->
+    /// Vec[Option[R]] { return Vec[x] }` puts the argument's box word inside
+    /// the result's heap buffer, where no word of the returned header can show
+    /// it, so the caller kept its box beside the element that now owns it and
+    /// both freed it: a segfault with no output on every compiled surface. The
+    /// search runs only when the element type IS the slot's type, so every
+    /// word it reads is a box word of this exact layout and nothing else
+    /// enters the compare. Unlike the `select` below, the search is a loop and
+    /// so adds blocks; it ends in a fresh block the caller continues from.
     pub(super) fn zero_boxed_slot_if_call_returned_its_box(
         &mut self,
         slot_ptr: inkwell::values::PointerValue<'ctx>,
         slot_ty: inkwell::types::BasicTypeEnum<'ctx>,
         ret: inkwell::values::BasicValueEnum<'ctx>,
+        vec_elem: Option<inkwell::types::BasicTypeEnum<'ctx>>,
     ) {
         let inkwell::types::BasicTypeEnum::StructType(st) = slot_ty else {
             return;
@@ -19768,7 +19781,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // aggregate-literal return.
         let mut ret_words: Vec<inkwell::values::IntValue<'ctx>> = Vec::new();
         self.collect_handback_box_words(ret, slot_ty, 0, &mut ret_words);
-        if ret_words.is_empty() {
+        let scan = vec_elem == Some(slot_ty);
+        if ret_words.is_empty() && !scan {
             return;
         }
         let Ok(cur) = self.builder.build_load(st, slot_ptr, "handback.cur") else {
@@ -19781,6 +19795,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let mut same_any: Option<inkwell::values::IntValue<'ctx>> = None;
+        if scan {
+            same_any = self.vec_ret_holds_box_word(ret, st, src_w0.into_int_value());
+        }
         for w in ret_words {
             let Ok(eq) = self.builder.build_int_compare(
                 inkwell::IntPredicate::EQ,
@@ -19821,6 +19838,102 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let _ = self.builder.build_store(slot_ptr, next);
+    }
+
+    /// B-2026-10-01-7 — an `i1` that is true when the `Vec` header `ret`
+    /// (`{ ptr, len, cap }`) holds an element of layout `elem` whose box word
+    /// (word 1) is `w0`. A loop over `len`, so every element is looked at and
+    /// nothing past the end is read.
+    fn vec_ret_holds_box_word(
+        &mut self,
+        ret: inkwell::values::BasicValueEnum<'ctx>,
+        elem: inkwell::types::StructType<'ctx>,
+        w0: inkwell::values::IntValue<'ctx>,
+    ) -> Option<inkwell::values::IntValue<'ctx>> {
+        let inkwell::values::BasicValueEnum::StructValue(sv) = ret else {
+            return None;
+        };
+        let hst = sv.get_type();
+        let i64t = self.context.i64_type();
+        if hst.count_fields() != 3
+            || !hst.get_field_type_at_index(0)?.is_pointer_type()
+            || hst.get_field_type_at_index(1)? != i64t.into()
+        {
+            return None;
+        }
+        let cur_fn = self.builder.get_insert_block()?.get_parent()?;
+        let buf = self
+            .builder
+            .build_extract_value(sv, 0, "handback.scan.buf")
+            .ok()?
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_extract_value(sv, 1, "handback.scan.len")
+            .ok()?
+            .into_int_value();
+        let bool_t = self.context.bool_type();
+        let found = self.create_entry_alloca(cur_fn, "handback.scan.found", bool_t.into());
+        let idx = self.create_entry_alloca(cur_fn, "handback.scan.idx", i64t.into());
+        self.builder.build_store(found, bool_t.const_zero()).ok()?;
+        self.builder.build_store(idx, i64t.const_zero()).ok()?;
+        let hdr = self.context.append_basic_block(cur_fn, "handback.scan.hdr");
+        let body = self
+            .context
+            .append_basic_block(cur_fn, "handback.scan.body");
+        let done = self
+            .context
+            .append_basic_block(cur_fn, "handback.scan.done");
+        self.builder.build_unconditional_branch(hdr).ok()?;
+        self.builder.position_at_end(hdr);
+        let i = self
+            .builder
+            .build_load(i64t, idx, "handback.scan.i")
+            .ok()?
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, i, len, "handback.scan.more")
+            .ok()?;
+        self.builder
+            .build_conditional_branch(more, body, done)
+            .ok()?;
+        self.builder.position_at_end(body);
+        // SAFETY: `i < len`, and `buf` holds `len` elements of layout `elem`.
+        let ep = unsafe { self.builder.build_gep(elem, buf, &[i], "handback.scan.ep") }.ok()?;
+        let wp = self
+            .builder
+            .build_struct_gep(elem, ep, 1, "handback.scan.wp")
+            .ok()?;
+        let w = self
+            .builder
+            .build_load(i64t, wp, "handback.scan.w")
+            .ok()?
+            .into_int_value();
+        let eq = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, w, w0, "handback.scan.eq")
+            .ok()?;
+        let f = self
+            .builder
+            .build_load(bool_t, found, "handback.scan.f")
+            .ok()?
+            .into_int_value();
+        let f2 = self.builder.build_or(f, eq, "handback.scan.f2").ok()?;
+        self.builder.build_store(found, f2).ok()?;
+        let i2 = self
+            .builder
+            .build_int_add(i, i64t.const_int(1, false), "handback.scan.i2")
+            .ok()?;
+        self.builder.build_store(idx, i2).ok()?;
+        self.builder.build_unconditional_branch(hdr).ok()?;
+        self.builder.position_at_end(done);
+        Some(
+            self.builder
+                .build_load(bool_t, found, "handback.scan.hit")
+                .ok()?
+                .into_int_value(),
+        )
     }
 
     /// B-2026-09-19-21 — every word of `val` that could be `slot_ty`'s box

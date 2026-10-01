@@ -3538,7 +3538,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.call_arg_flows_into_return(&qualified, ai)
                                 && !self.mixed_path_boxed_enum_param_callee_owned(&qualified, ai)
                         });
-                    if self.erased_boxed_user_enum_ident_arg(&a.value)
+                    if (self.erased_boxed_user_enum_ident_arg(&a.value)
+                        || self.boxed_optres_ident_arg_wrapped_back(&qualified, i, &a.value))
                         && self.callee_param_ast(&qualified, i).is_some_and(|(_, ai)| {
                             self.callee_by_value_binding_param_may_return(&qualified, ai)
                         })
@@ -3615,11 +3616,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     &qualified,
                     self.unpack_niche_abi_ret(&qualified, basic_val.unwrap_basic()),
                 );
+                // B-2026-10-01-7 — and inside a returned `Vec`'s elements.
+                let vec_elem = self.callee_return_vec_elem_ty(&qualified);
                 for src in &maybe_handed_back_args {
-                    self.zero_boxed_binding_if_call_returned_its_box(src, v);
+                    self.zero_boxed_binding_if_call_returned_its_box(src, v, vec_elem);
                 }
                 for (ptr, ty) in &maybe_handed_back_slots {
-                    self.zero_boxed_slot_if_call_returned_its_box(*ptr, *ty, v);
+                    self.zero_boxed_slot_if_call_returned_its_box(*ptr, *ty, v, vec_elem);
                 }
                 Ok(v)
             };

@@ -3011,7 +3011,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // is what says the binding's cleanup IS the null-guarded
             // `BoxedEnumDrop` the zeroing neutralizes.
             if !borrow_skip
-                && self.erased_boxed_user_enum_ident_arg(&a.value)
+                && (self.erased_boxed_user_enum_ident_arg(&a.value)
+                    || self.boxed_optres_ident_arg_wrapped_back(&name, i, &a.value))
                 && self.callee_by_value_binding_param_may_return(&name, i)
             {
                 if let ExprKind::Identifier(n) = &a.value.kind {
@@ -3388,11 +3389,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-09-20-52 — the non-generic twin of `mono.rs`'s post-call
             // hook. See the collection site in the argument loop above for why
             // the question is asked of the returned VALUE.
+            // B-2026-10-01-7 — and inside a returned `Vec`'s elements.
+            let vec_elem = self.callee_return_vec_elem_ty(&name);
             for src in &maybe_handed_back_args {
-                self.zero_boxed_binding_if_call_returned_its_box(src, v);
+                self.zero_boxed_binding_if_call_returned_its_box(src, v, vec_elem);
             }
             for (ptr, ty) in &maybe_handed_back_slots {
-                self.zero_boxed_slot_if_call_returned_its_box(*ptr, *ty, v);
+                self.zero_boxed_slot_if_call_returned_its_box(*ptr, *ty, v, vec_elem);
             }
             // LazyFrame codegen twin — rule 3 of the ownership model
             // (`src/codegen/lazyframe.rs`): a user fn DECLARED to return
@@ -8046,6 +8049,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 && (crate::ast::fn_always_returns_param(Some(program), f, arg_index)
                     || crate::ast::fn_always_returns_param_via_call(program, f, arg_index))
         })
+    }
+
+    /// B-2026-10-01-7 — the LLVM element type of a NON-generic callee's
+    /// declared `Vec[E]` return, for the hand-back compare that searches the
+    /// returned buffer. `None` for anything else, including a generic callee,
+    /// whose `E` is not resolved here.
+    pub(super) fn callee_return_vec_elem_ty(
+        &self,
+        callee_name: &str,
+    ) -> Option<inkwell::types::BasicTypeEnum<'ctx>> {
+        let program = self.program_snapshot.as_deref()?;
+        let f = super::declarations::find_function_ast(program, callee_name)?;
+        if f.generic_params.is_some() {
+            return None;
+        }
+        let rt = f.return_type.as_ref()?;
+        let crate::ast::TypeKind::Path(p) = &rt.kind else {
+            return None;
+        };
+        if p.segments.last().map(String::as_str) != Some("Vec") {
+            return None;
+        }
+        self.extract_vec_elem_type(rt)
     }
 
     /// B-2026-09-22-13 — does a value of type `rt` hold a part of the rendered
@@ -18086,6 +18112,57 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         crate::ast::fn_returns_param(f, i)
+    }
+
+    /// B-2026-10-01-7 — a NAMED `Option` / `Result` argument whose payload is
+    /// heap-boxed, for the post-call hand-back compare beside
+    /// [`Self::erased_boxed_user_enum_ident_arg`]. That predicate leaves the
+    /// two builtins out, so `let o = Some(mk(7)); let f = ov(o)` over `fn
+    /// ov(x: Option[R]) -> Vec[Option[R]] { return Vec[x] }` kept `o`'s box
+    /// drop while the returned `Vec`'s element freed the same box: a segfault
+    /// under the JIT and AOT. The compare is structural (it zeroes `o` only
+    /// when the returned value carries `o`'s own box word), so admitting the
+    /// builtins here cannot disarm a box the result does not hold.
+    ///
+    /// Only for a callee whose return type is NOT the param's own: a WHOLE
+    /// hand-back (`fn id(x: Option[R]) -> Option[R]`) already gives the
+    /// result `o`'s registration, so zeroing `o` there left the box with no
+    /// owner (32 B lost per call, measured).
+    pub(super) fn boxed_optres_ident_arg_wrapped_back(
+        &mut self,
+        name: &str,
+        i: usize,
+        arg: &Expr,
+    ) -> bool {
+        let ExprKind::Identifier(v) = &arg.kind else {
+            return false;
+        };
+        let wrapped = self.callee_param_ast(name, i).is_some_and(|(f, ast_i)| {
+            f.params.get(ast_i).is_some_and(|p| {
+                f.return_type.as_ref().is_some_and(|rt| {
+                    crate::formatter::render_type_expr(rt)
+                        != crate::formatter::render_type_expr(&p.ty)
+                })
+            })
+        });
+        if !wrapped {
+            return false;
+        }
+        let owner = self.moved_arg_owner_name(v);
+        if !self
+            .payload_vars
+            .boxed_enum_payload_vars
+            .contains(owner.as_str())
+        {
+            return false;
+        }
+        self.var_types
+            .var_option_payload_te
+            .contains_key(owner.as_str())
+            || self
+                .var_types
+                .var_result_payload_te
+                .contains_key(owner.as_str())
     }
 
     pub(super) fn erased_boxed_user_enum_ident_arg(&mut self, arg: &Expr) -> bool {
