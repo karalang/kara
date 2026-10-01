@@ -25493,6 +25493,101 @@ impl<'ctx> super::Codegen<'ctx> {
         lowered.ok().map(|(ptr, _)| ptr)
     }
 
+    /// B-2026-09-20-28 — lower a place chain of fields and pure-scalar
+    /// indexes to a synth name bound to its storage, one step at a time, so
+    /// the displaced-element drop below sees only bare-name objects. Every
+    /// synth minted is pushed onto `synths` for the caller to forget. `None`
+    /// declines, which is a leak, the direction this family accepts.
+    fn materialize_displaced_place(
+        &mut self,
+        e: &Expr,
+        synths: &mut Vec<String>,
+    ) -> Option<String> {
+        match &e.kind {
+            ExprKind::Identifier(n) => Some(n.clone()),
+            ExprKind::SelfValue => Some("self".to_string()),
+            ExprKind::Index { object, index } => {
+                if !Self::index_expr_is_pure_scalar(index) {
+                    return None;
+                }
+                let base = self.materialize_displaced_place(object, synths)?;
+                if self.var_types.slice_elem_types.contains_key(base.as_str())
+                    || self.mapset.map_key_types.contains_key(base.as_str())
+                    || self.active_soa_layout(&base).is_some()
+                {
+                    return None;
+                }
+                // B-2026-09-14-29's rule: type and pointer chosen together.
+                let (te, is_array) = match self
+                    .var_types
+                    .var_elem_type_exprs
+                    .get(base.as_str())
+                    .cloned()
+                {
+                    Some(te) => (te, false),
+                    None => (
+                        self.var_types
+                            .array_elem_type_exprs
+                            .get(base.as_str())
+                            .cloned()?,
+                        true,
+                    ),
+                };
+                let lowered = if is_array {
+                    let slot = self.variables.get(base.as_str()).copied()?;
+                    self.lower_indexed_elem_ptr_array(slot, index)
+                } else {
+                    self.lower_indexed_elem_ptr_vec(&base, index)
+                };
+                let (ptr, ll_ty) = lowered.ok()?;
+                let synth = format!("__nested_elem_{}", self.indexed_elem_counter);
+                self.indexed_elem_counter += 1;
+                self.variables
+                    .insert(synth.clone(), super::state::VarSlot { ptr, ty: ll_ty });
+                self.register_var_from_type_expr(&synth, &te);
+                synths.push(synth.clone());
+                Some(synth)
+            }
+            ExprKind::FieldAccess { object, field } => {
+                let base = self.materialize_displaced_place(object, synths)?;
+                let base_expr = Expr {
+                    kind: ExprKind::Identifier(base),
+                    span: object.span,
+                };
+                let Ok(Some((ptr, ll_ty, te))) =
+                    self.lower_field_access_ptr(&base_expr, field, "displaced-elem lowering")
+                else {
+                    return None;
+                };
+                let synth = format!("__field_elem_{}", self.indexed_elem_counter);
+                self.indexed_elem_counter += 1;
+                self.variables
+                    .insert(synth.clone(), super::state::VarSlot { ptr, ty: ll_ty });
+                self.register_var_from_type_expr(&synth, &te);
+                synths.push(synth.clone());
+                Some(synth)
+            }
+            _ => None,
+        }
+    }
+
+    /// Drop every table entry a displaced-element synth name was given.
+    fn forget_displaced_synth(&mut self, synth: &str) {
+        self.variables.remove(synth);
+        self.var_types.vec_elem_types.remove(synth);
+        self.var_types.slice_elem_types.remove(synth);
+        self.var_types.var_elem_type_exprs.remove(synth);
+        self.var_types.var_type_names.remove(synth);
+        self.var_types.array_elem_type_exprs.remove(synth);
+        self.mapset.map_key_types.remove(synth);
+        self.mapset.map_val_types.remove(synth);
+        self.mapset.map_key_type_names.remove(synth);
+        self.mapset.map_key_type_exprs.remove(synth);
+        self.mapset.set_elem_types.remove(synth);
+        self.mapset.set_elem_type_names.remove(synth);
+        self.mapset.set_elem_type_exprs.remove(synth);
+    }
+
     fn emit_displaced_index_elem_drop(
         &mut self,
         object: &Expr,
@@ -25502,6 +25597,78 @@ impl<'ctx> super::Codegen<'ctx> {
         clone_log_mark: usize,
         run_bodies: bool,
     ) {
+        // B-2026-09-20-28 — a container one more step out. The FieldAccess and
+        // Index arms below each lower an inner object that is a BARE name and
+        // decline anything else, so `d[0][0][0] = x` (an Index under an Index)
+        // and `h.xs[0][0] = x` (a FieldAccess under an Index) were declined by
+        // both and the displaced element's heap was orphaned. Lower the inner
+        // object to a synth name first, then hand the rebuilt one-step object
+        // to those arms, which is the fixpoint each arm's own recursion
+        // already relies on. The alias guard runs HERE, against the root,
+        // because the arms below only see the synth name, which no RHS
+        // mentions.
+        if let ExprKind::FieldAccess { object: inner, .. } | ExprKind::Index { object: inner, .. } =
+            &object.kind
+        {
+            if matches!(
+                inner.kind,
+                ExprKind::FieldAccess { .. } | ExprKind::Index { .. }
+            ) {
+                let mut root: &Expr = inner;
+                while let ExprKind::FieldAccess { object: o, .. }
+                | ExprKind::Index { object: o, .. } = &root.kind
+                {
+                    root = o;
+                }
+                let rhs_may_alias_container = match &root.kind {
+                    ExprKind::SelfValue => expr_contains_self_value(rhs),
+                    ExprKind::Identifier(r) => {
+                        !self.expr_cannot_carry_container_heap(rhs, r, clone_log_mark)
+                    }
+                    _ => return,
+                };
+                if !rhs_index_deep_cloned && rhs_may_alias_container {
+                    return;
+                }
+                let mut synths = Vec::new();
+                if let Some(base) = self.materialize_displaced_place(inner, &mut synths) {
+                    let base_expr = Expr {
+                        kind: ExprKind::Identifier(base),
+                        span: inner.span,
+                    };
+                    let rebuilt = Expr {
+                        kind: match &object.kind {
+                            ExprKind::FieldAccess { field, .. } => ExprKind::FieldAccess {
+                                object: Box::new(base_expr),
+                                field: field.clone(),
+                            },
+                            ExprKind::Index { index: i, .. } => ExprKind::Index {
+                                object: Box::new(base_expr),
+                                index: i.clone(),
+                            },
+                            _ => unreachable!(),
+                        },
+                        span: object.span,
+                    };
+                    // `false`, as the one-level `Index` arm passes: the
+                    // interpreter runs no displaced body at a nested position
+                    // (B-2026-09-20-27), so running it here alone would turn
+                    // an agreed silence into a divergence.
+                    self.emit_displaced_index_elem_drop(
+                        &rebuilt,
+                        index,
+                        rhs,
+                        rhs_index_deep_cloned,
+                        clone_log_mark,
+                        false,
+                    );
+                }
+                for synth in synths.iter().rev() {
+                    self.forget_displaced_synth(synth);
+                }
+                return;
+            }
+        }
         // Field-rooted container (`h.xs[i] = <new>`, B-2026-08-01-22 leg a):
         // resolve the field's storage pointer exactly like the store arm
         // does — mint a synth identifier registered from the field TypeExpr
