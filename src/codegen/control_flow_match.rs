@@ -11902,6 +11902,33 @@ impl<'ctx> super::Codegen<'ctx> {
                         &scalar_tes,
                     );
                 }
+            } else if self.scrutinee_is_owned_param_binding(scrutinee)
+                && self.var_has_boxed_enum_drop(scrut_name)
+            {
+                // B-2026-09-20-33 — the read-only twin of the adoption above.
+                // The mask stood down, so the param's walker keeps the body,
+                // and the binding is the VIEW it was bound as. A payload struct
+                // with Drop-bearing fields and no `Drop` of its own was given a
+                // field-bodies walk at the bind site all the same, so the body
+                // ran twice: `Gen.A(w) => { println(..) }` over `Gen[Cn]`
+                // printed `dR1` at the arm's end and again at the callee's.
+                self.retract_generic_payload_view_field_bodies(pattern, &scalar_tes);
+            }
+            // B-2026-09-20-33 — and the INLINE spelling, where no box walker
+            // exists in this frame at all: a generic payload narrow enough to
+            // ride in the envelope's word is the CALLER's, whose
+            // `__karac_dropelems_genum_<te>` walk on the argument runs the body
+            // after the call, exactly as for a concrete enum. The binding is a
+            // view on every arm, so its bind-site field-bodies walk is the
+            // second body: `G1.Y(v) => { println(..) }` over `G1[Wn]`,
+            // `struct Wn { a: R }`, printed `dR1` in the arm and again after
+            // the call.
+            if self.scrutinee_is_owned_param_binding(scrutinee)
+                && !self.var_has_boxed_enum_drop(scrut_name)
+                && !matches!(enum_name.as_str(), "Option" | "Result")
+                && !self.enum_generic_param_names(&enum_name).is_empty()
+            {
+                self.retract_generic_payload_view_field_bodies(pattern, &scalar_tes);
             }
             // B-2026-09-10-2 — the MEMORY half of the same move-out for a
             // heap-BOXED generic payload. The arm's binding owns the interior;
@@ -15819,12 +15846,22 @@ impl<'ctx> super::Codegen<'ctx> {
         let [bind] = binds.as_slice() else {
             return;
         };
+        if !self.payload_vars.param_view_locals.contains(bind.as_str()) {
+            return;
+        }
         // A binding the bind site already gave a body walk (a payload struct
         // with Drop-bearing fields and no `Drop` of its own) carries the body
         // already; a second walk would run it twice.
-        if !self.payload_vars.param_view_locals.contains(bind.as_str())
-            || self.has_armed_own_user_drop(bind)
-        {
+        //
+        // B-2026-09-20-33 — but it is no longer a VIEW, for the reason the
+        // registration below says so: the mask took the body off the param's
+        // walker, so this binding is its only owner. Left in
+        // `param_view_locals`, `o = w` read the rebind as a view's and stored
+        // `false` into `o`'s flag on the premise that someone else fires, and
+        // the body ran nowhere — B-2026-09-19-43's two-gates shape at the
+        // generic spelling.
+        if self.has_armed_own_user_drop(bind) {
+            self.payload_vars.param_view_locals.remove(bind.as_str());
             return;
         }
         // B-2026-09-26-38 — the consumed positions past the scalar ones, in
@@ -15867,6 +15904,31 @@ impl<'ctx> super::Codegen<'ctx> {
             bodies,
             crate::codegen::state::UserDropKind::StructFieldBodies,
         );
+    }
+
+    /// B-2026-09-20-33 — retract the bind site's FIELD-BODIES walk from an
+    /// arm binding that stayed a param view, because the by-value param's
+    /// boxed-payload walker still runs that body. Only the
+    /// `StructFieldBodies` kind: an own-`Drop` payload's wrapper is never
+    /// registered on a view (`bind_pattern_values` declines it there), and
+    /// the binding's memory drop is a separate action this leaves alone.
+    fn retract_generic_payload_view_field_bodies(
+        &mut self,
+        pattern: &Pattern,
+        scalar_tes: &std::collections::HashMap<String, TypeExpr>,
+    ) {
+        for bind in Self::variant_arm_bodied_binds(pattern, scalar_tes) {
+            if !self.payload_vars.param_view_locals.contains(bind.as_str()) {
+                continue;
+            }
+            for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+                frame.retain(|a| {
+                    !matches!(a, super::state::CleanupAction::UserDrop { binding_name, kind, .. }
+                        if *binding_name == bind
+                            && *kind == UserDropKind::StructFieldBodies)
+                });
+            }
+        }
     }
 
     /// B-2026-09-20-41 — do the positions this arm takes instantiate to a
