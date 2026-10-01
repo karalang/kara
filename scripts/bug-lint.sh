@@ -13,6 +13,8 @@
 #  6b. every fix SHA this working copy just wrote is REACHABLE from HEAD or
 #      origin/main — an orphaned commit still resolves in the clone that made
 #      it, so presence (rule 6) cannot see the case rule 6b exists for
+#  6c. the same reachability test over every sha a changed row's PROSE gained
+#      (title / detail / fix), where an OPEN row's citations live
 #   7. no PUBLISHED row has disappeared — every B-ID on origin/main is still here
 #   8. canonical JSON encoding — see scripts/bug-ledger-normalize.py
 set -euo pipefail
@@ -474,6 +476,72 @@ else:
             f"clone (absent, or present-but-truncated and not created here): "
             f"{'; '.join(unverifiable)}"
         )
+
+    # ── 6c. a sha this working copy just wrote into PROSE (B-2026-09-20-37) ──
+    # Rules 6 and 6b both read the `fix` field's headline, and an OPEN row's
+    # `fix` is empty: a correction or a partial-fix citation can only live in
+    # `title` / `detail` / the fix prose, so both rules had no jurisdiction there.
+    # Measured on the commit that was correcting such an orphan: `checked for the
+    # 0 row(s) this tree changes`, `0 errors`.
+    #
+    # Same reachability test as 6b, over every sha token the row's text gained
+    # against its `origin/main` copy (an untouched row is never on trial). The
+    # verdict is narrower than 6b's, because prose is also where a row RECORDS an
+    # orphan on purpose (a `SHA NOTE:`), and that record must never fail the lint:
+    #   * present, created in this clone, unreachable, with a same-subject twin
+    #     in HEAD that the row does NOT also cite -> ERROR (a citation the rebase
+    #     orphaned; cite the twin);
+    #   * the row cites the twin too -> silent (that is the recorded-orphan shape);
+    #   * anything else unreachable -> one aggregated WARN.
+    def _texts(r):
+        return KATAS_SHA.sub("kara-katas", " ".join(
+            (r.get(k, "") or "") for k in ("title", "detail", "fix")))
+
+    pub_rows = {}
+    if pub6b.returncode == 0:
+        for line in pub6b.stdout.splitlines():
+            try:
+                j = json.loads(line)
+            except Exception:
+                continue
+            pub_rows[j.get("id", "")] = j
+    prose_warn = []
+    for r in (rows if pub6b.returncode == 0 else []):
+        text = _texts(r)
+        new = set(SHA.findall(text)) - set(SHA.findall(_texts(pub_rows.get(r["id"], {}))))
+        new -= {t for t in cand if r["id"] in cand[t]}  # 6b already judged these
+        cited = set(SHA.findall(text))
+        for t in sorted(new):
+            if _reach(t):
+                continue
+            here = _git("cat-file", "-e", t + "^{commit}").returncode == 0
+            if not here:
+                prose_warn.append(f"{r['id']} ({t}, " + (
+                    "absent from this shallow clone)" if _shallow else "resolves to no commit)"))
+                continue
+            made_here = any(h.startswith(t) for h in reflog)
+            twin = ""
+            if made_here:
+                subj = _git("log", "-1", "--format=%s", t).stdout.strip()
+                if subj:
+                    twin = _git("log", "-n", "1", "--format=%H", "--fixed-strings",
+                                f"--grep={subj}", "HEAD").stdout.strip()
+            if twin and any(twin.startswith(c) for c in cited):
+                continue  # the row records the orphan AND its live twin
+            if twin:
+                errs.append(
+                    f"{r['id']}: prose cites {t}, which is reachable from neither HEAD nor "
+                    "origin/main — a rebase orphaned it after the row was written. A commit in "
+                    f"HEAD carries the same subject: {twin[:9]} — cite that instead (or keep "
+                    "both, as a SHA NOTE recording the orphan).")
+            else:
+                prose_warn.append(f"{r['id']} ({t}, present but unreachable" + (
+                    "" if made_here else ", not created in this clone") + ")")
+    if prose_warn:
+        warns.append(
+            f"{len(prose_warn)} sha(s) newly written into a row's prose are reachable from "
+            f"neither HEAD nor origin/main — check each is a deliberate record and not a "
+            f"rebase orphan: {'; '.join(prose_warn)}")
 
 # 7. NO PUBLISHED ROW HAS DISAPPEARED.
 #

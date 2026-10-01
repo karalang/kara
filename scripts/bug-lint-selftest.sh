@@ -163,4 +163,61 @@ grep -q "reachable from neither HEAD nor origin/main" <<<"$out" \
     || fail "wrong failure for the all-digit sha $digits — got:
 $out"
 
-echo "bug-lint selftest: 5/5 rule-6b cells pass (orphan detected, live sha silent, untouched row unjudged, recorded close caught, all-digit sha not skipped)"
+# ---- 6-8. rule 6c: a sha written into an OPEN row's PROSE (B-2026-09-20-37) --
+# An open row's `fix` is empty, so a correction or a partial-fix citation can
+# only live in `detail`, where rules 6 and 6b never looked. A fresh orphan/twin
+# pair, ground until the orphan's short sha has a letter in it: prose is scanned
+# with the digit-and-letter token rule, so an all-digit one is not a sha there.
+set_fix B-2026-01-01-1 ""
+set_detail() {  # $1 = B-ID, $2 = detail prose
+    python3 - "$w/docs/bug-ledger.jsonl" "$1" "$2" <<'PY'
+import json, sys
+path, bid, detail = sys.argv[1:4]
+out = []
+for line in open(path):
+    if line.strip():
+        r = json.loads(line)
+        if r["id"] == bid:
+            r["detail"] = detail
+            line = json.dumps(r, ensure_ascii=False) + "\n"
+    out.append(line)
+open(path, "w").writelines(out)
+PY
+}
+porph=""
+for mm in $(seq 0 59); do
+    "${G[@]}" -C "$w" reset -q --soft "$base"
+    d="$(printf '2026-04-01T00:%02d:00+0000' "$mm")"
+    GIT_AUTHOR_DATE="$d" GIT_COMMITTER_DATE="$d" \
+        "${G[@]}" -C "$w" commit -q -m "fix(selftest): the prose twin"
+    s="$("${G[@]}" -C "$w" rev-parse --short HEAD)"
+    case "$s" in *[a-f]*[0-9]*|*[0-9]*[a-f]*) porph="$s"; break ;; esac
+done
+[ -n "$porph" ] || fail "could not grind a mixed short sha for the prose orphan"
+"${G[@]}" -C "$w" reset -q --soft "$base"
+GIT_AUTHOR_DATE="2026-04-02T00:00:00+0000" GIT_COMMITTER_DATE="2026-04-02T00:00:00+0000" \
+    "${G[@]}" -C "$w" commit -q -m "fix(selftest): the prose twin"
+plive="$("${G[@]}" -C "$w" rev-parse --short HEAD)"
+
+# 6. the orphan alone in an open row's detail is an ERROR naming the twin.
+set_detail B-2026-01-01-1 "partial fix landed (2026-04-01, by $porph); the rest is open."
+out="$(lint)" && fail "rule 6c did not fail the lint on an orphaned sha in an open row's prose:
+$out"
+grep -q "B-2026-01-01-1: prose cites $porph" <<<"$out" || fail "wrong failure for the prose orphan $porph:
+$out"
+grep -q "same subject: ${plive:0:7}" <<<"$out" || fail "rule 6c did not name the live twin $plive:
+$out"
+
+# 7. the same orphan RECORDED beside its live twin is a SHA NOTE, and silent.
+set_detail B-2026-01-01-1 "SHA NOTE: this first cited $porph, which a rebase orphaned; the live commit is $plive."
+out="$(lint)" || fail "rule 6c failed a row that records an orphan beside its twin:
+$out"
+
+# 8. a prose sha that resolves to nothing WARNS and never errors.
+set_detail B-2026-01-01-1 "cites cafe123 from a clone nobody has."
+out="$(lint)" || fail "rule 6c errored on an unresolvable prose sha:
+$out"
+grep -q "cafe123" <<<"$out" || fail "rule 6c said nothing about the unresolvable prose sha cafe123:
+$out"
+
+echo "bug-lint selftest: 8/8 cells pass (orphan detected, live sha silent, untouched row unjudged, recorded close caught, all-digit sha not skipped, prose orphan detected, recorded prose orphan silent, unresolvable prose sha warned)"
