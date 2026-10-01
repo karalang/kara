@@ -4032,6 +4032,226 @@ pub fn fn_always_returns_param_via_call(
     answer
 }
 
+/// B-2026-10-01-52 — the param seen THROUGH a seeded constructor that this
+/// body builds and immediately destructures: `match Some(a) { Some(v) => v,
+/// None => .. }`, its `if let` twin, and the named spelling `let o = Some(a);
+/// match o { .. }`. The arm binding `v` IS the param, so it joins the whole
+/// aliases (with any plain rebind of it, `let u = v`), and an arm whose variant
+/// the constructor cannot produce (`None` under `Some`, `Err` under `Ok`) is
+/// DEAD, so its exit is no exit. Without both, `return v` stood no caller down
+/// and the caller ran the argument's `Drop` bodies at the call AND over the
+/// result -- `d1 d2 y2 d1 d2` on every surface for a `Vec[R]` param, a double
+/// free compiled for an `Array` or a struct.
+///
+/// Returns the extra aliases and the addresses of the dead arm bodies (and dead
+/// `else` branches). Only the ALL-paths predicate asks: a dead arm is no exit
+/// at all, so dropping it can only remove a counter-example that never runs.
+fn seeded_unwrap_aliases(
+    program: Option<&crate::Program>,
+    f: &Function,
+    aliases: &[String],
+) -> (Vec<String>, Vec<*const Expr>) {
+    let w = rebind_walk(f);
+    let seeded_name = |callee: &Expr| -> Option<String> {
+        match &callee.kind {
+            ExprKind::Identifier(n) if matches!(n.as_str(), "Some" | "Ok" | "Err") => {
+                let shadowed = program.is_some_and(|p| {
+                    p.items
+                        .iter()
+                        .any(|it| matches!(it, Item::Function(g) if &g.name == n))
+                });
+                (!shadowed).then(|| n.clone())
+            }
+            ExprKind::Path { segments, .. } => match segments.as_slice() {
+                [h, v]
+                    if (h == "Option" && v == "Some")
+                        || (h == "Result" && matches!(v.as_str(), "Ok" | "Err")) =>
+                {
+                    Some(v.clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    // The variant a scrutinee is statically known to carry, when its payload
+    // is the param (under any whole alias).
+    let variant_of = |s: &Expr| -> Option<String> {
+        match &s.kind {
+            ExprKind::Call { callee, args } => match args.as_slice() {
+                [only]
+                    if matches!(&only.value.kind, ExprKind::Identifier(n)
+                    if aliases.iter().any(|a| a == n)) =>
+                {
+                    seeded_name(callee)
+                }
+                _ => None,
+            },
+            ExprKind::Identifier(o) if w.bound.get(o.as_str()) == Some(&1) => {
+                w.ctor_wraps.iter().find_map(|(x, y, callee, path)| {
+                    (x == o && path.is_empty() && aliases.iter().any(|a| a == y))
+                        .then(|| seeded_name(callee))
+                        .flatten()
+                })
+            }
+            _ => None,
+        }
+    };
+    let sibling = |name: &str| matches!(name, "Some" | "None" | "Ok" | "Err");
+    // `Some(v)` under a known `Some`: the one bare binding it unwraps to.
+    let unwrap_binding = |p: &Pattern, variant: &str| -> Option<String> {
+        let PatternKind::TupleVariant { path, patterns } = &p.kind else {
+            return None;
+        };
+        if path.last().map(String::as_str) != Some(variant) {
+            return None;
+        }
+        match patterns.as_slice() {
+            [Pattern {
+                kind: PatternKind::Binding(v),
+                ..
+            }] if w.bound.get(v.as_str()) == Some(&1) => Some(v.clone()),
+            _ => None,
+        }
+    };
+    // A pattern that can only match a variant OTHER than `variant`.
+    let is_dead = |p: &Pattern, variant: &str| match &p.kind {
+        PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+            path.last().is_some_and(|l| sibling(l) && l != variant)
+        }
+        PatternKind::Binding(n) => n == "None" && variant != "None",
+        _ => false,
+    };
+    struct Acc<'a> {
+        found: Vec<String>,
+        dead: Vec<*const Expr>,
+        variant_of: &'a dyn Fn(&Expr) -> Option<String>,
+        unwrap_binding: &'a dyn Fn(&Pattern, &str) -> Option<String>,
+        is_dead: &'a dyn Fn(&Pattern, &str) -> bool,
+    }
+    fn visit(e: &Expr, acc: &mut Acc<'_>) {
+        match &e.kind {
+            ExprKind::Match { scrutinee, arms } => {
+                if let Some(v) = (acc.variant_of)(scrutinee) {
+                    for a in arms {
+                        if a.guard.is_none() {
+                            if let Some(b) = (acc.unwrap_binding)(&a.pattern, &v) {
+                                acc.found.push(b);
+                            }
+                        }
+                        if (acc.is_dead)(&a.pattern, &v) {
+                            acc.dead.push(&a.body as *const Expr);
+                        }
+                    }
+                }
+                visit(scrutinee, acc);
+                for a in arms {
+                    visit(&a.body, acc);
+                }
+            }
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(v) = (acc.variant_of)(value) {
+                    if let Some(b) = (acc.unwrap_binding)(pattern, &v) {
+                        acc.found.push(b);
+                        if let Some(x) = else_branch.as_deref() {
+                            acc.dead.push(x as *const Expr);
+                        }
+                    }
+                }
+                visit(value, acc);
+                visit_block(then_block, acc);
+                if let Some(x) = else_branch.as_deref() {
+                    visit(x, acc);
+                }
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => visit_block(b, acc),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                visit_block(then_block, acc);
+                if let Some(x) = else_branch.as_deref() {
+                    visit(x, acc);
+                }
+            }
+            ExprKind::Return(Some(x)) => visit(x, acc),
+            _ => {}
+        }
+    }
+    fn visit_block(b: &Block, acc: &mut Acc<'_>) {
+        // An `if let` the constructor always enters, whose block always
+        // returns, makes every statement after it unreachable:
+        // `if let Some(v) = Some(a) { return v } return Vec.new()`.
+        let mut unreachable = false;
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Expr(e) if unreachable => acc.dead.push(e as *const Expr),
+                StmtKind::Expr(e) | StmtKind::Let { value: e, .. } => {
+                    let before = acc.found.len();
+                    visit(e, acc);
+                    if let ExprKind::IfLet {
+                        then_block,
+                        else_branch: None,
+                        ..
+                    } = &e.kind
+                    {
+                        let entered = acc.found.len() > before
+                            && matches!(&e.kind, ExprKind::IfLet { pattern, value, .. }
+                                if (acc.variant_of)(value)
+                                    .is_some_and(|v| (acc.unwrap_binding)(pattern, &v).is_some()));
+                        let returns = match (
+                            then_block.final_expr.as_deref(),
+                            then_block.stmts.last(),
+                        ) {
+                            (Some(t), _) => matches!(t.kind, ExprKind::Return(_)),
+                            (None, Some(st)) => {
+                                matches!(&st.kind, StmtKind::Expr(x) if matches!(x.kind, ExprKind::Return(_)))
+                            }
+                            (None, None) => false,
+                        };
+                        unreachable |= entered && returns;
+                    }
+                }
+                _ => {}
+            }
+        }
+        match b.final_expr.as_deref() {
+            Some(fe) if unreachable => acc.dead.push(fe as *const Expr),
+            Some(fe) => visit(fe, acc),
+            None => {}
+        }
+    }
+    let mut acc = Acc {
+        found: Vec::new(),
+        dead: Vec::new(),
+        variant_of: &variant_of,
+        unwrap_binding: &unwrap_binding,
+        is_dead: &is_dead,
+    };
+    visit_block(&f.body, &mut acc);
+    let found = acc.found;
+    let dead = acc.dead;
+    if found.is_empty() {
+        return (Vec::new(), dead);
+    }
+    let extra = close_many(&w, &found)
+        .into_iter()
+        .filter(|n| !aliases.iter().any(|a| a == n))
+        .collect();
+    (extra, dead)
+}
+
 fn fn_always_returns_param_ex(
     program: Option<&crate::Program>,
     f: &Function,
@@ -4050,7 +4270,13 @@ fn fn_always_returns_param_ex(
     // See `param_rebind_aliases` for what qualifies and why declining is safe.
     // B-2026-09-06-12 — and to a rebind THROUGH an always-returning callee
     // (`let w = keeps(r); return w`), when the caller can supply the program.
-    let aliases = param_whole_aliases(program, f, name);
+    let mut aliases = param_whole_aliases(program, f, name);
+    // B-2026-10-01-52 — and the arm binding that unwraps a seeded constructor
+    // over it (`match Some(a) { Some(v) => v, .. }`), with the dead arms that
+    // constructor cannot reach.
+    let (unwraps, dead) = seeded_unwrap_aliases(program, f, &aliases);
+    aliases.extend(unwraps);
+    let dead: &[*const Expr] = &dead;
     // B-2026-09-26-27 — an ALL-paths question, so an enum-constructor wrap
     // counts (`let o = Some(r); return o`).
     let wraps = param_wrap_aliases_ex(program, f, name, true);
@@ -4153,7 +4379,7 @@ fn fn_always_returns_param_ex(
                 .is_some_and(|p| yields(p, name, wraps, program, via)),
         }
     }
-    fn leaf_tails<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+    fn leaf_tails<'a>(e: &'a Expr, dead: &[*const Expr], out: &mut Vec<&'a Expr>) {
         match &e.kind {
             ExprKind::If {
                 then_block,
@@ -4166,21 +4392,26 @@ fn fn_always_returns_param_ex(
                 ..
             } => {
                 match &then_block.final_expr {
-                    Some(t) => leaf_tails(t, out),
+                    Some(t) => leaf_tails(t, dead, out),
                     None => out.push(e),
                 }
                 match else_branch {
-                    Some(x) => leaf_tails(x, out),
+                    // B-2026-10-01-52 — an `else` the seeded constructor
+                    // cannot reach is no exit.
+                    Some(x) if dead.contains(&(&**x as *const Expr)) => {}
+                    Some(x) => leaf_tails(x, dead, out),
                     None => out.push(e),
                 }
             }
             ExprKind::Match { arms, .. } => {
                 for arm in arms {
-                    leaf_tails(&arm.body, out);
+                    if !dead.contains(&(&arm.body as *const Expr)) {
+                        leaf_tails(&arm.body, dead, out);
+                    }
                 }
             }
             ExprKind::Block(b) => match &b.final_expr {
-                Some(t) => leaf_tails(t, out),
+                Some(t) => leaf_tails(t, dead, out),
                 None => out.push(e),
             },
             // B-2026-08-29-65 — a tail `return x` is a RETURN SITE, not a leaf
@@ -4194,7 +4425,7 @@ fn fn_always_returns_param_ex(
             // A bare `return;` still pushes the node and so still declines,
             // which is correct: it yields nothing.
             ExprKind::Return(inner) => match inner.as_deref() {
-                Some(x) => leaf_tails(x, out),
+                Some(x) => leaf_tails(x, dead, out),
                 None => out.push(e),
             },
             _ => out.push(e),
@@ -4210,19 +4441,19 @@ fn fn_always_returns_param_ex(
     ///
     /// Deliberately does NOT descend into a closure body: a `return` there
     /// returns from the closure, not from `f`.
-    fn return_operands<'a>(e: &'a Expr, out: &mut Vec<Option<&'a Expr>>) {
+    fn return_operands<'a>(e: &'a Expr, dead: &[*const Expr], out: &mut Vec<Option<&'a Expr>>) {
         match &e.kind {
             ExprKind::Return(inner) => {
                 out.push(inner.as_deref());
                 if let Some(x) = inner.as_deref() {
-                    return_operands(x, out);
+                    return_operands(x, dead, out);
                 }
             }
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
-            | ExprKind::Par(b) => return_operands_block(b, out),
+            | ExprKind::Par(b) => return_operands_block(b, dead, out),
             ExprKind::If {
                 then_block,
                 else_branch,
@@ -4233,28 +4464,39 @@ fn fn_always_returns_param_ex(
                 else_branch,
                 ..
             } => {
-                return_operands_block(then_block, out);
+                return_operands_block(then_block, dead, out);
                 if let Some(x) = else_branch.as_deref() {
-                    return_operands(x, out);
+                    if !dead.contains(&(x as *const Expr)) {
+                        return_operands(x, dead, out);
+                    }
                 }
             }
             ExprKind::Match { arms, .. } => {
                 for a in arms {
-                    return_operands(&a.body, out);
+                    if !dead.contains(&(&a.body as *const Expr)) {
+                        return_operands(&a.body, dead, out);
+                    }
                 }
             }
             ExprKind::While { body, .. }
             | ExprKind::WhileLet { body, .. }
             | ExprKind::For { body, .. }
             | ExprKind::Loop { body, .. }
-            | ExprKind::LabeledBlock { body, .. } => return_operands_block(body, out),
+            | ExprKind::LabeledBlock { body, .. } => return_operands_block(body, dead, out),
             _ => {}
         }
     }
-    fn return_operands_block<'a>(b: &'a Block, out: &mut Vec<Option<&'a Expr>>) {
+    fn return_operands_block<'a>(
+        b: &'a Block,
+        dead: &[*const Expr],
+        out: &mut Vec<Option<&'a Expr>>,
+    ) {
         for st in &b.stmts {
             match &st.kind {
-                StmtKind::Expr(e) | StmtKind::Let { value: e, .. } => return_operands(e, out),
+                // B-2026-10-01-52 — a statement after an `if let` the
+                // seeded constructor always enters and that always returns.
+                StmtKind::Expr(e) if dead.contains(&(e as *const Expr)) => {}
+                StmtKind::Expr(e) | StmtKind::Let { value: e, .. } => return_operands(e, dead, out),
                 // A `let ... else { return; }` hides the most common bare
                 // `return` in the language behind a statement kind the older
                 // walk did not visit. So do the assignment forms and the
@@ -4263,30 +4505,32 @@ fn fn_always_returns_param_ex(
                 StmtKind::LetElse {
                     value, else_block, ..
                 } => {
-                    return_operands(value, out);
-                    return_operands_block(else_block, out);
+                    return_operands(value, dead, out);
+                    return_operands_block(else_block, dead, out);
                 }
                 StmtKind::Assign { target, value } => {
-                    return_operands(target, out);
-                    return_operands(value, out);
+                    return_operands(target, dead, out);
+                    return_operands(value, dead, out);
                 }
                 StmtKind::CompoundAssign { target, value, .. } => {
-                    return_operands(target, out);
-                    return_operands(value, out);
+                    return_operands(target, dead, out);
+                    return_operands(value, dead, out);
                 }
                 StmtKind::MultiAssign { targets, values } => {
                     for e in targets.iter().chain(values.iter()) {
-                        return_operands(e, out);
+                        return_operands(e, dead, out);
                     }
                 }
                 StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-                    return_operands_block(body, out)
+                    return_operands_block(body, dead, out)
                 }
                 StmtKind::LetUninit { .. } => {}
             }
         }
         if let Some(fe) = b.final_expr.as_deref() {
-            return_operands(fe, out);
+            if !dead.contains(&(fe as *const Expr)) {
+                return_operands(fe, dead, out);
+            }
         }
     }
 
@@ -4300,7 +4544,7 @@ fn fn_always_returns_param_ex(
         None
     };
     let mut returns = Vec::new();
-    return_operands_block(&f.body, &mut returns);
+    return_operands_block(&f.body, dead, &mut returns);
     // Is there a `return` that does NOT hand the param back? A bare `return;`
     // counts: it exits without yielding, so the param dies on that path.
     // B-2026-09-26-15 — a payload-less `None` exit, admitted only when asked.
@@ -4319,7 +4563,13 @@ fn fn_always_returns_param_ex(
         .iter()
         .any(|o| !o.is_some_and(|x| yields(x, name, wraps, program, via) || is_none(x)));
 
-    let Some(tail) = f.body.final_expr.as_deref() else {
+    // B-2026-10-01-52 — an unreachable tail is no tail.
+    let Some(tail) = f
+        .body
+        .final_expr
+        .as_deref()
+        .filter(|t| !dead.contains(&(*t as *const Expr)))
+    else {
         // NO TAIL EXPRESSION AT ALL — every exit is a `return` (B-2026-08-29-14).
         //
         // This arm used to decline, on the reasoning that such a body was "left
@@ -4348,7 +4598,7 @@ fn fn_always_returns_param_ex(
         return f.return_type.is_some() && any_good_return && !any_bad_return;
     };
     let mut tails = Vec::new();
-    leaf_tails(tail, &mut tails);
+    leaf_tails(tail, dead, &mut tails);
     if tails.is_empty()
         || !tails
             .iter()
