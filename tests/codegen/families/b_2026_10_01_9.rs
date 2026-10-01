@@ -1,0 +1,70 @@
+//! B-2026-10-01-9: a by-value param moved into a `let mut` literal that is returned.
+
+use super::*;
+
+/// B-2026-10-01-9 — a by-value param moved into a literal bound to a `let mut`
+/// local and returned on every exit stands the caller down, as the immutable
+/// spelling already did, so its `Drop` body runs once, over the result. The
+/// all-paths hand-back predicate admitted only immutable wraps. Covers `Vec`
+/// and `Array` literals with and without later pushes, a `pop`, an index
+/// store, the tail spelling, a discarded call, a named argument, tuple and
+/// struct literals with a field store, two params, a method, an associated
+/// function, a generic callee, `Some`, a rebind of the local and a loop of
+/// pushes, with a conditional exit that does not hand it back and a callee
+/// that does not return it as guards.
+#[test]
+fn e2e_param_moved_into_let_mut_literal_and_returned_runs_body_once() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+struct P { r: R, n: i64 }
+struct K { a: i64 }
+impl K {
+  fn m(ref self, x: R) -> Vec[R] { let mut v = Vec[x]; return v }
+  fn a(x: R) -> Vec[R] { let mut v = Vec[x]; return v }
+}
+fn f1(x: R) -> Vec[R] { let mut v = Vec[x]; return v }
+fn f2(x: R) -> Vec[R] { let mut v = Vec[x]; v.push(mk(9)); return v }
+fn f5(x: R) -> Vec[R] { let mut v = [x]; v.push(mk(9)); return v }
+fn f6(x: R) -> Array[R, 1] { let mut v: Array[R, 1] = [x]; return v }
+fn f8(x: R) -> Vec[R] { let mut v = Vec[x]; let o = v.pop(); return v }
+fn f9(x: R) -> Vec[R] { let mut v = Vec[x]; v[0] = mk(7); return v }
+fn f10(x: R) -> Vec[R] { let mut v = Vec[x]; v }
+fn t1(x: R) -> (R, i64) { let mut t = (x, 1); t.1 = 5; return t }
+fn s1(x: R) -> P { let mut p = P { r: x, n: 1 }; p.n = 2; return p }
+fn c2(x: R, y: R) -> Vec[R] { let mut v = Vec[x]; v.push(y); return v }
+fn gv[T](x: T) -> Vec[T] { let mut v = Vec[x]; return v }
+fn cnd(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { return v } return Vec[mk(9)] }
+fn nr(x: R) -> i64 { let mut v = Vec[x]; return 3 }
+fn ow(x: R) -> Option[R] { let mut o = Some(x); return o }
+fn rb(x: R) -> Vec[R] { let mut v = Vec[x]; let w = v; return w }
+fn lp(x: R) -> Vec[R] { let mut v = Vec[x]; for i in 0..2 { v.push(mk(30 + i)) } return v }
+fn main() {
+  println("-p1"); let a = f1(mk(1)); println(f"k{a.len()}")
+  println("-p2"); let b = f2(mk(2)); println(f"k{b.len()}")
+  println("-p5"); let e = f5(mk(5)); println(f"k{e.len()}")
+  println("-p6"); let g = f6(mk(6)); println(f"k{g[0].id}")
+  println("-p8"); let i = f8(mk(18)); println(f"k{i.len()}")
+  println("-p9"); let j = f9(mk(19)); println(f"k{j.len()}")
+  println("-p10"); let l = f10(mk(20)); println(f"k{l.len()}")
+  println("-d1"); f1(mk(21)); println("k")
+  println("-n1"); let w = mk(22); let m = f1(w); println(f"k{m.len()}")
+  println("-t1"); let t = t1(mk(23)); println(f"k{t.1}")
+  println("-s1"); let s = s1(mk(24)); println(f"k{s.n}")
+  println("-c2"); c2(mk(25), mk(26)); println("k")
+  println("-me"); let kk = K { a: 1 }; let ma = kk.m(mk(41)); println(f"k{ma.len()}")
+  println("-as"); let ab = K.a(mk(42)); println(f"k{ab.len()}")
+  println("-g"); let gc = gv(mk(43)); println(f"k{gc.len()}")
+  println("-cf"); let ce = cnd(mk(45), false); println(f"k{ce.len()}")
+  println("-nr"); let nf = nr(mk(46)); println(f"k{nf}")
+  println("-ow"); let og = ow(mk(47)); match og { Some(r) => println(f"u{r.id}"), None => println("n") } println("k")
+  println("-rb"); let rh = rb(mk(48)); println(f"k{rh.len()}")
+  println("-lp"); let li = lp(mk(10)); println(f"k{li.len()}")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "-p1\nk1\ndR1\n-p2\nk2\ndR2\ndR9\n-p5\nk2\ndR5\ndR9\n-p6\nk6\ndR6\n-p8\ndR18\nk0\n-p9\ndR19\nk1\ndR7\n-p10\nk1\ndR20\n-d1\ndR21\nk\n-n1\nk1\ndR22\n-t1\nk5\ndR23\n-s1\nk2\ndR24\n-c2\ndR25\ndR26\nk\n-me\nk1\ndR41\n-as\nk1\ndR42\n-g\nk1\ndR43\n-cf\ndR45\nk1\ndR9\n-nr\ndR46\nk3\n-ow\nu47\ndR47\nk\n-rb\nk1\ndR48\n-lp\nk3\ndR10\ndR30\ndR31\n", "got:\n{out}");
+}

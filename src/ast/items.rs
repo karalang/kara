@@ -2514,6 +2514,18 @@ struct RebindWalk {
     /// inside the element. The element layer adds nothing to the path, as an
     /// enum payload's does not: no place chain projects through an index.
     coll_wraps: Vec<(String, String, ParamPath)>,
+    /// B-2026-10-01-9 — the `let MUT` twins of [`Self::wraps`] and
+    /// [`Self::coll_wraps`] together (`let mut v = Vec[y]`, `let mut t = (y,
+    /// 1)`), which those two deliberately leave out. Only the ALL-paths
+    /// predicates read them, and only for a local never reassigned whole
+    /// ([`Self::assigned`]); see `param_wrap_aliases_impl`.
+    mut_wraps: Vec<(String, String, ParamPath)>,
+    /// B-2026-10-01-9 — the `let MUT` twin of [`Self::ctor_wraps`]
+    /// (`let mut o = Some(y)`), on the same terms as [`Self::mut_wraps`].
+    mut_ctor_wraps: Vec<(String, String, Expr, ParamPath)>,
+    /// Every bare local assigned WHOLE (`x = ..`, or one target of a
+    /// multi-assign) anywhere the walk reaches.
+    assigned: std::collections::HashSet<String>,
     /// `let x = y.f.g` / `let x = y.0`: `x` REBINDS the part of `y` at `path`.
     /// Read back against a wrap: `let q = p.r` after `let p = P2 { r: r, .. }`
     /// makes `q` the param itself again (an empty remaining path).
@@ -2589,7 +2601,15 @@ impl RebindWalk {
                     {
                         self.mut_rebinds.push((x.clone(), y.clone()));
                     }
-                    if let (false, PatternKind::Binding(x)) = (*is_mut, &pattern.kind) {
+                    // B-2026-10-01-9 — a `let mut` wrap is recorded by the
+                    // same walk and then moved to the `mut_*` sets, so the
+                    // two spellings cannot drift apart.
+                    let marks = (
+                        self.wraps.len(),
+                        self.coll_wraps.len(),
+                        self.ctor_wraps.len(),
+                    );
+                    if let PatternKind::Binding(x) = &pattern.kind {
                         let mut path: ParamPath = Vec::new();
                         Self::collect_wrap_sources(value, &mut path, x, &mut self.wraps);
                         let elems: &[Expr] = match &value.kind {
@@ -2641,6 +2661,13 @@ impl RebindWalk {
                             }
                         }
                     }
+                    if *is_mut {
+                        let w = self.wraps.split_off(marks.0);
+                        let c = self.coll_wraps.split_off(marks.1);
+                        let k = self.ctor_wraps.split_off(marks.2);
+                        self.mut_wraps.extend(w.into_iter().chain(c));
+                        self.mut_ctor_wraps.extend(k);
+                    }
                     if let (false, PatternKind::Binding(x)) = (*is_mut, &pattern.kind) {
                         if let Some((root, chain)) = place_chain_root_and_path(value) {
                             if !chain.is_empty() {
@@ -2683,9 +2710,23 @@ impl RebindWalk {
                 StmtKind::LetUninit { name, .. } => {
                     *self.bound.entry(name.clone()).or_insert(0) += 1;
                 }
-                StmtKind::Assign { value, .. } | StmtKind::CompoundAssign { value, .. } => {
+                StmtKind::Assign { target, value } => {
+                    if let ExprKind::Identifier(n) = &target.kind {
+                        self.assigned.insert(n.clone());
+                    }
                     self.expr(value)
                 }
+                StmtKind::MultiAssign { targets, values } => {
+                    for t in targets {
+                        if let ExprKind::Identifier(n) = &t.kind {
+                            self.assigned.insert(n.clone());
+                        }
+                    }
+                    for v in values {
+                        self.expr(v);
+                    }
+                }
+                StmtKind::CompoundAssign { value, .. } => self.expr(value),
                 StmtKind::Expr(e) => self.expr(e),
                 _ => {}
             }
@@ -2805,6 +2846,9 @@ fn rebind_walk_raw(f: &Function) -> RebindWalk {
         wraps: Vec::new(),
         ctor_wraps: Vec::new(),
         coll_wraps: Vec::new(),
+        mut_wraps: Vec::new(),
+        mut_ctor_wraps: Vec::new(),
+        assigned: std::collections::HashSet::new(),
         proj_rebinds: Vec::new(),
         call_rebinds: Vec::new(),
         destructured: Vec::new(),
@@ -3141,6 +3185,31 @@ fn param_wrap_aliases_impl(
         // Left out, `let v = [a]; if f { return v } ...` stood no caller down
         // and `a` ran its body in the caller AND over the returned `v`.
         .chain(w.coll_wraps.iter().filter(|_| coll).cloned())
+        // B-2026-10-01-9 — a `let MUT` wrap counts too, for the ALL-paths
+        // predicates only. `fn f1(x: R) -> Vec[R] { let mut v = Vec[x];
+        // return v }` stood no caller down, so `x` ran its body in the caller
+        // AND over the result, on every surface, where the immutable spelling
+        // ran it once. Mutating the local in place (`v.push(..)`, `v.pop()`,
+        // `v[0] = ..`, `t.1 = ..`) leaves it the owner of whatever it still
+        // holds, so the stand-down is right for those. A local REASSIGNED
+        // whole (`v = Vec[mk(8)]`) is still declined: the reassignment's
+        // release of the displaced value already disagrees between the two
+        // backends with no caller involved (B-2026-10-01-9's close names the
+        // row), so standing the caller down there would make a lost body of it.
+        .chain(
+            w.mut_wraps
+                .iter()
+                .filter(|(x, _, _)| with_ctor && user_variants && !w.assigned.contains(x))
+                .cloned(),
+        )
+        .chain(
+            w.mut_ctor_wraps
+                .iter()
+                .filter(|(x, _, c, _)| {
+                    with_ctor && user_variants && !w.assigned.contains(x) && ctor_ok(c)
+                })
+                .map(|(x, y, _, path)| (x.clone(), y.clone(), path.clone())),
+        )
         .collect();
     let mut out: Vec<(String, ParamPath)> = Vec::new();
     loop {
@@ -3326,6 +3395,9 @@ pub fn expr_rebind_aliases(body: &Expr, seed: &str) -> Vec<String> {
         wraps: Vec::new(),
         ctor_wraps: Vec::new(),
         coll_wraps: Vec::new(),
+        mut_wraps: Vec::new(),
+        mut_ctor_wraps: Vec::new(),
+        assigned: std::collections::HashSet::new(),
         proj_rebinds: Vec::new(),
         call_rebinds: Vec::new(),
         destructured: Vec::new(),
@@ -3393,6 +3465,9 @@ fn arm_local_part_yield(body: &Expr, roots: &[String], tail: bool) -> Vec<ParamP
         wraps: Vec::new(),
         ctor_wraps: Vec::new(),
         coll_wraps: Vec::new(),
+        mut_wraps: Vec::new(),
+        mut_ctor_wraps: Vec::new(),
+        assigned: std::collections::HashSet::new(),
         proj_rebinds: Vec::new(),
         call_rebinds: Vec::new(),
         destructured: Vec::new(),
