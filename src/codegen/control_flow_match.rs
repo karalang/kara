@@ -916,6 +916,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the `if let` / `while let` / `let … else` legs since
                 // B-2026-09-05-34; the rationale lives on the helper.
                 self.stage_bare_tuple_bindings_for_bind(&arm.pattern);
+                self.mark_param_view_envelope_payload_binds(&arm.pattern, scrutinee);
                 // B-2026-08-12-2 — per-ARM, and saved/restored because a nested
                 // `match` inside this body binds through the same field.
                 let saved_arm_borrows = self.pattern_state.pattern_binding_arm_only_borrows;
@@ -3446,6 +3447,58 @@ impl<'ctx> super::Codegen<'ctx> {
     /// tuple scrutinee on all three legs, against a clean `match` spelling of
     /// every cell. The caller clears `current_bare_tuple_bindings` after the
     /// bind, exactly as the arm loop does.
+    /// B-2026-09-23-13 — the `Vec` payload of an `Option` / `Result` envelope
+    /// that is itself a VIEW of a by-value param (`Some(a)` over a
+    /// caller-retained `a: Vec[R]`, or a local `o` already marked a view) is
+    /// a view too, so a whole rebind of the arm binding (`Some(v) => { let u =
+    /// v; .. }`) must not arm the element bodies the CALLER runs after the
+    /// call. Without the mark `u` armed them at its NLL point and the caller
+    /// ran them again: `d1 d2 r1 d1 d2` on every compiled surface against
+    /// `--interp`'s `r1 d1 d2`. A `Vec` payload is inline in the envelope, so
+    /// it never reaches B-2026-09-23-5's boxed-`Array` site, which is why that
+    /// fix did not cover it.
+    ///
+    /// Staged BEFORE the bind, like the bare-tuple marks above: every reader
+    /// of `param_view_locals` at a `Vec` binding withholds a bodies walker and
+    /// nothing else, so the arm binding's own memory registration is
+    /// unchanged.
+    pub(super) fn mark_param_view_envelope_payload_binds(
+        &mut self,
+        pattern: &Pattern,
+        scrutinee: &Expr,
+    ) {
+        let PatternKind::TupleVariant { path, .. } = &pattern.kind else {
+            return;
+        };
+        let Some(variant) = path.last() else {
+            return;
+        };
+        if !matches!(
+            self.variant_pattern_enum_name(pattern).as_deref(),
+            Some("Option" | "Result")
+        ) {
+            return;
+        }
+        let envelope_is_view = self.optres_temp_is_param_view(scrutinee)
+            || matches!(&scrutinee.kind, ExprKind::Identifier(n)
+                if self.payload_vars.param_view_locals.contains(n.as_str()));
+        if !envelope_is_view {
+            return;
+        }
+        let payload_is_vec = self
+            .optres_scrutinee_payload_te_for(scrutinee, variant)
+            .is_some_and(|te| {
+                matches!(&te.kind, TypeKind::Path(p)
+                    if p.segments.last().is_some_and(|s| s == "Vec"))
+            });
+        if !payload_is_vec {
+            return;
+        }
+        self.payload_vars
+            .param_view_locals
+            .extend(Self::variant_arm_binds(pattern));
+    }
+
     pub(super) fn stage_bare_tuple_bindings_for_bind(&mut self, pattern: &Pattern) {
         if self.pattern_state.pattern_binding_scrutinee_is_owned_param {
             let mut bt_names: Vec<String> = Vec::new();

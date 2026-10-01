@@ -342,6 +342,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `compile_match`'s arm loop stages them. Without this the element
         // binding registered its own struct drop on top of the tuple's.
         self.stage_bare_tuple_bindings_for_bind(pattern);
+        self.mark_param_view_envelope_payload_binds(pattern, value);
         let bind_res = self.bind_pattern_values(pattern, val);
         // B-2026-09-01-30 — the `match`-arm rule applies verbatim to a
         // whole-value `if let` / `while let` / `let ... else` binding: the value
@@ -1306,6 +1307,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `compile_match`'s arm loop stages them. Without this the element
         // binding registered its own struct drop on top of the tuple's.
         self.stage_bare_tuple_bindings_for_bind(pattern);
+        self.mark_param_view_envelope_payload_binds(pattern, value);
         let bind_res = self.bind_pattern_values(pattern, val);
         // B-2026-09-01-30 — the `match`-arm rule applies verbatim to a
         // whole-value `if let` / `while let` / `let ... else` binding: the value
@@ -2695,6 +2697,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `compile_match`'s arm loop stages them. Without this the element
         // binding registered its own struct drop on top of the tuple's.
         self.stage_bare_tuple_bindings_for_bind(pattern);
+        self.mark_param_view_envelope_payload_binds(pattern, value);
         let bind_res = self.bind_pattern_values(pattern, val);
         // B-2026-09-01-30 — the `match`-arm rule applies verbatim to a
         // whole-value `if let` / `while let` / `let ... else` binding: the value
