@@ -7936,8 +7936,26 @@ impl<'a> super::Interpreter<'a> {
                 continue;
             };
             if matches!(&v, Value::Struct { .. }) && self.value_runs_user_drop(&v) {
+                let here = cleanup
+                    .iter()
+                    .any(|a| matches!(a, CleanupAction::Drop { name } if name == n.as_str()));
                 cleanup
                     .retain(|a| !matches!(a, CleanupAction::Drop { name } if name == n.as_str()));
+                // B-2026-09-30-105 — an ENCLOSING block's binding (a `match`
+                // arm's payload binding, the discard nested in an `if` inside
+                // the arm) has no slot in this block's cleanup, so the line
+                // above missed it and `[w];` ran the body twice. Record the
+                // move instead, as `record_enclosing_let_rebind_moves` does for
+                // a nested `let`. A param view is the caller's and is skipped.
+                if !here
+                    && self.env.get_in_current_scope(n).is_none()
+                    && !self
+                        .owned_param_names_stack
+                        .last()
+                        .is_some_and(|top| top.contains(n.as_str()))
+                {
+                    self.moved_out_user_drop_bindings.insert(n.clone());
+                }
             }
         }
     }

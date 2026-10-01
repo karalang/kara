@@ -1438,6 +1438,31 @@ impl<'a> super::Interpreter<'a> {
                         self.snapshot_shadowed_moved_records(&pattern.binding_names(), Some(value));
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
+                    // B-2026-09-30-105 — the `if let` copy of the `match` arm's
+                    // B-2026-08-04-4 re-arm: the binding holds a FRESH value, so
+                    // a move-out record a previous loop iteration's `let _ = w;`
+                    // left on the name must not silence this one's walk.
+                    // Measured: `for i in 0..3 { if let Some(w) = o { if i < 1
+                    // { let _ = w; } } }` ran no body for `i = 1, 2`.
+                    // A binding that SHADOWS the scrutinee's own root
+                    // (`if let Some(s) = s`) is left alone: the bind recorded
+                    // the scrutinee's move-out on that name, and the record is
+                    // the scrutinee's (B-2026-09-29-41).
+                    let mut root: &Expr = value;
+                    while let ExprKind::FieldAccess { object, .. }
+                    | ExprKind::TupleIndex { object, .. } = &root.kind
+                    {
+                        root = object;
+                    }
+                    let scrutinee_root = match &root.kind {
+                        ExprKind::Identifier(n) => Some(n.as_str()),
+                        _ => None,
+                    };
+                    for bound in pattern.binding_names() {
+                        if scrutinee_root != Some(bound.as_str()) {
+                            self.rearm_container_bodies_for_name(&bound);
+                        }
+                    }
                     // B-2026-08-29-17, `if let` leg — propagate the view-ness of a
                     // payload bound out of an OWNED-PARAM scrutinee, exactly as
                     // the `match` arm does in `pattern_match.rs`. Without it

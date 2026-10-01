@@ -2033,6 +2033,19 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.payload_vars
                                         .boxed_optres_payload_view_vars
                                         .insert(name.clone(), slot);
+                                    // B-2026-09-30-105 — a view bound inside a
+                                    // loop is a fresh binding each iteration,
+                                    // so a move bit a discard clears on one
+                                    // iteration must be re-armed here on the
+                                    // next (see `record_loop_decl_rearm_anchor`).
+                                    if !self.fn_ctx.loop_stack.is_empty() {
+                                        if let Some(blk) = self.builder.get_insert_block() {
+                                            self.drop_rc.loop_decl_rearm_anchors.insert(
+                                                name.clone(),
+                                                (blk, blk.get_last_instruction()),
+                                            );
+                                        }
+                                    }
                                 }
                                 // B-2026-09-28-48 — a view whose bodies the
                                 // CALLER runs is a param view: a whole rebind

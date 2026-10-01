@@ -17758,6 +17758,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 if b.build_store(f, bool_t.const_int(1, false)).is_err() {
                     return false;
                 }
+                // B-2026-09-30-105 — and re-armed each iteration for a
+                // scrutinee declared inside a loop, as `cond_move_drop_flag_for`
+                // re-arms its bit: the `let` gives the box a fresh interior on
+                // every pass, so a `false` one pass stored must not stand on
+                // the next (it leaked that pass's payload).
+                self.store_at_loop_decl_anchor(&name, f, true);
                 f
             }
         };
@@ -17865,6 +17871,67 @@ impl<'ctx> super::Codegen<'ctx> {
             ptr,
             "destructure.residual",
         );
+    }
+
+    /// B-2026-09-30-105 — fire a binding's `ContainerElemBodies` walk NOW and
+    /// retract the action: the container-walk twin of
+    /// [`Self::fire_struct_field_bodies_now`], for a boxed `Option`/`Result`
+    /// payload view a `let _ = w;` discards. The interpreter destroys the
+    /// discarded value at the statement; the walk otherwise waited for the
+    /// arm's end. Only the BODIES move: the box keeps the payload's memory and
+    /// frees it with the scrutinee, so nothing is freed early.
+    pub(super) fn fire_container_elem_bodies_now(&mut self, name: &str) -> bool {
+        let found = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .rev()
+            .find_map(|frame| {
+                frame.iter().find_map(|a| match a {
+                    CleanupAction::UserDrop {
+                        binding_name,
+                        binding_ptr,
+                        drop_fn,
+                        type_name,
+                        kind,
+                    } if binding_name == name && *kind == UserDropKind::ContainerElemBodies => {
+                        Some((*binding_ptr, *drop_fn, type_name.clone(), *kind))
+                    }
+                    _ => None,
+                })
+            });
+        let Some((ptr, drop_fn, type_name, kind)) = found else {
+            return false;
+        };
+        self.emit_user_drop_bodies_call_field_view_selected(
+            name,
+            &type_name,
+            kind,
+            drop_fn,
+            ptr,
+            "discard.payload_view",
+        );
+        // PER PATH: the discard may sit in a branch of the arm, and the walk
+        // still owes the body on every path that did not take it. Keep the
+        // action and clear the binding's move bit here, the way a nested
+        // `return` does (`guard_user_drop_for_nested_return`); the drain fires
+        // only where the bit still stands.
+        self.disarm_container_elem_bodies_per_path(name);
+        true
+    }
+
+    /// B-2026-09-30-105 — stand binding `name`'s `ContainerElemBodies` walk
+    /// down on THIS path only: clear its move bit and keep the action, which
+    /// the drain then fires only where the bit still stands. Falls back to the
+    /// all-paths retraction where no bit can be made.
+    pub(super) fn disarm_container_elem_bodies_per_path(&mut self, name: &str) {
+        match self.cond_move_drop_flag_for(name) {
+            Some(flag) => {
+                let bool_t = self.context.bool_type();
+                let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
+            }
+            None => self.suppress_container_elem_bodies_for_var(name),
+        }
     }
 
     pub(super) fn suppress_struct_field_bodies_for_var(&mut self, name: &str) {
@@ -18164,6 +18231,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// expression shapes or the backends print different things.
     pub(super) fn disarm_container_bodies_move_sources(&mut self, value: &Expr) {
         match &value.kind {
+            // B-2026-09-30-105 — a boxed `Option`/`Result` payload VIEW per
+            // path: its walk is the scrutinee's, and a rebind nested in a
+            // branch of the arm (`if c { let k = w; }`) took it on every path,
+            // so the paths that never rebound ran no body.
+            ExprKind::Identifier(n)
+                if self
+                    .payload_vars
+                    .boxed_optres_payload_view_vars
+                    .contains_key(n.as_str()) =>
+            {
+                self.disarm_container_elem_bodies_per_path(n)
+            }
             ExprKind::Identifier(n) => self.suppress_container_elem_bodies_for_var(n),
             ExprKind::SelfValue => self.suppress_container_elem_bodies_for_var("self"),
             // Recursive through NESTED literals (B-2026-08-02-23 leg 1) —

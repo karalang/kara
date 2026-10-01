@@ -4958,7 +4958,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-09-01-21 — and the STRUCT-literal fields that are the
                 // same movable place, now that the tail predicate admits them.
                 for n in self.discarded_literal_moved_place_sources(&tail) {
-                    self.suppress_user_drop_for_var(&n);
+                    if !self.is_boxed_payload_view_name(&n) {
+                        self.suppress_user_drop_for_var(&n);
+                    }
                 }
                 self.drop_rc.scope_cleanup_actions.push(Vec::new());
                 let prev_discard = self
@@ -4968,6 +4970,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let val = self.compile_expr(value);
                 self.drop_rc.discard_frame = prev_discard;
                 let val = val?;
+                self.disarm_discarded_payload_view_items(&tail);
                 // B-2026-08-28-53 — see the sibling discard site: argument
                 // temporaries below this mark, the discarded result above it.
                 let b53_arg_mark = self
@@ -5246,7 +5249,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `suppress_inline_option_result_binding_move`'s roster (that
                 // one covers args, aggregate-literal fields and container
                 // pushes) and not the match tail either.
-                self.suppress_boxed_payload_view_move(value);
+                // B-2026-09-30-105 — EXCEPT a `let _ = w;` over a payload
+                // view: a wildcard has no destination to take the box's
+                // interior, so releasing it here leaked the payload's heap
+                // (1 block) while its body waited for the arm's end. The box
+                // keeps the memory, and the bodies run at the statement, where
+                // the interpreter destroys the discarded value.
+                let discards_payload_view = matches!(&pattern.kind, PatternKind::Wildcard)
+                    && matches!(&value.kind, ExprKind::Identifier(n)
+                        if self.payload_vars.boxed_optres_payload_view_vars.contains_key(n.as_str()));
+                if !discards_payload_view {
+                    self.suppress_boxed_payload_view_move(value);
+                } else if let ExprKind::Identifier(n) = &value.kind {
+                    self.fire_container_elem_bodies_now(n);
+                }
                 // B-2026-09-30-66 — and one moved into a collection LITERAL the
                 // binding owns (`Some(x) => { let z = [x]; .. }`): `z`'s walk
                 // frees the payload's heap, so the box must not free it too (a
@@ -13945,7 +13961,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .map(|t| self.discarded_literal_moved_place_sources(t))
                     .unwrap_or_default();
                 for n in moved {
-                    self.suppress_user_drop_for_var(&n);
+                    if !self.is_boxed_payload_view_name(&n) {
+                        self.suppress_user_drop_for_var(&n);
+                    }
                 }
                 if tail.is_some() || literal_tail.is_some() {
                     self.drop_rc.scope_cleanup_actions.push(Vec::new());
@@ -14118,6 +14136,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     // registers its element bodies here instead (the moved
                     // place element's source was retracted above, making this
                     // walk its single owner).
+                    // B-2026-09-30-105 — the bare-statement twin of the
+                    // `let _ =` arm's payload-view hand-over (`[w];`).
+                    self.disarm_discarded_payload_view_items(lt);
                     // B-2026-08-31-21 — the bare-statement twin of the RC leg
                     // in the `let _ =` literal arm; see the note there.
                     if self.shared_struct_literal_type(lt).is_some() {
@@ -28896,7 +28917,54 @@ impl<'ctx> super::Codegen<'ctx> {
             .var_type_names
             .get(n.as_str())
             .is_some_and(|tn| self.type_runs_user_drop(tn.as_str(), &mut Vec::new()));
-        !runs_body || self.has_armed_own_user_drop(n)
+        // B-2026-09-30-105 — or a boxed `Option`/`Result` payload VIEW: its body
+        // rides the scrutinee's walk rather than an own drop, and the statement
+        // site hands both that walk and the box's interior to the literal
+        // (`disarm_discarded_payload_view_items`).
+        !runs_body
+            || self.has_armed_own_user_drop(n)
+            || self
+                .payload_vars
+                .boxed_optres_payload_view_vars
+                .contains_key(n.as_str())
+    }
+
+    /// B-2026-09-30-105 — the payload VIEWS among a discarded literal's moved
+    /// places. They are left out of the statement site's
+    /// `suppress_user_drop_for_var` retraction, which is all-paths and would
+    /// take the scrutinee's walk on every path when the discard sits in a
+    /// branch, and handed over by [`Self::disarm_discarded_payload_view_items`]
+    /// instead.
+    pub(super) fn is_boxed_payload_view_name(&self, n: &str) -> bool {
+        self.payload_vars
+            .boxed_optres_payload_view_vars
+            .contains_key(n)
+    }
+
+    /// B-2026-09-30-105 — give a discarded literal's payload-view items to the
+    /// literal, which now runs their bodies and frees them at the statement:
+    /// release the box's interior (the B-2026-09-30-98 move) and stand the
+    /// scrutinee's walk down PER PATH. Called after the literal compiled.
+    pub(super) fn disarm_discarded_payload_view_items(&mut self, tail: &Expr) {
+        let items: Vec<Expr> = match &tail.kind {
+            ExprKind::ArrayLiteral(items)
+            | ExprKind::PrefixCollectionLiteral { items, .. }
+            | ExprKind::Tuple(items) => items.clone(),
+            ExprKind::StructLiteral { fields, .. } => {
+                fields.iter().map(|f| f.value.clone()).collect()
+            }
+            _ => return,
+        };
+        for item in &items {
+            let ExprKind::Identifier(n) = &item.kind else {
+                continue;
+            };
+            if !self.is_boxed_payload_view_name(n) {
+                continue;
+            }
+            self.suppress_boxed_payload_view_move(item);
+            self.disarm_container_elem_bodies_per_path(n);
+        }
     }
 
     /// B-2026-09-01-21 — every source a DISCARDED literal moves that the

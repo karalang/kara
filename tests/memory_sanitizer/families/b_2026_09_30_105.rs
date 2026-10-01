@@ -1,0 +1,64 @@
+//! B-2026-09-30-105 -- an `Option`/`Result` payload binding discarded or
+//! moved inside a `match` arm or `if let`: freed once, on every path.
+
+use super::*;
+
+/// B-2026-09-30-105 — the memory half: `let _ = w` and `let _ = [w]` released
+/// the box's interior with nothing to free it (1 block lost), and a per-path
+/// bit cleared on one loop iteration leaked the next one's payload. Same program
+/// as the codegen twin.
+#[test]
+fn asan_payload_binding_discarded_in_arm_freed_once() {
+    assert_clean_asan_run(
+        r#"struct W1 { v: i64, s: String }
+impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
+fn mk(n: i64) -> W1 { return W1 { v: n, s: f"ssssssssssssssssssssssssssssss{n}" } }
+fn branch(c: bool, n: i64) {
+    let o = Some(mk(n));
+    match o { Some(w) => { if c { let _ = w; println("a") }; println("arm") }, None => {} };
+    let p = Some(mk(n + 1));
+    match p { Some(w) => { if c { let k = w; println(f"k:{k.v}") }; println("arm") }, None => {} };
+    let q = Some(mk(n + 2));
+    if let Some(w) = q { if c { [w]; println("b") }; println("arm") };
+    let r = Some(mk(n + 3));
+    match r { Some(w) => { if c { let _ = (w, 1); println("t") }; println("arm") }, None => {} };
+}
+fn main() {
+    let o1 = Some(mk(1));
+    match o1 { Some(w) => { let _ = w; println("arm1") }, None => {} };
+    let o2 = Some(mk(2));
+    match o2 { Some(w) => { let _ = [w]; println("arm2") }, None => {} };
+    let o3 = Some(mk(3));
+    if let Some(w) = o3 { [w]; println("arm3") };
+    let o4 = Some(mk(4));
+    match o4 { Some(w) => { let _ = [w, mk(49)]; println("arm4") }, None => {} };
+    let o5 = Some(mk(5));
+    match o5 { Some(w) => { let _ = Vec[w]; println("arm5") }, None => {} };
+    let r6: Result[W1, i64] = Ok(mk(6));
+    match r6 { Ok(w) => { let _ = Array[w]; println("arm6") }, Err(e) => { println(f"{e}") } };
+    branch(false, 10);
+    branch(true, 20);
+    for i in 0..3 {
+        let o = Some(mk(30 + i));
+        if let Some(w) = o { if i < 1 { let _ = w; println("in") } };
+        println("it")
+    };
+    let mut j = 0;
+    while j < 3 {
+        let o = Some(mk(40 + j));
+        match o { Some(w) => { if j % 2 == 0 { let k = w; println(f"k:{k.v}") } }, None => {} };
+        j = j + 1;
+    };
+    println("end")
+}
+"#,
+        &[
+            "dW1_1", "arm1", "dW1_2", "arm2", "dW1_3", "arm3", "dW1_4", "dW1_49", "arm4", "dW1_5",
+            "arm5", "dW1_6", "arm6", "arm", "dW1_10", "arm", "dW1_11", "arm", "dW1_12", "arm",
+            "dW1_13", "dW1_20", "a", "arm", "k:21", "dW1_21", "arm", "dW1_22", "b", "arm",
+            "dW1_23", "t", "arm", "dW1_30", "in", "it", "dW1_31", "it", "dW1_32", "it", "k:40",
+            "dW1_40", "dW1_41", "k:42", "dW1_42", "end",
+        ],
+        "payload_binding_discarded_in_arm",
+    );
+}
