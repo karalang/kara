@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 626 |
+| miscompile | 627 |
 | run-vs-build | 567 |
-| leak | 517 |
-| double-free | 386 |
+| leak | 518 |
+| double-free | 387 |
 | missing-feature | 215 |
 | codegen-gap | 208 |
 | other | 164 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2529 |
-| interp | 764 |
+| codegen | 2532 |
+| interp | 765 |
 | typecheck | 320 |
 | other | 112 |
 | ownership | 79 |
@@ -471,8 +471,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-5 | 2026-10-01 | codegen | medium | REMAINDER OF B-2026-09-20-30: A `Result[shared]` OR GENERIC ENUM OF A `shared` PAYLOAD THAT REACHES ITS BINDING THROUGH A `break` VALUE OR A PLAIN REBIND IS STILL NEVER RELEASED ON ANY COMPILED SURFACE, WHERE THE `Option` TWINS ARE CLEAN -- `let b: Box2[Sh] = loop { break freemk(50) }`, `let b: Box2[Sh] = outer: { break outer freemk(63) }` and `let r: Result[Sh, i64] = freeres(62); let c = r;` each print `x` with no `dSh` body on the JIT, -O0 and -O2 and lose 16 B in 1 block at -O0, while `--interp` prints `x dSh..`; `let o: Option[Sh] = loop { break Some(..) }` and `let o = Some(..); let c = o;` are right everywhere | — |
 | B-2026-10-01-6 | 2026-10-01 | codegen | medium | A `Result[shared]` OR A GENERIC ENUM OF A `shared` PAYLOAD HELD IN A STRUCT FIELD OR A `Vec` ELEMENT IS NEVER RELEASED ON ANY COMPILED SURFACE, WHERE THE `Option[shared]` TWIN IS CLEAN -- `let h = Hr { r: freeres(81) }` over `struct Hr { r: Result[Sh, i64] }`, the same with `struct Hb { b: Box2[Sh] }`, and `v.push(freeres(84))` / `v.push(freemk(85))` into a `Vec[Result[Sh, i64]]` / `Vec[Box2[Sh]]` each print `x` with no `dSh` body on the JIT, -O0 and -O2 and lose 16 B in 1 block at -O0; `struct Ho { o: Option[Sh] }` and `Vec[Option[Sh]]` print `x dSh..` everywhere, valgrind clean | — |
 | B-2026-10-01-16 | 2026-10-01 | interp | medium | REMAINDER OF B-2026-09-30-103: A FRESH-TEMP `Option` SCRUTINEE WHOSE STRUCT PAYLOAD IS PARTIALLY DESTRUCTURED LOSES THE UNBOUND FIELDS' BODIES UNDER `--interp` -- `match mo(3) { Option.Some(H2 { v, .. }) => v.id, Option.None => 0 }` prints `d3 3` against compiled `d30 d3 3` | — |
-| B-2026-10-01-17 | 2026-10-01 | codegen | high | A `?` THAT CONVERTS A NAMED `Result` THROUGH `From` (`let r = mke(k); let x = r?;`) READS FREED MEMORY, PRINTS GARBAGE OR LEAKS, BY SOURCE SHAPE -- the fresh-call spelling `mke(k)?` is B-2026-09-30-87 | — |
-| B-2026-10-01-18 | 2026-10-01 | interp+codegen | medium | A `?` THAT CONVERTS ITS ERROR THROUGH `From` NEVER RUNS THE SOURCE ERROR'S `Drop` BODY, ON BOTH BACKENDS -- `struct S { id: i64, v: String }` with a printing `Drop` prints `back 8 end` where the caller-side convention gives `dS8 back 8 end` | — |
 | B-2026-10-01-20 | 2026-10-01 | codegen | medium | A VIEW OF AN ALL-SCALAR CONCRETE ENUM PAYLOAD BOUND OUT OF A BY-VALUE PARAM AND THEN CONSUMED -- REBOUND (`let x = w`) OR HANDED TO A BY-VALUE CALLEE (`sinkn(w)`) -- RUNS ITS `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `fn g(b: En) { match b { En.A(w) => { let x = w; .. } .. } }` over `enum En { A(Cn), B }`, `struct Cn { r: R, n: i64 }`, prints `lt dR2 ret dR2` on the JIT, `-O0` and `-O2` against `--interp`'s `lt ret dR2`; valgrind clean, so only a printed body count sees it; the heap-bearing twin (`Ch { r: R, s: String }`, transfer-owned) is right, and the GENERIC spelling of both was fixed by B-2026-09-20-33's commit, so this is the concrete caller-retained channel alone | — |
 | B-2026-10-01-21 | 2026-10-01 | codegen | high | REASSIGNING A `let mut` LOCAL WHOSE COLLECTION LITERAL HOLDS A BY-VALUE PARAM RUNS THE PARAM'S `Drop` BODY TWICE COMPILED, AND THE REPLACEMENT'S NEVER -- `fn g7(x: R) { let mut v = Vec[x]; v = Vec[mk(8)]; println("in") }` prints `dR6 in dR6` under the JIT and AOT where `--interp` prints `dR8 in dR6` | — |
 | B-2026-10-01-22 | 2026-10-01 | interp+codegen | medium | REMAINDER OF B-2026-10-01-9: A `let mut` LITERAL HOLDING A BY-VALUE PARAM AND RETURNED ON SOME EXITS ONLY RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY SURFACE -- `fn cm(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { return v } return Vec[mk(9)] }` with `cm(mk(1), true)` prints `dR1 k1 dR1`; the immutable `let v = Vec[x]` runs it once | — |
@@ -484,6 +482,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-32 | 2026-10-01 | codegen | medium | AT A USE-AFTER-MOVE `Vec.push` / `Map.insert` OF A STRUCT WITH ITS OWN `Drop`, THE SOURCE'S BUFFERS LEAK -- `let p = P { id: 2, s: f"two" }; v.push(p); println(p.s)` prints correctly on every surface but leaks the source's `String` at -O0 (13 allocs / 12 frees, 3 B definitely lost; `m.insert(9, p)` loses 5 B); `uam_defensive_copy` hands the container a copy and the source keeps its buffers, but `disarm_moved_value_arg_user_drops` reaches `guard_user_drop_for_nested_return`, which fires at the expression-statement frame (depth 2) and stores `false` into the cond-move flag that gates the source's whole `karac_drop_<T>` wrapper, body AND memory; the variant constructor had the same leak through a static retraction and B-2026-09-20-36's fix gave it a memory-keeping one, which cannot be copied here because the guard's flag is per-path | — |
 | B-2026-10-01-33 | 2026-10-01 | codegen | medium | THE RC-PROMOTED SPELLINGS OF A USE-AFTER-MOVE STILL READ THE SOURCE EMPTY ON COMPILED BACKENDS -- a store or push inside a TAKEN BRANCH (`if c > 1 { a[0] = q; }; println(q.s)`) or a LOOP (`for i in 0..2 { v.push(q); }; println(q.s)`) of a no-`Drop` struct prints `q:` against `--interp`'s `q:four`, and the loop also empties every element but the first (`v:four` against `v:fourfour`); `source_outlives_move` answers `RcPromoted` there, not `UseAfterMove`, so `uam_defensive_copy` makes no copy and the sink's cap-zeroing empties the source; same on `Vec.push` and index-assign, so it is that answer's half of B-2026-09-15-16 / B-2026-09-20-36, not one sink; memory-balanced and valgrind-clean, so only an output comparison sees it | — |
 | B-2026-10-01-40 | 2026-10-01 | interp+codegen | medium | A DISCARDED `Vec[Option[R]]` CALL RESULT NEVER RUNS ITS ELEMENTS' `Drop` BODIES ON ANY SURFACE -- `fn bv() -> Vec[Option[R]] { return Vec[Some(mk(40))] }` called as the statement `bv();` prints no `dR40`, where the bound `let v = bv()` prints it and the discarded `Vec[R]` twin runs its body; `let _ = bv()` runs it under `--interp` only | — |
+| B-2026-10-01-37 | 2026-10-01 | codegen | medium | A `?` CONVERTING THROUGH `From` INTO A TARGET WITH TWO `From` IMPLS NEVER DROPS THE SOURCE ERROR WHEN COMPILED -- its `Drop` body does not run and its heap is leaked (`8 1 end` where --interp prints `dS8 8 1 end`), fresh and named, either impl order | — |
+| B-2026-10-01-38 | 2026-10-01 | codegen | medium | A `shared` VALUE AS THE PAYLOAD A `?` MOVES OUT OF A NAMED `Result` LEAKS ITS HANDLE -- `Err(Sh)` through `From` (fresh and named) and `Ok(Sh)` without `From`; plus `Option[Map[String, i64]]` through `?` leaks the map | — |
 
 ### Relocated
 
@@ -3498,7 +3498,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-9 | interp+codegen | medium | A BY-VALUE PARAM MOVED INTO A COLLECTION LITERAL BOUND TO A `let mut` LOCAL AND RETURNED RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `fn f1(x: R)… | 49cff9e64 |
 | B-2026-10-01-11 | codegen | high | RE-WRAPPING A BOXED `Option` PAYLOAD BINDING IN `Some` INSIDE ITS OWN ARM DOUBLE FREES ON THE JIT -- `let t = match o { Some(w) => Some(w), None => N… | 88835d717 |
 | B-2026-10-01-12 | interp | medium | UNDER `--interp` A BY-VALUE `Option` PARAM'S PAYLOAD MOVED INTO AN ARRAY LITERAL THAT IS THE `match` VALUE RUNS ITS `Drop` BODY TWICE -- `fn f(o: Opt… | 77ccda935 |
+| B-2026-10-01-17 | codegen | high | A `?` THAT CONVERTS A NAMED `Result` THROUGH `From` (`let r = mke(k); let x = r?;`) READS FREED MEMORY, PRINTS GARBAGE OR LEAKS, BY SOURCE SHAPE -- t… | 50addfbe7 |
+| B-2026-10-01-18 | interp+codegen | medium | A `?` THAT CONVERTS ITS ERROR THROUGH `From` NEVER RUNS THE SOURCE ERROR'S `Drop` BODY, ON BOTH BACKENDS -- `struct S { id: i64, v: String }` with a… | abae89141 |
 | B-2026-10-01-19 | codegen | high | MOVING A STRUCT FIELD OUT OF A BOXED `Err` PAYLOAD IN A `match` ARM (`Result.Err(e) => { let i = e.inner; . | f51cc9c12 |
+| B-2026-10-01-36 | interp+codegen | high | A `?` ON A NAMED `Option`/`Result` (`let r = mk(k); let x = r?;`) DOES NOT MOVE `r`: COMPILED, EVERY STRUCT OR BOXED PAYLOAD IS FREED TWICE; INTERPRE… | 50addfbe7 |
 
 </details>
 
