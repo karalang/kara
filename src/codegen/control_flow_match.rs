@@ -18695,6 +18695,15 @@ impl<'ctx> super::Codegen<'ctx> {
         if matched_side_is_boxed {
             return;
         }
+        // B-2026-10-01-38 — the same for a side whose payload is a `shared`
+        // handle: the slot's tag-guarded `RcDecOption` owns it, and the arm
+        // binding took a reference of its own. Zeroing the handle word made
+        // that release skip, so `match r { Ok(x) => .. }` over a
+        // `Result[Sh, String]` leaked the `Sh` (the `String` side is what
+        // armed this suppressor at all; `Result[Sh, i64]` never reached it).
+        if self.result_side_is_rc_released(slot.ptr, matched_tag) {
+            return;
+        }
         self.zero_result_payload_area(layout.llvm_type, slot.ptr, "respl.suppress");
         // B-2026-09-19-59 — the delivery half, as the `Option` twin has had
         // since B-2026-09-13-18: the zero above hands an `Array` payload to
@@ -26672,6 +26681,27 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
+    /// B-2026-10-01-38 — does a tag-guarded `RcDecOption` on `slot` release
+    /// the `Result` side whose tag is `tag`? That side's payload is a
+    /// `shared` handle the slot keeps its own reference to, so a consuming
+    /// arm has nothing of it to take over.
+    fn result_side_is_rc_released(&self, slot: PointerValue<'ctx>, tag: Option<u64>) -> bool {
+        let Some(tag) = tag else {
+            return false;
+        };
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .any(|a| {
+                matches!(
+                    a,
+                    super::state::CleanupAction::RcDecOption { option_slot, some_tag, .. }
+                        if *option_slot == slot && *some_tag == tag
+                )
+            })
+    }
+
     /// Alloca-keyed sibling of `suppress_inline_result_payload_cleanup` for a
     /// FRESH-TEMP inline `Result` scrutinee (no identifier to resolve). Zeros
     /// the materialized scrutinee slot's `cap` (field 3) on a CONSUMING `Ok`/
@@ -26697,6 +26727,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(layout) = self.type_decls.enum_layouts.get("Result") else {
             return;
         };
+        // B-2026-10-01-38 — see `suppress_inline_result_payload_cleanup`.
+        if self
+            .result_side_is_rc_released(slot, layout.tags.get(variant.unwrap_or_default()).copied())
+        {
+            return;
+        }
         self.zero_result_payload_area(layout.llvm_type, slot, "respl.suppress.at");
         // B-2026-09-19-59 — see `suppress_inline_result_payload_cleanup`.
         self.own_disarmed_inline_array_payload(pattern);

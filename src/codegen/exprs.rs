@@ -2684,6 +2684,49 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_call(drop_fn, &[slot.into()], "")
                         .unwrap();
                 }
+                // B-2026-10-01-38 — a `shared` source is a reference `from`
+                // only borrows (its param takes and drops one of its own), so
+                // the source's own reference is still the caller's to release,
+                // as after an ordinary `E2.from(<temp>)`. A fresh source and a
+                // named one whose slot releases nothing had no other owner, so
+                // the handle leaked.
+                let shared_source_owned_here = match &inner.kind {
+                    ExprKind::Call { .. } => true,
+                    ExprKind::Identifier(n) => self
+                        .variables
+                        .get(n.as_str())
+                        .is_some_and(|s| !self.slot_has_rc_dec_option(s.ptr)),
+                    _ => false,
+                };
+                if shared_source_owned_here && arg.is_pointer_value() {
+                    let heap = self
+                        .program_snapshot
+                        .as_deref()
+                        .and_then(|p| {
+                            super::declarations::find_function_ast_dispatch(
+                                p,
+                                &qualified,
+                                &self.span_tables.impl_dispatch_names,
+                            )
+                        })
+                        .and_then(|f| f.params.first())
+                        .and_then(|p| match &p.ty.kind {
+                            TypeKind::Path(path) => path.segments.last().cloned(),
+                            _ => None,
+                        })
+                        .and_then(|n| {
+                            self.type_decls
+                                .shared_types
+                                .get(n.as_str())
+                                .map(|info| (n.clone(), info.heap_type))
+                        });
+                    if let Some((name, heap)) = heap {
+                        // The recursive drop fn the dec frees through is
+                        // synthesized lazily, as at every scope-exit release.
+                        let _ = self.emit_shared_struct_rc_drop_fn(&name);
+                        self.emit_refcount_dec_by_type(heap, arg.into_pointer_value());
+                    }
+                }
                 // The box itself was the source aggregate's, and a fresh
                 // source is consumed here: its envelope has no other owner.
                 if let Some(bp) = source_box {

@@ -7977,10 +7977,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     // its own inc; the recursion inside that resolver declines it.
                     let read_transferred = matches!(&value.kind, ExprKind::FieldAccess { .. })
                         && self.shared_type_for_call_like(value).is_some();
+                    // B-2026-10-01-38 — `let x = r?;` over a named source
+                    // whose slot releases no reference of its own (the `?`
+                    // moved it, or nothing ever registered one): `x` holds
+                    // the only reference, and a receive-inc on top leaks the
+                    // box. A source with its own `RcDecOption` (an
+                    // `Option[shared]` local) keeps the inc it balances.
+                    let question_moved = match &value.kind {
+                        ExprKind::Question(inner) => match &inner.kind {
+                            ExprKind::Identifier(n) => self
+                                .variables
+                                .get(n.as_str())
+                                .is_some_and(|s| !self.slot_has_rc_dec_option(s.ptr)),
+                            _ => false,
+                        },
+                        _ => false,
+                    };
                     if !is_fresh_construction
                         && !b2_skip
                         && !transferred
                         && !read_transferred
+                        && !question_moved
                         && !frozen_alias
                     {
                         // Copying a shared pointer — increment refcount.
@@ -30703,6 +30720,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// as before this helper — but the aliasing branch is preserved
     /// correctly. Per-branch inc emission would require lowering the
     /// receive-inc into each tail block; deferred to a future slice.
+    /// B-2026-10-01-38 — does a scope-exit `RcDecOption` release a `shared`
+    /// payload out of the `Option`/`Result` slot `slot`?
+    pub(super) fn slot_has_rc_dec_option(&self, slot: PointerValue<'ctx>) -> bool {
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .any(|a| {
+                matches!(a, super::state::CleanupAction::RcDecOption { option_slot, .. }
+                if *option_slot == slot)
+            })
+    }
+
     pub(super) fn rhs_yields_fresh_ref(&self, expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::MethodCall {
@@ -30733,6 +30763,13 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::StructLiteral { .. }
             | ExprKind::Call { .. }
             | ExprKind::MethodCall { .. } => true,
+            // B-2026-10-01-38 — `f(k)?` unwraps a call's FRESH `Option` /
+            // `Result`, whose `+1` nothing else owns: no cleanup is
+            // registered for the `?` operand temp. The binding takes that
+            // reference over, as it takes a bare call's; an inc on top left
+            // the count at 1 and leaked the box. A named operand (`r?`) is not
+            // fresh: its own slot keeps the reference and releases it.
+            ExprKind::Question(inner) => matches!(inner.kind, ExprKind::Call { .. }),
             ExprKind::Block(block)
             | ExprKind::Unsafe(block)
             | ExprKind::LabeledBlock { body: block, .. } => block
