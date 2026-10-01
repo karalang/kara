@@ -22339,9 +22339,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             continue;
                         }
                         for (slot, te) in tes.iter_mut().zip(other) {
-                            if Self::te_is_unnamed(slot) && !Self::te_is_unnamed(&te) {
-                                *slot = te;
-                            }
+                            Self::fill_unnamed_te_from(slot, &te);
                         }
                     }
                     // B-2026-10-01-13 — a position EVERY tail fills with its
@@ -22350,40 +22348,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     // each such element; take its answer when it is a
                     // non-generic struct codegen has a layout for, the same
                     // fail-closed gate `type_name_of_expr` applies to this table.
+                    //
+                    // B-2026-10-01-49 — at any depth: `Ok(w) => ((w, 1), 2),
+                    // Err(w) => ((w, 3), 4)` leaves the inner position unnamed
+                    // on every tail just as the one-level spelling does.
                     for (k, slot) in tes.iter_mut().enumerate() {
-                        if !matches!(&slot.kind, TypeKind::Path(p)
-                            if p.segments.len() == 1 && p.segments[0].is_empty())
-                        {
-                            continue;
-                        }
-                        let named = all_tails.iter().find_map(|tail| {
-                            let ExprKind::Tuple(elems) = &tail.kind else {
-                                return None;
-                            };
-                            let el = elems.get(k)?;
-                            self.span_tables
-                                .expr_struct_type_names
-                                .get(&(el.span.offset, el.span.length))
-                                .filter(|n| {
-                                    self.type_decls.struct_field_names.contains_key(n.as_str())
-                                        && self
-                                            .type_decls
-                                            .struct_generic_params
-                                            .get(n.as_str())
-                                            .is_none_or(|ps| ps.is_empty())
-                                })
-                                .cloned()
-                        });
-                        if let Some(n) = named {
-                            *slot = TypeExpr {
-                                kind: TypeKind::Path(crate::ast::PathExpr {
-                                    segments: vec![n],
-                                    generic_args: None,
-                                    span: slot.span,
-                                }),
-                                span: slot.span,
-                            };
-                        }
+                        let at_k: Vec<&Expr> = all_tails
+                            .iter()
+                            .filter_map(|tail| match &tail.kind {
+                                ExprKind::Tuple(elems) => elems.get(k),
+                                _ => None,
+                            })
+                            .collect();
+                        self.name_unnamed_te_leaves_from_typechecker(slot, &at_k);
                     }
                 }
                 return Some(tes);
@@ -25105,6 +25082,79 @@ impl<'ctx> super::Codegen<'ctx> {
                 || matches!(&e.kind, ExprKind::Identifier(n)
                     if self.fresh_bare_unit_variant_enum(n).is_some()))
             .then_some(e),
+        }
+    }
+
+    /// B-2026-10-01-13 / B-2026-10-01-49 — name each unnamed leaf of `slot`
+    /// from the typechecker's type for the element expression at the same
+    /// position of any branch tail (`exprs`), descending through tuple
+    /// literals of equal arity. Fail-closed to a NON-GENERIC struct codegen
+    /// has a layout for, the gate `type_name_of_expr` applies to this table.
+    fn name_unnamed_te_leaves_from_typechecker(&self, slot: &mut TypeExpr, exprs: &[&Expr]) {
+        if matches!(&slot.kind, TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0].is_empty())
+        {
+            let named = exprs.iter().find_map(|el| {
+                self.span_tables
+                    .expr_struct_type_names
+                    .get(&(el.span.offset, el.span.length))
+                    .filter(|n| {
+                        self.type_decls.struct_field_names.contains_key(n.as_str())
+                            && self
+                                .type_decls
+                                .struct_generic_params
+                                .get(n.as_str())
+                                .is_none_or(|ps| ps.is_empty())
+                    })
+                    .cloned()
+            });
+            if let Some(n) = named {
+                *slot = TypeExpr {
+                    kind: TypeKind::Path(crate::ast::PathExpr {
+                        segments: vec![n],
+                        generic_args: None,
+                        span: slot.span,
+                    }),
+                    span: slot.span,
+                };
+            }
+            return;
+        }
+        if let TypeKind::Tuple(items) = &mut slot.kind {
+            let arity = items.len();
+            for (i, item) in items.iter_mut().enumerate() {
+                let at_i: Vec<&Expr> = exprs
+                    .iter()
+                    .filter_map(|e| match &e.kind {
+                        ExprKind::Tuple(elems) if elems.len() == arity => elems.get(i),
+                        _ => None,
+                    })
+                    .collect();
+                self.name_unnamed_te_leaves_from_typechecker(item, &at_i);
+            }
+        }
+    }
+
+    /// B-2026-10-01-49 — fill every unnamed LEAF of `slot` from the same
+    /// position of `other`, descending through tuples of equal arity. The
+    /// per-slot fill it replaces took `other` only when `other` was named
+    /// throughout, and an integer literal elsewhere in the same nested tuple
+    /// comes back unnamed too, so `None => ((mk(0), 0), 0)` could never name
+    /// the `w` in `Some(w) => ((w, 1), 2)`: the binding got no bodies walker
+    /// and the payload's `Drop` body ran nowhere compiled.
+    fn fill_unnamed_te_from(slot: &mut TypeExpr, other: &TypeExpr) {
+        let is_empty_path = |te: &TypeExpr| matches!(&te.kind, TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0].is_empty());
+        if is_empty_path(slot) {
+            if !is_empty_path(other) {
+                *slot = other.clone();
+            }
+            return;
+        }
+        if let (TypeKind::Tuple(a), TypeKind::Tuple(b)) = (&mut slot.kind, &other.kind) {
+            if a.len() == b.len() {
+                for (x, y) in a.iter_mut().zip(b) {
+                    Self::fill_unnamed_te_from(x, y);
+                }
+            }
         }
     }
 
