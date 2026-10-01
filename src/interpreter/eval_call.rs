@@ -3698,7 +3698,17 @@ impl<'a> super::Interpreter<'a> {
                 crate::ast::TypeKind::Path(p) => p.segments.last().map(String::as_str),
                 _ => None,
             };
-            if target != Some(type_name) {
+            // B-2026-10-01-37 — or the QUALIFIED segment a colliding impl
+            // dispatches under (`E9@From[S]`), which is what the `?` site's
+            // `From` conversion names its callee by. Matching the head alone
+            // found nothing for it, so the argument walk treated a `from` that
+            // stores its source as one that leaves it, and ran its body twice.
+            let qualified = || {
+                self.impl_dispatch_names
+                    .get(&crate::resolver::SpanKey::from_span(&imp.target_type.span))
+                    .is_some_and(|q| q == type_name)
+            };
+            if target != Some(type_name) && !qualified() {
                 return None;
             }
             imp.items.iter().find_map(|it| match it {

@@ -3277,7 +3277,13 @@ impl<'ctx> super::Codegen<'ctx> {
         qualified: &str,
     ) -> Option<(TypeExpr, bool)> {
         let program = self.program_snapshot.as_deref()?;
-        let f = super::declarations::find_function_ast(program, qualified)?;
+        // B-2026-10-01-37 — `qualified` is the dispatch key, which names a
+        // colliding `From` impl by its qualified segment.
+        let f = super::declarations::find_function_ast_dispatch(
+            program,
+            qualified,
+            &self.span_tables.impl_dispatch_names,
+        )?;
         let param = f.params.first()?;
         let TypeKind::Path(path) = &param.ty.kind else {
             return None;

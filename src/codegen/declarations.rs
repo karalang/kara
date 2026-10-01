@@ -6755,6 +6755,41 @@ pub(super) fn find_function_ast<'p>(program: &'p Program, fn_key: &str) -> Optio
     None
 }
 
+/// [`find_function_ast`] for a key that may carry a QUALIFIED dispatch
+/// segment (`E7@From[S].from`, B-2026-08-27-1). `find_function_ast` matches an
+/// impl method only under its head name, so a colliding impl's own key found
+/// nothing and every caller treated the callee as unknown.
+///
+/// B-2026-10-01-37 — the `?` site converts through exactly such a key, so with
+/// two `From` impls on one target it could not tell whether `from` left the
+/// source with the caller, and never dropped it.
+pub(super) fn find_function_ast_dispatch<'p>(
+    program: &'p Program,
+    fn_key: &str,
+    names: &crate::impl_dispatch::ImplDispatchNames,
+) -> Option<&'p Function> {
+    if let Some(f) = find_function_ast(program, fn_key) {
+        return Some(f);
+    }
+    let (seg, method) = fn_key.rsplit_once('.')?;
+    for item in &program.items {
+        let Item::ImplBlock(imp) = item else { continue };
+        if crate::impl_dispatch::impl_dispatch_segment(&imp.target_type, names).as_deref()
+            != Some(seg)
+        {
+            continue;
+        }
+        for ii in &imp.items {
+            if let ImplItem::Method(m) = ii {
+                if m.name == method {
+                    return Some(m);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Phase 6 line 26 slice 8t: count yield-point spans whose source
 /// range is contained inside the given statement's span. Used by the
 /// body-splitting walker when a stmt isn't classified as a top-level
