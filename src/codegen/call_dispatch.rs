@@ -11619,12 +11619,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     // rule the ctor arm follows: the frame drains LIFO, so the
                     // free pushed first runs last, after the payload bodies that
                     // read it.
+                    //
+                    // B-2026-09-20-50 — and the ESCAPING temp the callee
+                    // ENTRY-COPIES, the enum twin of B-2026-09-25-14's struct
+                    // leg just below. `gives(mks(1))` over `fn gives(e: Ts) ->
+                    // Ts { e }`, `puts(mut v, mks(3))` and `holds(mks(5))` each
+                    // hand onward the callee's COPY, so the caller's temp is an
+                    // orphaned original nothing freed: one payload buffer per
+                    // call at -O0, while a named local and an inline constructor
+                    // were clean. MEMORY ONLY: the payload's bodies belong to
+                    // the copy's new owner. Not when the callee RC-promotes a
+                    // stored param (`aggregate_arg_escape_stores`), whose box
+                    // frees the value, and never for a type the callee takes BY
+                    // TRANSFER — `enum_type_is_entry_copied_heap` excludes those,
+                    // which is the double free the gate above exists to stop.
+                    let enum_escaping_entry_copied = arg_escapes_frame
+                        && !self.drop_rc.aggregate_arg_escape_stores
+                        && self.enum_type_is_entry_copied_heap(&ret_ty_name);
                     if !has_user_drop
-                        && !arg_escapes_frame
+                        && (!arg_escapes_frame || enum_escaping_entry_copied)
                         && self.type_decls.enum_layouts.contains_key(&ret_ty_name)
                         && !self.enum_param_owned_by_transfer(&ret_ty_name)
                     {
-                        let walker = self.emit_enum_payload_user_drop_bodies_fn(&ret_ty_name);
+                        let walker = if enum_escaping_entry_copied {
+                            None
+                        } else {
+                            self.emit_enum_payload_user_drop_bodies_fn(&ret_ty_name)
+                        };
                         let needs_memory_drop = self.enum_drop_switch_does_work(&ret_ty_name);
                         if needs_memory_drop || walker.is_some() {
                             let slot =
