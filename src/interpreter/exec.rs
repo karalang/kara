@@ -1423,6 +1423,23 @@ impl Env {
         None
     }
 
+    /// [`Self::snapshot`] without the item scope `scopes[0]`, for a closure's
+    /// captured environment. B-2026-10-02-71 — every call of a closure
+    /// defines its captured names into the new frame, so capturing the items
+    /// copied every function's patterns and default expressions on every
+    /// call: a `sort_by` comparator spent most of its time there. A closure
+    /// frame reaches the items through [`Self::get`]'s fallback to
+    /// `scopes[0]` instead, which sees the same, immutable, values.
+    pub(crate) fn snapshot_locals(&self) -> HashMap<String, Value> {
+        let mut all = HashMap::new();
+        for scope in self.scopes.iter().skip(1) {
+            for (k, v) in scope {
+                all.insert(k.clone(), v.clone());
+            }
+        }
+        all
+    }
+
     /// Snapshot current env for closure capture. Preserves `SharedCell`
     /// slots verbatim so a captured `mut ref` alias keeps pointing at the
     /// shared cell when the closure dispatches.

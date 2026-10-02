@@ -2329,7 +2329,7 @@ impl<'a> super::Interpreter<'a> {
                     }
                     let _ = self.env.wrap_capture(&name);
                 }
-                let captured = self.env.snapshot();
+                let captured = self.env.snapshot_locals();
                 let closure_body = Block {
                     stmts: Vec::new(),
                     final_expr: Some(Box::new(body.as_ref().clone())),
