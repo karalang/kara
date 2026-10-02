@@ -6036,6 +6036,15 @@ impl<'a> super::Interpreter<'a> {
         variant: Option<&str>,
         include_payload_escape: bool,
     ) -> bool {
+        // Slice 4 step 2 (`KARAC_DROP_SCHEDULE=1`): the per-param fate settles
+        // the two unconditional whole-value answers; every other shape falls
+        // through to the legacy walks below.
+        if let Some(leaves) = self
+            .callee_fn_for_ownership_guard_of(callee_name, method_owner)
+            .and_then(|f| crate::param_fate::whole_param_leaves(Some(self.program), f, i))
+        {
+            return leaves;
+        }
         // B-2026-09-03-7 — on the METHOD path, also ask the question by RETURN
         // TYPE, exactly as B-2026-09-04-30's receiver gate does and through the
         // same shared predicate. The structural walks below recognise a bare

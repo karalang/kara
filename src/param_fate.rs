@@ -63,6 +63,9 @@ pub enum Coverage {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParamFate {
     pub exits: Vec<ExitFate>,
+    /// No path moved a PART of the parameter or consumed it inside the
+    /// callee: every exit is a whole-value answer.
+    pub whole_only: bool,
 }
 
 impl ParamFate {
@@ -159,6 +162,7 @@ fn param_fate_depth(
             .collect(),
         exits: Vec::new(),
         overflow: false,
+        moved: false,
     };
     let mut s = PState::default();
     s.whole.insert(name.clone());
@@ -169,8 +173,10 @@ fn param_fate_depth(
     if w.overflow {
         return Some(ParamFate {
             exits: vec![ExitFate::Unknown],
+            whole_only: false,
         });
     }
+    let whole_only = !w.moved;
     let mut exits = w.exits;
     if exits.is_empty() {
         // Every path diverges (panic / infinite loop): nothing leaves.
@@ -185,34 +191,14 @@ fn param_fate_depth(
             true
         }
     });
-    Some(ParamFate { exits })
+    Some(ParamFate { exits, whole_only })
 }
 
 fn is_scalar_ty(t: &TypeExpr) -> bool {
     let TypeKind::Path(p) = &t.kind else {
         return false;
     };
-    p.segments.len() == 1
-        && matches!(
-            p.segments[0].as_str(),
-            "i8" | "i16"
-                | "i32"
-                | "i64"
-                | "i128"
-                | "isize"
-                | "u8"
-                | "u16"
-                | "u32"
-                | "u64"
-                | "u128"
-                | "usize"
-                | "f16"
-                | "bf16"
-                | "f32"
-                | "f64"
-                | "bool"
-                | "char"
-        )
+    p.segments.len() == 1 && is_scalar_type_name(&p.segments[0])
 }
 
 fn is_borrow_ty(t: &TypeExpr) -> bool {
@@ -242,6 +228,10 @@ struct PState {
     stored: bool,
     /// The walk lost track of it on this path.
     unknown: bool,
+    /// A part of it moved somewhere, or the whole was consumed inside the
+    /// callee (discarded, or held by a local container). The exit still
+    /// classifies, but whole-value consumers must not act on it alone.
+    moved: bool,
 }
 
 impl PState {
@@ -279,6 +269,8 @@ struct Walker<'p> {
     borrows: BTreeSet<String>,
     exits: Vec<ExitFate>,
     overflow: bool,
+    /// Some exit's path set `PState::moved`.
+    moved: bool,
 }
 
 fn dedup(mut v: Outs) -> Outs {
@@ -289,6 +281,7 @@ fn dedup(mut v: Outs) -> Outs {
 
 impl Walker<'_> {
     fn exit(&mut self, s: &PState, y: Yield) {
+        self.moved |= s.moved || y == Yield::Part;
         let fate = if s.unknown {
             ExitFate::Unknown
         } else {
@@ -419,12 +412,20 @@ impl Walker<'_> {
                 }
                 vec![s]
             }
-            StmtKind::Expr(e) => self.expr(e, s).into_iter().map(|(s, _)| s).collect(),
+            StmtKind::Expr(e) => self
+                .expr(e, s)
+                .into_iter()
+                .map(|(mut s, y)| {
+                    s.moved |= y != Yield::None;
+                    s
+                })
+                .collect(),
         }
     }
 
     /// `target = <value carrying y>`.
     fn assign(&mut self, target: &Expr, mut s: PState, y: Yield) -> PState {
+        s.moved |= y == Yield::Part;
         match &target.kind {
             ExprKind::Identifier(n) => {
                 if self.borrows.contains(n) {
@@ -447,6 +448,7 @@ impl Walker<'_> {
                     Some(r) => {
                         // A field / element of a local now holds it.
                         if y != Yield::None {
+                            s.moved = true;
                             let cur = s.yield_of(r);
                             s.set(r, join(cur, y));
                         }
@@ -784,8 +786,18 @@ impl Walker<'_> {
             _ => None,
         };
         let ctor = target.is_none() && key.as_deref().is_some_and(is_ctor_name);
+        // A desugared operator on a primitive (`c.id + 10` reaches here as
+        // `i64.add(c.id, 10)`): its operands are scalars, copied rather than
+        // moved, and its result owns nothing of any holder.
+        let scalar_op = target.is_none()
+            && matches!(&callee.kind, ExprKind::Path { segments, .. }
+                if segments.len() == 2 && is_scalar_type_name(&segments[0]));
         let mut outs = Vec::new();
         for (s, ys) in self.args(args, s) {
+            if scalar_op {
+                outs.push((s, Yield::None));
+                continue;
+            }
             if ctor {
                 let y = ys.iter().copied().fold(Yield::None, join);
                 outs.push((s, y));
@@ -802,8 +814,10 @@ impl Walker<'_> {
                         if g.params.get(i).is_some_and(|p| is_borrow_ty(&p.ty)) {
                             continue; // lent, not handed over
                         }
+                        s.moved |= *y == Yield::Part;
                         match param_fate_depth(self.program, g, i, self.depth + 1) {
                             Some(fate) if fate.is_exact() => {
+                                s.moved |= !fate.whole_only;
                                 match (fate.returned_any(), fate.stored()) {
                                     (Coverage::Never, Coverage::Never) => {}
                                     (Coverage::Always, Coverage::Never) => {
@@ -854,10 +868,12 @@ impl Walker<'_> {
             for (mut s, ys) in self.args(args, s) {
                 let carried = ys.iter().copied().fold(Yield::None, join);
                 if carried != Yield::None {
+                    s.moved |= carried == Yield::Part;
                     if is_container_store(method) {
                         match place_root(object).as_deref() {
                             Some(r) if self.borrows.contains(r) => s.stored = true,
                             Some(r) => {
+                                s.moved = true;
                                 let cur = s.yield_of(r);
                                 s.set(r, join(cur, carried));
                             }
@@ -880,11 +896,37 @@ impl Walker<'_> {
     }
 }
 
+fn is_scalar_type_name(n: &str) -> bool {
+    matches!(
+        n,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "f16"
+            | "bf16"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+    )
+}
+
 /// `let <pattern> = <value carrying y>`.
 fn bind(s: &mut PState, pattern: &Pattern, y: Yield) {
     match &pattern.kind {
-        PatternKind::Binding(n) => s.set(n, y),
-        PatternKind::Wildcard => {}
+        PatternKind::Binding(n) => {
+            s.moved |= y == Yield::Part;
+            s.set(n, y)
+        }
+        PatternKind::Wildcard => s.moved |= y != Yield::None,
         _ => bind_projected(s, pattern, y),
     }
 }
@@ -892,7 +934,9 @@ fn bind(s: &mut PState, pattern: &Pattern, y: Yield) {
 /// Names bound inside a destructuring pattern each hold a PART.
 fn bind_projected(s: &mut PState, pattern: &Pattern, y: Yield) {
     let part = if y == Yield::None { y } else { Yield::Part };
-    for n in pattern_names(pattern) {
+    let names = pattern_names(pattern);
+    s.moved |= part != Yield::None && !names.is_empty();
+    for n in names {
         s.set(&n, part);
     }
 }
@@ -1177,6 +1221,43 @@ fn collect_expr_names(e: &Expr, out: &mut Vec<String>) {
     }
 }
 
+// ───────────────────────────── consumers ──────────────────────────────
+
+/// Whether the per-param fate is the ANSWER (`KARAC_DROP_SCHEDULE=1`), not
+/// only an audit. Read once per process.
+pub fn schedule_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("KARAC_DROP_SCHEDULE").ok().as_deref() == Some("1"))
+}
+
+/// Step 2's question, asked by the CALLER of a by-value argument: does the
+/// whole value leave the callee on every exit (`Some(true)` — the new owner
+/// runs its body, the caller must not), or stay on every exit (`Some(false)` —
+/// the caller runs it at the end of the call, design.md rule 3)?
+///
+/// `None` — the flag is off, the param is not a by-value binding, the walk
+/// lost track on some exit, a PART leaves while the rest stays, or the
+/// answer differs by path. Each of those keeps the legacy machinery, which
+/// handles parts and per-path flags; the fact only settles the two
+/// unconditional, whole-value answers.
+pub fn whole_param_leaves(program: Option<&Program>, f: &Function, idx: usize) -> Option<bool> {
+    if !schedule_enabled() {
+        return None;
+    }
+    let fate = param_fate(program, f, idx).filter(|x| x.whole_only)?;
+    if fate
+        .exits
+        .iter()
+        .all(|e| matches!(e, ExitFate::Returned | ExitFate::Stored))
+    {
+        Some(true)
+    } else if fate.exits.iter().all(|e| *e == ExitFate::Stays) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 // ─────────────────────────────── audit ────────────────────────────────
 
 /// Step 1's only consumer: compare a legacy predicate's answer with the fact.
@@ -1233,6 +1314,17 @@ pub mod audit {
         legacy: bool,
         derive: impl Fn(&ParamFate) -> bool,
     ) -> bool {
+        // Slice 4 step 2: under `KARAC_DROP_SCHEDULE=1` an EXACT fate answers
+        // in place of the legacy predicate, for every consumer at once, so the
+        // two backends cannot be flipped one at a time. An inexact fate
+        // (an exit the walker could not follow) keeps the legacy answer.
+        if super::schedule_enabled() && !f.params.get(idx).is_some_and(|p| is_scalar_ty(&p.ty)) {
+            if let Some(fate) = param_fate(program, f, idx).filter(|x| x.is_exact() && x.whole_only)
+            {
+                return derive(&fate);
+            }
+            return legacy;
+        }
         let Some(sink) = sink() else {
             return legacy;
         };
@@ -1287,6 +1379,16 @@ mod tests {
     }
 
     const PRE: &str = "struct R { id: i64 }\nstruct H { r: R }\n";
+
+    #[test]
+    fn desugared_scalar_operator_on_a_field_moves_nothing() {
+        let f = fate_of(
+            &format!("{PRE}fn f(a: R) -> R {{ let mut c = a; c.id = i64.add(c.id, 10); c }}"),
+            "f",
+            0,
+        );
+        assert_eq!(f.exits, vec![ExitFate::Returned], "{}", f.render());
+    }
 
     #[test]
     fn bare_return_is_returned_always() {
