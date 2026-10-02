@@ -4875,6 +4875,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 if is_scalar_surface_name(head) {
                     return false;
                 }
+                // B-2026-10-02-32 — a `shared` handle held as a FIELD of a value
+                // struct is a reference that struct's drop releases, so the
+                // struct owns heap. `named_type_owns_heap` answers `false` for
+                // a `shared` type because a `shared` PAYLOAD is a different
+                // regime (see `named_struct_owns_heap`); a field is not that
+                // payload. Answering `false` here made `Result[i64, E3]` over
+                // `struct E3 { inner: Sh }` look heap-free, so a read-only arm
+                // took the payload instead of borrowing it: the handle leaked,
+                // a `Drop` on the struct was skipped, and a second `match`
+                // read the zeroed source.
+                if self.type_decls.shared_type_decl_names.contains(head)
+                    || self.type_decls.shared_type_names.contains(head)
+                {
+                    return true;
+                }
                 // Resolves a user ENUM as well as a struct (B-2026-08-30-47).
                 // Before that, an enum field fell to the `true` below, so a
                 // struct holding a payload-free enum counted as owning heap —

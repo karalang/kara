@@ -1,0 +1,63 @@
+//! B-2026-10-02-32 — a read-only `match` / `if let` arm over a local `Result` whose
+//! payload is a value struct holding a `shared` field took the payload instead
+//! of borrowing it, compiled: the handle leaked, a `Drop` on the struct never
+//! ran, and a second `match` over the same local read the zeroed source and
+//! printed nothing. `field_te_owns_heap` now counts a `shared` FIELD as heap,
+//! so the read-only classifier makes the arm a borrow. The cells that MOVE the
+//! binding (`let z = e`, `v.push(e)`) were already right and stay as controls.
+
+use super::*;
+
+/// B-2026-10-02-32 — a read-only arm over a `Result` whose payload struct holds a `shared` field borrows it: matched twice, by param, with a `Drop` body, and over a live handle.
+#[test]
+fn asan_result_struct_shared_field_readonly_arm_borrows() {
+    assert_clean_asan_run_min_allocs(
+        r#"shared struct Sh { k: i64, s: String }
+fn hs(k: i64) -> String { f"heap-string-long-enough-{k}" }
+struct E3 { inner: Sh }
+struct E5 { inner: Sh, n: i64 }
+struct E6 { inner: Sh, n: i64 }
+impl Drop for E6 { fn drop(mut ref self) { println(f"dE6{self.n}") } }
+fn mk3(k: i64) -> Result[i64, E3] { Result.Err(E3 { inner: Sh { k: k, s: hs(k) } }) }
+fn c1() { let r = mk3(4); match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) }; match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.s) } }
+fn c2() { let r = mk3(9); if let Result.Err(e) = r { println(e.inner.k) }; if let Result.Err(e) = r { println(e.inner.s) } }
+fn c3(r: Result[i64, E3]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) } }
+fn c4() { let r: Result[E5, i64] = Result.Ok(E5 { inner: Sh { k: 5, s: hs(5) }, n: 3 }); match r { Result.Ok(e) => println(e.n + e.inner.k), Result.Err(v) => println(v) } }
+fn c5() { let r: Result[i64, E6] = Result.Err(E6 { inner: Sh { k: 6, s: hs(6) }, n: 6 }); match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) } }
+fn c6() { let sh = Sh { k: 7, s: hs(7) }; let r: Result[i64, E3] = Result.Err(E3 { inner: sh }); match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) }; println(sh.k) }
+fn c7() { let r = mk3(8); match r { Result.Ok(v) => println(v), Result.Err(e) => { let z = e; println(z.inner.k) } } }
+fn c8() { let mut v: Vec[E3] = Vec.new(); let r = mk3(10); match r { Result.Ok(_) => println(0), Result.Err(e) => v.push(e) }; println(v[0].inner.k) }
+fn c9() { let r: Result[i64, E6] = Result.Err(E6 { inner: Sh { k: 11, s: hs(11) }, n: 11 }); match r { Result.Ok(v) => println(v), Result.Err(e) => { let z = e; println(z.n) } } }
+fn main() {
+    c1()
+    c2()
+    c3(mk3(12))
+    c4()
+    c5()
+    c6()
+    c7()
+    c8()
+    c9()
+    println("end")
+}"#,
+        &[
+            "4",
+            "heap-string-long-enough-4",
+            "9",
+            "heap-string-long-enough-9",
+            "12",
+            "8",
+            "6",
+            "dE66",
+            "7",
+            "7",
+            "8",
+            "10",
+            "11",
+            "dE611",
+            "end",
+        ],
+        "asan_result_struct_shared_field_readonly_arm_borrows",
+        4,
+    );
+}
