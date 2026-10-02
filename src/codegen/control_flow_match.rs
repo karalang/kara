@@ -17216,7 +17216,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// B-2026-09-30-46 — does this arm bind a named, owned, non-`shared`
     /// STRUCT scrutinee whole (`match g { x => .. }`)? Such an arm is compiled
     /// as `let x = g` after its guard; see `whole_rebind` in `compile_match`.
-    fn arm_rebinds_named_struct_scrutinee_whole(
+    pub(super) fn arm_rebinds_named_struct_scrutinee_whole(
         &self,
         scrutinee: &Expr,
         pattern: &Pattern,

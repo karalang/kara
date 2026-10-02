@@ -1233,6 +1233,20 @@ impl<'a> super::Interpreter<'a> {
                 then_block,
                 else_branch,
             } => {
+                // B-2026-09-30-73 — `if let x = g { .. }` over a named STRUCT
+                // local cannot miss and is `{ let x = g; .. }`; evaluated as
+                // that block so the `let` path's move applies. Bound here it
+                // was a second owner beside `g`: the body ran at `x`'s death
+                // and again at `g`'s. Codegen makes the same rewrite.
+                if self.if_let_rebinds_named_struct_whole(pattern, value) {
+                    let block = Expr {
+                        kind: ExprKind::Block(crate::ast::whole_rebind_block(
+                            pattern, value, then_block,
+                        )),
+                        span: then_block.span,
+                    };
+                    return self.eval_expr_inner(&block);
+                }
                 self.disarm_self_match_adoption(value);
                 let val = self.eval_expr_inner(value);
                 // B-2026-07-11-26: run a fresh-temp enum scrutinee's user `Drop`

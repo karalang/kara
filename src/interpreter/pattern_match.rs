@@ -3842,6 +3842,29 @@ impl<'a> super::Interpreter<'a> {
 
     // ── Pattern matching ────────────────────────────────────────
 
+    /// B-2026-09-30-73 — does this `if let` / `let … else` bind a named struct
+    /// LOCAL whole (`if let x = g`)? That pattern cannot miss, and both backends
+    /// evaluate the construct as `let x = g` (see `ast::whole_rebind_block`).
+    /// A `Binding` spelled with a path, or naming a unit variant, is a tag test.
+    pub(crate) fn if_let_rebinds_named_struct_whole(
+        &self,
+        pattern: &Pattern,
+        value: &Expr,
+    ) -> bool {
+        let (PatternKind::Binding(name), ExprKind::Identifier(src)) = (&pattern.kind, &value.kind)
+        else {
+            return false;
+        };
+        // A borrowed param's binding is a view; the caller runs its body.
+        if name.contains('.') || self.names_borrowed_param(src) {
+            return false;
+        }
+        let Some(v @ Value::Struct { .. }) = self.env.slot_ref(src) else {
+            return false;
+        };
+        !self.binding_is_unit_variant(name, v)
+    }
+
     pub(crate) fn try_match_pattern(&self, pattern: &Pattern, value: &Value) -> bool {
         match &pattern.kind {
             PatternKind::Wildcard => true,

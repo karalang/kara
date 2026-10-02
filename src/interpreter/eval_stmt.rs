@@ -12054,6 +12054,21 @@ impl<'a> super::Interpreter<'a> {
                 else_block,
                 ..
             } => {
+                // B-2026-09-30-73 — `let x = g else { .. }` over a named STRUCT
+                // local cannot miss, so it is the plain `let x = g`. See the
+                // `if let` leg.
+                if self.if_let_rebinds_named_struct_whole(pattern, value) {
+                    let rebind = Stmt {
+                        kind: StmtKind::Let {
+                            is_mut: false,
+                            pattern: pattern.clone(),
+                            ty: None,
+                            value: value.clone(),
+                        },
+                        span: pattern.span,
+                    };
+                    return self.eval_stmt_cf(&rebind);
+                }
                 let val = self.eval_expr_inner(value);
                 // Poison discipline (B-2026-07-31-15): a faulted scrutinee must
                 // propagate — without this the poison Unit falls into

@@ -44,6 +44,19 @@ pub(super) type ScrutineeShapeFlags<'ctx> = (
 impl<'ctx> super::Codegen<'ctx> {
     // ── IfLet ────────────────────────────────────────────────────
 
+    /// B-2026-09-30-73 — does this `if let` / `let … else` bind a named
+    /// struct local WHOLE (`if let x = g`)? Such a pattern cannot miss and the
+    /// construct is a `let` of the scrutinee. A borrowed scrutinee binds a view
+    /// and keeps the ordinary path.
+    pub(super) fn if_let_rebinds_named_struct_whole(
+        &self,
+        pattern: &Pattern,
+        value: &Expr,
+    ) -> bool {
+        self.arm_rebinds_named_struct_scrutinee_whole(value, pattern)
+            && !self.scrutinee_is_borrowed_binding(value)
+    }
+
     pub(super) fn compile_if_let(
         &mut self,
         pattern: &Pattern,
@@ -51,6 +64,20 @@ impl<'ctx> super::Codegen<'ctx> {
         then_block: &Block,
         else_branch: Option<&Expr>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // B-2026-09-30-73 — `if let x = g { .. }` over a named STRUCT local is
+        // irrefutable and is `{ let x = g; .. }`, so it is compiled as that
+        // block, exactly as `match g { x => .. }` reuses the `let` path
+        // (B-2026-09-30-46). Bound as a copy through `bind_pattern_values` it
+        // gained its own owner while `g` kept its, and both freed one value.
+        // The else branch can never run.
+        if self.if_let_rebinds_named_struct_whole(pattern, value) {
+            let block = crate::ast::whole_rebind_block(pattern, value, then_block);
+            let expr = Expr {
+                kind: ExprKind::Block(block),
+                span: then_block.span,
+            };
+            return self.compile_expr(&expr);
+        }
         // Tail-return context: consume it now (the scrutinee `value` below is
         // NOT a tail return), then re-arm it for each branch's final expr so
         // a bare-arg `Option[shared]` leaf gets its per-branch inc.
@@ -2619,6 +2646,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // scope as its own (a nested `let … else` in the value or the else
         // block sets and takes its own).
         let let_else_rest = self.pattern_state.let_else_rest.take();
+        // B-2026-09-30-73 — `let x = g else { .. }` over a named STRUCT local
+        // cannot miss, so it is the plain `let x = g`. See `compile_if_let`.
+        if self.if_let_rebinds_named_struct_whole(pattern, value) {
+            let rebind = Stmt {
+                kind: StmtKind::Let {
+                    is_mut: false,
+                    pattern: pattern.clone(),
+                    ty: None,
+                    value: value.clone(),
+                },
+                span: pattern.span,
+            };
+            return self.compile_stmt(&rebind);
+        }
         let saved_stack_box = self.begin_stack_boxed_scrutinee(value);
         let val = self.compile_expr(value)?;
         self.end_stack_boxed_scrutinee(saved_stack_box);

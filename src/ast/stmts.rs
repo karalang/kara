@@ -15,6 +15,29 @@ pub struct Block {
     pub span: Span,
 }
 
+/// B-2026-09-30-73 — `{ let <pattern> = <value>; <then_block> }`, the block an
+/// irrefutable whole-binding `if let <pattern> = <value> { <then_block> }`
+/// means. Both backends rewrite that `if let` over a named struct local to
+/// this, so the `let` path's move rules apply to it.
+pub fn whole_rebind_block(pattern: &Pattern, value: &Expr, then_block: &Block) -> Block {
+    let mut stmts = Vec::with_capacity(then_block.stmts.len() + 1);
+    stmts.push(Stmt {
+        kind: StmtKind::Let {
+            is_mut: false,
+            pattern: pattern.clone(),
+            ty: None,
+            value: value.clone(),
+        },
+        span: pattern.span,
+    });
+    stmts.extend(then_block.stmts.iter().cloned());
+    Block {
+        stmts,
+        final_expr: then_block.final_expr.clone(),
+        span: then_block.span,
+    }
+}
+
 // ── Statements ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
