@@ -4004,6 +4004,52 @@ pub enum ReturnedAggSlot {
 /// name in the literal can only be the parameter it spells, because nothing
 /// else in the body could have rebound it. Every other shape answers `None`,
 /// which leaves the call site's answer exactly as it was.
+/// B-2026-09-25-33 — the STRUCT-literal sibling of
+/// [`fn_returned_aggregate_literal_slots`]: for a single-exit body returning a
+/// struct literal with no spread, each field filled by a bare by-value
+/// parameter, as `(field, param index)`. Single-exit for the same reason: the
+/// name in the literal can only be the parameter it spells.
+pub fn fn_returned_struct_literal_param_fields(f: &Function) -> Vec<(String, usize)> {
+    let lit = match (f.body.stmts.as_slice(), f.body.final_expr.as_deref()) {
+        ([], Some(e)) => match &e.kind {
+            ExprKind::Return(Some(e)) => e.as_ref(),
+            _ => e,
+        },
+        ([s], None) => match &s.kind {
+            crate::ast::StmtKind::Expr(e) => match &e.kind {
+                ExprKind::Return(Some(e)) => e.as_ref(),
+                _ => return Vec::new(),
+            },
+            _ => return Vec::new(),
+        },
+        _ => return Vec::new(),
+    };
+    let ExprKind::StructLiteral {
+        fields,
+        spread: None,
+        ..
+    } = &lit.kind
+    else {
+        return Vec::new();
+    };
+    fields
+        .iter()
+        .filter_map(|fl| {
+            let ExprKind::Identifier(n) = &fl.value.kind else {
+                return None;
+            };
+            let i = f.params.iter().position(|p| {
+                matches!(&p.pattern.kind, PatternKind::Binding(b) if b == n)
+                    && !matches!(
+                        p.ty.kind,
+                        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+                    )
+            })?;
+            Some((fl.name.clone(), i))
+        })
+        .collect()
+}
+
 pub fn fn_returned_aggregate_literal_slots(f: &Function) -> Option<Vec<ReturnedAggSlot>> {
     let lit = match (f.body.stmts.as_slice(), f.body.final_expr.as_deref()) {
         ([], Some(e)) => e,

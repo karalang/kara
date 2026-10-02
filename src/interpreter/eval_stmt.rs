@@ -3734,6 +3734,33 @@ impl<'a> super::Interpreter<'a> {
     /// caller stood down and the `let` hands the param's body over, so the
     /// masked element ran no body on the exit that does not hand the local
     /// back. Codegen's twin is `literal_elem_is_param_view` in `runtime.rs`.
+    /// B-2026-09-25-33 — the fields of the struct `fn_name` returns that hold
+    /// a param VIEW of this frame passed straight through (`wrapC(x)` over
+    /// `fn wrapC(v: R) -> BxP { return BxP { v: v } }` names `v`).
+    fn discarded_call_param_view_fields(
+        &self,
+        fn_name: &str,
+        args: &[crate::ast::CallArg],
+    ) -> Vec<String> {
+        if self.owned_param_frame_is_method.last().copied() == Some(true) {
+            return Vec::new();
+        }
+        let Some(f) = self.program.items.iter().find_map(|i| match i {
+            crate::ast::Item::Function(f) if f.name == fn_name => Some(f),
+            _ => None,
+        }) else {
+            return Vec::new();
+        };
+        crate::ast::fn_returned_struct_literal_param_fields(f)
+            .into_iter()
+            .filter(|(_, i)| {
+                args.get(*i)
+                    .is_some_and(|a| self.literal_elem_is_param_view(&a.value))
+            })
+            .map(|(name, _)| name)
+            .collect()
+    }
+
     fn literal_elem_is_param_view(&self, e: &Expr) -> bool {
         matches!(&e.kind, ExprKind::Identifier(src)
             if self.owned_param_names_stack
@@ -12891,7 +12918,7 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
                 match &shape.kind {
-                    ExprKind::Call { callee, .. } => {
+                    ExprKind::Call { callee, args } => {
                         // Bare Path-callee CTOR discard (`Option.Some(mk());`,
                         // `Sig.A(g);`): the wildcard-let gate admits Path
                         // ctors unconditionally, and codegen's bare arm now
@@ -13051,7 +13078,32 @@ impl<'a> super::Interpreter<'a> {
                                         level.shared_holders.push(discarded.clone());
                                     }
                                 }
-                                if self.program.drop_method_keys.contains_key(&tn) {
+                                // B-2026-09-25-33 — a param VIEW the callee wraps
+                                // into the struct it returns (`wrapC(x);` over
+                                // `fn wrapC(v: R) -> BxP { return BxP { v: v } }`)
+                                // keeps its body with the CALLER, which runs it
+                                // when this frame's call returns (design.md
+                                // rule 3), exactly as a view moved into a
+                                // discarded literal does (B-2026-10-01-25). The
+                                // discard runs the struct's own body over the
+                                // whole value and its field walk less the views.
+                                let view_fields =
+                                    self.discarded_call_param_view_fields(fn_name, args);
+                                let views_masked = !view_fields.is_empty()
+                                    && matches!(&discarded, Value::Struct { .. });
+                                if views_masked {
+                                    if self.program.drop_method_keys.contains_key(&tn) {
+                                        self.run_user_drop_body_only(&tn, discarded.clone());
+                                    }
+                                    let mut masked = discarded.clone();
+                                    for f in &view_fields {
+                                        Self::remove_field_at_path(
+                                            &mut masked,
+                                            std::slice::from_ref(f),
+                                        );
+                                    }
+                                    self.drop_user_drop_fields_of_value(&masked);
+                                } else if self.program.drop_method_keys.contains_key(&tn) {
                                     // B-2026-09-02-13 — the OWN body and, for an
                                     // enum, the live variant's PAYLOAD bodies.
                                     // The two are COMPLEMENTARY registrations for

@@ -9405,7 +9405,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // both the enum walker below and the generic-struct walk need. Only an
         // instantiation OF the resolved return type is taken, so a tail whose
         // span happens to carry some other recorded type cannot steer either.
-        let discard_inst: Option<TypeExpr> = if self.discarded_call_passes_a_param(tail)
+        let discard_inst: Option<TypeExpr> = if (self.discarded_call_passes_a_param(tail)
+            && !self.discarded_call_params_all_masked(tail, &ret_ty_name))
             || self.discarded_call_may_return_an_arg_whole(tail)
         {
             None
@@ -9446,6 +9447,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|te| self.generic_struct_subst_from_inst(&ret_ty_name, te))
             .filter(|s| !s.is_empty());
         let mut memory_only = false;
+        let generic_view_skip = if field_bodies_only && discarded_generic_struct_subst.is_some() {
+            self.discarded_call_param_view_field_skip(tail, &ret_ty_name)
+        } else {
+            super::synth_drop::FieldSkipTree::default()
+        };
         let bodies_fn = if !field_bodies_only {
             None
         } else if is_enum {
@@ -9506,6 +9512,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 },
             }
+        } else if let (Some(subst), false) = (
+            discarded_generic_struct_subst.as_ref(),
+            generic_view_skip.is_empty(),
+        ) {
+            // B-2026-09-25-33 — less the param VIEW fields, as the concrete
+            // arm below does; with none left the memory is still this temp's.
+            match self.field_bodies_fn_for_owned_temp_mono_skipping(
+                &ret_ty_name,
+                subst,
+                &generic_view_skip,
+            ) {
+                Some(f) => Some((f, UserDropKind::StructFieldBodies)),
+                None => {
+                    memory_only = true;
+                    None
+                }
+            }
         } else if let Some(f) = discarded_generic_struct_subst
             .as_ref()
             .and_then(|subst| self.field_bodies_fn_for_owned_temp_mono(&ret_ty_name, subst))
@@ -9538,8 +9561,20 @@ impl<'ctx> super::Codegen<'ctx> {
             memory_only = true;
             None
         } else {
-            match self.field_bodies_fn_for_owned_temp(&ret_ty_name) {
+            // B-2026-09-25-33 — less the fields the callee filled straight from
+            // a param VIEW of this frame (`wrapC(x);` over `fn wrapC(v: R) ->
+            // BxP { return BxP { v: v } }`): the caller runs that body when
+            // this frame's call returns (design.md rule 3), as for a view
+            // moved into a discarded literal (B-2026-10-01-25).
+            let skip = self.discarded_call_param_view_field_skip(tail, &ret_ty_name);
+            match self.field_bodies_fn_for_owned_temp_skipping(&ret_ty_name, &skip) {
                 Some(f) => Some((f, UserDropKind::StructFieldBodies)),
+                // Every body was a masked view: the temp still owns the
+                // callee's entry copy, so its memory is registered below.
+                None if !skip.here.is_empty() => {
+                    memory_only = true;
+                    None
+                }
                 None => return,
             }
         };
@@ -9685,7 +9720,35 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot)
                 }
             }
-            None => self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot),
+            None => {
+                // B-2026-09-25-33, own-`Drop` leg — the wrapper less the
+                // fields filled from a param VIEW, whose bodies the caller
+                // runs (`own(x);` over `fn own(v: R) -> D { D { v: v } }`).
+                let masked = if field_bodies_only || is_enum {
+                    None
+                } else {
+                    let skip = self.discarded_call_param_view_field_skip(tail, &ret_ty_name);
+                    if skip.is_empty() {
+                        None
+                    } else {
+                        self.emit_user_drop_wrapper_skipping(
+                            &ret_ty_name,
+                            &Default::default(),
+                            &skip,
+                        )
+                    }
+                };
+                match masked {
+                    Some(f) => self.track_user_drop_var_with_fn(
+                        &ret_ty_name,
+                        "__owned_agg_tmp",
+                        slot,
+                        f,
+                        UserDropKind::OwnWrapper,
+                    ),
+                    None => self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot),
+                }
+            }
         }
     }
 
@@ -13635,6 +13698,78 @@ impl<'ctx> super::Codegen<'ctx> {
     /// registered the `H`), or a struct the monomorph hand-back retraction does
     /// not stand down. The binding still frees what it would hand into the
     /// result, so the result must not be given a second owner.
+    /// B-2026-09-25-33 — the field mask for a discarded direct call whose
+    /// callee returns a struct literal with fields filled by its by-value
+    /// params, where this call passes a param VIEW of the current frame.
+    /// Interpreter twin: `discarded_call_param_view_fields`.
+    fn discarded_call_param_view_field_skip(
+        &self,
+        tail: &Expr,
+        ret_ty_name: &str,
+    ) -> super::synth_drop::FieldSkipTree {
+        self.discarded_call_param_view_masks(tail, ret_ty_name).0
+    }
+
+    /// [`Self::discarded_call_param_view_field_skip`] with the ARGUMENT
+    /// indices it masks, so a caller can tell whether every param the call
+    /// passes is one of them.
+    fn discarded_call_param_view_masks(
+        &self,
+        tail: &Expr,
+        ret_ty_name: &str,
+    ) -> (
+        super::synth_drop::FieldSkipTree,
+        std::collections::BTreeSet<usize>,
+    ) {
+        let mut tree = super::synth_drop::FieldSkipTree::default();
+        let mut masked_args = std::collections::BTreeSet::new();
+        let ExprKind::Call { callee, args } = &tail.kind else {
+            return (tree, masked_args);
+        };
+        let ExprKind::Identifier(fn_name) = &callee.kind else {
+            return (tree, masked_args);
+        };
+        let Some(f) = self
+            .program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, fn_name))
+        else {
+            return (tree, masked_args);
+        };
+        let Some(names) = self.type_decls.struct_field_names.get(ret_ty_name) else {
+            return (tree, masked_args);
+        };
+        for (field, i) in crate::ast::fn_returned_struct_literal_param_fields(f) {
+            if args
+                .get(i)
+                .is_some_and(|a| self.literal_elem_is_param_view(&a.value))
+            {
+                if let Some(k) = names.iter().position(|n| *n == field) {
+                    tree.here.insert(k);
+                    masked_args.insert(i);
+                }
+            }
+        }
+        (tree, masked_args)
+    }
+
+    /// B-2026-09-25-33 — does the discarded call pass a param only as views
+    /// its result's field mask covers? Then the result is this frame's own
+    /// temp less those fields, so the generic instantiation is resolved for
+    /// it like any other discard.
+    fn discarded_call_params_all_masked(&self, tail: &Expr, ret_ty_name: &str) -> bool {
+        let ExprKind::Call { args, .. } = &tail.kind else {
+            return false;
+        };
+        let (tree, masked) = self.discarded_call_param_view_masks(tail, ret_ty_name);
+        !tree.is_empty()
+            && args.iter().enumerate().all(|(i, a)| {
+                masked.contains(&i)
+                    || !matches!(&a.value.kind, ExprKind::Identifier(n)
+                        if self.fn_ctx.current_fn_param_names.contains(n.as_str()))
+            })
+    }
+
     fn discarded_call_passes_a_param(&self, tail: &Expr) -> bool {
         let args = match &tail.kind {
             ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => args,
