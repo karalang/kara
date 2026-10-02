@@ -2767,7 +2767,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.mask_enum_payload_bodies_for_var(&var_name, en, &skip);
                             }
                             _ => {
-                                self.suppress_container_elem_bodies_for_var(&var_name);
+                                // B-2026-10-02-66 — per path for a `let` local
+                                // whose walk an enclosing frame owns, as the
+                                // non-generic twin does (B-2026-09-29-116).
+                                if self.container_bodies_owned_by_let_slot(&var_name) {
+                                    self.suppress_container_elem_bodies_for_receiver(&var_name);
+                                } else {
+                                    self.suppress_container_elem_bodies_for_var(&var_name);
+                                }
                                 // B-2026-09-19-22 — the retraction above is right
                                 // on the leg that hands the box back (the RESULT
                                 // runs the bodies) and wrong on the leg where the
