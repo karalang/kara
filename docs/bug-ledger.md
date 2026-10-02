@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 211 |
 | other | 164 |
 | diagnostics | 139 |
-| perf | 123 |
+| perf | 124 |
 | false-positive | 118 |
 | crash | 105 |
 | soundness | 97 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2571 |
-| interp | 785 |
+| interp | 786 |
 | typecheck | 322 |
 | other | 113 |
 | ownership | 80 |
@@ -492,10 +492,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-54 | 2026-10-02 | interp | medium | `let Some(t) = x else { .. }; return t;` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM RUNS EVERY ELEMENT'S `Drop` BODY TWICE UNDER `--interp` -- it prints `dR1 dR2 got1 dR1 dR2 end` where the compiled surfaces (after B-2026-09-27-83) print the due `got1 dR1 dR2 end` | — |
 | B-2026-10-02-55 | 2026-10-02 | codegen | low | `let k = match x { Some(t) => t, None => z() }; k[1].id` OVER AN `Option[Array[R, 2]]` FAILS TO COMPILE -- `codegen: cannot resolve field 'id' on this receiver (its type was not recorded for codegen)` on the JIT and `karac build`, where `--interp` prints `dR1 dR2 got2 end`; annotating `let k: Array[R, 2]` compiles | — |
 | B-2026-10-02-56 | 2026-10-02 | codegen+interp | medium | A BY-VALUE STRUCT PARAM HANDED BACK THROUGH AN IDENTITY CALL WHOSE RESULT IS DISCARDED RUNS ITS `Drop` BODY TWICE ON ALL FOUR SURFACES -- `fn fw(h: P) { eatsr(h); println("after") }` over `fn eatsr(o: P) -> P { println("xr"); return o }` prints `xr dP1 after dP1` against a due `xr after dP1` (design.md rule 3: the caller runs it); `let _ = eatsr(h);` is the same and `let g = eatsr(h);` is right. The struct twin of B-2026-09-28-13 (fixed for `Option`/`Result` params), split out of B-2026-09-25-33 | — |
-| B-2026-10-02-57 | 2026-10-02 | interp | high | `--interp` SCOPES NAMES DYNAMICALLY: a callee's free function or constant resolves to a CALLER'S LOCAL of the same name, and every global lookup walks the whole call stack, so recursion is QUADRATIC in its depth | — |
 | B-2026-10-02-58 | 2026-10-02 | interp | medium | `--interp` DEEP-COPIES A `shared enum` ON EVERY ALIAS, so building a recursive list is QUADRATIC IN TIME AND MEMORY: 4,000 nodes take 9.8 s and 2.7 GB, and a recursive walk of them 45 s and 10.7 GB | — |
 | B-2026-10-02-59 | 2026-10-02 | typecheck+ownership | low | A `shared enum` IS NOT TREATED AS AN RC HANDLE BY THE MOVE CHECKER OR BY `.clone()`: passing one binding by value twice warns E0500 (a `shared struct` does not), `.clone()` on it is E0236, and the E0500 hint says `.clone()` exists on RC types | — |
-| B-2026-10-02-60 | 2026-10-02 | codegen | medium | A LOCAL CLOSURE IN ONE FUNCTION BREAKS `karac build` OF A CALL TO THE SAME-NAMED FREE FUNCTION IN EVERY FUNCTION COMPILED AFTER IT: `Undefined variable 'helper'` | — |
+| B-2026-10-02-61 | 2026-10-02 | interp | medium | `--interp` RE-DERIVES A BLOCK'S LAST-USE TABLE ON EVERY ENTRY AND THE BRANCH HAND-OVER TALLY ON EVERY CALL, so 40% of a memoized grid search's interpreter time is static analysis | — |
 
 ### Relocated
 
@@ -3551,6 +3550,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-43 | codegen | high | AN EXPLICIT `return` OF A `Drop` STRUCT PAYLOAD BOUND OUT OF A BOXED `Option`/`Result` SCRUTINEE FREES ITS `String` TWICE ON THE JIT AND AT -O0 -- `f… | 0e2807a8f |
 | B-2026-10-02-46 | codegen | high | AN ARM BINDING OF A PLAIN ENUM'S HEAP-BOXED `Array` OR TUPLE PAYLOAD RE-BOUND BY `let` AND THEN RETURNED DOUBLE-FREES -- `fn r4(s: E) -> Array[String… | 4b86bdf2e |
 | B-2026-10-02-47 | codegen | medium | AN EMPTY `SortedMap.range`, `Column.sorted()`/`argsort()` OR `Stats.sort`/`argsort` RESULT LEAKS ITS SCRATCH BUFFER -- the result Vec is built with `… | 17a385c45 |
+| B-2026-10-02-57 | interp | high | `--interp` SCOPES NAMES DYNAMICALLY: a callee's free function or constant resolves to a CALLER'S LOCAL of the same name, and every global lookup walk… | f868e4639 |
+| B-2026-10-02-60 | codegen | medium | A LOCAL CLOSURE IN ONE FUNCTION BREAKS `karac build` OF A CALL TO THE SAME-NAMED FREE FUNCTION IN EVERY FUNCTION COMPILED AFTER IT: `Undefined variab… | 9b322b2ca |
 
 </details>
 
