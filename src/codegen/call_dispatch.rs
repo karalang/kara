@@ -17048,14 +17048,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // the caller is still an owner, so retracting its drop or zeroing its
         // field would strand the original box instead of handing it on.
         self.uam_copy_boxed_enum_arg(arg);
-        self.suppress_array_binding_move_arg(arg);
+        // B-2026-10-02-33 — a TUPLE bound out of a plain enum's box is not
+        // taken over by a by-value param (a tuple param is caller-retained),
+        // so the box stays its owner here and must keep its interior walk.
+        if !self.is_boxed_tuple_payload_alias(arg) {
+            self.suppress_array_binding_move_arg(arg);
+        }
         // B-2026-09-23-12 — a caller-retained array the callee hands back
         // WHOLE on every exit. `CalleeParam` above declines to retract it,
         // because the callee takes nothing over; but the result binding does.
         // ALL-paths only, for the reason `call_arg_flows_into_return` records:
         // this is the suppressing direction, and a mixed-path callee's
         // dies-inside exit leaves the value with the caller.
-        if let Some(c) = callee {
+        // (Nor does a tuple alias reach the hand-back retraction: its box is
+        // still the owner when the callee returns the tuple, per the above.)
+        if let Some(c) = callee.filter(|_| !self.is_boxed_tuple_payload_alias(arg)) {
             // B-2026-09-23-15 — or on SOME exits, where the callee now owns
             // the array per path (see the predicate) and the memory goes with
             // it.

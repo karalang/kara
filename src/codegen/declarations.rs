@@ -4322,7 +4322,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // the payload on (`return x`) double-frees it today for
         // `(Array[String, 2], i64)` already, so reclassifying the Option shapes
         // there would turn their leak into that double free. That half is
-        // filed on its own rather than widened into here.
+        // filed on its own rather than widened into here. (B-2026-10-02-33 has
+        // since disarmed that move-out through the boxed-array alias; lifting
+        // this gate is left to B-2026-09-29-26 and was not measured with it.)
         if let (true, TypeKind::Path(p)) = (nested_enums, &ty.kind) {
             let name = p.segments.first().map(|s| s.as_str()).unwrap_or("");
             if !self.type_decls.shared_types.contains_key(name)

@@ -1,0 +1,61 @@
+//! B-2026-10-02-33: a plain enum's heap-boxed tuple payload moved out of an arm is freed once
+
+use super::*;
+
+/// B-2026-10-02-33 — `enum E { S((Array[String, 2], i64)), N }` boxes its tuple
+/// payload (`EnumDropKind::BoxedTuple`), and the drop switch walks the box
+/// interior. An arm that handed the bound tuple on (`return x`, the arm's value,
+/// `if let`, a struct-shaped variant, `v.push(x)`, `Some(x)`, `(x, 1)`,
+/// `W { t: x }`) left the box and the new owner freeing the same buffers: two or
+/// three invalid frees per cell at -O0. A by-value tuple PARAM is caller-retained,
+/// so `eat(x)` and `back(x)` keep the box as owner and must stay clean too.
+#[test]
+fn e2e_plain_enum_boxed_tuple_payload_moved_out_of_arm_frees_once() {
+    let Some(out) = run_program(
+        r#"enum E { S((Array[String, 2], i64)), N }
+enum F { S((Array[String, 2], Option[String])), N }
+enum H { S { t: (Array[String, 2], i64) }, N }
+struct W { t: (Array[String, 2], i64) }
+fn mkt(t: String) -> (Array[String, 2], i64) { let a: Array[String, 2] = [f"e-{t}-bbbbbbbbbbbbbbbbbbbbbbbb", f"e-{t}-cc"]; return (a, 7); }
+fn mkf(t: String) -> (Array[String, 2], Option[String]) { let a: Array[String, 2] = [f"f-{t}-bbbbbbbbbbbbbbbbbbbbbbbb", f"f-{t}-cc"]; return (a, Some(f"o-{t}-dddddddddddddddddddddddd")); }
+fn eat(t: (Array[String, 2], i64)) -> i64 { return t.1; }
+fn back(t: (Array[String, 2], i64)) -> (Array[String, 2], i64) { return t; }
+fn r1(s: E) -> (Array[String, 2], i64) { match s { E.S(x) => { return x; } E.N => { return mkt("z"); } } }
+fn r2(s: F) -> (Array[String, 2], Option[String]) { match s { F.S(x) => { return x; } F.N => { return mkf("z"); } } }
+fn r5(s: E) -> i64 { match s { E.S(x) => { return eat(x); } E.N => { return 0; } } }
+fn r6(s: E) -> (Array[String, 2], i64) { match s { E.S(x) => x, E.N => mkt("z") } }
+fn r7(s: E) -> i64 { match s { E.S(x) => { println(x.0[0]); return x.1; } E.N => { return 0; } } }
+fn r8(s: E) -> (Array[String, 2], i64) { if let E.S(x) = s { return x; } return mkt("z"); }
+fn r9(s: H) -> (Array[String, 2], i64) { match s { H.S { t } => { return t; } H.N => { return mkt("z"); } } }
+fn ra(s: E) -> i64 { let mut v: Vec[(Array[String, 2], i64)] = Vec.new(); match s { E.S(x) => { v.push(x); } E.N => { } } return v.len(); }
+fn rc(s: E) -> (Array[String, 2], i64) { let r = match s { E.S(x) => x, E.N => mkt("z") }; return r; }
+fn s2(s: E) -> W { match s { E.S(x) => { return W { t: x }; } E.N => { return W { t: mkt("z") }; } } }
+fn s3(s: E) -> Option[(Array[String, 2], i64)] { match s { E.S(x) => { return Some(x); } E.N => { return None; } } }
+fn s4(s: E) -> ((Array[String, 2], i64), i64) { match s { E.S(x) => { return (x, 1); } E.N => { return (mkt("z"), 0); } } }
+fn s5(s: E) -> (Array[String, 2], i64) { match s { E.S(x) => { return back(x); } E.N => { return mkt("z"); } } }
+fn s7(b: bool) -> (Array[String, 2], i64) { let s = E.S(mkt("x")); match s { E.S(x) => { if b { return x; } return mkt("q"); } E.N => { return mkt("z"); } } }
+fn main() {
+    let y1 = r1(E.S(mkt("a"))); println(f"r1 {y1.0[0]} {y1.1}");
+    let y2 = r2(F.S(mkf("b"))); println(f"r2 {y2.0[1]}");
+    println(f"r5 {r5(E.S(mkt("c")))}");
+    let y6 = r6(E.S(mkt("d"))); println(f"r6 {y6.0[0]} {y6.1}");
+    println(f"r7 {r7(E.S(mkt("e")))}");
+    let y8 = r8(E.S(mkt("f"))); println(f"r8 {y8.0[1]} {y8.1}");
+    let y9 = r9(H.S { t: mkt("g") }); println(f"r9 {y9.0[0]} {y9.1}");
+    println(f"ra {ra(E.S(mkt("h")))}");
+    let yc = rc(E.S(mkt("i"))); println(f"rc {yc.0[0]} {yc.1}");
+    let w = s2(E.S(mkt("j"))); println(f"s2 {w.t.0[0]}");
+    let o = s3(E.S(mkt("k"))); println(f"s3 {o.is_some()}");
+    let p = s4(E.S(mkt("l"))); println(f"s4 {p.0.0[1]} {p.1}");
+    let y5 = s5(E.S(mkt("m"))); println(f"s5 {y5.0[0]}");
+    let yt = s7(true); println(f"s7t {yt.0[0]}");
+    let yf = s7(false); println(f"s7f {yf.0[0]}");
+    let yn = r1(E.N); println(f"rn {yn.0[0]} {yn.1}");
+    println("done");
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "r1 e-a-bbbbbbbbbbbbbbbbbbbbbbbb 7\nr2 f-b-cc\nr5 7\nr6 e-d-bbbbbbbbbbbbbbbbbbbbbbbb 7\ne-e-bbbbbbbbbbbbbbbbbbbbbbbb\nr7 7\nr8 e-f-cc 7\nr9 e-g-bbbbbbbbbbbbbbbbbbbbbbbb 7\nra 1\nrc e-i-bbbbbbbbbbbbbbbbbbbbbbbb 7\ns2 e-j-bbbbbbbbbbbbbbbbbbbbbbbb\ns3 true\ns4 e-l-cc 1\ns5 e-m-bbbbbbbbbbbbbbbbbbbbbbbb\ns7t e-x-bbbbbbbbbbbbbbbbbbbbbbbb\ns7f e-q-bbbbbbbbbbbbbbbbbbbbbbbb\nrn e-z-bbbbbbbbbbbbbbbbbbbbbbbb 7\ndone\n", "got:\n{out}");
+}

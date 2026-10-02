@@ -2975,9 +2975,42 @@ impl<'ctx> super::Codegen<'ctx> {
                     None
                 };
             if shgen_te.is_none() {
+                // B-2026-10-02-33 — a PLAIN enum's heap-boxed TUPLE payload is
+                // the same hazard one kind over: the switch's `BoxedTuple` arm
+                // walks the interior exactly as the `BoxedArray` arm does, so
+                // an arm handing the tuple on (`return x`, `v.push(x)`, the
+                // arm's value) left the box and the new owner freeing the same
+                // buffers. The disarm below zeroes the box contents through the
+                // payload's own LLVM type, which is a tuple's as readily as an
+                // array's. Held to a non-shared enum: a shared one RE-OWNS a
+                // moving arm's tuple payload instead (B-2026-09-20-56), and
+                // zeroing that box as well would strand the copy's source. A
+                // tuple carrying a user `Drop` body is declined for the reason
+                // the array element is, below.
+                let kind = kinds.get(pos).copied();
+                let boxed_tuple = kind == Some(super::state::EnumDropKind::BoxedTuple)
+                    && !layout.is_shared
+                    && !tes
+                        .get(pos)
+                        .is_some_and(|te| self.elem_te_runs_user_drop(te));
+                if boxed_tuple {
+                    if let Some(bound_slot) = self.variables.get(bound.as_str()).map(|s| s.ptr) {
+                        self.payload_vars.boxed_array_payload_alias.insert(
+                            bound.clone(),
+                            (
+                                slot,
+                                bound_slot,
+                                enum_name.to_string(),
+                                variant.clone(),
+                                pos,
+                            ),
+                        );
+                    }
+                    continue;
+                }
                 // Read the KIND rather than re-deriving the boxing decision, so
                 // this tracks whatever `declarations.rs` classified.
-                if kinds.get(pos).copied() != Some(super::state::EnumDropKind::BoxedArray) {
+                if kind != Some(super::state::EnumDropKind::BoxedArray) {
                     continue;
                 }
                 // B-2026-09-17-21 — and for a shared enum, THIS field's box must be

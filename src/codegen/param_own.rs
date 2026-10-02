@@ -9516,6 +9516,30 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-10-02-33 — whether `arg` names an arm binding recorded by
+    /// `register_boxed_array_payload_alias` over a `BoxedTuple` payload rather
+    /// than a `BoxedArray` one. The two share the alias map and its disarm,
+    /// and differ only at a by-value CALL argument: an `Array` param is
+    /// callee-owned, a tuple param is not.
+    pub(super) fn is_boxed_tuple_payload_alias(&self, arg: &Expr) -> bool {
+        let ExprKind::Identifier(root) = &arg.kind else {
+            return false;
+        };
+        let Some((_, _, enum_name, variant, pos)) = self
+            .payload_vars
+            .boxed_array_payload_alias
+            .get(root.as_str())
+        else {
+            return false;
+        };
+        self.type_decls
+            .enum_layouts
+            .get(enum_name.as_str())
+            .and_then(|l| l.field_drop_kinds.get(variant))
+            .and_then(|k| k.get(*pos).copied())
+            == Some(super::state::EnumDropKind::BoxedTuple)
+    }
+
     /// B-2026-09-14-17 — stand the SOURCE enum's drop switch down for the
     /// interior of a heap-boxed `Array` payload whose arm binding has just been
     /// handed to a new owner.
