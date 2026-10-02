@@ -1288,11 +1288,18 @@ fn collect_expr_names(e: &Expr, out: &mut Vec<String>) {
 
 // ───────────────────────────── consumers ──────────────────────────────
 
-/// Whether the per-param fate is the ANSWER (`KARAC_DROP_SCHEDULE=1`), not
-/// only an audit. Read once per process.
+/// Whether the per-param fate is the ANSWER, not only an audit. On by default
+/// since Slice 4 step 3 (2026-10-02); `KARAC_DROP_SCHEDULE=0` restores the
+/// legacy predicates and `KARAC_DROP_SCHEDULE=audit` runs them with the audit
+/// log. Read once per process.
 pub fn schedule_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("KARAC_DROP_SCHEDULE").ok().as_deref() == Some("1"))
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("KARAC_DROP_SCHEDULE").ok().as_deref(),
+            Some("0") | Some("audit")
+        )
+    })
 }
 
 /// Step 2's question, asked by the CALLER of a by-value argument: does the

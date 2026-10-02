@@ -36,6 +36,8 @@ fn main() {
 /// name is the parameter again (the interpreter ran its body twice there,
 /// once in the callee). Also a rebind through the param (`let x = x`,
 /// `let x = pass(x)`), a shadowed `mut ref` param, and a shadow returned whole.
+/// That last one (`k7`) also runs the shadowed param's `dR8/w` in the caller
+/// since B-2026-09-29-61 (design.md rule 3); before it, no surface ran it.
 #[test]
 fn e2e_param_shadow_ends_with_its_block() {
     let src = r#"struct R { name: String, id: i64 }
@@ -63,7 +65,7 @@ fn main() {
     println("end")
 }
 "#;
-    let want = "in21\ndR21/a\ndR1/p\nn1\ndR2/q\nn2\ndR3/r\nn3\ndR24/d\ndR4/s\nn24\ndR25/e\ndR5/t\nn25\ndR6/u\nn6\ndR26/f\nn26\ndR7/v\ngtrue\ndR27/g\nend\n";
+    let want = "in21\ndR21/a\ndR1/p\nn1\ndR2/q\nn2\ndR3/r\nn3\ndR24/d\ndR4/s\nn24\ndR25/e\ndR5/t\nn25\ndR6/u\nn6\ndR26/f\nn26\ndR7/v\ndR8/w\ngtrue\ndR27/g\nend\n";
     let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
     assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
     assert_eq!(interp_out.join(""), want, "interpreter");
