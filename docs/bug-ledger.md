@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 645 |
 | run-vs-build | 570 |
-| leak | 529 |
-| double-free | 398 |
+| leak | 530 |
+| double-free | 399 |
 | missing-feature | 216 |
 | codegen-gap | 211 |
 | other | 164 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2580 |
+| codegen | 2582 |
 | interp | 791 |
 | typecheck | 322 |
 | other | 113 |
@@ -494,13 +494,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-63 | 2026-10-02 | interp+codegen | medium | A BY-VALUE USER-ENUM PARAM THAT IS ONLY THE SCRUTINEE OF AN UNTAKEN NESTED BRANCH NEVER RUNS ITS PAYLOAD'S `Drop` BODIES, ON EVERY SURFACE -- `fn e1(x: EArr, y: EArr) -> Array[R, 2] { if let EArr.A(v) = x { v } else if let EArr.A(w) = y { w } else { z() } }` called with two `A` values prints `k1 dR1 dR2 end` everywhere, where `y` dying at `e1`'s end owes `dR3 dR4` before `k1`; the nested-`match` spelling is the same, and an untouched `y` is correct | — |
 | B-2026-10-02-64 | 2026-10-02 | interp+codegen | medium | A DISCARDED `if let` WHOSE THEN-BLOCK IS THE BOXED `Array` PAYLOAD BINDING RUNS NO `Drop` BODY FOR THAT PAYLOAD ON ANY SURFACE, AND THE `match` SPELLING RUNS NONE COMPILED -- `if let EArr.A(v) = x { v } else { z() }; println("disc")` prints `disc g1 end` on `--interp`, the JIT and the default build, against the due `dR1 dR2 disc g1 end`; `match x { EArr.A(v) => v, EArr.B => z() };` is right on `--interp` and loses both bodies on the JIT and the build | — |
 | B-2026-10-02-62 | 2026-10-02 | codegen+interp | medium | A by-value struct param returned through `if let x = g { x }` or `let x = g else { .. }; x` runs its field's `Drop` body TWICE on every compiled surface, and the `let .. else` spelling twice on `--interp` too -- `fn f(g: H) -> H { if let x = g { x } else { .. } }` prints `ds17 35 ds17 35 r after` where `--interp` and `let x = g; x` print `ds17 35 r after` | — |
-| B-2026-10-02-65 | 2026-10-02 | codegen | medium | A FRESH `Tensor` TEMPORARY PASSED TO A GENERIC CALLEE LEAKS ITS BUFFER -- `eat(make())` over `fn eat[T](t: T) -> i64 { 1 }` loses 56 B per call at -O0, while the non-generic `fn eat(t: Tensor[f64, [2, 2]])` is clean; also leaks for a concrete tensor param on a generic fn (`fn first[T](t: Tensor[..], u: T)`) and for `ref Tensor`. Output is right everywhere | — |
-| B-2026-10-02-66 | 2026-10-02 | codegen | medium | A `let` LOCAL HANDED TO A GENERIC CALLEE INSIDE ONE BRANCH LOSES ITS `Drop` BODY ON THE BRANCH NOT TAKEN -- `let t = E.A(mks(1)); if c { let k = keep(t); .. }` over `fn keep[T](e: T) -> T { return e }` prints `r 0` for `c == false` on JIT, -O0 and -O2 against the interpreter's due `dS1 r 0`; the non-generic `fn keep(e: E) -> E` is right on every surface. Memory is clean | — |
 | B-2026-10-02-67 | 2026-10-02 | codegen | high | A NESTED `Option[Option[R]]` LOCAL ALIASED THROUGH AN IDENTITY CALL AND THEN PASSED BY VALUE READS FREED MEMORY -- `let c = id(b); println(cls(c))` with non-generic `id`/`cls` over `Option[Option[R]]` prints `dR1 7 end` compiled (body before the callee's result) with 3 invalid reads of size 8 under valgrind at -O0; the interpreter and the generic `fn cls[T](x: Option[Option[T]])` print the due `7 dR1 end` clean | — |
-| B-2026-10-02-68 | 2026-10-02 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY PASSED TO A GENERIC CALLEE LEAKS THE PAYLOAD'S HEAP -- `cls(Some(Some(mk(1))))` over `fn cls[T](x: Option[Option[T]]) -> i64` runs `dR1` but loses R's String (29 B at -O0); the non-generic `fn cls(x: Option[Option[R]])` is clean, and so is a tuple payload `Option[(R, i64)]` on both | — |
 | B-2026-10-02-69 | 2026-10-02 | codegen | high | `replace(d, v)` FORWARDED THROUGH A WRAPPER WITH A `mut ref String` PARAM DOUBLE-FREES COMPILED -- `fn rep(d: mut ref String, v: String) -> String { return replace(d, v) }` called as `rep(mut s, f"..")` aborts with `free(): double free detected in tcache 2` on JIT, -O0 and -O2; the interpreter is right, and `replace(mut s, f"..")` directly in `main` is clean | — |
 | B-2026-10-02-71 | 2026-10-02 | interp | medium | `--interp` CLOSURES CAPTURE THE WHOLE ITEM SCOPE and copy it into every call's frame, so a `sort_by` comparator costs a copy of every function in the program: sorting 8,000 pairs takes 11.8 s | — |
 | B-2026-10-02-70 | 2026-10-02 | codegen | medium | `for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)]` HEAP-ALLOCATES THE LITERAL ON EVERY EXECUTION under `karac build`, so a grid DFS that walks its four neighbours this way does one malloc/free per call and runs 1.42x slower than the same loop over an `Array` local | — |
+| B-2026-10-02-72 | 2026-10-02 | codegen | high | A FRESH NESTED `Option[Option[R]]` TEMPORARY WHOSE INNER `Option` A CALLEE RETURNS OUT OF A MATCH ARM IS FREED TWICE -- `let a = take(Some(Some(mk(1))))` over `fn take[T](x: Option[Option[T]]) -> Option[T] { match x { Some(inner) => inner, None => None } }` aborts with `free(): double free` on JIT / -O0 / -O2 against the interpreter's `dR1 a end`; the non-generic twin prints NOTHING at -O0 with invalid reads | — |
+| B-2026-10-02-73 | 2026-10-02 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY MATCHED TWO LEVELS DEEP BY A GENERIC CALLEE LEAKS THE LEAF'S HEAP -- `deep(Some(Some(mk(2))))` over `fn deep[T](x: Option[Option[T]]) -> i64 { match x { Some(Some(w)) => 1, _ => 0 } }` runs `dR2` but loses R's String (29 B at -O0); the non-generic twin is clean. B-2026-10-02-68's remainder | — |
 
 ### Relocated
 
@@ -3562,6 +3561,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-57 | interp | high | `--interp` SCOPES NAMES DYNAMICALLY: a callee's free function or constant resolves to a CALLER'S LOCAL of the same name, and every global lookup walk… | f868e4639 |
 | B-2026-10-02-60 | codegen | medium | A LOCAL CLOSURE IN ONE FUNCTION BREAKS `karac build` OF A CALL TO THE SAME-NAMED FREE FUNCTION IN EVERY FUNCTION COMPILED AFTER IT: `Undefined variab… | 9b322b2ca |
 | B-2026-10-02-61 | interp | medium | `--interp` RE-DERIVES A BLOCK'S LAST-USE TABLE ON EVERY ENTRY AND THE BRANCH HAND-OVER TALLY ON EVERY CALL, so 40% of a memoized grid search's interp… | 2025d6e66 |
+| B-2026-10-02-65 | codegen | medium | A FRESH `Tensor` TEMPORARY PASSED TO A GENERIC CALLEE LEAKS ITS BUFFER -- `eat(make())` over `fn eat[T](t: T) -> i64 { 1 }` loses 56 B per call at -O… | 333d7ddb9 |
+| B-2026-10-02-66 | codegen | medium | A `let` LOCAL HANDED TO A GENERIC CALLEE INSIDE ONE BRANCH LOSES ITS `Drop` BODY ON THE BRANCH NOT TAKEN -- `let t = E.A(mks(1)); if c { let k = keep… | e1912c2b6 |
+| B-2026-10-02-68 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY PASSED TO A GENERIC CALLEE LEAKS THE PAYLOAD'S HEAP -- `cls(Some(Some(mk(1))))` over `fn cls[T](x: Optio… | baab0f800 |
 
 </details>
 
