@@ -345,7 +345,7 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.scrutinee_is_readonly_owned_enum_local_block(value, pattern, then_block)
             // B-2026-09-17-12 (`if let` leg) — the heap-boxed generic sibling.
             || self.scrutinee_is_readonly_owned_boxed_generic_enum_local_block(
-                value, pattern, then_block,
+                value, pattern, then_block, false,
             )
             // B-2026-09-06-24 (`if let` leg) — the borrowed-place sibling the
             // `match` path always had; see `scrutinee_is_readonly_borrowed_place_block`.
@@ -1353,7 +1353,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-08-08-25 leg 3 (while-let leg) — see the if-let site.
             || self.scrutinee_is_readonly_owned_enum_local_block(value, pattern, body)
             // B-2026-09-17-12 (`while let` leg) — see the if-let site.
-            || self.scrutinee_is_readonly_owned_boxed_generic_enum_local_block(value, pattern, body)
+            || self.scrutinee_is_readonly_owned_boxed_generic_enum_local_block(
+                value, pattern, body, true,
+            )
             // B-2026-09-06-24 (`while let` leg) — see the if-let site.
             || self.scrutinee_is_readonly_borrowed_place_block(value, pattern, body)
             // B-2026-08-29-29 (`while let` leg) — the projection-place sibling.

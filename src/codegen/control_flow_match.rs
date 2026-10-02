@@ -4203,6 +4203,57 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-27-110 — does `node` mention the local `name` anywhere
+    /// other than as the whole target of a plain `name = <value>` that does
+    /// not itself read `name`? Ordered descent through blocks and `if`
+    /// branches; any other expression counts every mention.
+    pub(super) fn mentions_besides_overwrites(&self, node: Child<'_>, name: &str) -> bool {
+        match node {
+            Child::Block(b) => {
+                for st in &b.stmts {
+                    let hit = match &st.kind {
+                        StmtKind::Assign { target, value } if matches!(&target.kind, ExprKind::Identifier(n) if n == name) => {
+                            crate::deque_head::expr_mentions_name_deep(value, name)
+                        }
+                        StmtKind::Expr(e) => self.mentions_besides_overwrites(Child::Expr(e), name),
+                        _ => {
+                            let one = Expr {
+                                kind: ExprKind::Block(crate::ast::Block {
+                                    stmts: vec![st.clone()],
+                                    final_expr: None,
+                                    span: st.span,
+                                }),
+                                span: st.span,
+                            };
+                            crate::deque_head::expr_mentions_name_deep(&one, name)
+                        }
+                    };
+                    if hit {
+                        return true;
+                    }
+                }
+                b.final_expr
+                    .as_ref()
+                    .is_some_and(|e| self.mentions_besides_overwrites(Child::Expr(e), name))
+            }
+            Child::Expr(e) => match &e.kind {
+                ExprKind::Block(b) => self.mentions_besides_overwrites(Child::Block(b), name),
+                ExprKind::If {
+                    condition,
+                    then_block,
+                    else_branch,
+                } => {
+                    crate::deque_head::expr_mentions_name_deep(condition, name)
+                        || self.mentions_besides_overwrites(Child::Block(then_block), name)
+                        || else_branch.as_ref().is_some_and(|eb| {
+                            self.mentions_besides_overwrites(Child::Expr(eb), name)
+                        })
+                }
+                _ => crate::deque_head::expr_mentions_name_deep(e, name),
+            },
+        }
+    }
+
     fn scan_overwrite_step_block(
         &self,
         one: &crate::ast::Block,
@@ -4378,6 +4429,7 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
         block: &crate::ast::Block,
+        loop_body: bool,
     ) -> bool {
         let Some(name) = self.owned_boxed_generic_enum_local(scrutinee) else {
             return false;
@@ -4387,11 +4439,30 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return false;
         }
-        let as_expr = Expr {
-            kind: ExprKind::Block(block.clone()),
-            span: block.span,
+        // A view dies with the box it views; see the `match` classifier.
+        //
+        // B-2026-09-27-110 — except in a `while let` (`loop_body`), where that
+        // owning path is worse than the view: every pass took the box's
+        // interior and the overwrite's displaced-value drop freed it again
+        // (`free(): double free` on every compiled surface). There the test is
+        // narrowed to what frees the view: handing the scrutinee on, or reading
+        // the binding AFTER a possible overwrite. A plain `g = ..` after the
+        // binding's last read stays a view.
+        let declines = if loop_body {
+            self.mentions_besides_overwrites(Child::Block(block), name)
+                || self.view_read_after_overwrite(
+                    Child::Block(block),
+                    name,
+                    &pattern.binding_names(),
+                )
+        } else {
+            let as_expr = Expr {
+                kind: ExprKind::Block(block.clone()),
+                span: block.span,
+            };
+            crate::deque_head::expr_mentions_name_deep(&as_expr, name)
         };
-        if crate::deque_head::expr_mentions_name_deep(&as_expr, name) {
+        if declines {
             return false;
         }
         if !self.boxed_generic_arm_reads_only(scrutinee, pattern, |v, read| {
