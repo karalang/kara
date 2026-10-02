@@ -7929,33 +7929,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(ptr_ty, data_ptr_ptr, "swap.data")
                     .unwrap()
                     .into_pointer_value();
-                let elem_size = elem_ty.size_of().unwrap();
-
-                let runtime_fn = self
-                    .module
-                    .get_function("karac_vec_swap")
-                    .unwrap_or_else(|| {
-                        let void_t = self.context.void_type();
-                        let fn_ty = void_t.fn_type(
-                            &[ptr_ty.into(), i64_t.into(), i64_t.into(), i64_t.into()],
-                            false,
-                        );
-                        self.module
-                            .add_function("karac_vec_swap", fn_ty, Some(Linkage::External))
-                    });
-
-                self.builder
-                    .build_call(
-                        runtime_fn,
-                        &[
-                            BasicMetadataValueEnum::from(data),
-                            BasicMetadataValueEnum::from(i_val),
-                            BasicMetadataValueEnum::from(j_val),
-                            BasicMetadataValueEnum::from(elem_size),
-                        ],
-                        "",
-                    )
-                    .unwrap();
+                // B-2026-10-02-35 — inline, as two loads and two stores of
+                // the element type. This was a call to the runtime's
+                // `karac_vec_swap(data, i, j, elem_size)`, which LLVM cannot
+                // inline across the archive boundary, so every swap in a hot
+                // loop paid a call plus a byte-sized `swap_nonoverlapping`
+                // whose width was only known at run time. Kata 324's
+                // partition loop ran 1.57x slower than the C and Rust mirrors
+                // for that alone. Loading both before storing either keeps
+                // `i == j` a no-op, and a load/store pair of the element type
+                // is the same bitwise relocation the helper did: no `Drop`
+                // body, no RC traffic.
+                let ip = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(elem_ty, data, &[i_val], "swap.ip")
+                        .unwrap()
+                };
+                let jp = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(elem_ty, data, &[j_val], "swap.jp")
+                        .unwrap()
+                };
+                let iv = self.builder.build_load(elem_ty, ip, "swap.iv").unwrap();
+                let jv = self.builder.build_load(elem_ty, jp, "swap.jv").unwrap();
+                self.builder.build_store(ip, jv).unwrap();
+                self.builder.build_store(jp, iv).unwrap();
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
