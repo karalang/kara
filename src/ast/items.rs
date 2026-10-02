@@ -1374,7 +1374,21 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
 /// running its `Drop` body beside the one the result carries. The
 /// interpreter keeps the program-less form, which is why this is a sibling
 /// rather than a change of meaning.
+/// Slice-4 audit wrapper (`crate::param_fate::audit`): returns the legacy
+/// answer unchanged and, when `KARAC_DROP_SCHEDULE=audit`, logs where the
+/// per-param fate fact disagrees with it.
 pub fn fn_returns_param_with(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    let legacy = fn_returns_param_with_legacy(program, f, arg_index);
+    crate::param_fate::audit::check("returns_param", program, f, arg_index, legacy, |x| {
+        x.returned_whole() != crate::param_fate::Coverage::Never
+    })
+}
+
+fn fn_returns_param_with_legacy(
     program: Option<&crate::Program>,
     f: &Function,
     arg_index: usize,
@@ -3787,7 +3801,21 @@ struct ViaCtx<'a> {
     arg_index: usize,
 }
 
+/// Slice-4 audit wrapper (`crate::param_fate::audit`): returns the legacy
+/// answer unchanged and, when `KARAC_DROP_SCHEDULE=audit`, logs where the
+/// per-param fate fact disagrees with it.
 pub fn fn_always_returns_param(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    let legacy = fn_always_returns_param_legacy(program, f, arg_index);
+    crate::param_fate::audit::check("always_returns_param", program, f, arg_index, legacy, |x| {
+        x.returned_whole() == crate::param_fate::Coverage::Always
+    })
+}
+
+fn fn_always_returns_param_legacy(
     program: Option<&crate::Program>,
     f: &Function,
     arg_index: usize,
@@ -4880,7 +4908,26 @@ pub fn concrete_plain_type(
 /// The conservative direction is unchanged from the rest of this family — a
 /// shape this predicate declines keeps today's missed body, which is a
 /// leak-of-side-effect, never a double drop and never a memory fault.
+/// Slice-4 audit wrapper (`crate::param_fate::audit`): returns the legacy
+/// answer unchanged and, when `KARAC_DROP_SCHEDULE=audit`, logs where the
+/// per-param fate fact disagrees with it.
 pub fn fn_conditionally_returns_param_bare(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    let legacy = fn_conditionally_returns_param_bare_legacy(program, f, arg_index);
+    crate::param_fate::audit::check(
+        "conditionally_returns_param",
+        program,
+        f,
+        arg_index,
+        legacy,
+        |x| x.returned_whole() == crate::param_fate::Coverage::Some,
+    )
+}
+
+fn fn_conditionally_returns_param_bare_legacy(
     program: Option<&crate::Program>,
     f: &Function,
     arg_index: usize,
@@ -11197,7 +11244,22 @@ pub fn fn_moves_param_into_local_aggregate(f: &Function, arg_index: usize) -> bo
     walk_block(&f.body, name)
 }
 
+/// Slice-4 audit wrapper (`crate::param_fate::audit`): returns the legacy
+/// answer unchanged and, when `KARAC_DROP_SCHEDULE=audit`, logs where the
+/// per-param fate fact disagrees with it.
 pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bool {
+    let legacy = fn_moves_param_into_outliving_place_legacy(f, arg_index);
+    crate::param_fate::audit::check(
+        "moves_param_into_outliving_place",
+        None,
+        f,
+        arg_index,
+        legacy,
+        |x| x.stored() != crate::param_fate::Coverage::Never,
+    )
+}
+
+fn fn_moves_param_into_outliving_place_legacy(f: &Function, arg_index: usize) -> bool {
     let Some(param) = f.params.get(arg_index) else {
         return false;
     };
@@ -11835,7 +11897,22 @@ pub fn param_reassigned_rebind_local(f: &Function, arg_index: usize) -> Option<&
 /// or into a container one of `f`'s own locals holds. Every site that registers
 /// or honours the conditional-store flag asks this, so the two routes cannot be
 /// admitted on one side of the handover and not the other.
+/// Slice-4 audit wrapper (`crate::param_fate::audit`): returns the legacy
+/// answer unchanged and, when `KARAC_DROP_SCHEDULE=audit`, logs where the
+/// per-param fate fact disagrees with it.
 pub fn fn_conditionally_stores_param(f: &Function, arg_index: usize) -> bool {
+    let legacy = fn_conditionally_stores_param_legacy(f, arg_index);
+    crate::param_fate::audit::check(
+        "conditionally_stores_param",
+        None,
+        f,
+        arg_index,
+        legacy,
+        |x| x.stored() == crate::param_fate::Coverage::Some,
+    )
+}
+
+fn fn_conditionally_stores_param_legacy(f: &Function, arg_index: usize) -> bool {
     fn_conditionally_moves_param_into_outliving_place(f, arg_index)
         || fn_conditionally_moves_param_into_local_container(f, arg_index)
 }

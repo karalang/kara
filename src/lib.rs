@@ -102,6 +102,7 @@ pub mod numeric_conv;
 pub mod ownership;
 pub mod ownership_oracle;
 pub mod par_cost;
+pub mod param_fate;
 pub mod parser;
 pub mod prelude;
 pub mod provider_escape;
