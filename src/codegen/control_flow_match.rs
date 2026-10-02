@@ -19,6 +19,7 @@
 
 use crate::ast::*;
 use crate::codegen::helpers::vec_inner_type_expr;
+use crate::index_disjoint::Child;
 
 use super::state::UserDropKind;
 use inkwell::basic_block::BasicBlock;
@@ -4080,19 +4081,146 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         // B-2026-09-27-111 — a view dies with the payload it views, so an arm
-        // that can REPLACE the scrutinee keeps the owning path. See
-        // `expr_may_overwrite_local`.
+        // that can REPLACE the scrutinee and then read its binding keeps the
+        // owning path. See `view_read_after_overwrite`.
         if let ExprKind::Identifier(name) = &scrutinee.kind {
             if arms.iter().any(|a| {
-                self.expr_may_overwrite_local(&a.body, name)
-                    || a.guard
-                        .as_ref()
-                        .is_some_and(|g| self.expr_may_overwrite_local(g, name))
+                a.guard
+                    .as_ref()
+                    .is_some_and(|g| self.expr_may_overwrite_local(g, name))
+                    || self.view_read_after_overwrite(
+                        Child::Expr(&a.body),
+                        name,
+                        &a.pattern.binding_names(),
+                    )
             }) {
                 return false;
             }
         }
         self.no_arm_payload_escapes(arms)
+    }
+
+    /// B-2026-09-27-111 — does `body` read one of `bindings` (views of the
+    /// local `name`'s payload) AFTER something in it may have overwritten
+    /// `name` ([`Self::expr_may_overwrite_local`])? Only that order frees what
+    /// the view reads. An overwrite after the last read is safe as a view, and
+    /// must stay one: the owning path takes the payload on every pass of a
+    /// `while let`, so a loop that reassigns its scrutinee only on a later pass
+    /// would read an emptied payload on the second (`w28 dR28 w0 dR0` where
+    /// `w28 w28 dR28` is right). Ordered through blocks and `if` branches;
+    /// any other expression is one step, in which an overwrite and a read
+    /// together count as a conflict.
+    pub(super) fn view_read_after_overwrite(
+        &self,
+        body: Child<'_>,
+        name: &str,
+        bindings: &[String],
+    ) -> bool {
+        let mut overwritten = false;
+        self.scan_overwrite_order(body, name, bindings, &mut overwritten)
+    }
+
+    fn scan_overwrite_order(
+        &self,
+        node: Child<'_>,
+        name: &str,
+        bindings: &[String],
+        overwritten: &mut bool,
+    ) -> bool {
+        match node {
+            Child::Block(b) => {
+                for st in &b.stmts {
+                    let conflict = match &st.kind {
+                        StmtKind::Expr(e) => {
+                            self.scan_overwrite_order(Child::Expr(e), name, bindings, overwritten)
+                        }
+                        _ => {
+                            let one = crate::ast::Block {
+                                stmts: vec![st.clone()],
+                                final_expr: None,
+                                span: st.span,
+                            };
+                            self.scan_overwrite_step_block(&one, name, bindings, overwritten)
+                        }
+                    };
+                    if conflict {
+                        return true;
+                    }
+                }
+                match &b.final_expr {
+                    Some(e) => {
+                        self.scan_overwrite_order(Child::Expr(e), name, bindings, overwritten)
+                    }
+                    None => false,
+                }
+            }
+            Child::Expr(e) => match &e.kind {
+                ExprKind::Block(b) => {
+                    self.scan_overwrite_order(Child::Block(b), name, bindings, overwritten)
+                }
+                ExprKind::If {
+                    condition,
+                    then_block,
+                    else_branch,
+                } => {
+                    if self.scan_overwrite_order(
+                        Child::Expr(condition),
+                        name,
+                        bindings,
+                        overwritten,
+                    ) {
+                        return true;
+                    }
+                    let mut then_ow = *overwritten;
+                    if self.scan_overwrite_order(
+                        Child::Block(then_block),
+                        name,
+                        bindings,
+                        &mut then_ow,
+                    ) {
+                        return true;
+                    }
+                    let mut else_ow = *overwritten;
+                    if let Some(eb) = else_branch {
+                        if self.scan_overwrite_order(Child::Expr(eb), name, bindings, &mut else_ow)
+                        {
+                            return true;
+                        }
+                    }
+                    *overwritten = then_ow || else_ow;
+                    false
+                }
+                _ => {
+                    let ow = self.expr_may_overwrite_local(e, name);
+                    let reads = bindings
+                        .iter()
+                        .any(|b| crate::deque_head::expr_mentions_name_deep(e, b));
+                    let conflict = reads && (*overwritten || ow);
+                    *overwritten |= ow;
+                    conflict
+                }
+            },
+        }
+    }
+
+    fn scan_overwrite_step_block(
+        &self,
+        one: &crate::ast::Block,
+        name: &str,
+        bindings: &[String],
+        overwritten: &mut bool,
+    ) -> bool {
+        let as_expr = Expr {
+            kind: ExprKind::Block(one.clone()),
+            span: one.span,
+        };
+        let ow = self.block_may_overwrite_local(one, name);
+        let reads = bindings
+            .iter()
+            .any(|b| crate::deque_head::expr_mentions_name_deep(&as_expr, b));
+        let conflict = reads && (*overwritten || ow);
+        *overwritten |= ow;
+        conflict
     }
 
     /// B-2026-09-27-111 — can `expr` overwrite the local `name` while a view of
@@ -4114,7 +4242,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return true;
         }
         let mut hit = false;
-        self.walk_overwrite_calls(crate::index_disjoint::Child::Expr(expr), name, &mut hit);
+        self.walk_overwrite_calls(Child::Expr(expr), name, &mut hit);
         hit
     }
 
@@ -4126,17 +4254,12 @@ impl<'ctx> super::Codegen<'ctx> {
             return true;
         }
         let mut hit = false;
-        self.walk_overwrite_calls(crate::index_disjoint::Child::Block(block), name, &mut hit);
+        self.walk_overwrite_calls(Child::Block(block), name, &mut hit);
         hit
     }
 
-    fn walk_overwrite_calls(
-        &self,
-        node: crate::index_disjoint::Child<'_>,
-        name: &str,
-        hit: &mut bool,
-    ) {
-        use crate::index_disjoint::{for_each_block_child, for_each_child_public, Child};
+    fn walk_overwrite_calls(&self, node: Child<'_>, name: &str, hit: &mut bool) {
+        use crate::index_disjoint::{for_each_block_child, for_each_child_public};
         if *hit {
             return;
         }
@@ -4484,7 +4607,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // B-2026-09-27-111 — see the `match` classifier.
         if let ExprKind::Identifier(name) = &scrutinee.kind {
-            if self.block_may_overwrite_local(block, name) {
+            if self.view_read_after_overwrite(Child::Block(block), name, &pattern.binding_names()) {
                 return false;
             }
         }

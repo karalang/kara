@@ -2,9 +2,12 @@
 //! concrete enum local makes its binding a VIEW of the local's payload, and an
 //! arm that REPLACED the local (`g = E.X(..)`, `g = E.Y`, `clr(mut g)`) freed
 //! the payload the view still read: garbage and invalid reads on every
-//! compiled surface. Such an arm now keeps the owning path. Plain reads of the
-//! local inside the arm, a `ref self` method on it and a reassignment after
-//! the view's last read stay where they were, as controls.
+//! compiled surface. An arm that reads its binding AFTER it may have replaced
+//! the local now keeps the owning path. Plain reads of the local inside the
+//! arm, a `ref self` method on it and a reassignment after the view's last
+//! read stay views, as controls. `c14`/`c15` pin the narrowing: the first cut
+//! took the owning path for ANY replacing arm, so a `while let` that replaced
+//! its scrutinee only on a later pass read an emptied payload on the second.
 
 use super::*;
 
@@ -30,6 +33,8 @@ fn c9() { let mut s = S { e: E.X(mk(30)) }; match s.e { E.X(t) => { s.e = E.Y; p
 fn c10() { let mut g = E.X(mk(31)); match g { E.X(t) => { g.clear(); println(f"x{t.tag}") } E.Y => { println("x0") } } }
 fn c11() { let g = E.X(mk(32)); match g { E.X(t) => { println(g.k()); println(f"x{t.tag}") } E.Y => { println("x0") } }; println(g.k()) }
 fn c12() { let mut g = E.X(mk(33)); match g { E.X(t) => { println(f"x{t.tag}") } E.Y => { println("x0") } }; match g { E.X(t) => println(t.tag), E.Y => println(0) } }
+fn c14() { let mut g = E.X(mk(35)); let mut i = 0; while let E.X(t) = g { println(f"x{t.tag}"); i = i + 1; if i > 1 { g = E.Y; } } }
+fn c15() { let mut g = E.X(mk(36)); match g { E.X(t) => { if t.id > 0 { println(t.id); g = E.Y; } else { println(0) } } E.Y => { println("x0") } }; match g { E.X(t) => println(t.id), E.Y => println(0) } }
 fn c13() { let mut g = E.X(mk(34)); match g { E.X(t) => { let u = t; g = E.X(mk(3)); println(u.tag) } E.Y => { println("x0") } } }
 fn main() {
     c1()
@@ -45,9 +50,11 @@ fn main() {
     c11()
     c12()
     c13()
+    c14()
+    c15()
     println("end")
 }"#;
-    let want = "xt20-heap-string-long-enough-to-allocate\nxt21-heap-string-long-enough-to-allocate\nxt22-heap-string-long-enough-to-allocate\n4\nxt23-heap-string-long-enough-to-allocate\nxt24-heap-string-long-enough-to-allocate\n25\nxt25-heap-string-long-enough-to-allocate\nxt27-heap-string-long-enough-to-allocate\n0\nxt28-heap-string-long-enough-to-allocate\nxt30-heap-string-long-enough-to-allocate\nxt31-heap-string-long-enough-to-allocate\n32\nxt32-heap-string-long-enough-to-allocate\n32\nxt33-heap-string-long-enough-to-allocate\nt33-heap-string-long-enough-to-allocate\nt34-heap-string-long-enough-to-allocate\nend\n";
+    let want = "xt20-heap-string-long-enough-to-allocate\nxt21-heap-string-long-enough-to-allocate\nxt22-heap-string-long-enough-to-allocate\n4\nxt23-heap-string-long-enough-to-allocate\nxt24-heap-string-long-enough-to-allocate\n25\nxt25-heap-string-long-enough-to-allocate\nxt27-heap-string-long-enough-to-allocate\n0\nxt28-heap-string-long-enough-to-allocate\nxt30-heap-string-long-enough-to-allocate\nxt31-heap-string-long-enough-to-allocate\n32\nxt32-heap-string-long-enough-to-allocate\n32\nxt33-heap-string-long-enough-to-allocate\nt33-heap-string-long-enough-to-allocate\nt34-heap-string-long-enough-to-allocate\nxt35-heap-string-long-enough-to-allocate\nxt35-heap-string-long-enough-to-allocate\n36\n0\nend\n";
     let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
     assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
     assert_eq!(interp_out.join(""), want, "interpreter");
