@@ -117,6 +117,10 @@ pub(crate) struct PayloadEscapeFrame {
     pub(crate) loop_borrowed: std::collections::HashSet<String>,
 }
 
+/// B-2026-10-02-61 — `(block address, statement buffer address, statement
+/// count, span offset, span length)`, the key of `Interpreter::last_use_memo`.
+type LastUseKey = (usize, usize, usize, usize, usize);
+
 pub struct Interpreter<'a> {
     pub(crate) program: &'a Program,
     /// B-2026-08-13-8 — qualified dispatch segments for impls whose head name is
@@ -1005,6 +1009,15 @@ pub struct Interpreter<'a> {
     /// `record_conditional_move_tail` disarms it on the path that actually
     /// returned the value — the interpreter twin of codegen's per-path `i1`.
     pub(crate) pending_param_drop_bindings: Vec<String>,
+    /// B-2026-10-02-61 — [`compute_block_last_use`] per block, computed once a
+    /// run instead of on every entry. It is a pure function of the block, and
+    /// a block body re-entered by every call and loop iteration re-walked
+    /// every statement each time: 23% of a memoized grid search's run.
+    /// Keyed like the AST analysis memo: the block's address, its statement
+    /// buffer's address and length, and its span, since an address alone is
+    /// an identity only while the AST it points into is alive, which this
+    /// interpreter's run bounds.
+    pub(crate) last_use_memo: FxHashMap<LastUseKey, std::rc::Rc<HashMap<String, Vec<usize>>>>,
     /// B-2026-08-30-33 — the parameters a call adopted a per-path body drop
     /// for, kept for the whole callee frame so any statement that hands the
     /// value to a new owner can disarm it.
@@ -1484,6 +1497,7 @@ impl<'a> Interpreter<'a> {
             pending_arm_drop_bindings: Vec::new(),
             pending_arm_unbound_struct: None,
             pending_param_drop_bindings: Vec::new(),
+            last_use_memo: FxHashMap::default(),
             own_body_only_view_bindings: std::collections::HashMap::new(),
             cond_store_param_names: std::collections::HashSet::new(),
             self_match_payload_adopted: false,

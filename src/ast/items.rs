@@ -12344,10 +12344,22 @@ pub fn fn_branch_hands_param_to_storer(
     if f.generic_params.is_some() {
         return false;
     }
-    fn_branch_hands_param_to(f, arg_index, &|g, j| {
-        resolve_free_or_assoc_fn(program, g)
-            .is_some_and(|gf| gf.self_param.is_none() && fn_moves_param_into_outliving_place(gf, j))
-    })
+    // B-2026-10-02-61 — memoized: the interpreter asks this on every call, and
+    // the tally behind it walks the whole body.
+    analysis_memo_full(
+        "fn_branch_hands_param_to_storer",
+        f,
+        Some(program),
+        arg_index,
+        "",
+        || {
+            fn_branch_hands_param_to(f, arg_index, &|g, j| {
+                resolve_free_or_assoc_fn(program, g).is_some_and(|gf| {
+                    gf.self_param.is_none() && fn_moves_param_into_outliving_place(gf, j)
+                })
+            })
+        },
+    )
 }
 
 /// Which `(callee, argument index)` hand-overs [`branch_handover_tally`]

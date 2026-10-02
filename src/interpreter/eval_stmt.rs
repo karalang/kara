@@ -180,7 +180,22 @@ impl<'a> super::Interpreter<'a> {
         // defer/errdefer body) stay in `cleanup` and drain via the
         // unified LIFO at scope exit, preserving the program-order
         // interleave with Defers for that case.
-        let last_use = compute_block_last_use(block);
+        // B-2026-10-02-61 — once per block per run; see `last_use_memo`.
+        let key = (
+            block as *const Block as usize,
+            block.stmts.as_ptr() as usize,
+            block.stmts.len(),
+            block.span.offset,
+            block.span.length,
+        );
+        let last_use = match self.last_use_memo.get(&key) {
+            Some(memo) => memo.clone(),
+            None => {
+                let computed = std::rc::Rc::new(compute_block_last_use(block));
+                self.last_use_memo.insert(key, computed.clone());
+                computed
+            }
+        };
 
         for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
             // B-2026-08-30-33 — the interpreter twin of codegen's
