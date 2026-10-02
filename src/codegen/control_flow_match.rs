@@ -21608,6 +21608,42 @@ impl<'ctx> super::Codegen<'ctx> {
         None
     }
 
+    /// B-2026-10-02-43 — every queued `BoxedEnumDrop`'s interior walk, in frame order,
+    /// so a suppression applied for ONE exit can be undone once that exit's
+    /// drain is emitted. Paired with [`Self::restore_boxed_enum_inner_drop_fns`].
+    pub(super) fn boxed_enum_inner_drop_fns(
+        &self,
+    ) -> Vec<Option<inkwell::values::FunctionValue<'ctx>>> {
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .filter_map(|a| match a {
+                super::state::CleanupAction::BoxedEnumDrop { inner_drop_fn, .. } => {
+                    Some(*inner_drop_fn)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// B-2026-10-02-43 — put back what [`Self::boxed_enum_inner_drop_fns`] recorded.
+    /// The queue is unchanged in between (an exit's drain reads it, it does
+    /// not pop it), so the order lines up action for action.
+    pub(super) fn restore_boxed_enum_inner_drop_fns(
+        &mut self,
+        saved: Vec<Option<inkwell::values::FunctionValue<'ctx>>>,
+    ) {
+        let mut it = saved.into_iter();
+        for action in self.drop_rc.scope_cleanup_actions.iter_mut().flatten() {
+            if let super::state::CleanupAction::BoxedEnumDrop { inner_drop_fn, .. } = action {
+                if let Some(v) = it.next() {
+                    *inner_drop_fn = v;
+                }
+            }
+        }
+    }
+
     pub(super) fn suppress_boxed_payload_view_move(&mut self, value: &Expr) {
         // B-2026-10-01-11 — a view RE-WRAPPED in an `Option`/`Result`
         // constructor (`Some(w)`) is copied whole into the new value's own

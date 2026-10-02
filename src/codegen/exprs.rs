@@ -1589,6 +1589,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     // finish, on the OTHER path, stored a never-written save
                     // slot over the binding.
                     self.flush_pending_uam_enum_restores();
+                    // B-2026-10-02-43 — a boxed `Option`/`Result` payload VIEW handed out
+                    // by an explicit `return v` (`match Option.Some(mk()) {
+                    // Some(v) => { return v } .. }`): the returned words still
+                    // point at the box's interior, so the scrutinee's box drop
+                    // below must free the box shell only. The tail-value
+                    // spelling (`Some(v) => v`) already stood the interior
+                    // down at the arm (`suppress_boxed_payload_view_move`);
+                    // the explicit return drained the box with its interior
+                    // walk armed and freed the payload's `String` again in the
+                    // caller -- `free(): double free detected in tcache 2` on
+                    // the JIT and at -O0. This exit is the only path the
+                    // suppression may reach, so the interior walks it turns
+                    // off are turned back on once this exit's drain is built.
+                    let saved_box_inner_drops = self.boxed_enum_inner_drop_fns();
+                    self.suppress_boxed_payload_view_move(e);
                     if is_error_exit {
                         // Slice 4 (Phase 7 § *defer / errdefer codegen*):
                         // stage the Err payload for any in-scope
@@ -1643,6 +1658,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         self.emit_scope_cleanup();
                     }
+                    self.restore_boxed_enum_inner_drop_fns(saved_box_inner_drops);
                     // A2 slice 2b.3: inside a coroutine, an explicit `return v`
                     // routes to the signal + final-suspend block (the `ptr`
                     // ramp return is emitted in the shared suspend-return
