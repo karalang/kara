@@ -14864,6 +14864,11 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn note_escaping_site(&mut self, expr: &Expr) {
+        if self.drop_rc.seeding_let_sites {
+            self.drop_rc
+                .cond_move_let_sites
+                .insert((expr.span.offset, expr.span.length));
+        }
         if self.drop_rc.seeding_call_arg_sites {
             self.drop_rc
                 .cond_move_call_arg_sites
@@ -14979,7 +14984,10 @@ impl<'ctx> super::Codegen<'ctx> {
             StmtKind::Let { pattern, value, .. }
                 if !matches!(&pattern.kind, PatternKind::Wildcard) =>
             {
-                self.note_escaping_site(value)
+                // B-2026-10-02-50 — and record which sites a `let` reached.
+                let outer = std::mem::replace(&mut self.drop_rc.seeding_let_sites, true);
+                self.note_escaping_site(value);
+                self.drop_rc.seeding_let_sites = outer;
             }
             // B-2026-08-31-35 — a WILDCARD `let` is readmitted for exactly the
             // branches THIS SITE OWNS. The blanket exclusion above is right

@@ -768,10 +768,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let ExprKind::Identifier(n) = &Self::block_tail_expr(fe).kind {
                     let n = Self::block_tail_rebind_root(then_block, n);
                     if pattern.binding_names().contains(&n) {
-                        let leaves = self
-                            .pattern_state
-                            .fn_escaping_branch_spans
-                            .contains(&crate::resolver::SpanKey::from_span(&value.span));
+                        let leaves =
+                            self.branch_tail_takes_array_bodies(value, Self::block_tail_expr(fe));
                         let saved = self.array_alias_bodies_leave;
                         self.array_alias_bodies_leave = saved || leaves;
                         self.suppress_boxed_array_payload_alias_move(&n);

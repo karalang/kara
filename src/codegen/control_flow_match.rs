@@ -1812,10 +1812,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             // result; a match consumed in the frame
                             // (`eat(match x { E.A(v) => v, .. })`) leaves
                             // them with the box.
-                            let leaves = self
-                                .pattern_state
-                                .fn_escaping_branch_spans
-                                .contains(&crate::resolver::SpanKey::from_span(&scrutinee.span));
+                            let leaves = self.branch_tail_takes_array_bodies(
+                                scrutinee,
+                                Self::block_tail_expr(&arm.body),
+                            );
                             let saved = self.array_alias_bodies_leave;
                             self.array_alias_bodies_leave = saved || leaves;
                             self.suppress_boxed_array_payload_alias_move(&n);
@@ -2846,6 +2846,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Only plain `let <name> = <name>` links in the outermost block are
     /// followed; an assignment to any name on the chain gives up and answers
     /// `tail` itself, since the chain no longer says what the value is.
+    /// B-2026-09-27-83 / B-2026-10-02-50 — does the value of a branch whose
+    /// head is `head`, handed out at its arm tail `tail`, take the elements'
+    /// `Drop` BODIES with it, so a boxed-`Array` alias may be disarmed for an
+    /// element that runs one? Yes when the branch IS the frame's result
+    /// (`fn_escaping_branch_spans`), and when the tail is reached from a named
+    /// `let` initializer and is not a call argument under it: the `let`
+    /// binding registers its own element walk. A call argument
+    /// (`eat(match x { .. })`) leaves the bodies with the box, which the
+    /// caller's walk over the argument still reads. An assignment's value is
+    /// left out: `k = match x { .. }` is wrong on every backend for reasons of
+    /// its own, and this disarm only moved it from one wrong answer to
+    /// another.
+    pub(super) fn branch_tail_takes_array_bodies(&self, head: &Expr, tail: &Expr) -> bool {
+        if self
+            .pattern_state
+            .fn_escaping_branch_spans
+            .contains(&crate::resolver::SpanKey::from_span(&head.span))
+        {
+            return true;
+        }
+        let key = (tail.span.offset, tail.span.length);
+        self.drop_rc.cond_move_let_sites.contains(&key)
+            && !self.drop_rc.cond_move_call_arg_sites.contains(&key)
+    }
+
     pub(super) fn arm_tail_rebind_root(body: &Expr, tail: &str) -> String {
         let (ExprKind::Block(b) | ExprKind::Seq(b)) = &body.kind else {
             return tail.to_string();

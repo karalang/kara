@@ -123,6 +123,14 @@ pub(crate) struct DropRc<'ctx> {
     /// as the parent set is.
     pub(crate) cond_move_return_sites: std::collections::HashSet<(usize, usize)>,
     pub(crate) seeding_return_sites: bool,
+    /// B-2026-10-02-50 — the escaping sites reached from a named `let`
+    /// initializer, whose destination binding registers its own element walk
+    /// and so takes the value's `Drop` bodies with its memory. Read by
+    /// `branch_tail_takes_array_bodies`, together with the call-argument
+    /// subset, which a `let k = eat(..)` reaches as well and which leaves the
+    /// bodies behind. Span-keyed and never cleared, as the parent set is.
+    pub(crate) cond_move_let_sites: std::collections::HashSet<(usize, usize)>,
+    pub(crate) seeding_let_sites: bool,
     /// B-2026-09-27-14 — the call-argument sites above whose one-hop
     /// projection tail DID hand its part over (the source's walk now skips
     /// it on that path), so the argument temp must own the merged value
