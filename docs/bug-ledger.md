@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 637 |
+| miscompile | 639 |
 | run-vs-build | 570 |
-| leak | 526 |
-| double-free | 394 |
+| leak | 527 |
+| double-free | 397 |
 | missing-feature | 216 |
-| codegen-gap | 209 |
+| codegen-gap | 210 |
 | other | 164 |
 | diagnostics | 138 |
 | perf | 122 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2563 |
-| interp | 779 |
+| codegen | 2569 |
+| interp | 782 |
 | typecheck | 321 |
 | other | 113 |
 | ownership | 79 |
@@ -487,6 +487,13 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-45 | 2026-10-02 | codegen+interp | medium | PUSHING THE ARM BINDING OF AN `Option` ENVELOPE AROUND A BY-VALUE STRUCT PARAM INTO A `Vec` THAT DIES IN THE CALLEE RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY SURFACE -- `fn v2(a: R) -> i64 { let o = Some(a); match o { Some(v) => { let mut vs: Vec[R] = Vec.new(); vs.push(v); return vs.len() } None => { return 0 } } }` prints `d2 d2 y1`, where pushing the param itself (`vs.push(a)`) prints one `d1` | — |
 | B-2026-10-02-47 | 2026-10-02 | codegen | medium | AN EMPTY `SortedMap.range`, `Column.sorted()`/`argsort()` OR `Stats.sort`/`argsort` RESULT LEAKS ITS SCRATCH BUFFER -- the result Vec is built with `cap == count`, and `cap == 0` reads as a static buffer that no drop frees | — |
 | B-2026-10-02-48 | 2026-10-02 | codegen | low | `karac build` SPENDS 2 SECONDS RE-WALKING A SELF-RECURSIVE FUNCTION THROUGH THE PART-PATH OWNERSHIP PREDICATES -- the cycle guards stop the recursion but nothing remembers an answer, so every call site re-asks the whole tree | — |
+| B-2026-10-02-49 | 2026-10-02 | codegen | high | AN `if let` OVER A BY-VALUE USER-ENUM PARAM WHOSE THEN-BRANCH IS THE BOXED `Array` PAYLOAD BINDING, AS THE FUNCTION'S TAIL, DOUBLE-FREES ON THE COMPILED SURFACES, EVEN FOR `Array[String, 2]` -- `fn n9(x: EStr) -> Array[String, 2] { if let EStr.A(v) = x { v } else { zs() } }` aborts with `free(): double free detected in tcache 2` on the JIT and the default build (valgrind -O0: 12 allocs / 14 frees, 4 errors) against `--interp`'s `gotx1 end`; the `Array[R, 2]` twin aborts on the JIT and -O0 | — |
+| B-2026-10-02-50 | 2026-10-02 | codegen | high | A `let k: Array[R, 2] = match x { EArr.A(v) => v, EArr.B => z() }` OVER A BY-VALUE USER-ENUM PARAM WHOSE `Array` ELEMENT RUNS A `Drop` BODY DOUBLE-FREES ON THE JIT AND AT -O0 -- valgrind 14 allocs / 16 frees against `--interp`'s `dR1 dR2 got1 end`; the `Array[String, 2]` twin is correct | — |
+| B-2026-10-02-51 | 2026-10-02 | codegen+interp | high | PUSHING A BOXED `Array` PAYLOAD BINDING WHOSE ELEMENT RUNS A `Drop` BODY INTO A LOCAL `Vec` RUNS EVERY BODY TWICE ON EVERY SURFACE, AND THE USER-ENUM SPELLING ALSO DOUBLE-FREES COMPILED -- `match x { EArr.A(v) => { w.push(v); } .. }` prints `dR1 dR2 dR1 dR2` under `--interp` and aborts with `free(): double free detected in tcache 2` on the JIT and the default build | — |
+| B-2026-10-02-52 | 2026-10-02 | codegen | medium | HANDING A BY-VALUE `Option[Array[R, 2]]` PARAM'S PAYLOAD BINDING TO A BY-VALUE `Array` CALLEE LEAKS EVERY ELEMENT'S HEAP COMPILED WHEN THE ELEMENT RUNS A `Drop` BODY -- `match x { Some(t) => { return eat(t); } .. }` and `Some(t) => eat(t)` print the right bodies but valgrind -O0 reports 14 allocs / 12 frees, 4 bytes definitely lost; the plain user-enum spelling is clean | — |
+| B-2026-10-02-53 | 2026-10-02 | interp+codegen | medium | A CONDITIONAL `return` OF A BOXED `Array` PAYLOAD BINDING RUNS NO ELEMENT `Drop` BODY ON THE PATH THAT DOES NOT RETURN -- `Some(t) => { if c { return t; } println("nc"); return [mk(5), mk(6)]; }` with `c = false` prints `nc got5 dR5 dR6` under `--interp` (no `dR1 dR2`), and the user-enum spelling prints the same on EVERY surface | — |
+| B-2026-10-02-54 | 2026-10-02 | interp | medium | `let Some(t) = x else { .. }; return t;` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM RUNS EVERY ELEMENT'S `Drop` BODY TWICE UNDER `--interp` -- it prints `dR1 dR2 got1 dR1 dR2 end` where the compiled surfaces (after B-2026-09-27-83) print the due `got1 dR1 dR2 end` | — |
+| B-2026-10-02-55 | 2026-10-02 | codegen | low | `let k = match x { Some(t) => t, None => z() }; k[1].id` OVER AN `Option[Array[R, 2]]` FAILS TO COMPILE -- `codegen: cannot resolve field 'id' on this receiver (its type was not recorded for codegen)` on the JIT and `karac build`, where `--interp` prints `dR1 dR2 got2 end`; annotating `let k: Array[R, 2]` compiles | — |
 
 ### Relocated
 
