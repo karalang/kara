@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 641 |
+| miscompile | 643 |
 | run-vs-build | 570 |
 | leak | 527 |
 | double-free | 397 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2571 |
-| interp | 786 |
+| codegen | 2573 |
+| interp | 788 |
 | typecheck | 322 |
 | other | 113 |
 | ownership | 80 |
@@ -484,7 +484,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-44 | 2026-10-02 | codegen+interp | medium | A BY-VALUE STRUCT PARAM HANDED BACK ON ONE PATH ONLY OUT OF AN `Option` ENVELOPE'S ARM RUNS ITS `Drop` BODY TWICE, AND DOUBLE-FREES COMPILED WHEN THE ENVELOPE IS FRESH (CORRECTION 2026-10-02: the compiled double free on the fresh envelope was B-2026-10-02-43's and is gone since 0e2807a8f; that cell now prints the same wrong `d2 y2 d2` on every surface) -- `fn hd(a: R, c: bool) -> R { let o = Some(a); match o { Some(v) => { if c { return v } return mkr(0) } None => { return mkr(0) } } }` prints `d4 y4 d4` on every surface at `c = true`, against the `y4 d4` of the plain `if c { return a } return mkr(0)` | — |
 | B-2026-10-02-45 | 2026-10-02 | codegen+interp | medium | PUSHING THE ARM BINDING OF AN `Option` ENVELOPE AROUND A BY-VALUE STRUCT PARAM INTO A `Vec` THAT DIES IN THE CALLEE RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY SURFACE -- `fn v2(a: R) -> i64 { let o = Some(a); match o { Some(v) => { let mut vs: Vec[R] = Vec.new(); vs.push(v); return vs.len() } None => { return 0 } } }` prints `d2 d2 y1`, where pushing the param itself (`vs.push(a)`) prints one `d1` | — |
 | B-2026-10-02-48 | 2026-10-02 | codegen | low | `karac build` SPENDS 2 SECONDS RE-WALKING A SELF-RECURSIVE FUNCTION THROUGH THE PART-PATH OWNERSHIP PREDICATES -- the cycle guards stop the recursion but nothing remembers an answer, so every call site re-asks the whole tree | — |
-| B-2026-10-02-49 | 2026-10-02 | codegen | high | AN `if let` OVER A BY-VALUE USER-ENUM PARAM WHOSE THEN-BRANCH IS THE BOXED `Array` PAYLOAD BINDING, AS THE FUNCTION'S TAIL, DOUBLE-FREES ON THE COMPILED SURFACES, EVEN FOR `Array[String, 2]` -- `fn n9(x: EStr) -> Array[String, 2] { if let EStr.A(v) = x { v } else { zs() } }` aborts with `free(): double free detected in tcache 2` on the JIT and the default build (valgrind -O0: 12 allocs / 14 frees, 4 errors) against `--interp`'s `gotx1 end`; the `Array[R, 2]` twin aborts on the JIT and -O0 | — |
 | B-2026-10-02-50 | 2026-10-02 | codegen | high | A `let k: Array[R, 2] = match x { EArr.A(v) => v, EArr.B => z() }` OVER A BY-VALUE USER-ENUM PARAM WHOSE `Array` ELEMENT RUNS A `Drop` BODY DOUBLE-FREES ON THE JIT AND AT -O0 -- valgrind 14 allocs / 16 frees against `--interp`'s `dR1 dR2 got1 end`; the `Array[String, 2]` twin is correct | — |
 | B-2026-10-02-51 | 2026-10-02 | codegen+interp | high | PUSHING A BOXED `Array` PAYLOAD BINDING WHOSE ELEMENT RUNS A `Drop` BODY INTO A LOCAL `Vec` RUNS EVERY BODY TWICE ON EVERY SURFACE, AND THE USER-ENUM SPELLING ALSO DOUBLE-FREES COMPILED -- `match x { EArr.A(v) => { w.push(v); } .. }` prints `dR1 dR2 dR1 dR2` under `--interp` and aborts with `free(): double free detected in tcache 2` on the JIT and the default build | — |
 | B-2026-10-02-52 | 2026-10-02 | codegen | medium | HANDING A BY-VALUE `Option[Array[R, 2]]` PARAM'S PAYLOAD BINDING TO A BY-VALUE `Array` CALLEE LEAKS EVERY ELEMENT'S HEAP COMPILED WHEN THE ELEMENT RUNS A `Drop` BODY -- `match x { Some(t) => { return eat(t); } .. }` and `Some(t) => eat(t)` print the right bodies but valgrind -O0 reports 14 allocs / 12 frees, 4 bytes definitely lost; the plain user-enum spelling is clean | — |
@@ -495,6 +494,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-58 | 2026-10-02 | interp | medium | `--interp` DEEP-COPIES A `shared enum` ON EVERY ALIAS, so building a recursive list is QUADRATIC IN TIME AND MEMORY: 4,000 nodes take 9.8 s and 2.7 GB, and a recursive walk of them 45 s and 10.7 GB | — |
 | B-2026-10-02-59 | 2026-10-02 | typecheck+ownership | low | A `shared enum` IS NOT TREATED AS AN RC HANDLE BY THE MOVE CHECKER OR BY `.clone()`: passing one binding by value twice warns E0500 (a `shared struct` does not), `.clone()` on it is E0236, and the E0500 hint says `.clone()` exists on RC types | — |
 | B-2026-10-02-61 | 2026-10-02 | interp | medium | `--interp` RE-DERIVES A BLOCK'S LAST-USE TABLE ON EVERY ENTRY AND THE BRANCH HAND-OVER TALLY ON EVERY CALL, so 40% of a memoized grid search's interpreter time is static analysis | — |
+| B-2026-10-02-63 | 2026-10-02 | interp+codegen | medium | A BY-VALUE USER-ENUM PARAM THAT IS ONLY THE SCRUTINEE OF AN UNTAKEN NESTED BRANCH NEVER RUNS ITS PAYLOAD'S `Drop` BODIES, ON EVERY SURFACE -- `fn e1(x: EArr, y: EArr) -> Array[R, 2] { if let EArr.A(v) = x { v } else if let EArr.A(w) = y { w } else { z() } }` called with two `A` values prints `k1 dR1 dR2 end` everywhere, where `y` dying at `e1`'s end owes `dR3 dR4` before `k1`; the nested-`match` spelling is the same, and an untouched `y` is correct | — |
+| B-2026-10-02-64 | 2026-10-02 | interp+codegen | medium | A DISCARDED `if let` WHOSE THEN-BLOCK IS THE BOXED `Array` PAYLOAD BINDING RUNS NO `Drop` BODY FOR THAT PAYLOAD ON ANY SURFACE, AND THE `match` SPELLING RUNS NONE COMPILED -- `if let EArr.A(v) = x { v } else { z() }; println("disc")` prints `disc g1 end` on `--interp`, the JIT and the default build, against the due `dR1 dR2 disc g1 end`; `match x { EArr.A(v) => v, EArr.B => z() };` is right on `--interp` and loses both bodies on the JIT and the build | — |
 
 ### Relocated
 
@@ -3550,6 +3551,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-43 | codegen | high | AN EXPLICIT `return` OF A `Drop` STRUCT PAYLOAD BOUND OUT OF A BOXED `Option`/`Result` SCRUTINEE FREES ITS `String` TWICE ON THE JIT AND AT -O0 -- `f… | 0e2807a8f |
 | B-2026-10-02-46 | codegen | high | AN ARM BINDING OF A PLAIN ENUM'S HEAP-BOXED `Array` OR TUPLE PAYLOAD RE-BOUND BY `let` AND THEN RETURNED DOUBLE-FREES -- `fn r4(s: E) -> Array[String… | 4b86bdf2e |
 | B-2026-10-02-47 | codegen | medium | AN EMPTY `SortedMap.range`, `Column.sorted()`/`argsort()` OR `Stats.sort`/`argsort` RESULT LEAKS ITS SCRATCH BUFFER -- the result Vec is built with `… | 17a385c45 |
+| B-2026-10-02-49 | codegen | high | AN `if let` OVER A BY-VALUE USER-ENUM PARAM WHOSE THEN-BRANCH IS THE BOXED `Array` PAYLOAD BINDING, AS THE FUNCTION'S TAIL, DOUBLE-FREES ON THE COMPI… | 4a5bf3113 |
 | B-2026-10-02-57 | interp | high | `--interp` SCOPES NAMES DYNAMICALLY: a callee's free function or constant resolves to a CALLER'S LOCAL of the same name, and every global lookup walk… | f868e4639 |
 | B-2026-10-02-60 | codegen | medium | A LOCAL CLOSURE IN ONE FUNCTION BREAKS `karac build` OF A CALL TO THE SAME-NAMED FREE FUNCTION IN EVERY FUNCTION COMPILED AFTER IT: `Undefined variab… | 9b322b2ca |
 
