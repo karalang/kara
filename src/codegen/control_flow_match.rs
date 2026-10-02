@@ -2847,10 +2847,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// followed; an assignment to any name on the chain gives up and answers
     /// `tail` itself, since the chain no longer says what the value is.
     pub(super) fn arm_tail_rebind_root(body: &Expr, tail: &str) -> String {
-        let mut cur = tail.to_string();
         let (ExprKind::Block(b) | ExprKind::Seq(b)) = &body.kind else {
-            return cur;
+            return tail.to_string();
         };
+        Self::block_tail_rebind_root(b, tail)
+    }
+
+    /// [`Self::arm_tail_rebind_root`] over a block itself: the `if let`
+    /// then-block (B-2026-10-02-49).
+    pub(super) fn block_tail_rebind_root(b: &crate::ast::Block, tail: &str) -> String {
+        let mut cur = tail.to_string();
         for st in b.stmts.iter().rev() {
             match &st.kind {
                 crate::ast::StmtKind::Let { pattern, value, .. } => {

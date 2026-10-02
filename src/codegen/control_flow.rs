@@ -750,6 +750,36 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let mut then_val = self.compile_block(then_block)?;
         self.borrow_vars.borrowed_agg_payload_struct_vars = saved_borrowed_agg_payload_vars;
+        // B-2026-10-02-49 — the `match` arm tail's boxed-`Array` alias disarm
+        // (control_flow_match.rs, B-2026-09-28-64 / B-2026-10-02-46), which
+        // this construct never ran: `if let E.A(v) = x { v } else { .. }` as
+        // a function's tail handed the array to the caller while the user
+        // enum's box drop freed its elements too, a double free for
+        // `Array[String, 2]` as much as for an element with a `Drop` body.
+        // Same `own_value` gate as the view neutralizer above, and emitted on
+        // the then-edge only, so the else edge's box still frees its payload.
+        if own_value
+            && self
+                .builder
+                .get_insert_block()
+                .is_some_and(|b| b.get_terminator().is_none())
+        {
+            if let Some(fe) = then_block.final_expr.as_deref() {
+                if let ExprKind::Identifier(n) = &Self::block_tail_expr(fe).kind {
+                    let n = Self::block_tail_rebind_root(then_block, n);
+                    if pattern.binding_names().contains(&n) {
+                        let leaves = self
+                            .pattern_state
+                            .fn_escaping_branch_spans
+                            .contains(&crate::resolver::SpanKey::from_span(&value.span));
+                        let saved = self.array_alias_bodies_leave;
+                        self.array_alias_bodies_leave = saved || leaves;
+                        self.suppress_boxed_array_payload_alias_move(&n);
+                        self.array_alias_bodies_leave = saved;
+                    }
+                }
+            }
+        }
         // B-2026-08-28-7 — record the then-arm's tail type so an `if let` used
         // as a VALUE receiver (`if let Some(v) = o { Tag { n: v } } else { … }.n`)
         // can be typed, the same way `compile_block_with_frame` records for a
