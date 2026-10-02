@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 644 |
+| miscompile | 645 |
 | run-vs-build | 570 |
-| leak | 527 |
-| double-free | 397 |
+| leak | 529 |
+| double-free | 398 |
 | missing-feature | 216 |
 | codegen-gap | 211 |
 | other | 164 |
@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 118 |
 | crash | 105 |
 | soundness | 97 |
-| use-after-free | 74 |
+| use-after-free | 75 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2574 |
+| codegen | 2579 |
 | interp | 790 |
 | typecheck | 322 |
 | other | 113 |
@@ -495,6 +495,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-63 | 2026-10-02 | interp+codegen | medium | A BY-VALUE USER-ENUM PARAM THAT IS ONLY THE SCRUTINEE OF AN UNTAKEN NESTED BRANCH NEVER RUNS ITS PAYLOAD'S `Drop` BODIES, ON EVERY SURFACE -- `fn e1(x: EArr, y: EArr) -> Array[R, 2] { if let EArr.A(v) = x { v } else if let EArr.A(w) = y { w } else { z() } }` called with two `A` values prints `k1 dR1 dR2 end` everywhere, where `y` dying at `e1`'s end owes `dR3 dR4` before `k1`; the nested-`match` spelling is the same, and an untouched `y` is correct | — |
 | B-2026-10-02-64 | 2026-10-02 | interp+codegen | medium | A DISCARDED `if let` WHOSE THEN-BLOCK IS THE BOXED `Array` PAYLOAD BINDING RUNS NO `Drop` BODY FOR THAT PAYLOAD ON ANY SURFACE, AND THE `match` SPELLING RUNS NONE COMPILED -- `if let EArr.A(v) = x { v } else { z() }; println("disc")` prints `disc g1 end` on `--interp`, the JIT and the default build, against the due `dR1 dR2 disc g1 end`; `match x { EArr.A(v) => v, EArr.B => z() };` is right on `--interp` and loses both bodies on the JIT and the build | — |
 | B-2026-10-02-62 | 2026-10-02 | codegen+interp | medium | A by-value struct param returned through `if let x = g { x }` or `let x = g else { .. }; x` runs its field's `Drop` body TWICE on every compiled surface, and the `let .. else` spelling twice on `--interp` too -- `fn f(g: H) -> H { if let x = g { x } else { .. } }` prints `ds17 35 ds17 35 r after` where `--interp` and `let x = g; x` print `ds17 35 r after` | — |
+| B-2026-10-02-65 | 2026-10-02 | codegen | medium | A FRESH `Tensor` TEMPORARY PASSED TO A GENERIC CALLEE LEAKS ITS BUFFER -- `eat(make())` over `fn eat[T](t: T) -> i64 { 1 }` loses 56 B per call at -O0, while the non-generic `fn eat(t: Tensor[f64, [2, 2]])` is clean; also leaks for a concrete tensor param on a generic fn (`fn first[T](t: Tensor[..], u: T)`) and for `ref Tensor`. Output is right everywhere | — |
+| B-2026-10-02-66 | 2026-10-02 | codegen | medium | A `let` LOCAL HANDED TO A GENERIC CALLEE INSIDE ONE BRANCH LOSES ITS `Drop` BODY ON THE BRANCH NOT TAKEN -- `let t = E.A(mks(1)); if c { let k = keep(t); .. }` over `fn keep[T](e: T) -> T { return e }` prints `r 0` for `c == false` on JIT, -O0 and -O2 against the interpreter's due `dS1 r 0`; the non-generic `fn keep(e: E) -> E` is right on every surface. Memory is clean | — |
+| B-2026-10-02-67 | 2026-10-02 | codegen | high | A NESTED `Option[Option[R]]` LOCAL ALIASED THROUGH AN IDENTITY CALL AND THEN PASSED BY VALUE READS FREED MEMORY -- `let c = id(b); println(cls(c))` with non-generic `id`/`cls` over `Option[Option[R]]` prints `dR1 7 end` compiled (body before the callee's result) with 3 invalid reads of size 8 under valgrind at -O0; the interpreter and the generic `fn cls[T](x: Option[Option[T]])` print the due `7 dR1 end` clean | — |
+| B-2026-10-02-68 | 2026-10-02 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY PASSED TO A GENERIC CALLEE LEAKS THE PAYLOAD'S HEAP -- `cls(Some(Some(mk(1))))` over `fn cls[T](x: Option[Option[T]]) -> i64` runs `dR1` but loses R's String (29 B at -O0); the non-generic `fn cls(x: Option[Option[R]])` is clean, and so is a tuple payload `Option[(R, i64)]` on both | — |
+| B-2026-10-02-69 | 2026-10-02 | codegen | high | `replace(d, v)` FORWARDED THROUGH A WRAPPER WITH A `mut ref String` PARAM DOUBLE-FREES COMPILED -- `fn rep(d: mut ref String, v: String) -> String { return replace(d, v) }` called as `rep(mut s, f"..")` aborts with `free(): double free detected in tcache 2` on JIT, -O0 and -O2; the interpreter is right, and `replace(mut s, f"..")` directly in `main` is clean | — |
 
 ### Relocated
 
