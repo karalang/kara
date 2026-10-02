@@ -318,7 +318,21 @@ impl<'a> super::EffectChecker<'a> {
                                 // the function. Render the real return type so
                                 // the suggestion is copy-pasteable rather than
                                 // a shape the reader has to reconstruct.
+                                // B-2026-09-20-60: on `main` the bare advice
+                                // keeps the `pub` that design.md § Entry Point
+                                // forbids ("`main()` ... is never `pub`"), and
+                                // following it produced a `pub main` that ran.
+                                // The typechecker now rejects a `pub main`
+                                // (E_MAIN_SIGNATURE), so the advice that agrees
+                                // with it is to drop the `pub`. Free functions
+                                // are keyed by bare name and methods dotted, so
+                                // `name == "main"` is the free `main` only.
                                 let advice = match self.fn_return_type(sym) {
+                                    _ if &*name == "main" => "`main()` is never `pub` \
+                                         (design.md § Entry Point): remove `pub` and \
+                                         its effects are inferred like any other \
+                                         private function's"
+                                        .to_string(),
                                     Some(ret) => format!(
                                         "Add: with {clause} after a PARENTHESISED return type — \
                                          `-> ({}) with {clause}` — because a `with` written \

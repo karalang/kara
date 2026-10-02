@@ -194,6 +194,7 @@ Bucket key: **A✓** applied · **A⚠** emitted-not-applied · **B** mechanical
 | E0265 | DeriveCloneAllocates | derive(Clone) allocates | B | manual `impl Clone` w/ `try_clone` or allow-lint |
 | E0266 | MainReturnType | invalid `main` return | B | change to `()`/`Result`/`ExitCode` |
 | E0267 | MainErrNotDisplay | main err lacks Display | B | add `impl Display for E` |
+| E0286 | MainSignature | `main` is `pub`, has params, or is generic | B | drop `pub` / params (use `env.args()`) / type params |
 | E0268 | StringNotIndexable | `s[i]` on String | B | `.char_at(i)`/`.bytes()[i]` |
 | E0269 | SharedFieldNotMut | reassign non-mut shared field | B | add `mut` to field decl |
 | E0270 | AtomicMissingOrdering | atomic op missing ordering | B | insert `MemoryOrdering::Relaxed` |

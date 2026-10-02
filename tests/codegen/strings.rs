@@ -4767,7 +4767,7 @@ unsafe extern "C" {
     fn puts(s: *const u8) -> i32 with writes(Console);
 }
 
-pub fn main() with writes(Console) blocks {
+fn main() with writes(Console) blocks {
     let msg: ref CStr = c"hello, world";
     puts(msg.as_ptr());
     puts(c"literal receiver".as_ptr());
@@ -4849,7 +4849,7 @@ unsafe extern "C" {
     fn puts(s: *const u8) -> i32 with writes(Console);
 }
 
-pub fn main() with writes(Console) writes(Stdout) blocks {
+fn main() with writes(Console) writes(Stdout) blocks {
     let s = "hello, " + "world";
     match s.to_cstring() {
         Ok(cs) => { puts(cs.as_ptr()); }

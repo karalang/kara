@@ -1807,6 +1807,9 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::MainReturnType => "E0266",
                 // Slice C — `main() -> Result[(), E]` where `E` lacks `Display`.
                 crate::typechecker::TypeErrorKind::MainErrNotDisplay => "E0267",
+                // B-2026-09-20-59 — `main()` is `pub`, takes parameters, or is
+                // generic (design.md § Entry Point).
+                crate::typechecker::TypeErrorKind::MainSignature => "E0286",
                 // `s[i]` (scalar index) on a `String` — UTF-8 is
                 // variable-width, so `[]` is rejected in favour of
                 // `s.char_at(i)` / `s.bytes()[i]` (design.md § Character type).

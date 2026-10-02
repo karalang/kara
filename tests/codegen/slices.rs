@@ -5578,7 +5578,7 @@ fn test_slice_8ab_call_effect_subs_reaches_program() {
     let src = "effect resource Db;\n\
                    pub fn op[T, with E](x: T, cb: Fn(T) -> T with E) -> T with E { cb(x) }\n\
                    pub fn touch_db(x: i64) -> i64 with reads(Db) { x }\n\
-                   pub fn main() with reads(Db) {\n\
+                   pub fn caller() with reads(Db) {\n\
                        let _ = op(42, |y| touch_db(y));\n\
                    }";
     let mut parsed = karac::parse(src);

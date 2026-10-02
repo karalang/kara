@@ -509,6 +509,8 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0265", ty("DeriveCloneAllocates", None)),
     ("E0266", ty("MainReturnType", None)),
     ("E0267", ty("MainErrNotDisplay", None)),
+    // B-2026-09-20-59 — `pub main`, `main(x: T)`, or `main[T]()`.
+    ("E0286", ty("MainSignature", None)),
     (
         "E0268",
         ty("StringNotIndexable", Some(DiagnosticClass::TypeMismatch)),

@@ -10846,7 +10846,7 @@ pub fn user_profile(user_id: UserId) -> Result[Html, Error]
 
 // Server entry point. Binds PostgresUserStore for `native`.
 #[target(native)]
-pub fn main() -> Result[(), AppError] {
+fn main() -> Result[(), AppError] {
     providers {
         UserStore => PostgresUserStore.connect(env.var("DATABASE_URL")?)?,
         Display   => HtmlStringBuilder.new(),

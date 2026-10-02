@@ -1165,6 +1165,10 @@ pub enum TypeErrorKind {
     /// exit path, so the bound is checked at the entry-point boundary with
     /// an `impl Display for E` fix-it. `E_MAIN_ERR_NOT_DISPLAY` (Slice C).
     MainErrNotDisplay,
+    /// `fn main` is `pub`, takes parameters, or is generic — design.md
+    /// § Entry Point: "`main()` ... is never `pub`, takes no parameters".
+    /// `E_MAIN_SIGNATURE` (B-2026-09-20-59).
+    MainSignature,
     /// A `#[gpu]`-annotated function uses a type that is not GPU-compatible
     /// — a heap-allocated type (`String`, `Vec[T]`, `Map`/`Set`, …), an
     /// RC/`shared` reference type (`shared struct`, `Rc[T]`, `Arc[T]`,
@@ -1348,6 +1352,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::DeriveCloneAllocates
         | TypeErrorKind::MainReturnType
         | TypeErrorKind::MainErrNotDisplay
+        | TypeErrorKind::MainSignature
         | TypeErrorKind::CrossTaskUnsafeCapture
         | TypeErrorKind::LazyLockRuntimeCapture
         | TypeErrorKind::GpuNotSafe

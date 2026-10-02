@@ -2695,6 +2695,54 @@ fn test_main_entry_rejects_disallowed_return_type() {
     }
 }
 
+// ── B-2026-09-20-59: the rest of § Entry Point's first sentence ─────
+//
+// "`main()` ... is never `pub`, takes no parameters". Before this check
+// none of it was enforced: a parameter ran silently unbound (a read of a
+// tuple one hit an `unreachable!()` in the interpreter), a `pub main`
+// ran, and a generic `main` ran under `--interp` while `karac run` and
+// `karac build` failed at symbol lookup / link.
+
+#[test]
+fn test_main_entry_rejects_pub_params_and_generics() {
+    for (src, what) in [
+        ("fn main(x: i64) { println(\"a\") }", "an unread param"),
+        (
+            "fn main(t: (i64, i64)) { println(f\"a{t.0}\") }",
+            "a read tuple param",
+        ),
+        ("fn main(x: ref i64) { println(f\"a{x}\") }", "a ref param"),
+        ("pub fn main() { println(\"a\") }", "pub"),
+        (
+            "pub fn main() with writes(Stdout) { println(\"a\") }",
+            "pub with effects",
+        ),
+        ("fn main[T]() { println(\"a\") }", "a type param"),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == TypeErrorKind::MainSignature),
+            "expected E_MAIN_SIGNATURE for {what}, got: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn test_main_entry_signature_leaves_legal_mains_and_methods_alone() {
+    // A private `main` may still write its effects out (redundant, not
+    // forbidden), a METHOD named `main` is not an entry point, and a
+    // helper with parameters is unaffected.
+    typecheck_ok("fn main() with writes(Stdout) { println(\"m\") }");
+    typecheck_ok(
+        "struct S {}\n\
+         impl S { fn main(self) -> i64 { 0 } }\n\
+         fn main() { let s = S {}; println(f\"{s.main()}\") }",
+    );
+    typecheck_ok("fn helper(x: i64) -> i64 { x + 1 }\nfn main() { println(f\"{helper(1)}\") }");
+}
+
 #[test]
 fn test_main_entry_rejects_non_display_error_type() {
     // A conforming `Result[(), E]` shape but `E` lacks `Display`.
@@ -28436,7 +28484,7 @@ fn cstr_as_ptr_feeds_pointer_param_extern_call() {
     typecheck_ok(
         "effect resource Reporter;\n\
          host fn report_str(ptr: *const u8, len: i64) with writes(Reporter);\n\
-         pub fn main() with writes(Reporter) {\n\
+         fn main() with writes(Reporter) {\n\
              let msg = c\"hello\";\n\
              report_str(msg.as_ptr(), msg.len());\n\
          }",
@@ -28515,7 +28563,7 @@ fn cstring_as_ptr_feeds_pointer_param_extern_call() {
     typecheck_ok(
         "effect resource Reporter;\n\
          host fn report_ptr(ptr: *const u8) with writes(Reporter);\n\
-         pub fn main() with writes(Reporter) {\n\
+         fn main() with writes(Reporter) {\n\
          \x20   let s = \"a\" + \"b\";\n\
          \x20   match s.to_cstring() {\n\
          \x20       Ok(cs) => report_ptr(cs.as_ptr()),\n\

@@ -1511,6 +1511,50 @@ impl<'a> super::TypeChecker<'a> {
             || matches!(ty, Type::Named { name, args } if name == "Unit" && args.is_empty())
     }
 
+    /// The rest of design.md § Entry Point's first sentence — "`main()` ...
+    /// is never `pub`, takes no parameters" — plus no type parameters,
+    /// since the entry point is called with none and nothing could
+    /// instantiate them. Emits `E_MAIN_SIGNATURE` (B-2026-09-20-59). Before
+    /// this check none of the three was enforced: a parameter ran unbound
+    /// (and its read reached an `unreachable!()` in the interpreter), a
+    /// `pub main` ran, and a generic `main` ran under `--interp` but failed
+    /// at JIT symbol lookup and at link.
+    fn check_main_entry_signature(&mut self, f: &Function) {
+        if f.is_pub {
+            self.type_error(
+                "error[E_MAIN_SIGNATURE]: `main()` is never `pub` (design.md § \
+                 Entry Point). help: remove `pub`; `main`'s effects are inferred \
+                 like any other private function's"
+                    .to_string(),
+                f.span,
+                TypeErrorKind::MainSignature,
+            );
+        }
+        if let Some(gp) = &f.generic_params {
+            if !gp.params.is_empty() || !gp.effect_params.is_empty() {
+                self.type_error(
+                    "error[E_MAIN_SIGNATURE]: `main()` cannot be generic — the \
+                     program entry point is called with no type arguments, so \
+                     nothing could instantiate its parameters (design.md § Entry \
+                     Point)"
+                        .to_string(),
+                    gp.span,
+                    TypeErrorKind::MainSignature,
+                );
+            }
+        }
+        if let Some(first) = f.params.first() {
+            self.type_error(
+                "error[E_MAIN_SIGNATURE]: `main()` takes no parameters (design.md \
+                 § Entry Point). help: read command-line arguments with \
+                 `env.args()`"
+                    .to_string(),
+                first.span,
+                TypeErrorKind::MainSignature,
+            );
+        }
+    }
+
     /// Phase-8 entry-point contract Slice C (design.md § Entry Point): the
     /// program's `main()` must return exactly one of `()` / `Unit`,
     /// `Result[(), E]` with `E: Display`, or `ExitCode`. Emits
@@ -1916,6 +1960,7 @@ impl<'a> super::TypeChecker<'a> {
         // named `main` — `self_type` / `self_param` exclude methods named
         // `main`, which are not entry points.
         if f.name == "main" && self_type.is_none() && f.self_param.is_none() {
+            self.check_main_entry_signature(f);
             self.check_main_entry_return_type(&return_type, f);
         }
 

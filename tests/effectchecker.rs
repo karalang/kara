@@ -2619,6 +2619,41 @@ fn test_return_slot_follows_branch_tails() {
     );
 }
 
+// ── B-2026-09-20-60: `pub main`'s advice points back at the spec ──────
+//
+// The generic advice ("Add: with writes(Stdout) to the function
+// signature") kept the `pub` that design.md § Entry Point forbids, and
+// following it produced a `pub main` that compiled and ran. On `main` the
+// advice is to drop the `pub`; every other public function keeps it.
+#[test]
+fn test_pub_main_effect_advice_says_remove_pub() {
+    let msgs: Vec<String> = effectcheck_errors("pub fn main() { println(\"a\") }")
+        .into_iter()
+        .filter(|e| e.kind == EffectErrorKind::MissingEffectDeclaration)
+        .map(|e| e.message)
+        .collect();
+    assert_eq!(
+        msgs.len(),
+        1,
+        "expected one missing-declaration error: {msgs:?}"
+    );
+    assert!(
+        msgs[0].contains("remove `pub`") && !msgs[0].contains("Add: with"),
+        "advice on `main` must say to remove `pub`, not to add a `with`; got {}",
+        msgs[0]
+    );
+    // A non-`main` public function still gets the `with` advice.
+    let other: Vec<String> = effectcheck_errors("pub fn go() { println(\"a\") }")
+        .into_iter()
+        .filter(|e| e.kind == EffectErrorKind::MissingEffectDeclaration)
+        .map(|e| e.message)
+        .collect();
+    assert!(
+        other.len() == 1 && other[0].contains("Add: with writes(Stdout)"),
+        "other public functions keep the `with` advice; got {other:?}"
+    );
+}
+
 // ── B-2026-08-24-12: advice a user can actually follow ──────────────
 //
 // "public function 'get' performs effects [writes(UserDB)] but has no
@@ -3317,11 +3352,11 @@ fn test_compound_polymorphism_end_to_end_effect_propagation() {
     //   step 1 — non-closure arg `42` collects `T = i64`
     //   step 2 — `T` is substituted into `Fn(T) -> T`, closure body sees `y: i64`
     //   step 3 — `E` unifies with the closure body's inferred effects = {reads(Db)}
-    //   step 4 — call site contributes `reads(Db)` to `main`, which declares it
+    //   step 4 — call site contributes `reads(Db)` to `caller`, which declares it
     let source = "effect resource Db;\n\
                   pub fn pipeline[T, with E](x: T, cb: Fn(T) -> T with E) -> T with E { cb(x) }\n\
                   pub fn touch_db(x: i64) -> i64 with reads(Db) { x }\n\
-                  pub fn main() with reads(Db) {\n\
+                  pub fn caller() with reads(Db) {\n\
                       let _ = pipeline(42, |y| touch_db(y));\n\
                   }";
     effectcheck_full_pipeline(source);
@@ -3344,7 +3379,7 @@ fn test_compound_polymorphism_nested_bottom_up_resolution() {
                   pub fn outer[T, with E](x: T, cb: Fn(T) -> T with E) -> T with E { cb(x) }\n\
                   pub fn inner[U, with F](y: U, dg: Fn(U) -> U with F) -> U with F { dg(y) }\n\
                   pub fn touch_db(z: i64) -> i64 with reads(Db) { z }\n\
-                  pub fn main() with reads(Db) {\n\
+                  pub fn caller() with reads(Db) {\n\
                       let _ = outer(42, |a| inner(a, |b| touch_db(b)));\n\
                   }";
     effectcheck_full_pipeline(source);
@@ -3369,7 +3404,7 @@ fn test_monomorphized_signature_substitutes_type_param_in_e0404() {
                   effect resource Log;\n\
                   pub fn write_log() with writes(Log) {}\n\
                   pub fn pipeline[T](x: T, cb: Fn(T) -> () with reads(Db)) with reads(Db) { cb(x); }\n\
-                  pub fn main() with writes(Log) reads(Db) {\n\
+                  pub fn caller() with writes(Log) reads(Db) {\n\
                       pipeline(42i64, |y| write_log())\n\
                   }";
     let result = effectcheck_full_pipeline(source);
@@ -3441,7 +3476,7 @@ fn test_monomorphized_signature_resolves_with_e_variable() {
                       vary: Fn(T) -> () with E) with reads(Db) E { \
                       restricted(x); vary(x); \
                   }\n\
-                  pub fn main() with reads(Db) writes(Log) {\n\
+                  pub fn caller() with reads(Db) writes(Log) {\n\
                       pipeline(7i64, |y| write_log(), |z| read_db())\n\
                   }";
     let result = effectcheck_full_pipeline(source);
@@ -3517,7 +3552,7 @@ fn test_trait_method_effects_union_with_with_e_binding() {
     // `pipeline[T: Storage, with E]` invokes `store.fetch()` (Storage.fetch
     // declares `reads(Cache)`) and the closure `cb` (binds `E` to whatever
     // its body does). The caller passes a closure that does `writes(Log)`.
-    // Both effects should reach `main`, which declares both.
+    // Both effects should reach `caller`, which declares both.
     let source = "effect resource Cache;\n\
                   effect resource Log;\n\
                   pub trait Storage {\n\
@@ -3532,7 +3567,7 @@ fn test_trait_method_effects_union_with_with_e_binding() {
                       -> i64 with reads(Cache) E { \
                       cb(); store.fetch() \
                   }\n\
-                  pub fn main() with reads(Cache) writes(Log) {\n\
+                  pub fn caller() with reads(Cache) writes(Log) {\n\
                       let _ = pipeline(DiskStore {}, || write_log());\n\
                   }";
     effectcheck_full_pipeline(source);
@@ -3540,7 +3575,7 @@ fn test_trait_method_effects_union_with_with_e_binding() {
 
 #[test]
 fn test_trait_method_effect_missing_from_caller_declaration_fails() {
-    // Same shape, but `main` only declares `writes(Log)` — the trait method's
+    // Same shape, but `caller` only declares `writes(Log)` — the trait method's
     // `reads(Cache)` must still surface, and the missing declaration must be
     // diagnosed.
     let source = "effect resource Cache;\n\
@@ -3557,7 +3592,7 @@ fn test_trait_method_effect_missing_from_caller_declaration_fails() {
                       -> i64 with reads(Cache) E { \
                       cb(); store.fetch() \
                   }\n\
-                  pub fn main() with writes(Log) {\n\
+                  pub fn caller() with writes(Log) {\n\
                       let _ = pipeline(DiskStore {}, || write_log());\n\
                   }";
     let mut parsed = parse(source);
@@ -3610,7 +3645,7 @@ fn test_with_e_closure_effect_missing_from_caller_declaration_fails() {
                       -> i64 with reads(Cache) E { \
                       cb(); store.fetch() \
                   }\n\
-                  pub fn main() with reads(Cache) {\n\
+                  pub fn caller() with reads(Cache) {\n\
                       let _ = pipeline(DiskStore {}, || write_log());\n\
                   }";
     let mut parsed = parse(source);
@@ -3667,7 +3702,7 @@ fn test_trait_method_effects_compose_at_call_site_not_during_unification() {
                       -> i64 with reads(Cache) E { \
                       cb(); store.fetch() \
                   }\n\
-                  pub fn main() with reads(Cache) {\n\
+                  pub fn caller() with reads(Cache) {\n\
                       let _ = pipeline(DiskStore {}, || {});\n\
                   }";
     effectcheck_full_pipeline(source);
@@ -7616,7 +7651,7 @@ fn test_slice_8aa_call_effect_subs_populated_for_polymorphic_effect_call() {
     let source = "effect resource Db;\n\
                   pub fn op[T, with E](x: T, cb: Fn(T) -> T with E) -> T with E { cb(x) }\n\
                   pub fn touch_db(x: i64) -> i64 with reads(Db) { x }\n\
-                  pub fn main() with reads(Db) {\n\
+                  pub fn caller() with reads(Db) {\n\
                       let _ = op(42, |y| touch_db(y));\n\
                   }";
     let result = effectcheck_full_pipeline(source);
@@ -7652,7 +7687,7 @@ fn test_slice_8aa_call_effect_subs_empty_when_no_polymorphic_callee() {
     // consumers rely on.
     let result = effectcheck_ok(
         "pub fn add(x: i64, y: i64) -> i64 { x + y }\n\
-         pub fn main() { let _ = add(1, 2); }",
+         pub fn caller() { let _ = add(1, 2); }",
     );
     assert!(
         result.call_effect_subs.is_empty(),
@@ -7672,7 +7707,7 @@ fn test_slice_8aa_call_effect_subs_records_multiple_call_sites() {
                   pub fn op[T, with E](x: T, cb: Fn(T) -> T with E) -> T with E { cb(x) }\n\
                   pub fn touch_db(x: i64) -> i64 with reads(Db) { x }\n\
                   pub fn pure_id(x: i64) -> i64 { x }\n\
-                  pub fn main() with reads(Db) {\n\
+                  pub fn caller() with reads(Db) {\n\
                       let _ = op(42, |y| touch_db(y));\n\
                       let _ = op(7, |y| pure_id(y));\n\
                   }";

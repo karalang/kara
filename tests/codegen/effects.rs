@@ -1810,7 +1810,7 @@ unsafe extern "C" {
     fn puts(s: *const u8) -> i32 with writes(Console);
 }
 
-pub fn main() with writes(Console) blocks {
+fn main() with writes(Console) blocks {
     puts(c"advisory".as_ptr());
 }
 "#;

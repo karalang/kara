@@ -2328,7 +2328,7 @@ fn process_order(o: Order) { ... }
 // most one #[target(...)] attribute may appear per item (merge the names).
 // See design.md § Cross-target Compilation.
 #[target(native)]
-pub fn main() -> Result[(), AppError] { ... }
+fn main() -> Result[(), AppError] { ... }
 
 #[target(wasm_browser, wasm_wasi)]
 fn platform_info() -> String { ... }
