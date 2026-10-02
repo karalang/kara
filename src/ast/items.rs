@@ -12170,7 +12170,7 @@ pub fn fn_branch_stores_param_whole(f: &Function, arg_index: usize) -> bool {
     if fn_stores_param_whole_into_container(f, arg_index) {
         return false;
     }
-    branch_handover_tally(f, arg_index, None)
+    branch_handover_tally_untaken(f, arg_index)
         .is_some_and(|t| t.stores > 0 && t.payload_takes == 0 && !t.other)
 }
 
@@ -12216,7 +12216,7 @@ pub fn fn_branch_hands_param_to(
 /// leaves no path on which the payload dies here. Strict in the same way as
 /// its siblings: a store, a hand-over or any other mention answers `false`.
 pub fn fn_branch_takes_param_payload(f: &Function, arg_index: usize) -> bool {
-    branch_handover_tally(f, arg_index, None).is_some_and(|t| {
+    branch_handover_tally_untaken(f, arg_index).is_some_and(|t| {
         t.payload_takes > 0 && t.nested && t.stores == 0 && t.calls == 0 && !t.other
     })
 }
@@ -12235,7 +12235,7 @@ pub fn fn_branch_stores_and_takes_param(f: &Function, arg_index: usize) -> bool 
     if fn_stores_param_whole_into_container(f, arg_index) {
         return false;
     }
-    branch_handover_tally(f, arg_index, None)
+    branch_handover_tally_untaken(f, arg_index)
         .is_some_and(|t| t.stores > 0 && t.payload_takes > 0 && t.calls == 0 && !t.other)
 }
 
@@ -12305,6 +12305,7 @@ pub fn fn_branch_hands_param_to_storer(
 /// accepts.
 type HandoverAccept<'a> = &'a dyn Fn(&str, usize) -> bool;
 
+#[derive(Clone)]
 struct BranchHandoverTally {
     stores: usize,
     calls: usize,
@@ -12319,6 +12320,16 @@ struct BranchHandoverTally {
 /// [`fn_branch_hands_param_to`]: classifies every mention of the parameter as a
 /// whole store into a container, a bare hand-over to an accepted call (when
 /// `takes` is given), or something else.
+/// [`branch_handover_tally`] with no hand-over callee, memoized per run like
+/// the other callee-body walks (B-2026-10-02-40): three of its four callers
+/// ask this form, twice per interpreted call. The `takes` form carries a
+/// closure and cannot be keyed, so it still walks.
+fn branch_handover_tally_untaken(f: &Function, arg_index: usize) -> Option<BranchHandoverTally> {
+    analysis_memo("branch_handover_tally_untaken", f, arg_index, || {
+        branch_handover_tally(f, arg_index, None)
+    })
+}
+
 fn branch_handover_tally(
     f: &Function,
     arg_index: usize,
