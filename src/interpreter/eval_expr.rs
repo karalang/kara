@@ -2325,7 +2325,7 @@ impl<'a> super::Interpreter<'a> {
                     name: "<closure>".to_string(),
                     param_patterns: params.iter().map(|p| p.pattern.clone()).collect(),
                     param_defaults: params.iter().map(|_| None).collect(),
-                    body: closure_body,
+                    body: std::sync::Arc::new(closure_body),
                     closure_env: Some(captured),
                 }
             }

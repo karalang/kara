@@ -627,7 +627,11 @@ pub enum Value {
         /// `None` means the parameter has no default; `Some(expr)` is
         /// evaluated at call time when the caller omits the argument.
         param_defaults: Vec<Option<crate::ast::Expr>>,
-        body: Block,
+        /// Shared, not owned: a `Value::Function` is cloned on every
+        /// `Env::get` of its name, and one call looks the name up several
+        /// times, so an owned `Block` copied the callee's whole AST each time
+        /// (B-2026-10-02-41).
+        body: Arc<Block>,
         /// Captured environment for closures
         closure_env: Option<HashMap<String, Value>>,
     },

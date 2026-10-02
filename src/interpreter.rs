@@ -2438,7 +2438,7 @@ impl<'a> Interpreter<'a> {
                         name: f.name.clone(),
                         param_patterns: f.params.iter().map(|p| p.pattern.clone()).collect(),
                         param_defaults: f.params.iter().map(|p| p.default_value.clone()).collect(),
-                        body: f.body.clone(),
+                        body: std::sync::Arc::new(f.body.clone()),
                         closure_env: None,
                     };
                     self.env.define(f.name.clone(), val);
@@ -2459,7 +2459,7 @@ impl<'a> Interpreter<'a> {
                         name: f.name.clone(),
                         param_patterns: f.params.iter().map(|p| p.pattern.clone()).collect(),
                         param_defaults: f.params.iter().map(|p| p.default_value.clone()).collect(),
-                        body: f.body.clone(),
+                        body: std::sync::Arc::new(f.body.clone()),
                         closure_env: None,
                     };
                     self.env.define(f.name.clone(), val);
@@ -2512,7 +2512,7 @@ impl<'a> Interpreter<'a> {
                         name: f.name.clone(),
                         param_patterns: f.params.iter().map(|p| p.pattern.clone()).collect(),
                         param_defaults: f.params.iter().map(|p| p.default_value.clone()).collect(),
-                        body: f.body.clone(),
+                        body: std::sync::Arc::new(f.body.clone()),
                         closure_env: None,
                     };
                     self.env.define(f.name.clone(), val);
@@ -2642,7 +2642,7 @@ impl<'a> Interpreter<'a> {
                 name: method.name.clone(),
                 param_patterns: patterns,
                 param_defaults: defaults,
-                body: method.body.clone(),
+                body: std::sync::Arc::new(method.body.clone()),
                 closure_env: None,
             };
             self.env.define(method_key, val);
