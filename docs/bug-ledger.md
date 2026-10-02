@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 634 |
 | run-vs-build | 570 |
-| leak | 523 |
+| leak | 524 |
 | double-free | 390 |
 | missing-feature | 215 |
 | codegen-gap | 209 |
@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 117 |
 | crash | 105 |
 | soundness | 97 |
-| use-after-free | 73 |
+| use-after-free | 74 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2549 |
-| interp | 772 |
+| codegen | 2551 |
+| interp | 773 |
 | typecheck | 321 |
 | other | 112 |
 | ownership | 79 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-02). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -467,7 +467,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-32 | 2026-10-01 | codegen | medium | AT A USE-AFTER-MOVE `Vec.push` / `Map.insert` OF A STRUCT WITH ITS OWN `Drop`, THE SOURCE'S BUFFERS LEAK -- `let p = P { id: 2, s: f"two" }; v.push(p); println(p.s)` prints correctly on every surface but leaks the source's `String` at -O0 (13 allocs / 12 frees, 3 B definitely lost; `m.insert(9, p)` loses 5 B); `uam_defensive_copy` hands the container a copy and the source keeps its buffers, but `disarm_moved_value_arg_user_drops` reaches `guard_user_drop_for_nested_return`, which fires at the expression-statement frame (depth 2) and stores `false` into the cond-move flag that gates the source's whole `karac_drop_<T>` wrapper, body AND memory; the variant constructor had the same leak through a static retraction and B-2026-09-20-36's fix gave it a memory-keeping one, which cannot be copied here because the guard's flag is per-path | — |
 | B-2026-10-01-33 | 2026-10-01 | codegen | medium | THE RC-PROMOTED SPELLINGS OF A USE-AFTER-MOVE STILL READ THE SOURCE EMPTY ON COMPILED BACKENDS -- a store or push inside a TAKEN BRANCH (`if c > 1 { a[0] = q; }; println(q.s)`) or a LOOP (`for i in 0..2 { v.push(q); }; println(q.s)`) of a no-`Drop` struct prints `q:` against `--interp`'s `q:four`, and the loop also empties every element but the first (`v:four` against `v:fourfour`); `source_outlives_move` answers `RcPromoted` there, not `UseAfterMove`, so `uam_defensive_copy` makes no copy and the sink's cap-zeroing empties the source; same on `Vec.push` and index-assign, so it is that answer's half of B-2026-09-15-16 / B-2026-09-20-36, not one sink; memory-balanced and valgrind-clean, so only an output comparison sees it | — |
 | B-2026-10-01-40 | 2026-10-01 | interp+codegen | medium | A DISCARDED `Vec[Option[R]]` CALL RESULT NEVER RUNS ITS ELEMENTS' `Drop` BODIES ON ANY SURFACE -- `fn bv() -> Vec[Option[R]] { return Vec[Some(mk(40))] }` called as the statement `bv();` prints no `dR40`, where the bound `let v = bv()` prints it and the discarded `Vec[R]` twin runs its body; `let _ = bv()` runs it under `--interp` only | — |
-| B-2026-10-01-37 | 2026-10-01 | codegen | medium | A `?` CONVERTING THROUGH `From` INTO A TARGET WITH TWO `From` IMPLS NEVER DROPS THE SOURCE ERROR WHEN COMPILED -- its `Drop` body does not run and its heap is leaked (`8 1 end` where --interp prints `dS8 8 1 end`), fresh and named, either impl order | — |
 | B-2026-10-01-38 | 2026-10-01 | codegen | medium | A `shared` VALUE AS THE PAYLOAD A `?` MOVES OUT OF A NAMED `Result` LEAKS ITS HANDLE -- `Err(Sh)` through `From` (fresh and named) and `Ok(Sh)` without `From`; plus `Option[Map[String, i64]]` through `?` leaks the map | — |
 | B-2026-10-01-43 | 2026-10-01 | interp | medium | IN A METHOD BODY, `--interp` RUNS A DISPLACED PARAM VIEW'S `Drop` BODY AT THE REASSIGNMENT AND AGAIN IN THE CALLER -- `impl H { fn m(self, x: R) { let mut v = Vec[x]; v = Vec[mk(8)]; println(f"in{v.len()}") } }` called as `h.m(mk(14))` prints `dR14 in1 dR8 dR14` under `--interp`, where the JIT and AOT print `in1 dR8 dR14` | — |
 | B-2026-10-01-44 | 2026-10-01 | codegen | medium | IN A GENERIC BODY, REASSIGNING A `let mut` LOCAL BUILT FROM A BY-VALUE PARAM LEAKS THE PARAM'S `String` FIELD COMPILED -- `fn g2[T](x: T) { let mut v = Vec[x]; let e: Vec[T] = Vec.new(); v = e; .. }` called as `g2(mk(2))` prints the right `in0 dR2` on every surface but valgrind reports `definitely lost: 2 bytes` (13 allocs, 12 frees) | — |
@@ -485,6 +484,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-56 | 2026-10-01 | interp | medium | UNDER `--interp` A BY-VALUE METHOD PARAM MOVED INTO A DISCARDED LITERAL RUNS ITS `Drop` BODY EARLY OR TWICE -- `impl H { fn m(self, w: W1) { let _ = (w, 1); println("m") } }` prints `dW1_11 m end` interpreted against `m dW1_11 end` compiled, and the `Option` payload spelling `match o { Some(w) => { let _ = [w]; .. } }` prints `dW1_12 mo dW1_12 end` against `mo dW1_12 end` | — |
 | B-2026-10-01-57 | 2026-10-01 | codegen | medium | DISCARDING THE TUPLE PAYLOAD OF A BY-VALUE `Option[(W1, i64)]` PARAM LEAKS THE BOXED PAYLOAD ON EVERY COMPILED SURFACE -- `match o { Some(t) => { let _ = t; println("in") }, None => {} }` prints the right `in aft dW1_17 end` everywhere but valgrind at -O0 reports 72 bytes (40 direct, 32 indirect) definitely lost; the same for `let _ = [t];`, `[t];` and `let _ = (t, 2);` | — |
 | B-2026-10-01-53 | 2026-10-01 | codegen | low | A FRESH `Result.Ok(a)` SCRUTINEE WHOSE ERROR TYPE IS INFERRED ONLY FROM ITS `Err` ARM FAILS MODULE VERIFICATION COMPILED -- `fn ok1(a: Vec[i64]) -> Vec[i64] { match Result.Ok(a) { Ok(v) => v, Err(e) => e } }` stops `karac build` and the JIT with `Function return type does not match operand type of return inst! ret i64 0` against `{ ptr, i64, i64 }`, while `--interp` prints the right `y2` | — |
+| B-2026-10-02-31 | 2026-10-02 | codegen | medium | REMAINDER OF B-2026-10-01-38: A `?` THAT UNWRAPS A `Map` OUT OF AN `Option` OR `Result` LEAKS THE WHOLE MAP ON EVERY COMPILED SURFACE -- `let x = mk(k)?; x.len()` over `Option[Map[String, i64]]` loses 625 B (72 direct + 553 indirect), named `let r = mk(k); let x = r?` the same, and `Result[Map[String, i64], String]` 72 B direct; `match` and `unwrap()` over the same value are clean | — |
+| B-2026-10-02-32 | 2026-10-02 | codegen | high | A READ-ONLY `match` OR `if let` ARM OVER A LOCAL `Result` WHOSE PAYLOAD IS A VALUE STRUCT HOLDING A `shared` FIELD TAKES THE PAYLOAD ON EVERY COMPILED SURFACE: the handle leaks (65 B), a `Drop` body on the struct never runs, and a SECOND `match` over the same local reads freed memory and prints nothing -- `match r { Ok(v) => .., Err(e) => println(e.inner.k) }` over `Result[i64, E3]`, `struct E3 { inner: Sh }`; the `Option` twin and a struct that also holds a `String` are correct | — |
 
 ### Relocated
 
@@ -3518,6 +3519,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-23 | codegen | medium | A DISCARDED USER-ENUM RE-WRAP OF A BOXED `Option` PAYLOAD BINDING (`let _ = E.A(w);`) STILL DOUBLE FREES COMPILED AFTER B-2026-10-01-11 -- `match o {… | fa5b2358f |
 | B-2026-10-01-25 | interp | low | A BY-VALUE PARAM, OR A BY-VALUE `Option`/`Result` PARAM'S PAYLOAD, MOVED INTO A DISCARDED LITERAL DID NOT RUN ITS `Drop` BODY ONCE IN THE CALLER -- `… | ddce22299 |
 | B-2026-10-01-36 | interp+codegen | high | A `?` ON A NAMED `Option`/`Result` (`let r = mk(k); let x = r?;`) DOES NOT MOVE `r`: COMPILED, EVERY STRUCT OR BOXED PAYLOAD IS FREED TWICE; INTERPRE… | 50addfbe7 |
+| B-2026-10-01-37 | interp+codegen | medium | A `?` CONVERTING THROUGH `From` INTO A TARGET WITH TWO `From` IMPLS NEVER DROPS THE SOURCE ERROR WHEN COMPILED -- its `Drop` body does not run and it… | 3f58a0c10 |
 | B-2026-10-01-41 | interp+codegen | medium | REASSIGNING A LOCAL THAT STARTED AS AN OWNED COLLECTION TO ONE HOLDING A BY-VALUE PARAM RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY SURFACE -- `fn d3… | 4568695e5 |
 | B-2026-10-01-42 | interp | medium | `--interp` RUNS A BY-VALUE PARAM'S `Drop` BODY TWICE WHEN A `let mut` LOCAL BUILT FROM ANOTHER PARAM IS REASSIGNED TO A COLLECTION HOLDING IT -- `fn… | 4568695e5 |
 | B-2026-10-01-30 | codegen | high | A HEAP FIELD READ OUT OF A LOCAL `Array` ELEMENT WAS AN ALIAS, NOT A MOVE OR A COPY, SO IT DOUBLE FREED -- `let a: Array[S, 2] = [..]; let x = a[1].s… | caad46339 |
