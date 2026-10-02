@@ -1070,7 +1070,17 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Check if this is an indirect call through a closure variable.
-        if self.closure_state.closure_fn_types.contains_key(&name) {
+        // B-2026-10-02-60 — `closure_fn_types` is keyed by NAME and outlives
+        // the function whose local closure put the entry there, so without the
+        // second condition a free function `helper` called from any function
+        // compiled after one with a local `let helper = || ..` lowered as a
+        // call through a closure slot that does not exist, and `karac build`
+        // failed with "Undefined variable 'helper'". A declared function is
+        // only shadowed by a LIVE local (the check above handles that one).
+        if self.closure_state.closure_fn_types.contains_key(&name)
+            && (self.variables.contains_key(name.as_str())
+                || self.module.get_function(&name).is_none())
+        {
             return self.compile_closure_call(&name, args);
         }
 
