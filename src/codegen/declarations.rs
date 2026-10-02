@@ -570,7 +570,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// collision made `__karac_rc_drop_<T>` resolve to whichever same-width
     /// type came first in `shared_types`' (randomly-seeded) HashMap order —
     /// dropping a `Vec[TypeExpr]` element through `__karac_rc_drop_Pattern`
-    /// and corrupting the heap (B-2026-06-20-6, slice-3b self-host regression).
+    /// and corrupting the heap (the slice-3b self-host regression, fixed by
+    /// 5ef81f8fd, which never got a ledger row).
     /// A *named* struct type is identified by name, never deduped against a
     /// structural twin, so every shared type owns a distinct heap
     /// `StructType` and the identity-keyed reverse-lookups stay correct.

@@ -3381,7 +3381,7 @@ fn main() {
     }
 }
 
-// ── Shared-type heap-identity regression (B-2026-06-20-6) ────────
+// ── Shared-type heap-identity regression (5ef81f8fd) ─────────────
 //
 // Two distinct `shared enum`s whose heap layouts are STRUCTURALLY
 // IDENTICAL (same payload word-count) must still receive DISTINCT LLVM

@@ -1294,7 +1294,7 @@ fn main() {
 // from its heap type by object identity, confused the two: dropping a
 // `Vec[Alfa]` element ran it through `__karac_rc_drop_Bravo` (or vice
 // versa), reading the wrong variant tag/offsets and double-freeing. This
-// was the slice-3b self-host type-oracle crash (B-2026-06-20-6,
+// was the slice-3b self-host type-oracle crash (commit 5ef81f8fd,
 // `Pattern` vs `TypeExpr`, both 12 payload words); fixed by giving each
 // shared type a uniquely NAMED heap struct (`%karac.shared.<T>`). Here
 // we BUILD and DROP many

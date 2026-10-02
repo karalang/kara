@@ -17,6 +17,9 @@
 #      (title / detail / fix), where an OPEN row's citations live
 #   7. no PUBLISHED row has disappeared — every B-ID on origin/main is still here
 #   8. canonical JSON encoding — see scripts/bug-ledger-normalize.py
+#   9. every B-ID cited in tracked code (src/ tests/ runtime/ hash/ selfhost/
+#      examples/) names a ledger row; a `PREDICTS <B-ID>` citation of a closed
+#      row warns
 set -euo pipefail
 cd "$(dirname "$0")/.."
 LEDGER="docs/bug-ledger.jsonl"
@@ -598,6 +601,61 @@ else:
                 f"`git show origin/main:{ledger} | grep '\"{bid}\"' >> {ledger}`, then "
                 "renumber whichever row actually collided."
             )
+
+# 9. EVERY LEDGER ID CITED IN CODE NAMES A ROW (B-2026-09-20-61).
+#
+# Source comments cite rows as provenance (`// B-2026-08-21-53 — ...`), and
+# nothing checked that the id resolves. One did not for three months:
+# B-2026-06-20-6 was RESERVED in a commit message for a fix that never got a
+# row, and when a real row collided on it the real row was renumbered, leaving
+# three comments pointing at nothing. A renumber after an id collision produces
+# the same shape from the other side.
+#
+# DANGLING ONLY. Do not extend this to "cites a CLOSED row": a comment is
+# normally written when its row is fixed, so that form flags nearly every
+# citation in the tree (2282 of 2317 cited ids when measured) and gets ignored.
+#
+# Scope is tracked CODE, not docs: the checklists cite rows that were
+# consolidated away and say so in the same sentence, which is a correct record.
+# The lint self-test's synthetic ids live under scripts/ and are not scanned.
+#
+# PREDICTIVE citations need a marker, because no regex can tell "this cell is
+# silent because of B-x" from "this cell must FLIP when B-x is fixed". Write
+# `PREDICTS B-...` beside a citation of the second kind; once that row is
+# closed the comment is either stale or a regression report, and this warns so
+# whoever closed it reads the fixture.
+DANGLING_OK = {
+    # Fixed by 9fe66bba4 (2026-06-12), whose message cites it; the id never
+    # became a row. Its one citation is a comment in runtime/src, and editing
+    # runtime/src makes every runtime archive stale for asan-o0-leg.sh's
+    # freshness check, so it is waived here rather than rewritten.
+    "B-2026-06-11-9",
+}
+_code = _git("grep", "-nIoE", r"(PREDICTS )?B-20[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]+",
+             "--", "src", "tests", "runtime", "hash", "selfhost", "examples")
+if _code.returncode not in (0, 1):
+    warns.append("could not `git grep` the tree — skipped the cited-id check (rule 9)")
+else:
+    by_id = {r["id"]: r for r in rows}
+    dangling, predicts = {}, {}
+    for line in _code.stdout.splitlines():
+        loc, _, tok = line.rpartition(":")
+        bid = tok.removeprefix("PREDICTS ")
+        if bid not in by_id and bid not in DANGLING_OK:
+            dangling.setdefault(bid, []).append(loc)
+        elif tok.startswith("PREDICTS ") and bid in by_id and by_id[bid]["status"] != "open":
+            predicts.setdefault(bid, []).append(loc)
+    for bid, locs in sorted(dangling.items()):
+        errs.append(
+            f"{bid} is cited in code but has no ledger row: {', '.join(locs[:5])}"
+            + (f" (+{len(locs) - 5} more)" if len(locs) > 5 else "")
+            + ". Cite the row it was renumbered to, or the fix commit's SHA if it never had one."
+        )
+    for bid, locs in sorted(predicts.items()):
+        warns.append(
+            f"{bid} is {by_id[bid]['status']} and a comment PREDICTS what its fix does: "
+            f"{', '.join(locs)}. Check the fixture flipped as predicted, then reword the comment."
+        )
 
 for w in warns: print(f"WARN  {w}")
 for e in errs: print(f"ERROR {e}")
