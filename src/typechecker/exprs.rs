@@ -114,6 +114,36 @@ fn expectation_is_concrete(t: &Type) -> bool {
     !contains_type_var(t) && !contains_type_param(t)
 }
 
+/// B-2026-09-25-8 — the expectation a SIBLING branch gives a bare sequence
+/// literal in synthesis mode. design.md § Collection Literals has a bare `[..]`
+/// take the type its context expects, and every check-mode position already
+/// pushes `Array[T, N]` into one (an annotated `let`, a return, a concrete
+/// parameter). A `match` or `if` with no expectation of its own gave its
+/// branches none, so `match a { Some(s) => s, None => [f"e"] }` over an
+/// `Option[Array[String, 1]]` typed the literal arm `Vec[String]` and rejected
+/// the match, while the identical match under `let r: Array[String, 1] = ..`
+/// was accepted. The branches must agree, so an EARLIER branch that is a
+/// concrete `Array` is the expectation for a later branch whose value is a bare
+/// literal (through any block tail). `Some` only then; every other pair keeps
+/// synthesis, so a literal-first match still defaults to `Vec` (the prefix
+/// form `Array[..]` names the type there).
+pub(super) fn sibling_array_expectation(body: &Expr, sibling: &Type) -> Option<Type> {
+    if !matches!(sibling, Type::Array { .. }) || !expectation_is_concrete(sibling) {
+        return None;
+    }
+    let mut tail = body;
+    while let ExprKind::Block(block) = &tail.kind {
+        tail = block.final_expr.as_deref()?;
+    }
+    match &tail.kind {
+        ExprKind::ArrayLiteral(_)
+        | ExprKind::RepeatLiteral {
+            type_name: None, ..
+        } => Some(sibling.clone()),
+        _ => None,
+    }
+}
+
 /// Does this type still carry an unsolved inference metavar? Gates
 /// expected-return seeding: a fully concrete return has nothing to seed, and
 /// unifying it against a mismatched expectation could bind ids inside the
@@ -2344,6 +2374,44 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     let resolved = self.resolve_assoc_projections(&resolved);
                     expectation_is_concrete(&resolved).then_some(resolved)
+                } else if matches!(
+                    &arg.value.kind,
+                    ExprKind::ArrayLiteral(_)
+                        | ExprKind::RepeatLiteral {
+                            type_name: None,
+                            ..
+                        }
+                ) {
+                    // B-2026-09-25-8 — an EARLIER argument may already have
+                    // solved this slot to a fixed array: `pick(a, [x, y])` over
+                    // `fn pick[T](a: Option[T], d: T)` with `a:
+                    // Option[Array[String, 2]]`. Inferred alone, the bare
+                    // literal minted its `Vec` default and pass 2 rejected it.
+                    // Unifying the arguments before this one is what pass 1
+                    // below does anyway, in the same order, so it binds
+                    // nothing that pass would not; only a concrete `Array`
+                    // answer is taken, the one the literal has no other way
+                    // to learn.
+                    for (p, a) in sub_params[..idx].iter().zip(arg_tys.iter()) {
+                        if let Some(a) = a {
+                            unify_types(
+                                p,
+                                a,
+                                &mut self.env.substitutions,
+                                &mut self.env.const_substitutions,
+                            );
+                        }
+                    }
+                    let resolved = resolve_type_vars(
+                        &sub_params[idx],
+                        &self.env.substitutions,
+                        &id_to_name,
+                        &self.env.const_substitutions,
+                        &const_id_to_name,
+                    );
+                    let resolved = self.resolve_assoc_projections(&resolved);
+                    (matches!(resolved, Type::Array { .. }) && expectation_is_concrete(&resolved))
+                        .then_some(resolved)
                 } else {
                     None
                 };
@@ -5605,7 +5673,10 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 let then_ty = self.infer_block(then_block);
                 if let Some(ref else_expr) = else_branch {
-                    let else_ty = self.infer_expr(else_expr);
+                    let else_ty = match sibling_array_expectation(else_expr, &then_ty) {
+                        Some(expected) => self.check_expr(else_expr, &expected),
+                        None => self.infer_expr(else_expr),
+                    };
                     if then_ty == Type::Never {
                         return else_ty;
                     }

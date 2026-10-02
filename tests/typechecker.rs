@@ -185,6 +185,51 @@ fn test_type_mismatch_let() {
     assert!(errors[0].message.contains("i64"));
 }
 
+/// B-2026-09-25-8 — a bare `[..]` takes the `Array` type a sibling branch or
+/// an earlier generic argument has already fixed, as it does under an
+/// annotation. Each result is handed to a concrete `Array` parameter, so a
+/// `Vec` answer would still be rejected.
+#[test]
+fn bare_sequence_literal_takes_a_sibling_branchs_array_type() {
+    typecheck_ok(
+        r#"fn need1(a: Array[String, 1]) -> i64 { return 1 }
+fn need2(a: Array[i64, 2]) -> i64 { return 2 }
+fn need3(a: Array[i64, 3]) -> i64 { return 3 }
+fn mk() -> Array[i64, 2] { return [1, 2] }
+fn pick[T](a: Option[T], d: T) -> T { return match a { Some(x) => x, None => d } }
+fn main() {
+    let a: Option[Array[String, 1]] = None;
+    let r = match a { Some(s) => s, None => [f"e"] };
+    let b: Option[Array[i64, 2]] = None;
+    let q = match b { Some(s) => s, None => { let k = 4; [k, 5] } };
+    let c = true;
+    let w = if c { mk() } else { [7, 8] };
+    let d: Option[Array[i64, 3]] = None;
+    let z = match d { Some(s) => s, None => [0; 3] };
+    let g = pick(b, [3, 4]);
+    println(f"{need1(r)}{need2(q)}{need2(w)}{need3(z)}{need2(g)}");
+}
+"#,
+    );
+}
+
+/// B-2026-09-25-8 — the sibling expectation is checked, not assumed: a literal
+/// of the wrong length against it is the annotated form's length error.
+#[test]
+fn bare_sequence_literal_against_a_sibling_array_checks_its_length() {
+    for src in [
+        "fn main() { let a: Option[Array[i64, 2]] = None; let r = match a { Some(s) => s, None => [1, 2, 3] }; }",
+        "fn mk() -> Array[i64, 2] { return [1, 2] }\nfn main() { let w = if true { mk() } else { [7] }; }",
+        "fn pick[T](a: Option[T], d: T) -> T { return match a { Some(x) => x, None => d } }\nfn main() { let b: Option[Array[i64, 2]] = None; let g = pick(b, [3, 4, 5]); }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors.iter().any(|e| e.message.contains("array literal has")),
+            "expected the literal's length error for {src:?}, got: {errors:?}"
+        );
+    }
+}
+
 #[test]
 fn test_integer_suffix_i32_ok() {
     typecheck_ok("fn main() { let x: i32 = 42i32; }");

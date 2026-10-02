@@ -574,7 +574,15 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
             }
-            let arm_ty = self.infer_expr(&arm.body);
+            // B-2026-09-25-8 — an earlier `Array` arm is a later bare
+            // literal arm's expectation; see `sibling_array_expectation`.
+            let sibling = arm_types
+                .iter()
+                .find_map(|t| super::exprs::sibling_array_expectation(&arm.body, t));
+            let arm_ty = match sibling {
+                Some(expected) => self.check_expr(&arm.body, &expected),
+                None => self.infer_expr(&arm.body),
+            };
             // The synth-mode twin of the check-mode arm hook above.
             self.warn_partial_move_of_drop_struct(&arm.body, &arm_ty);
             if scrut_borrows_an_element {
