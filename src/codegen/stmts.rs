@@ -9571,6 +9571,34 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-10-02-46 — the same hop for a USER enum's boxed
+                // `Array` / tuple payload alias (`register_boxed_array_payload_alias`).
+                // `let u = x` over such an arm binding creates no owner of its
+                // own, so `u` is a second NAME for the box's interior, and the
+                // hand-off sites look the alias up by name: `return u` found
+                // nothing to disarm and the enum's drop switch walked the
+                // interior the caller had just taken -- 7 errors at `-O0` for
+                // `Array[String, 2]`, 2 for `(Array[String, 2], i64)`, where
+                // `return x` was clean. Copied with the DESTINATION's slot, which
+                // is what the disarm's staleness guard compares against; the
+                // source keeps its entry for the reason the hop above gives.
+                if let (PatternKind::Binding(dst), ExprKind::Identifier(src)) =
+                    (&pattern.kind, &value.kind)
+                {
+                    if dst != src {
+                        if let (Some((enum_slot, _, en, variant, pos)), Some(dst_ptr)) = (
+                            self.payload_vars
+                                .boxed_array_payload_alias
+                                .get(src.as_str())
+                                .cloned(),
+                            self.variables.get(dst.as_str()).map(|s| s.ptr),
+                        ) {
+                            self.payload_vars
+                                .boxed_array_payload_alias
+                                .insert(dst.clone(), (enum_slot, dst_ptr, en, variant, pos));
+                        }
+                    }
+                }
                 // Track Vec variables for scope cleanup.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     // A whole-Vec re-borrow (`let ps = params`, B-2026-07-18-4)

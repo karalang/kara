@@ -1798,9 +1798,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // B-2026-09-28-64 — and an `Array` bound out of a generic
                     // shared enum's heap box, whose alias the hand-off sites
                     // disarm but an arm's VALUE did not reach.
+                    // B-2026-10-02-46 — or a `let` re-bind of that binding
+                    // in the arm's own block (`E.S(x) => { let u = x; u }`).
+                    // `u` is out of scope by the time the arm's value reaches
+                    // here, so its own alias entry cannot pass the disarm's
+                    // slot check; follow the re-bind back to the arm binding,
+                    // which is still live, and disarm through that.
                     if let ExprKind::Identifier(n) = &Self::block_tail_expr(&arm.body).kind {
-                        if arm.pattern.binding_names().iter().any(|b| b == n) {
-                            let n = n.clone();
+                        let n = Self::arm_tail_rebind_root(&arm.body, n);
+                        if arm.pattern.binding_names().contains(&n) {
                             self.suppress_boxed_array_payload_alias_move(&n);
                         }
                     }
@@ -2821,6 +2827,39 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars
             .boxed_payload_alias
             .insert(bound.clone(), (src.clone(), container.to_string()));
+    }
+
+    /// B-2026-10-02-46 — the name an arm's tail value `tail` was re-bound
+    /// FROM in the arm's own block: `{ let u = x; let w = u; w }` answers `x`.
+    /// Only plain `let <name> = <name>` links in the outermost block are
+    /// followed; an assignment to any name on the chain gives up and answers
+    /// `tail` itself, since the chain no longer says what the value is.
+    pub(super) fn arm_tail_rebind_root(body: &Expr, tail: &str) -> String {
+        let mut cur = tail.to_string();
+        let (ExprKind::Block(b) | ExprKind::Seq(b)) = &body.kind else {
+            return cur;
+        };
+        for st in b.stmts.iter().rev() {
+            match &st.kind {
+                crate::ast::StmtKind::Let { pattern, value, .. } => {
+                    if let (PatternKind::Binding(dst), ExprKind::Identifier(src)) =
+                        (&pattern.kind, &value.kind)
+                    {
+                        if *dst == cur {
+                            cur = src.clone();
+                        }
+                    } else if pattern.binding_names().contains(&cur) {
+                        return tail.to_string();
+                    }
+                }
+                crate::ast::StmtKind::Assign { .. }
+                | crate::ast::StmtKind::CompoundAssign { .. } => {
+                    return tail.to_string();
+                }
+                _ => {}
+            }
+        }
+        cur
     }
 
     /// B-2026-09-14-17 — record that the arm's binding is a bit-copy alias of

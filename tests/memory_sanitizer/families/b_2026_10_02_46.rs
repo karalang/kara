@@ -1,0 +1,81 @@
+//! B-2026-10-02-46: a re-bound boxed Array or tuple payload handed on is freed once
+
+use super::*;
+
+/// B-2026-10-02-46 — an arm binding of a plain enum's heap-boxed `Array` or tuple
+/// payload is an alias of the box interior, disarmed by name at each hand-off.
+/// `let u = x` gave the same buffers a second name the disarm never looked up, so
+/// `return u`, `eat(u)`, `v.push(u)`, `Some(u)`, a further `let w = u` and the
+/// arm's value `{ let u = x; u }` left the box and the new owner freeing the same
+/// buffers. Reads of `u` and a by-value tuple param (caller-retained) stay clean.
+#[test]
+fn asan_rebound_boxed_payload_alias_handed_on_frees_once() {
+    assert_clean_asan_run(
+        r#"enum E { S(Array[String, 2]), N }
+enum T { S((Array[String, 2], i64)), N }
+fn mka(t: String) -> Array[String, 2] { let a: Array[String, 2] = [f"a-{t}-bbbbbbbbbbbbbbbbbbbbbbbb", f"a-{t}-cc"]; return a; }
+fn mkt(t: String) -> (Array[String, 2], i64) { return (mka(t), 7); }
+fn eata(a: Array[String, 2]) -> i64 { return 2; }
+fn eatt(t: (Array[String, 2], i64)) -> i64 { return t.1; }
+fn a1(s: E) -> Array[String, 2] { match s { E.S(x) => { let u = x; return u; } E.N => { return mka("z"); } } }
+fn a2(s: E) -> i64 { match s { E.S(x) => { let u = x; return eata(u); } E.N => { return 0; } } }
+fn a3(s: E) -> i64 { let mut v: Vec[Array[String, 2]] = Vec.new(); match s { E.S(x) => { let u = x; v.push(u); } E.N => { } } return v.len(); }
+fn a4(s: E) -> Option[Array[String, 2]] { match s { E.S(x) => { let u = x; return Some(u); } E.N => { return None; } } }
+fn a5(s: E) -> Array[String, 2] { match s { E.S(x) => { let u = x; u } E.N => mka("z") } }
+fn a6(s: E) -> Array[String, 2] { match s { E.S(x) => { let u = x; let w = u; return w; } E.N => { return mka("z"); } } }
+fn a7(s: E) -> String { match s { E.S(x) => { let u = x; return u[0]; } E.N => { return "n"; } } }
+fn a8(s: E, b: bool) -> Array[String, 2] { match s { E.S(x) => { let u = x; if b { return u; } return mka("q"); } E.N => { return mka("z"); } } }
+fn a9(s: E) -> Array[String, 2] { if let E.S(x) = s { let u = x; return u; } return mka("z"); }
+fn t1(s: T) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; return u; } T.N => { return mkt("z"); } } }
+fn t2(s: T) -> i64 { match s { T.S(x) => { let u = x; return eatt(u); } T.N => { return 0; } } }
+fn t3(s: T) -> i64 { let mut v: Vec[(Array[String, 2], i64)] = Vec.new(); match s { T.S(x) => { let u = x; v.push(u); } T.N => { } } return v.len(); }
+fn t5(s: T) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; u } T.N => mkt("z") } }
+fn t6(s: T) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; let w = u; return w; } T.N => { return mkt("z"); } } }
+fn t7(s: T) -> i64 { match s { T.S(x) => { let u = x; return u.1; } T.N => { return 0; } } }
+fn t8(s: T, b: bool) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; if b { return u; } return mkt("q"); } T.N => { return mkt("z"); } } }
+fn main() {
+    let y1 = a1(E.S(mka("a"))); println(f"a1 {y1[0]}");
+    println(f"a2 {a2(E.S(mka("b")))}");
+    println(f"a3 {a3(E.S(mka("c")))}");
+    println(f"a4 {a4(E.S(mka("d"))).is_some()}");
+    let y5 = a5(E.S(mka("e"))); println(f"a5 {y5[1]}");
+    let y6 = a6(E.S(mka("f"))); println(f"a6 {y6[0]}");
+    println(f"a7 {a7(E.S(mka("g")))}");
+    let y8 = a8(E.S(mka("h")), true); println(f"a8t {y8[0]}");
+    let y8f = a8(E.S(mka("i")), false); println(f"a8f {y8f[0]}");
+    let y9 = a9(E.S(mka("j"))); println(f"a9 {y9[1]}");
+    let z1 = t1(T.S(mkt("k"))); println(f"t1 {z1.0[0]} {z1.1}");
+    println(f"t2 {t2(T.S(mkt("l")))}");
+    println(f"t3 {t3(T.S(mkt("m")))}");
+    let z5 = t5(T.S(mkt("n"))); println(f"t5 {z5.0[1]}");
+    let z6 = t6(T.S(mkt("o"))); println(f"t6 {z6.0[0]}");
+    println(f"t7 {t7(T.S(mkt("p")))}");
+    let z8 = t8(T.S(mkt("q")), true); println(f"t8t {z8.0[0]}");
+    let z8f = t8(T.S(mkt("r")), false); println(f"t8f {z8f.0[0]}");
+    println("done");
+}
+"#,
+        &[
+            "a1 a-a-bbbbbbbbbbbbbbbbbbbbbbbb",
+            "a2 2",
+            "a3 1",
+            "a4 true",
+            "a5 a-e-cc",
+            "a6 a-f-bbbbbbbbbbbbbbbbbbbbbbbb",
+            "a7 a-g-bbbbbbbbbbbbbbbbbbbbbbbb",
+            "a8t a-h-bbbbbbbbbbbbbbbbbbbbbbbb",
+            "a8f a-q-bbbbbbbbbbbbbbbbbbbbbbbb",
+            "a9 a-j-cc",
+            "t1 a-k-bbbbbbbbbbbbbbbbbbbbbbbb 7",
+            "t2 7",
+            "t3 1",
+            "t5 a-n-cc",
+            "t6 a-o-bbbbbbbbbbbbbbbbbbbbbbbb",
+            "t7 7",
+            "t8t a-q-bbbbbbbbbbbbbbbbbbbbbbbb",
+            "t8f a-q-bbbbbbbbbbbbbbbbbbbbbbbb",
+            "done",
+        ],
+        "asan_rebound_boxed_payload_alias_handed_on_frees_once",
+    );
+}
