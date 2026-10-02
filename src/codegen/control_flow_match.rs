@@ -1807,7 +1807,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // which is still live, and disarm through that.
                     if let ExprKind::Identifier(n) = &Self::block_tail_expr(&arm.body).kind {
                         let n = Self::arm_tail_rebind_root(&arm.body, n);
-                        if arm.pattern.binding_names().contains(&n) {
+                        // B-2026-10-02-79 — or an enclosing construct's
+                        // binding (`E.A(v) => match c { true => v, .. }`).
+                        if arm.pattern.binding_names().contains(&n)
+                            || self
+                                .payload_vars
+                                .boxed_array_payload_alias
+                                .contains_key(n.as_str())
+                        {
                             // B-2026-09-27-83 — the bodies leave with the
                             // value only when the match IS the frame's
                             // result; a match consumed in the frame
@@ -2870,6 +2877,49 @@ impl<'ctx> super::Codegen<'ctx> {
         let key = (tail.span.offset, tail.span.length);
         self.drop_rc.cond_move_let_sites.contains(&key)
             && !self.drop_rc.cond_move_call_arg_sites.contains(&key)
+    }
+
+    /// B-2026-10-02-79 — the arm-tail disarm above, one branch deeper: a
+    /// branch block of an `if` whose tail hands out the arm binding of an
+    /// enclosing construct's heap-boxed `Array` payload
+    /// (`E.A(v) => { if c { v } else { z() } }`). The enclosing arm's own
+    /// disarm reads only ITS tail, which here is the `if` and never names the
+    /// binding, so the box freed the elements the result owned too. Emitted at
+    /// the end of this branch block, so only the edge that hands the binding
+    /// out disarms the box. `head` is the `if`'s condition, which is what the
+    /// escaping-branch set records for it.
+    pub(super) fn disarm_boxed_array_alias_at_branch_tail(
+        &mut self,
+        head: &Expr,
+        block: &crate::ast::Block,
+    ) {
+        if self
+            .builder
+            .get_insert_block()
+            .is_none_or(|b| b.get_terminator().is_some())
+        {
+            return;
+        }
+        let Some(fe) = block.final_expr.as_deref() else {
+            return;
+        };
+        let tail = Self::block_tail_expr(fe);
+        let ExprKind::Identifier(n) = &tail.kind else {
+            return;
+        };
+        let n = Self::block_tail_rebind_root(block, n);
+        if !self
+            .payload_vars
+            .boxed_array_payload_alias
+            .contains_key(n.as_str())
+        {
+            return;
+        }
+        let leaves = self.branch_tail_takes_array_bodies(head, tail);
+        let saved = self.array_alias_bodies_leave;
+        self.array_alias_bodies_leave = saved || leaves;
+        self.suppress_boxed_array_payload_alias_move(&n);
+        self.array_alias_bodies_leave = saved;
     }
 
     pub(super) fn arm_tail_rebind_root(body: &Expr, tail: &str) -> String {

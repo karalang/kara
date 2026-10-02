@@ -767,7 +767,13 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(fe) = then_block.final_expr.as_deref() {
                 if let ExprKind::Identifier(n) = &Self::block_tail_expr(fe).kind {
                     let n = Self::block_tail_rebind_root(then_block, n);
-                    if pattern.binding_names().contains(&n) {
+                    // B-2026-10-02-79 — or an enclosing construct's binding.
+                    if pattern.binding_names().contains(&n)
+                        || self
+                            .payload_vars
+                            .boxed_array_payload_alias
+                            .contains_key(n.as_str())
+                    {
                         let leaves =
                             self.branch_tail_takes_array_bodies(value, Self::block_tail_expr(fe));
                         let saved = self.array_alias_bodies_leave;
@@ -1068,6 +1074,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     let v = self.compile_block_with_frame(blk)?;
                     else_pending = self.arm_pending_tail_owner.take();
+                    if own_value {
+                        self.disarm_boxed_array_alias_at_branch_tail(value, blk);
+                    }
                     v
                 }
                 _ => {
@@ -4010,6 +4019,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-30-2 — what this arm reported; registered a few lines
         // below, once the deep-copy has settled which value escapes.
         let then_pending = self.arm_pending_tail_owner.take();
+        if own_value {
+            self.disarm_boxed_array_alias_at_branch_tail(condition, then_block);
+        }
         let then_terminated = self
             .builder
             .get_insert_block()
@@ -4052,6 +4064,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     let v = self.compile_block_with_frame(blk)?;
                     else_pending = self.arm_pending_tail_owner.take();
+                    if own_value {
+                        self.disarm_boxed_array_alias_at_branch_tail(condition, blk);
+                    }
                     v
                 }
                 ExprKind::If {
