@@ -1382,6 +1382,16 @@ pub fn fn_returns_param_with(
     f: &Function,
     arg_index: usize,
 ) -> bool {
+    analysis_memo_full("fn_returns_param_with", f, program, arg_index, "", || {
+        fn_returns_param_with_uncached(program, f, arg_index)
+    })
+}
+
+fn fn_returns_param_with_uncached(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
     let legacy = fn_returns_param_with_legacy(program, f, arg_index);
     crate::param_fate::audit::check("returns_param", program, f, arg_index, legacy, |x| {
         x.returned_whole() != crate::param_fate::Coverage::Never
@@ -2827,8 +2837,116 @@ impl RebindWalk {
 }
 
 /// The rebind walk over `f`'s body, seeded with its parameter names.
-fn rebind_walk(f: &Function) -> RebindWalk {
-    let mut w = rebind_walk_raw(f);
+/// B-2026-10-02-40 — a per-run memo of the callee-body walks below
+/// ([`rebind_walk`] and the predicates built on it), live only while an
+/// [`AnalysisMemo`] guard is held (the interpreter holds one for a whole
+/// program run). The walk is a pure function of the `Function`, but the
+/// interpreter asks for it on EVERY CALL, through a dozen ownership
+/// predicates, and it walks the whole body each time: 10.5 M instructions a
+/// call for a ten-`let` body, 4.6 ms a call at forty. Codegen asks the same
+/// questions once per function at compile time and is not affected.
+///
+/// Keyed by the `Function`'s address plus its span, and scoped to one run:
+/// the address alone is only an identity while the AST it points into is
+/// alive, and the guard is what bounds that. Off (`None`) outside a guard, so
+/// the compiler phases, which can hold several programs in one process,
+/// never see a cached answer.
+/// `(analysis tag, Function address, span offset, span length, packed
+/// non-`Function` arguments, Program address or 0, parameter name or "")`.
+type AnalysisMemoKey = (usize, usize, usize, usize, usize, usize, String);
+thread_local! {
+    static ANALYSIS_MEMO: std::cell::RefCell<
+        Option<rustc_hash::FxHashMap<AnalysisMemoKey, std::rc::Rc<dyn std::any::Any>>>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+/// Enables the per-run AST analysis memo on this thread until dropped; see
+/// [`ANALYSIS_MEMO`]. Nested guards share the outer memo, and only the
+/// outermost clears it.
+pub struct AnalysisMemo {
+    outermost: bool,
+}
+
+impl AnalysisMemo {
+    pub fn enable() -> Self {
+        let outermost = ANALYSIS_MEMO.with(|m| {
+            let mut m = m.borrow_mut();
+            if m.is_none() {
+                *m = Some(rustc_hash::FxHashMap::default());
+                true
+            } else {
+                false
+            }
+        });
+        AnalysisMemo { outermost }
+    }
+}
+
+impl Drop for AnalysisMemo {
+    fn drop(&mut self) {
+        if self.outermost {
+            ANALYSIS_MEMO.with(|m| *m.borrow_mut() = None);
+        }
+    }
+}
+
+/// `compute()`, answered from the memo when a guard is live. `tag` names the
+/// analysis and `extra` packs its non-`Function` arguments, so one map serves
+/// every memoized predicate. The lookup's borrow ends before `compute` runs,
+/// which is what lets one memoized analysis call another.
+fn analysis_memo<T: Clone + 'static>(
+    tag: &'static str,
+    f: &Function,
+    extra: usize,
+    compute: impl FnOnce() -> T,
+) -> T {
+    analysis_memo_full(tag, f, None, extra, "", compute)
+}
+
+/// [`analysis_memo`] for an analysis that also reads the `Program` (keyed by
+/// its address, `None` apart from `Some`) and/or a parameter NAME.
+fn analysis_memo_full<T: Clone + 'static>(
+    tag: &'static str,
+    f: &Function,
+    program: Option<&crate::Program>,
+    extra: usize,
+    name: &str,
+    compute: impl FnOnce() -> T,
+) -> T {
+    let live = ANALYSIS_MEMO.with(|m| m.borrow().is_some());
+    if !live {
+        return compute();
+    }
+    let key = (
+        tag.as_ptr() as usize,
+        f as *const Function as usize,
+        f.span.offset,
+        f.span.length,
+        extra,
+        program.map_or(0, |p| p as *const crate::Program as usize),
+        name.to_string(),
+    );
+    let hit = ANALYSIS_MEMO.with(|m| m.borrow().as_ref().and_then(|m| m.get(&key).cloned()));
+    if let Some(v) = hit.as_ref().and_then(|v| v.downcast_ref::<T>()) {
+        return v.clone();
+    }
+    let v = compute();
+    ANALYSIS_MEMO.with(|m| {
+        if let Some(m) = m.borrow_mut().as_mut() {
+            m.insert(key, std::rc::Rc::new(v.clone()));
+        }
+    });
+    v
+}
+
+fn rebind_walk(f: &Function) -> std::rc::Rc<RebindWalk> {
+    analysis_memo("rebind_walk", f, 0, || {
+        std::rc::Rc::new(rebind_walk_uncached(f))
+    })
+}
+
+fn rebind_walk_uncached(f: &Function) -> RebindWalk {
+    let mut w = rebind_walk_raw_uncached(f);
     // B-2026-09-27-51 — an unmutated `let mut` rebind of a parameter is an
     // immutable rebind for every alias question, on BOTH backends: codegen
     // compiles it as a `let` (`demote_unmutated_param_rebinds`) and the
@@ -2853,7 +2971,13 @@ fn rebind_walk(f: &Function) -> RebindWalk {
     w
 }
 
-fn rebind_walk_raw(f: &Function) -> RebindWalk {
+fn rebind_walk_raw(f: &Function) -> std::rc::Rc<RebindWalk> {
+    analysis_memo("rebind_walk_raw", f, 0, || {
+        std::rc::Rc::new(rebind_walk_raw_uncached(f))
+    })
+}
+
+fn rebind_walk_raw_uncached(f: &Function) -> RebindWalk {
     let mut w = RebindWalk {
         rebinds: Vec::new(),
         mut_rebinds: Vec::new(),
@@ -3050,6 +3174,16 @@ pub fn param_whole_aliases(
     f: &Function,
     param_name: &str,
 ) -> Vec<String> {
+    analysis_memo_full("param_whole_aliases", f, program, 0, param_name, || {
+        param_whole_aliases_uncached(program, f, param_name)
+    })
+}
+
+fn param_whole_aliases_uncached(
+    program: Option<&crate::Program>,
+    f: &Function,
+    param_name: &str,
+) -> Vec<String> {
     let w = rebind_walk(f);
     let mut aliases = close_rebind_aliases(&w, param_name);
     let Some(program) = program else {
@@ -3143,6 +3277,25 @@ pub fn param_wrap_aliases_ex(
 /// enum's (a generic `Ho[T]` erases its payload); admitting one there stood the
 /// caller down with no carrier behind it.
 fn param_wrap_aliases_impl(
+    program: Option<&crate::Program>,
+    f: &Function,
+    param_name: &str,
+    with_ctor: bool,
+    user_variants: bool,
+    coll: bool,
+) -> Vec<(String, ParamPath)> {
+    let flags = usize::from(with_ctor) | usize::from(user_variants) << 1 | usize::from(coll) << 2;
+    analysis_memo_full(
+        "param_wrap_aliases_impl",
+        f,
+        program,
+        flags,
+        param_name,
+        || param_wrap_aliases_impl_uncached(program, f, param_name, with_ctor, user_variants, coll),
+    )
+}
+
+fn param_wrap_aliases_impl_uncached(
     program: Option<&crate::Program>,
     f: &Function,
     param_name: &str,
@@ -4287,6 +4440,19 @@ fn fn_always_returns_param_ex(
     allow_via_call: bool,
     none_ok: bool,
 ) -> bool {
+    let extra = arg_index << 2 | usize::from(allow_via_call) << 1 | usize::from(none_ok);
+    analysis_memo_full("fn_always_returns_param_ex", f, program, extra, "", || {
+        fn_always_returns_param_ex_uncached(program, f, arg_index, allow_via_call, none_ok)
+    })
+}
+
+fn fn_always_returns_param_ex_uncached(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+    allow_via_call: bool,
+    none_ok: bool,
+) -> bool {
     let Some(param) = f.params.get(arg_index) else {
         return false;
     };
@@ -4916,6 +5082,21 @@ pub fn fn_conditionally_returns_param_bare(
     f: &Function,
     arg_index: usize,
 ) -> bool {
+    analysis_memo_full(
+        "fn_conditionally_returns_param_bare",
+        f,
+        program,
+        arg_index,
+        "",
+        || fn_conditionally_returns_param_bare_uncached(program, f, arg_index),
+    )
+}
+
+fn fn_conditionally_returns_param_bare_uncached(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
     let legacy = fn_conditionally_returns_param_bare_legacy(program, f, arg_index);
     crate::param_fate::audit::check(
         "conditionally_returns_param",
@@ -4965,7 +5146,7 @@ fn fn_conditionally_returns_param_bare_legacy(
     // and runs nothing, so the body was lost there.
     let plain_wraps = param_wrap_aliases_impl(program, f, param_name, false, false, false);
     let ctor_wraps = param_wrap_aliases_impl(program, f, param_name, true, false, true);
-    let destructured = rebind_walk(f).destructured;
+    let destructured = rebind_walk(f).destructured.clone();
     let wraps = if f.generic_params.is_none()
         && !ctor_wraps
             .iter()
@@ -5713,7 +5894,7 @@ fn fn_conditionally_returns_param_bare_legacy(
         }
         _ => false,
     };
-    let bound = rebind_walk(f).bound;
+    let bound = rebind_walk(f).bound.clone();
     let branch_let_init = |x: &str| -> Option<&Expr> {
         if !expandable_param {
             return None;
@@ -6253,6 +6434,21 @@ pub fn fn_escaping_param_part_paths(
 /// operand), not inside a loop, and `f` is neither generic nor an instance
 /// method. Anything else keeps the channel's static answer.
 pub fn fn_conditionally_handed_param_parts(
+    program: &crate::Program,
+    f: &Function,
+    arg_index: usize,
+) -> Vec<ParamPath> {
+    analysis_memo_full(
+        "fn_conditionally_handed_param_parts",
+        f,
+        Some(program),
+        arg_index,
+        "",
+        || fn_conditionally_handed_param_parts_uncached(program, f, arg_index),
+    )
+}
+
+fn fn_conditionally_handed_param_parts_uncached(
     program: &crate::Program,
     f: &Function,
     arg_index: usize,
@@ -10191,6 +10387,21 @@ pub fn fn_conditionally_hands_param_to_flip_callee(
     f: &Function,
     arg_index: usize,
 ) -> bool {
+    analysis_memo_full(
+        "fn_conditionally_hands_param_to_flip_callee",
+        f,
+        Some(program),
+        arg_index,
+        "",
+        || fn_conditionally_hands_param_to_flip_callee_uncached(program, f, arg_index),
+    )
+}
+
+fn fn_conditionally_hands_param_to_flip_callee_uncached(
+    program: &crate::Program,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
     let Some(param) = f.params.get(arg_index) else {
         return false;
     };
@@ -11329,6 +11540,12 @@ fn fn_moves_param_into_outliving_place_legacy(f: &Function, arg_index: usize) ->
 /// argument, optional-chain call or `for` over it counts as a mutation, so a
 /// false "unmutated" cannot arise from a use this walk does not understand.
 pub fn unmutated_param_mut_rebinds(f: &Function) -> Vec<usize> {
+    analysis_memo("unmutated_param_mut_rebinds", f, 0, || {
+        unmutated_param_mut_rebinds_uncached(f)
+    })
+}
+
+fn unmutated_param_mut_rebinds_uncached(f: &Function) -> Vec<usize> {
     // B-2026-09-27-51 — every OWNED parameter, not `Option` / `Result` alone.
     // A plain struct returned through the same spelling (`fn rb(a: R) -> R {
     // let mut c = a; c }`) ran its `Drop` body twice on all four surfaces:
@@ -11352,7 +11569,7 @@ pub fn unmutated_param_mut_rebinds(f: &Function) -> Vec<usize> {
     if owned_params.is_empty() {
         return Vec::new();
     }
-    let bound = rebind_walk_raw(f).bound;
+    let bound = rebind_walk_raw(f).bound.clone();
     let once = |n: &str| bound.get(n) == Some(&1);
     // The names the param's value goes by: the param, then every top-level
     // whole rebind of one of them -- an immutable one, or a `let mut` this
@@ -11648,6 +11865,15 @@ pub fn fn_forwards_param_whole_to<'f>(
 /// the caller holds and a store in the body's tail expression, which the
 /// former has never counted.
 fn param_whole_container_store(f: &Function, arg_index: usize, outliving: bool) -> bool {
+    analysis_memo(
+        "param_whole_container_store",
+        f,
+        arg_index * 2 + usize::from(outliving),
+        || param_whole_container_store_uncached(f, arg_index, outliving),
+    )
+}
+
+fn param_whole_container_store_uncached(f: &Function, arg_index: usize, outliving: bool) -> bool {
     let Some(param) = f.params.get(arg_index) else {
         return false;
     };
@@ -12331,6 +12557,18 @@ pub fn fn_moves_param_into_local_container_any(f: &Function, arg_index: usize) -
 /// must have no other way out, the same `escapes_by_unclearable_route` gate the
 /// outliving sibling applies.
 pub fn fn_conditionally_moves_param_into_local_container(f: &Function, arg_index: usize) -> bool {
+    analysis_memo(
+        "fn_conditionally_moves_param_into_local_container",
+        f,
+        arg_index,
+        || fn_conditionally_moves_param_into_local_container_uncached(f, arg_index),
+    )
+}
+
+fn fn_conditionally_moves_param_into_local_container_uncached(
+    f: &Function,
+    arg_index: usize,
+) -> bool {
     let Some(param) = f.params.get(arg_index) else {
         return false;
     };

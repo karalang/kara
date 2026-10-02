@@ -2306,6 +2306,9 @@ impl<'a> Interpreter<'a> {
 
     /// Run the program: register top-level items, then call main().
     pub fn run(&mut self) -> Value {
+        // B-2026-10-02-40 — the callee-body ownership walks are pure in the
+        // AST, which outlives this call, so answer each once per run.
+        let _memo = crate::ast::AnalysisMemo::enable();
         self.register_items();
         // Look for main()
         if self.env.get("main").is_some() {
