@@ -2195,7 +2195,7 @@ impl<'a> super::Interpreter<'a> {
                         self.impl_method_ast(ty, &fn_name)
                             .is_some_and(|f| f.self_param.is_none())
                     });
-                self.env.push_scope();
+                self.env.push_frame_scope();
                 let pushed_subs = self.push_type_subs_for_call(span);
                 if let Some(ref captured) = closure_env {
                     for (k, v) in captured {
@@ -4571,7 +4571,7 @@ impl<'a> super::Interpreter<'a> {
         else {
             return self.call_function(&qualified, &[source]);
         };
-        self.env.push_scope();
+        self.env.push_frame_scope();
         if let Some(ref captured) = closure_env {
             for (k, v) in captured {
                 self.env.define(k.clone(), v.clone());
@@ -7440,7 +7440,7 @@ impl<'a> super::Interpreter<'a> {
             Value::Function {
                 body, closure_env, ..
             } => {
-                self.env.push_scope();
+                self.env.push_frame_scope();
                 if let Some(ref captured) = closure_env {
                     for (k, v) in captured {
                         self.env.define(k.clone(), v.clone());
@@ -7653,7 +7653,7 @@ impl<'a> super::Interpreter<'a> {
         else {
             return Value::Unit;
         };
-        self.env.push_scope();
+        self.env.push_frame_scope();
         if let Some(captured) = closure_env {
             for (k, v) in captured {
                 self.env.define(k, v);

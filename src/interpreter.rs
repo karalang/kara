@@ -2718,7 +2718,7 @@ impl<'a> Interpreter<'a> {
                 closure_env,
                 ..
             }) => {
-                self.env.push_scope();
+                self.env.push_frame_scope();
                 if let Some(ref captured) = closure_env {
                     for (k, v) in captured {
                         self.env.define(k.clone(), v.clone());

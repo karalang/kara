@@ -114,7 +114,7 @@ impl<'a> super::Interpreter<'a> {
         // Prepend the provider as the implicit `self` argument.
         arg_vals.insert(0, provider);
 
-        self.env.push_scope();
+        self.env.push_frame_scope();
         if let Some(ref captured) = closure_env {
             for (k, v) in captured {
                 self.env.define(k.clone(), v.clone());

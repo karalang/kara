@@ -1074,6 +1074,15 @@ pub(crate) struct Env {
     /// must not hide a write from an enclosing one, so a write marks every
     /// frame that names it, not just the innermost.
     pub(crate) watches: Vec<(String, bool)>,
+    /// B-2026-10-02-57 — the index in `scopes` of each active call frame's
+    /// first scope, innermost last. A call pushes its frame with
+    /// [`Env::push_frame_scope`]; [`Env::pop_scope`] drops the mark with the
+    /// scope. [`Env::get`] reads a frame's own scopes, then the item scope
+    /// (`scopes[0]`), and only then the scopes of the frames that called it,
+    /// so a callee's free function or constant is never shadowed by a CALLER'S
+    /// local of the same name, and a global lookup costs the frame's depth
+    /// rather than the whole call stack's.
+    pub(crate) frame_starts: Vec<usize>,
 }
 
 impl Env {
@@ -1081,6 +1090,7 @@ impl Env {
         Env {
             scopes: vec![HashMap::new()],
             watches: Vec::new(),
+            frame_starts: Vec::new(),
         }
     }
 
@@ -1099,8 +1109,22 @@ impl Env {
         self.scopes.push(HashMap::new());
     }
 
+    /// Push the first scope of a call frame: a function, method or closure
+    /// body. See `frame_starts`.
+    pub(crate) fn push_frame_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+        self.frame_starts.push(self.scopes.len() - 1);
+    }
+
     pub(crate) fn pop_scope(&mut self) {
         self.scopes.pop();
+        while self
+            .frame_starts
+            .last()
+            .is_some_and(|&start| start >= self.scopes.len())
+        {
+            self.frame_starts.pop();
+        }
     }
 
     /// B-2026-08-30-51 — the value bound to `name` in the INNERMOST scope only,
@@ -1254,22 +1278,38 @@ impl Env {
     /// callers always see the underlying value rather than the aliasing
     /// slot / place-ref.
     pub(crate) fn get(&self, name: &str) -> Option<Value> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(v) = scope.get(name) {
-                return Some(match v {
-                    Value::SharedCell(cell) => cell.lock().unwrap().clone(),
-                    Value::MapSlotRef { map_var, key } => self.read_map_slot(map_var, key),
-                    Value::VecSlotRef { storage, index } => storage
-                        .read()
-                        .unwrap()
-                        .get(*index)
-                        .cloned()
-                        .unwrap_or(Value::Unit),
-                    other => other.clone(),
-                });
-            }
-        }
-        None
+        // B-2026-10-02-57 — lexical order: the current frame, then the item
+        // scope, then (for the interpreter's own synthetic names, which a
+        // caller can define for a callee to read) the calling frames.
+        let start = self.frame_starts.last().copied().unwrap_or(0);
+        let found = self.scopes[start..]
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .or_else(|| {
+                if start > 0 {
+                    self.scopes[0].get(name)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                self.scopes[1..start.max(1)]
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(name))
+            })?;
+        Some(match found {
+            Value::SharedCell(cell) => cell.lock().unwrap().clone(),
+            Value::MapSlotRef { map_var, key } => self.read_map_slot(map_var, key),
+            Value::VecSlotRef { storage, index } => storage
+                .read()
+                .unwrap()
+                .get(*index)
+                .cloned()
+                .unwrap_or(Value::Unit),
+            other => other.clone(),
+        })
     }
 
     /// Resolve a map PLACE to a borrow: either a plain binding name (`m`) or a
