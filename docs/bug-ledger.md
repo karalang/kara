@@ -94,13 +94,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 637 |
 | run-vs-build | 570 |
-| leak | 525 |
+| leak | 526 |
 | double-free | 394 |
 | missing-feature | 216 |
 | codegen-gap | 209 |
 | other | 164 |
 | diagnostics | 138 |
-| perf | 121 |
+| perf | 122 |
 | false-positive | 118 |
 | crash | 105 |
 | soundness | 97 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2561 |
+| codegen | 2563 |
 | interp | 779 |
 | typecheck | 321 |
 | other | 113 |
@@ -486,6 +486,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-44 | 2026-10-02 | codegen+interp | medium | A BY-VALUE STRUCT PARAM HANDED BACK ON ONE PATH ONLY OUT OF AN `Option` ENVELOPE'S ARM RUNS ITS `Drop` BODY TWICE, AND DOUBLE-FREES COMPILED WHEN THE ENVELOPE IS FRESH (CORRECTION 2026-10-02: the compiled double free on the fresh envelope was B-2026-10-02-43's and is gone since 0e2807a8f; that cell now prints the same wrong `d2 y2 d2` on every surface) -- `fn hd(a: R, c: bool) -> R { let o = Some(a); match o { Some(v) => { if c { return v } return mkr(0) } None => { return mkr(0) } } }` prints `d4 y4 d4` on every surface at `c = true`, against the `y4 d4` of the plain `if c { return a } return mkr(0)` | — |
 | B-2026-10-02-45 | 2026-10-02 | codegen+interp | medium | PUSHING THE ARM BINDING OF AN `Option` ENVELOPE AROUND A BY-VALUE STRUCT PARAM INTO A `Vec` THAT DIES IN THE CALLEE RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY SURFACE -- `fn v2(a: R) -> i64 { let o = Some(a); match o { Some(v) => { let mut vs: Vec[R] = Vec.new(); vs.push(v); return vs.len() } None => { return 0 } } }` prints `d2 d2 y1`, where pushing the param itself (`vs.push(a)`) prints one `d1` | — |
 | B-2026-10-02-46 | 2026-10-02 | codegen | high | AN ARM BINDING OF A PLAIN ENUM'S HEAP-BOXED `Array` OR TUPLE PAYLOAD RE-BOUND BY `let` AND THEN RETURNED DOUBLE-FREES -- `fn r4(s: E) -> Array[String, 2] { match s { E.S(x) => { let u = x; return u; } E.N => { return mkt("z") } } }` over `enum E { S(Array[String, 2]), N }` reports 7 errors at -O0 under valgrind and aborts on the JIT and AOT, while `return x` straight from the arm is clean; `--interp` is right | — |
+| B-2026-10-02-47 | 2026-10-02 | codegen | medium | AN EMPTY `SortedMap.range`, `Column.sorted()`/`argsort()` OR `Stats.sort`/`argsort` RESULT LEAKS ITS SCRATCH BUFFER -- the result Vec is built with `cap == count`, and `cap == 0` reads as a static buffer that no drop frees | — |
+| B-2026-10-02-48 | 2026-10-02 | codegen | low | `karac build` SPENDS 2 SECONDS RE-WALKING A SELF-RECURSIVE FUNCTION THROUGH THE PART-PATH OWNERSHIP PREDICATES -- the cycle guards stop the recursion but nothing remembers an answer, so every call site re-asks the whole tree | — |
 
 ### Relocated
 
