@@ -956,6 +956,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-10-02-70 — a `Vec` literal of plain scalar values
+                // iterates from a stack array instead of a heap buffer.
+                if let Some(result) =
+                    self.try_compile_for_scalar_vec_literal(label, pattern, iterable, body)?
+                {
+                    return Ok(result);
+                }
                 // Value-producing iterable whose type is a Vec — e.g.
                 // `for sub in t.iter_axis(0)` (a `Vec[Tensor]` temporary).
                 // Materialize it into a synth local and iterate. Returns
@@ -1188,6 +1195,110 @@ impl<'ctx> super::Codegen<'ctx> {
             }),
             span: elem_te.span,
         }
+    }
+
+    /// B-2026-10-02-70 — `for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)]`.
+    ///
+    /// An un-annotated bracketed literal is typed `Vec`, so the generic path
+    /// ([`Self::try_compile_for_vec_value`]) heap-allocates it on every
+    /// execution and frees it after the loop: one malloc per call of a grid
+    /// search's neighbour walk. When the loop is the literal's only consumer
+    /// and its elements are plain scalars or tuples of them, nothing can
+    /// observe the buffer, so the elements go into an entry-block array and
+    /// the loop runs through [`Self::compile_for_array_var`], exactly as it
+    /// does for the same literal bound to an `Array[T, N]` local.
+    ///
+    /// Returns `Ok(None)` for anything else, which keeps the heap path.
+    fn try_compile_for_scalar_vec_literal(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        iterable: &Expr,
+        body: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let ExprKind::PrefixCollectionLiteral { type_name, items } = &iterable.kind else {
+            return Ok(None);
+        };
+        if type_name != "Vec" || items.is_empty() {
+            return Ok(None);
+        }
+        let key = (iterable.span.offset, iterable.span.length);
+        let elem_te = if let Some(te) = self.span_tables.temp_recv_elem_types.get(&key) {
+            te.clone()
+        } else {
+            let Some(vec_te) = self.drop_rc.owned_temp_drops.get(&key) else {
+                return Ok(None);
+            };
+            let TypeKind::Path(p) = &vec_te.kind else {
+                return Ok(None);
+            };
+            if p.segments.len() != 1 || p.segments[0] != "Vec" {
+                return Ok(None);
+            }
+            match p.generic_args.as_ref().and_then(|a| a.first()) {
+                Some(crate::ast::GenericArg::Type(t)) => t.clone(),
+                _ => return Ok(None),
+            }
+        };
+        fn is_plain_scalar(te: &TypeExpr) -> bool {
+            match &te.kind {
+                TypeKind::Path(p) => {
+                    p.generic_args.is_none()
+                        && p.segments.len() == 1
+                        && matches!(
+                            p.segments[0].as_str(),
+                            "i8" | "i16"
+                                | "i32"
+                                | "i64"
+                                | "u8"
+                                | "u16"
+                                | "u32"
+                                | "u64"
+                                | "isize"
+                                | "usize"
+                                | "f32"
+                                | "f64"
+                                | "bool"
+                                | "char"
+                        )
+                }
+                TypeKind::Tuple(elems) => !elems.is_empty() && elems.iter().all(is_plain_scalar),
+                _ => false,
+            }
+        }
+        if !is_plain_scalar(&elem_te) {
+            return Ok(None);
+        }
+        let mut vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(items.len());
+        for item in items {
+            vals.push(self.compile_expr(item)?);
+        }
+        let elem_ty = vals[0].get_type();
+        if vals.iter().any(|v| v.get_type() != elem_ty) {
+            return Err(format!(
+                "internal: B-2026-10-02-70 scalar Vec literal at offset {} has mixed element types",
+                iterable.span.offset
+            ));
+        }
+        let arr_ty = inkwell::types::BasicType::array_type(&elem_ty, vals.len() as u32);
+        let fn_val = self.current_fn.unwrap();
+        let slot = self.create_entry_alloca(fn_val, "for.lit", arr_ty.into());
+        let i64_t = self.context.i64_type();
+        for (i, v) in vals.iter().enumerate() {
+            let p = unsafe {
+                self.builder
+                    .build_in_bounds_gep(
+                        arr_ty,
+                        slot,
+                        &[i64_t.const_zero(), i64_t.const_int(i as u64, false)],
+                        "for.lit.el",
+                    )
+                    .unwrap()
+            };
+            self.builder.build_store(p, *v).unwrap();
+        }
+        self.compile_for_array_var(label, pattern, slot, arr_ty, body)
+            .map(Some)
     }
 
     fn try_compile_for_vec_value(
