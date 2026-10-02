@@ -4054,7 +4054,97 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return false;
         }
+        // B-2026-09-27-111 — a view dies with the payload it views, so an arm
+        // that can REPLACE the scrutinee keeps the owning path. See
+        // `expr_may_overwrite_local`.
+        if let ExprKind::Identifier(name) = &scrutinee.kind {
+            if arms.iter().any(|a| {
+                self.expr_may_overwrite_local(&a.body, name)
+                    || a.guard
+                        .as_ref()
+                        .is_some_and(|g| self.expr_may_overwrite_local(g, name))
+            }) {
+                return false;
+            }
+        }
         self.no_arm_payload_escapes(arms)
+    }
+
+    /// B-2026-09-27-111 — can `expr` overwrite the local `name` while a view of
+    /// its payload is live? An assignment rooted at it (`g = ..`, `g.f = ..`,
+    /// compound too), a `mut g` argument, or a method call on it whose
+    /// receiver is `mut ref self` (or that cannot be resolved). The read-only
+    /// classifiers make an arm binding a VIEW of the scrutinee's payload, and
+    /// their escape walk looks only at the binding, so
+    /// `match g { E.X(t) => { g = E.X(mk(3)); println(t.tag) } }` freed the
+    /// payload `t` still read: garbage and two invalid reads on every compiled
+    /// surface. The heap-boxed generic sibling declines on ANY mention of the
+    /// scrutinee; a plain read stays a view here, because the owning path
+    /// zeroes the source's payload words and a read of `g` inside the arm
+    /// would then see an empty payload.
+    pub(super) fn expr_may_overwrite_local(&self, expr: &Expr, name: &str) -> bool {
+        let mut roots = std::collections::HashSet::new();
+        crate::ast::collect_assigned_roots_expr(expr, &mut roots);
+        if roots.contains(name) {
+            return true;
+        }
+        let mut hit = false;
+        self.walk_overwrite_calls(crate::index_disjoint::Child::Expr(expr), name, &mut hit);
+        hit
+    }
+
+    /// [`Self::expr_may_overwrite_local`] over a block.
+    pub(super) fn block_may_overwrite_local(&self, block: &crate::ast::Block, name: &str) -> bool {
+        let mut roots = std::collections::HashSet::new();
+        crate::ast::collect_assigned_roots_block(block, &mut roots);
+        if roots.contains(name) {
+            return true;
+        }
+        let mut hit = false;
+        self.walk_overwrite_calls(crate::index_disjoint::Child::Block(block), name, &mut hit);
+        hit
+    }
+
+    fn walk_overwrite_calls(
+        &self,
+        node: crate::index_disjoint::Child<'_>,
+        name: &str,
+        hit: &mut bool,
+    ) {
+        use crate::index_disjoint::{for_each_block_child, for_each_child_public, Child};
+        if *hit {
+            return;
+        }
+        let expr = match node {
+            Child::Block(b) => {
+                for_each_block_child(b, &mut |c| self.walk_overwrite_calls(c, name, hit));
+                return;
+            }
+            Child::Expr(e) => e,
+        };
+        let rooted_at = |e: &Expr| crate::ast::assign_target_root(e).as_deref() == Some(name);
+        match &expr.kind {
+            ExprKind::Call { args, .. } => {
+                if args.iter().any(|a| a.mut_marker && rooted_at(&a.value)) {
+                    *hit = true;
+                    return;
+                }
+            }
+            ExprKind::MethodCall { object, method, .. } if rooted_at(object) => {
+                let mutates = self
+                    .var_types
+                    .var_type_names
+                    .get(name)
+                    .and_then(|tn| self.impl_method_self_and_borrow_return(tn, method))
+                    .is_none_or(|(sp, _)| matches!(sp, crate::ast::SelfParam::MutRef));
+                if mutates {
+                    *hit = true;
+                    return;
+                }
+            }
+            _ => {}
+        }
+        for_each_child_public(expr, &mut |c| self.walk_overwrite_calls(c, name, hit));
     }
 
     /// B-2026-09-17-12 — the HEAP-BOXED generic sibling of
@@ -4366,6 +4456,12 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if !self.enum_pattern_binds_heap_payload(&enum_name, pattern) {
             return false;
+        }
+        // B-2026-09-27-111 — see the `match` classifier.
+        if let ExprKind::Identifier(name) = &scrutinee.kind {
+            if self.block_may_overwrite_local(block, name) {
+                return false;
+            }
         }
         !self.pattern_bindings_escape_in_block(pattern, block)
     }
