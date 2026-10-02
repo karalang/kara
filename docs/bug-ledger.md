@@ -96,11 +96,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 570 |
 | leak | 525 |
 | double-free | 391 |
-| missing-feature | 215 |
+| missing-feature | 216 |
 | codegen-gap | 209 |
 | other | 164 |
 | diagnostics | 138 |
-| perf | 119 |
+| perf | 121 |
 | false-positive | 118 |
 | crash | 105 |
 | soundness | 97 |
@@ -110,14 +110,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2556 |
-| interp | 774 |
+| codegen | 2557 |
+| interp | 777 |
 | typecheck | 321 |
 | other | 113 |
 | ownership | 79 |
 | cli | 73 |
 | autopar | 56 |
-| parser | 49 |
+| parser | 50 |
 | runtime | 48 |
 | effect | 30 |
 | resolver | 29 |
@@ -481,11 +481,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-31 | 2026-10-02 | codegen | medium | REMAINDER OF B-2026-10-01-38: A `?` THAT UNWRAPS A `Map` OUT OF AN `Option` OR `Result` LEAKS THE WHOLE MAP ON EVERY COMPILED SURFACE -- `let x = mk(k)?; x.len()` over `Option[Map[String, i64]]` loses 625 B (72 direct + 553 indirect), named `let r = mk(k); let x = r?` the same, and `Result[Map[String, i64], String]` 72 B direct; `match` and `unwrap()` over the same value are clean | — |
 | B-2026-10-02-33 | 2026-10-02 | codegen | high | A PLAIN enum's heap-BOXED tuple payload returned out of a `match` arm double-frees -- `fn take(s: E) -> T { match s { E.S(x) => { return x; } .. } }` over `enum E { S((Array[String, 2], i64)), N }` (2 invalid) and `S((Array[String, 2], Option[String]))` (3 invalid), at -O0 under valgrind; stdout right | — |
 | B-2026-10-02-34 | 2026-10-02 | codegen | medium | An arm-bound INLINE tuple payload holding a `Vec[String]`, rebound with `let u = x`, leaks the Vec's element strings -- `match s { S.S(x) => { let u = x; .. } }` over `S((Vec[String], i64))` loses 30 B (one element) at -O0 under valgrind, on a `shared` and a plain enum alike; `return x` and a read-only arm are clean | — |
-| B-2026-10-02-35 | 2026-10-02 | codegen | medium | `Vec.swap` LOWERED TO A RUNTIME CALL THAT LLVM CANNOT INLINE, SO A SWAP-HEAVY LOOP RAN 1.57x SLOWER THAN THE C AND RUST MIRRORS -- kata 324's select arm (quickselect plus a three-way partition through a virtual index) timed 571 ms against 364 ms for `clang -O3` and `rustc -O`; the same program with every `a.swap(i, j)` written out by hand timed 378 ms, tied with C | — |
 | B-2026-10-02-36 | 2026-10-02 | interp | medium | `--interp` RUNS A PAYLOAD BINDING'S `Drop` BODY AN EXTRA TIME, BEFORE ITS LAST READ, WHEN A `match` ON A LOCAL MOVES IT INTO AN ARM-TAIL AGGREGATE BESIDE A FRESH CALL -- `let t = match o { Some(w) => (w, mk(70)), None => (mk(0), mk(1)) }; println(f"{t.0.v}")` over a local `Option[W1]` prints `dW1_7 7 dW1_7 dW1_70 end` under `--interp` against `7 dW1_7 dW1_70 end` on the JIT, -O2 and -O2 auto-par; `(w, 70)` is right, so the fresh call beside the binding is the trigger | — |
 | B-2026-10-02-37 | 2026-10-02 | codegen | medium | A BLOCK-LOCAL MOVED INTO THE BLOCK'S TAIL TUPLE, STRUCT LITERAL OR ARRAY RUNS ITS `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `let t = { let x = mk(70); (1, x) }; println(f"{t.0}")` prints `dW1_70 1 dW1_70 end` on the JIT, -O2 and -O2 auto-par against `--interp`'s `1 dW1_70 end`, memory clean; a bare tail `x` and `Some(x)` are right | — |
-| B-2026-10-02-38 | 2026-10-02 | other | medium | bug-lint rule 6c ERRORS on a correctly recorded orphan when the live twin's short sha is all digits, so the selftest's cell 7 fails at random (~1 in 27) and reddened main's Lint at dfd90ed51 | — |
 | B-2026-10-02-39 | 2026-10-02 | runtime+codegen | low | A growth-heavy `Map[i64, i64]` workload runs 1.63x Rust's `HashMap` at equal hashing (SipHash-1-3 both), and ties a plain C linear-probing table: kata:325's bench, 857.5 ms against 520.6 for rust_ovf | — |
+| B-2026-10-02-40 | 2026-10-02 | interp | medium | THE INTERPRETER RE-RUNS THE CALLEE-BODY OWNERSHIP WALKS ON EVERY CALL, so a call costs time proportional to the callee's SIZE: 13 us for a one-line body, 4.6 ms for a forty-`let` body, and kata:326's 1M-call sweep took 102 s under `--interp` | — |
+| B-2026-10-02-41 | 2026-10-02 | interp | medium | THE INTERPRETER COPIES A FUNCTION'S WHOLE BODY EVERY TIME IT LOOKS UP THE FUNCTION'S NAME: `Value::Function` holds its `Block` by value and `Env::get` returns a clone, so after B-2026-10-02-40's memo about 40% of a trivial call is cloning and freeing the callee's AST | — |
+| B-2026-10-02-42 | 2026-10-02 | parser+interp+codegen | low | F-STRING FORMAT SPECS HAVE NO SIGN FLAG: `f"{d:+}"` is rejected, and the error calls `+` an unsupported TYPE | — |
 
 ### Relocated
 
@@ -3530,6 +3531,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-50 | codegen | medium | A USER TYPE NAMED `T` WHOSE VALUES RUN A `Drop` BODY CAPTURED `Option`/`Result`'S PAYLOAD PARAM, SO AN ARM THAT DISCARDS ITS `Some(w)` BINDING ON ONE… | e01560189 |
 | B-2026-10-01-52 | interp+codegen | high | A BY-VALUE PARAM HANDED BACK OUT OF A SEEDED CONSTRUCTOR'S ARM RUNS ITS `Drop` BODIES AT THE CALL AND AGAIN OVER THE RESULT, AND DOUBLE FREES COMPILE… | b0a18a59c |
 | B-2026-10-02-32 | codegen | high | A READ-ONLY `match` OR `if let` ARM OVER A LOCAL `Result` WHOSE PAYLOAD IS A VALUE STRUCT HOLDING A `shared` FIELD TAKES THE PAYLOAD ON EVERY COMPILE… | 66cb2b4f9 |
+| B-2026-10-02-35 | codegen | medium | `Vec.swap` LOWERED TO A RUNTIME CALL THAT LLVM CANNOT INLINE, SO A SWAP-HEAVY LOOP RAN 1.57x SLOWER THAN THE C AND RUST MIRRORS -- kata 324's select… | 91e986697 |
+| B-2026-10-02-38 | other | medium | bug-lint rule 6c ERRORS on a correctly recorded orphan when the live twin's short sha is all digits, so the selftest's cell 7 fails at random (~1 in… | 55a335427 |
 
 </details>
 
