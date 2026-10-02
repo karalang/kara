@@ -2412,6 +2412,41 @@ impl<'ctx> super::Codegen<'ctx> {
         )> = Vec::new();
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
+            // B-2026-10-02-65 — a fresh TENSOR temp (`eat(make())`) had no
+            // owner on this path: a tensor is a bare `ptr` block, so none of the
+            // aggregate registrars below admit it, and `compile_call`'s
+            // `track_tensor_var` arm has no twin here -- 56 B per call. The
+            // caller owns it for the call's statement, as it does there: under a
+            // `ref` param always, under an owned one only when the callee
+            // neither returns nor keeps it (a returned block belongs to the
+            // result binding).
+            if val.is_pointer_value()
+                && self.expr_is_tensor_typed(&a.value)
+                && self.expr_yields_fresh_owned_temp(&a.value)
+                && generic_fn.self_param.is_none()
+                && generic_fn.params.get(i).is_some_and(|p| match &p.ty.kind {
+                    TypeKind::Ref(_) => true,
+                    TypeKind::MutRef(_) => false,
+                    _ => {
+                        !crate::ast::fn_returns_param(&generic_fn, i)
+                            && !crate::ast::fn_moves_param_into_outliving_place(&generic_fn, i)
+                            && !crate::ast::fn_moves_param_into_local_container_any(&generic_fn, i)
+                    }
+                })
+            {
+                let cur_fn = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|bb| bb.get_parent())
+                    .expect("compile_generic_call inside a function context");
+                let slot = self.create_entry_alloca(
+                    cur_fn,
+                    &format!("tensor_garg_tmp{i}"),
+                    val.get_type(),
+                );
+                self.builder.build_store(slot, val).unwrap();
+                self.track_tensor_var(slot);
+            }
             // B-2026-07-14-12: a fresh-heap `String` TEMP arg to a generic fn
             // (`dup(mk())`, `passthru(mk())`, where `mk() -> String`) is
             // orphaned — the mono body CLONES a `String` generic param (both into

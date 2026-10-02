@@ -3405,7 +3405,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// True iff `expr`'s result is a tensor (its span is in the lowering
     /// side-table). Used to tell the tensor operand of a tensor⊕scalar op
     /// from the scalar one.
-    fn expr_is_tensor_typed(&self, expr: &Expr) -> bool {
+    pub(super) fn expr_is_tensor_typed(&self, expr: &Expr) -> bool {
         self.accel
             .tensor_typed_exprs
             .contains_key(&(expr.span.offset, expr.span.length))
