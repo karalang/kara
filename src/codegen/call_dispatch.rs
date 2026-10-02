@@ -7642,12 +7642,30 @@ impl<'ctx> super::Codegen<'ctx> {
             // nothing about the `Ok` tuple, and collapsing the two lost that
             // tuple's interior again.
             let inner_drop = if !payload_taken_by_callee.contains(variant) {
-                Self::optres_variant_payload_type_expr(inst_te, variant)
+                let payload = Self::optres_variant_payload_type_expr(inst_te, variant);
+                let tuple_drop = payload
+                    .clone()
                     .filter(|p| {
                         matches!(p.kind, TypeKind::Tuple(_))
                             && self.option_payload_struct_or_enum_drop_ok(p)
                     })
-                    .map(|p| self.emit_drop_fn_for_type_expr(&p))
+                    .map(|p| self.emit_drop_fn_for_type_expr(&p));
+                // B-2026-10-02-68 — the LEAF drop for an envelope chain whose
+                // bottom is a user struct or enum (`Option[Option[R]]`), as the
+                // non-generic leg A spells it (functions.rs, B-2026-09-02-22).
+                // The box chain was freed and R's own heap was not: 29 B per
+                // call. Only for a leaf with no owning depth -- an arm binding
+                // `Some(Some(w))` takes the header, not the fields' heap, so no
+                // retraction is owed, and none could reach this frame.
+                tuple_drop.or_else(|| {
+                    payload.filter(|_| !deeper.is_empty()).and_then(|p| {
+                        if self.boxed_leaf_owning_depth(&p, deeper.len()).is_some() {
+                            return None;
+                        }
+                        let leaf = self.nested_box_leaf_contents(&p).clone();
+                        self.vec_elem_agg_drop_for_type_expr(&leaf)
+                    })
+                })
             } else {
                 None
             };
