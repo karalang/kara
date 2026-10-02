@@ -304,6 +304,23 @@ pub(super) fn compute_transferable_struct_params(
                 fr.rc_promoted.extend(names.iter().cloned());
             }
         }
+        // B-2026-09-27-33 — an argument inside a closure body that names a
+        // binding the closure CAPTURED rather than declared. The enclosing
+        // frame still owns that binding and frees it at its own scope exit,
+        // and the closure may run any number of times, so there is no single
+        // call at which its drop could be retracted.
+        let mut capture_args: FxHashSet<*const Expr> = FxHashSet::default();
+        let mut find_closures = |n| {
+            if let Node::Expr(e) = n {
+                if let ExprKind::Closure { params, body, .. } = &e.kind {
+                    closure_capture_call_args(params, body, &mut capture_args);
+                }
+            }
+        };
+        match region {
+            Region::Body(_, b) => visit_block(b, &mut find_closures),
+            Region::Loose(e) => visit_expr(e, &mut find_closures),
+        }
         let mut calls: Vec<(String, &[crate::ast::CallArg])> = Vec::new();
         let mut callees: FxHashSet<*const Expr> = FxHashSet::default();
         let mut mentions: Vec<(String, *const Expr)> = Vec::new();
@@ -377,7 +394,7 @@ pub(super) fn compute_transferable_struct_params(
             }
         }
         for (f, args) in calls {
-            classify_call(&f, args, &fr, &mut cx);
+            classify_call(&f, args, &fr, &capture_args, &mut cx);
         }
     }
     cx.live
@@ -781,7 +798,13 @@ fn visit_expr<'a, F: FnMut(Node<'a>)>(e: &'a Expr, f: &mut F) {
 }
 
 /// Decide, for one direct call, which of the callee's params survive.
-fn classify_call(f: &str, args: &[crate::ast::CallArg], fr: &FrameOwned, cx: &mut Cx) {
+fn classify_call(
+    f: &str,
+    args: &[crate::ast::CallArg],
+    fr: &FrameOwned,
+    capture_args: &FxHashSet<*const Expr>,
+    cx: &mut Cx,
+) {
     let (nparams, has_default) = cx.fns.get(f).copied().unwrap_or((0, false));
 
     // A LABELLED argument may sit anywhere in the list, so index `i` no longer
@@ -805,12 +828,71 @@ fn classify_call(f: &str, args: &[crate::ast::CallArg], fr: &FrameOwned, cx: &mu
     for (i, a) in args.iter().enumerate() {
         let admit = match &a.value.kind {
             ExprKind::Identifier(n) => {
-                fr.admits(n) && !cx.uam.contains(&(a.value.span.offset, a.value.span.length))
+                fr.admits(n)
+                    && !cx.uam.contains(&(a.value.span.offset, a.value.span.length))
+                    && !capture_args.contains(&(&a.value as *const Expr))
             }
             _ => false,
         };
         if !admit {
             cx.disqualify(f, i);
+        }
+    }
+}
+
+/// B-2026-09-27-33 — every bare-identifier call argument in a closure `body`
+/// whose name the closure does not itself bind (a param, a `let`, a pattern),
+/// i.e. a capture of the enclosing frame. Over-collecting declared names only
+/// shrinks the answer, which keeps the transfer gate admitting less.
+fn closure_capture_call_args(
+    params: &[crate::ast::ClosureParam],
+    body: &Expr,
+    out: &mut FxHashSet<*const Expr>,
+) {
+    let mut declared: FxHashSet<String> = FxHashSet::default();
+    for cp in params {
+        pattern_names(&cp.pattern.kind, &mut declared);
+    }
+    let mut args: Vec<(String, *const Expr)> = Vec::new();
+    visit_expr(body, &mut |n| match n {
+        Node::Stmt(st) => match &st.kind {
+            StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                pattern_names(&pattern.kind, &mut declared);
+            }
+            StmtKind::LetUninit { name, .. } => {
+                declared.insert(name.clone());
+            }
+            _ => {}
+        },
+        Node::Expr(e) => match &e.kind {
+            ExprKind::IfLet { pattern, .. }
+            | ExprKind::WhileLet { pattern, .. }
+            | ExprKind::For { pattern, .. } => pattern_names(&pattern.kind, &mut declared),
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    pattern_names(&a.pattern.kind, &mut declared);
+                }
+            }
+            ExprKind::Closure { params, .. } => {
+                for cp in params {
+                    pattern_names(&cp.pattern.kind, &mut declared);
+                }
+            }
+            ExprKind::Call {
+                args: call_args, ..
+            } => {
+                for a in call_args {
+                    if let ExprKind::Identifier(n) = &a.value.kind {
+                        args.push((n.clone(), &a.value as *const Expr));
+                    }
+                }
+            }
+            _ => {}
+        },
+    });
+    for (n, ptr) in args {
+        if !declared.contains(&n) {
+            out.insert(ptr);
         }
     }
 }

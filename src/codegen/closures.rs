@@ -1275,6 +1275,28 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-25-44 — the closure's tail gets the read level a function
         // body's tail does (`begin_fn_tail_freshtemp_reads`), asked about the
         // same expression: a block body's final expression, or the body.
+        // B-2026-09-27-33 — a stack-env closure's whole capture of a
+        // heap-bearing user struct or enum is a bit-copy of a value the
+        // ENCLOSING frame still owns and frees at its own scope exit. A body
+        // that moves it (`|| keep(h)`, a by-value callee that frees its param)
+        // is therefore a move whose source outlives it, which is exactly the
+        // question `uam_consume_sites` answers for the copy machinery: mark
+        // the capture's occurrences in the body for the body's compile, so a
+        // consume hands the callee its own copy. Vec/String captures take the
+        // borrow-alias route above and keep it; a heap-env closure owns its
+        // captures through the env-drop; a type that runs a user `Drop` body
+        // would gain a second body from the copy (B-2026-09-27-16's
+        // territory), so it is left alone.
+        let uam_capture_spans = if is_heap_env {
+            Vec::new()
+        } else {
+            self.stack_env_capture_consume_spans(
+                &free_vars,
+                &mutref_caps,
+                path_layout.as_ref(),
+                body,
+            )
+        };
         self.freshtemp_read_levels
             .push(super::state::FreshTempReadLevel {
                 fn_val: self.current_fn,
@@ -1294,6 +1316,9 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => self.compile_expr(body),
         };
         self.end_freshtemp_reads();
+        for k in &uam_capture_spans {
+            self.span_tables.uam_consume_sites.remove(k);
+        }
         let mut result = body_result?;
         if self
             .builder
@@ -1595,6 +1620,97 @@ impl<'ctx> super::Codegen<'ctx> {
     /// capture (handled by the `for_loop_borrow_vars` flat-copy path,
     /// B-2026-07-18-42), a shared (RC) aggregate (refcount machinery), a POD
     /// aggregate (nothing to deep-copy), or an unknown/unnamed capture.
+    /// B-2026-09-27-33 — insert into `uam_consume_sites` the span of every
+    /// occurrence in `body` of a stack-env capture the enclosing frame owns
+    /// (a whole, by-value, non-shared user struct or enum that bears heap and
+    /// runs no user `Drop` body), returning the keys this call ADDED so the
+    /// caller removes exactly those after the body compile.
+    fn stack_env_capture_consume_spans(
+        &mut self,
+        free_vars: &[String],
+        mutref_caps: &HashSet<String>,
+        path_layout: Option<&CapturePathLayout<'ctx>>,
+        body: &Expr,
+    ) -> Vec<(usize, usize)> {
+        let names: HashSet<String> = free_vars
+            .iter()
+            .filter(|n| !mutref_caps.contains(*n))
+            .filter(|n| {
+                path_layout.is_none_or(|l| {
+                    l.root_plans
+                        .iter()
+                        .any(|(r, p)| r == *n && p.whole_root_slot.is_some())
+                })
+            })
+            .filter(|n| self.capture_owned_by_enclosing_frame(n))
+            .cloned()
+            .collect();
+        if names.is_empty() {
+            return Vec::new();
+        }
+        fn walk(
+            node: crate::index_disjoint::Child<'_>,
+            names: &HashSet<String>,
+            out: &mut Vec<(usize, usize)>,
+        ) {
+            match node {
+                crate::index_disjoint::Child::Expr(e) => {
+                    if let ExprKind::Identifier(n) = &e.kind {
+                        if names.contains(n) {
+                            out.push((e.span.offset, e.span.length));
+                        }
+                    }
+                    crate::index_disjoint::for_each_child_public(e, &mut |c| walk(c, names, out));
+                }
+                crate::index_disjoint::Child::Block(b) => {
+                    crate::index_disjoint::for_each_block_child(b, &mut |c| walk(c, names, out));
+                }
+            }
+        }
+        let mut spans = Vec::new();
+        walk(crate::index_disjoint::Child::Expr(body), &names, &mut spans);
+        spans
+            .into_iter()
+            .filter(|k| self.span_tables.uam_consume_sites.insert(*k))
+            .collect()
+    }
+
+    /// B-2026-09-27-33 — the capture-type half of
+    /// [`Self::stack_env_capture_consume_spans`].
+    fn capture_owned_by_enclosing_frame(&self, name: &str) -> bool {
+        if self.var_types.vec_elem_types.contains_key(name) {
+            return false;
+        }
+        let Some(tn) = self.var_types.var_type_names.get(name) else {
+            return false;
+        };
+        if self.type_decls.shared_types.contains_key(tn.as_str()) {
+            return false;
+        }
+        if !(self.type_decls.struct_types.contains_key(tn.as_str())
+            || self.type_decls.enum_layouts.contains_key(tn.as_str()))
+        {
+            return false;
+        }
+        if self.type_runs_user_drop(tn.as_str(), &mut Vec::new()) {
+            return false;
+        }
+        let te = self
+            .var_types
+            .var_enum_inst_te
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| TypeExpr {
+                kind: TypeKind::Path(PathExpr {
+                    segments: vec![tn.clone()],
+                    generic_args: None,
+                    span: Span::default(),
+                }),
+                span: Span::default(),
+            });
+        self.type_expr_has_drop_heap(&te) || !self.user_enum_boxed_payload_variants(&te).is_empty()
+    }
+
     fn captured_heap_agg_type(&self, name: &str) -> Option<(String, String)> {
         // Vec/String captures take the flat borrow-alias path.
         if self.var_types.vec_elem_types.contains_key(name) {
