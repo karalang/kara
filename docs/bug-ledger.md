@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 634 |
+| miscompile | 636 |
 | run-vs-build | 570 |
 | leak | 525 |
 | double-free | 391 |
@@ -100,8 +100,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 209 |
 | other | 164 |
 | diagnostics | 138 |
-| perf | 117 |
-| false-positive | 117 |
+| perf | 119 |
+| false-positive | 118 |
 | crash | 105 |
 | soundness | 97 |
 | use-after-free | 74 |
@@ -110,15 +110,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2553 |
-| interp | 773 |
+| codegen | 2556 |
+| interp | 774 |
 | typecheck | 321 |
-| other | 112 |
+| other | 113 |
 | ownership | 79 |
 | cli | 73 |
 | autopar | 56 |
 | parser | 49 |
-| runtime | 47 |
+| runtime | 48 |
 | effect | 30 |
 | resolver | 29 |
 | lexer | 11 |
@@ -473,8 +473,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-46 | 2026-10-01 | codegen | medium | AN OWNED-`self` METHOD WHOSE ARM DISCARDS A BOXED GENERIC PAYLOAD (`G.Y(_)`) LEAKS THE PAYLOAD'S HEAP -- `fn m(self) -> i64 { match self { G.Y(_) => { return 6; } G.N => { return 0; } } }` over `enum G[T] { Y(T), N }` loses 3 B for `G[String]`, 24 B for `G[Vec[i64]]`, 48 B for `G[Vec[String]]` and 8 B for `G[Vec[D]]` at -O0 with the output right on every surface, on the `impl[T] G[T]` and the concrete `impl G[String]` blocks alike; the binding spelling `G.Y(v)` of the same method is clean | — |
 | B-2026-10-01-47 | 2026-10-01 | codegen | medium | AN OWNED-`self` METHOD THAT BINDS A BOXED GENERIC PAYLOAD'S `Array[D, N]` / `Vec[D]` RUNS NONE OF THE ELEMENTS' `Drop` BODIES ON THE COMPILED SURFACES -- `fn m(self) -> i64 { match self { G.Y(v) => { println("seen"); return 4; } .. } }` over `G[Array[D, 2]]` prints `seen r=4 end` where `--interp` prints `seen dD1 dD2 r=4 end`, memory clean, on the `impl[T] G[T]` and the concrete `impl G[Array[D, 2]]` blocks alike | — |
 | B-2026-10-01-48 | 2026-10-01 | typecheck | low | IN A CONCRETE IMPL ON A GENERIC ENUM, `let w = v` OF AN ARM-BOUND PAYLOAD IS REFUSED WITH "cannot infer type parameter 'T'" -- `impl G[String] { fn m(self) -> i64 { match self { G.Y(v) => { let w = v; return 5; } .. } } }` fails `karac check` at the `let`, while `println(v)` in the same arm checks, `let w: String = v` checks and runs, and the `impl[T] G[T]` spelling checks | — |
-| B-2026-10-01-49 | 2026-10-01 | codegen | medium | A PAYLOAD BINDING NESTED ONE TUPLE DEEPER AT AN ARM'S TAIL LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE -- `let t = match o { Some(w) => ((w, 1), 2), None => ((mk(0), 0), 0) }` over a local `Option[W1]` prints `6 2 end` on the JIT, -O2 and -O2 auto-par against `6 2 dW1_6 end` under `--interp`, valgrind clean; the one-level `(w, 1)` is right since B-2026-10-01-13 | — |
-| B-2026-10-01-50 | 2026-10-01 | codegen | medium | A BOXED PAYLOAD BINDING RE-WRAPPED IN A DISCARDED CONSTRUCTOR INSIDE AN `if` IN ITS ARM LEAKS THE PAYLOAD'S HEAP ON THE PATH THAT SKIPS THE `if` -- `match o { Some(w) => { if c { let _ = Some(w); .. }; println("b") }, None => {} }` over a local `Option[W1]` with `c = false` prints the right output on every surface but valgrind at -O0 reports 31 bytes definitely lost; the same for `E.A(w)`, and the taken path is clean | — |
 | B-2026-10-01-39 | 2026-10-01 | interp+codegen | medium | REMAINDER OF B-2026-10-01-16: A FRESH `Option` STRUCT-PAYLOAD DESTRUCTURE OUTSIDE A `match`/`if let` ON A FREE-FUNCTION CALL STILL FOLLOWS THE OLD RULES -- `let Option.Some(H2 { v, .. }) = mo(k) else { return 0 }` prints `d30 d3 3` compiled (leaking 31 B) and `d3 3` under `--interp`; a hand-back scrutinee `match id(b) { .. }`, a `ref self` method scrutinee `match bx.rget(2) { .. }`, a `while let` and a nested sub-pattern `H2 { v: R { id, .. }, .. }` each diverge or lose bodies | — |
 | B-2026-10-01-51 | 2026-10-01 | codegen | medium | A BY-VALUE `Option` PARAM'S PAYLOAD MOVED INTO A NAMED LOCAL LITERAL INSIDE ITS ARM RUNS ITS `Drop` BODY INSIDE THE CALLEE ON EVERY COMPILED SURFACE -- `match o { Some(w) => { let v = [w]; println("q2") }, None => {} }; println("aft")` prints `dW1_2 q2 aft end` compiled against `--interp`'s `q2 aft dW1_2 end`, which is the rule-3 order; the same for `E.A(w)`, `Some(w)`, `(w, 1)` and `if let` | — |
 | B-2026-10-01-56 | 2026-10-01 | interp | medium | UNDER `--interp` A BY-VALUE METHOD PARAM MOVED INTO A DISCARDED LITERAL RUNS ITS `Drop` BODY EARLY OR TWICE -- `impl H { fn m(self, w: W1) { let _ = (w, 1); println("m") } }` prints `dW1_11 m end` interpreted against `m dW1_11 end` compiled, and the `Option` payload spelling `match o { Some(w) => { let _ = [w]; .. } }` prints `dW1_12 mo dW1_12 end` against `mo dW1_12 end` | — |
@@ -483,6 +481,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-31 | 2026-10-02 | codegen | medium | REMAINDER OF B-2026-10-01-38: A `?` THAT UNWRAPS A `Map` OUT OF AN `Option` OR `Result` LEAKS THE WHOLE MAP ON EVERY COMPILED SURFACE -- `let x = mk(k)?; x.len()` over `Option[Map[String, i64]]` loses 625 B (72 direct + 553 indirect), named `let r = mk(k); let x = r?` the same, and `Result[Map[String, i64], String]` 72 B direct; `match` and `unwrap()` over the same value are clean | — |
 | B-2026-10-02-33 | 2026-10-02 | codegen | high | A PLAIN enum's heap-BOXED tuple payload returned out of a `match` arm double-frees -- `fn take(s: E) -> T { match s { E.S(x) => { return x; } .. } }` over `enum E { S((Array[String, 2], i64)), N }` (2 invalid) and `S((Array[String, 2], Option[String]))` (3 invalid), at -O0 under valgrind; stdout right | — |
 | B-2026-10-02-34 | 2026-10-02 | codegen | medium | An arm-bound INLINE tuple payload holding a `Vec[String]`, rebound with `let u = x`, leaks the Vec's element strings -- `match s { S.S(x) => { let u = x; .. } }` over `S((Vec[String], i64))` loses 30 B (one element) at -O0 under valgrind, on a `shared` and a plain enum alike; `return x` and a read-only arm are clean | — |
+| B-2026-10-02-35 | 2026-10-02 | codegen | medium | `Vec.swap` LOWERED TO A RUNTIME CALL THAT LLVM CANNOT INLINE, SO A SWAP-HEAVY LOOP RAN 1.57x SLOWER THAN THE C AND RUST MIRRORS -- kata 324's select arm (quickselect plus a three-way partition through a virtual index) timed 571 ms against 364 ms for `clang -O3` and `rustc -O`; the same program with every `a.swap(i, j)` written out by hand timed 378 ms, tied with C | — |
+| B-2026-10-02-36 | 2026-10-02 | interp | medium | `--interp` RUNS A PAYLOAD BINDING'S `Drop` BODY AN EXTRA TIME, BEFORE ITS LAST READ, WHEN A `match` ON A LOCAL MOVES IT INTO AN ARM-TAIL AGGREGATE BESIDE A FRESH CALL -- `let t = match o { Some(w) => (w, mk(70)), None => (mk(0), mk(1)) }; println(f"{t.0.v}")` over a local `Option[W1]` prints `dW1_7 7 dW1_7 dW1_70 end` under `--interp` against `7 dW1_7 dW1_70 end` on the JIT, -O2 and -O2 auto-par; `(w, 70)` is right, so the fresh call beside the binding is the trigger | — |
+| B-2026-10-02-37 | 2026-10-02 | codegen | medium | A BLOCK-LOCAL MOVED INTO THE BLOCK'S TAIL TUPLE, STRUCT LITERAL OR ARRAY RUNS ITS `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `let t = { let x = mk(70); (1, x) }; println(f"{t.0}")` prints `dW1_70 1 dW1_70 end` on the JIT, -O2 and -O2 auto-par against `--interp`'s `1 dW1_70 end`, memory clean; a bare tail `x` and `Some(x)` are right | — |
+| B-2026-10-02-38 | 2026-10-02 | other | medium | bug-lint rule 6c ERRORS on a correctly recorded orphan when the live twin's short sha is all digits, so the selftest's cell 7 fails at random (~1 in 27) and reddened main's Lint at dfd90ed51 | — |
+| B-2026-10-02-39 | 2026-10-02 | runtime+codegen | low | A growth-heavy `Map[i64, i64]` workload runs 1.63x Rust's `HashMap` at equal hashing (SipHash-1-3 both), and ties a plain C linear-probing table: kata:325's bench, 857.5 ms against 520.6 for rust_ovf | — |
 
 ### Relocated
 
@@ -3523,6 +3526,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-42 | interp | medium | `--interp` RUNS A BY-VALUE PARAM'S `Drop` BODY TWICE WHEN A `let mut` LOCAL BUILT FROM ANOTHER PARAM IS REASSIGNED TO A COLLECTION HOLDING IT -- `fn… | 4568695e5 |
 | B-2026-10-01-30 | codegen | high | A HEAP FIELD READ OUT OF A LOCAL `Array` ELEMENT WAS AN ALIAS, NOT A MOVE OR A COPY, SO IT DOUBLE FREED -- `let a: Array[S, 2] = [..]; let x = a[1].s… | caad46339 |
 | B-2026-10-01-55 | codegen | high | A HEAP ELEMENT READ OUT OF A NAMED FIXED `Array` INTO ANY OWNING SINK IS AN ALIAS, SO THE ARRAY AND THE DESTINATION FREE ONE BUFFER -- `fn f(p: ref A… | 0f27fea4c |
+| B-2026-10-01-49 | codegen | medium | A PAYLOAD BINDING NESTED ONE TUPLE DEEPER AT AN ARM'S TAIL LOSES ITS `Drop` BODY ON EVERY COMPILED SURFACE -- `let t = match o { Some(w) => ((w, 1),… | 7c3f9d7c8 |
+| B-2026-10-01-50 | codegen | medium | A USER TYPE NAMED `T` WHOSE VALUES RUN A `Drop` BODY CAPTURED `Option`/`Result`'S PAYLOAD PARAM, SO AN ARM THAT DISCARDS ITS `Some(w)` BINDING ON ONE… | e01560189 |
 | B-2026-10-01-52 | interp+codegen | high | A BY-VALUE PARAM HANDED BACK OUT OF A SEEDED CONSTRUCTOR'S ARM RUNS ITS `Drop` BODIES AT THE CALL AND AGAIN OVER THE RESULT, AND DOUBLE FREES COMPILE… | b0a18a59c |
 | B-2026-10-02-32 | codegen | high | A READ-ONLY `match` OR `if let` ARM OVER A LOCAL `Result` WHOSE PAYLOAD IS A VALUE STRUCT HOLDING A `shared` FIELD TAKES THE PAYLOAD ON EVERY COMPILE… | 66cb2b4f9 |
 
