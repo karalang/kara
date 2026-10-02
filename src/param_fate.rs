@@ -125,10 +125,100 @@ pub fn param_fate(program: Option<&Program>, f: &Function, idx: usize) -> Option
     param_fate_depth(program, f, idx, 0)
 }
 
+/// `(Function address, span offset, span length, param index, call depth,
+/// Program address or 0)`, with the function's name and parameter types as a
+/// check against an address reused by a later clone (a monomorph shares its
+/// template's span).
+type FateMemoKey = (usize, usize, usize, usize, usize, usize);
+type FateMemoMap = rustc_hash::FxHashMap<FateMemoKey, (String, Option<ParamFate>)>;
+thread_local! {
+    static FATE_MEMO: std::cell::RefCell<Option<FateMemoMap>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Answers [`param_fate`] once per (function, param) for one compile or one
+/// interpreter run, until dropped. The walk follows callees, and with the fact
+/// answering by default every ownership predicate asks it at every call site:
+/// unmemoized, building the self-hosted parser went from 28 s to over ten
+/// minutes. Off outside a guard, so a process holding several programs never
+/// sees another's answer. Nested guards share the outermost's map.
+pub struct FateMemo {
+    outermost: bool,
+}
+
+impl FateMemo {
+    pub fn enable() -> Self {
+        let outermost = FATE_MEMO.with(|m| {
+            let mut m = m.borrow_mut();
+            if m.is_none() {
+                *m = Some(FateMemoMap::default());
+                true
+            } else {
+                false
+            }
+        });
+        FateMemo { outermost }
+    }
+}
+
+impl Drop for FateMemo {
+    fn drop(&mut self) {
+        if self.outermost {
+            FATE_MEMO.with(|m| *m.borrow_mut() = None);
+        }
+    }
+}
+
+fn fate_memo_check(f: &Function) -> String {
+    let mut c = f.name.clone();
+    for p in &f.params {
+        c.push('|');
+        c.push_str(&format!("{:?}", p.ty.kind));
+    }
+    c
+}
+
 const MAX_CALL_DEPTH: usize = 4;
 const MAX_PATHS: usize = 256;
 
 fn param_fate_depth(
+    program: Option<&Program>,
+    f: &Function,
+    idx: usize,
+    depth: usize,
+) -> Option<ParamFate> {
+    if !FATE_MEMO.with(|m| m.borrow().is_some()) {
+        return param_fate_depth_uncached(program, f, idx, depth);
+    }
+    let key = (
+        f as *const Function as usize,
+        f.span.offset,
+        f.span.length,
+        idx,
+        depth,
+        program.map_or(0, |p| p as *const Program as usize),
+    );
+    let check = fate_memo_check(f);
+    let hit = FATE_MEMO.with(|m| {
+        m.borrow()
+            .as_ref()
+            .and_then(|m| m.get(&key))
+            .filter(|(c, _)| *c == check)
+            .map(|(_, v)| v.clone())
+    });
+    if let Some(v) = hit {
+        return v;
+    }
+    let v = param_fate_depth_uncached(program, f, idx, depth);
+    FATE_MEMO.with(|m| {
+        if let Some(m) = m.borrow_mut().as_mut() {
+            m.insert(key, (check, v.clone()));
+        }
+    });
+    v
+}
+
+fn param_fate_depth_uncached(
     program: Option<&Program>,
     f: &Function,
     idx: usize,

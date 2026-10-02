@@ -2323,6 +2323,7 @@ impl<'a> Interpreter<'a> {
         // B-2026-10-02-40 — the callee-body ownership walks are pure in the
         // AST, which outlives this call, so answer each once per run.
         let _memo = crate::ast::AnalysisMemo::enable();
+        let _fate_memo = crate::param_fate::FateMemo::enable();
         self.register_items();
         // Look for main()
         if self.env.get("main").is_some() {

@@ -8087,6 +8087,8 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn compile_program(&mut self, program: &Program) -> Result<(), String> {
+        // Slice 4 step 3 — one fate walk per (function, param) per compile.
+        let _fate_memo = crate::param_fate::FateMemo::enable();
         // B-2026-09-27-37 — a `let mut` rebind of a by-value `Option` /
         // `Result` param that is never mutated is compiled as the `let` it
         // is, so the caller-retains protocol reads one spelling. See
