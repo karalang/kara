@@ -1352,7 +1352,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// keys, keeps those with `lo <= key <= hi` (via the ascending comparator),
     /// and deep-clones each matching key + its looked-up value into the result.
     /// Over-allocates to `len` entries (upper bound) and reports the matched
-    /// `count` as the Vec's len/cap. Integer/String keys only (as `min`/etc.).
+    /// `count` as the Vec's len/cap; an empty result is `{null, 0, 0}`
+    /// ([`stats_build_vec`](Self::stats_build_vec)). Integer/String keys only
+    /// (as `min`/etc.).
     fn compile_sorted_map_range(
         &mut self,
         var_name: &str,
@@ -1362,7 +1364,6 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
-        let vec_ty = self.vec_struct_type();
         let fn_val = self.current_fn.unwrap();
 
         let key_te = self
@@ -1527,23 +1528,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i64_t, count_slot, "smr.count.f")
             .unwrap()
             .into_int_value();
-        let mut vec_val = vec_ty.get_undef();
-        vec_val = self
-            .builder
-            .build_insert_value(vec_val, buf, 0, "smr.vec.data")
-            .unwrap()
-            .into_struct_value();
-        vec_val = self
-            .builder
-            .build_insert_value(vec_val, count, 1, "smr.vec.len")
-            .unwrap()
-            .into_struct_value();
-        vec_val = self
-            .builder
-            .build_insert_value(vec_val, count, 2, "smr.vec.cap")
-            .unwrap()
-            .into_struct_value();
-        Ok(vec_val.into())
+        // `buf` was sized for every key; an EMPTY result must not carry it
+        // with `cap == 0`, which reads as static and is never freed
+        // (B-2026-10-02-47). `stats_build_vec` releases it and returns
+        // `{null, 0, 0}` for that case.
+        Ok(self.stats_build_vec(buf, count))
     }
 
     /// Compile a method call on a `Map[K,V]` variable.

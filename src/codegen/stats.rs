@@ -747,12 +747,45 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Build an owned `Vec` value `{ buf, len, len }` (cap == len) from a
     /// malloc'd buffer. The let-binding's `Vec` cleanup frees `buf`.
+    ///
+    /// `buf` must be a fresh `malloc` block the result takes over, sized for
+    /// AT LEAST `len` elements (several callers over-allocate and compact).
+    /// An empty result is returned as the canonical `{null, 0, 0}` and `buf`
+    /// is freed here: a Vec whose `cap` is 0 reads as static and is never
+    /// freed, so handing `buf` out with `len == cap == 0` leaked it
+    /// (B-2026-10-02-47: an empty `SortedMap.range`, an all-null
+    /// `Column.sorted()` / `argsort()`).
     pub(super) fn stats_build_vec(
         &self,
         buf: PointerValue<'ctx>,
         len: IntValue<'ctx>,
     ) -> BasicValueEnum<'ctx> {
         let vec_ty = self.vec_struct_type();
+        let null = self
+            .context
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null();
+        let empty = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                len,
+                len.get_type().const_zero(),
+                "stats.vec.empty",
+            )
+            .unwrap();
+        let to_free = self
+            .builder
+            .build_select(empty, buf, null, "stats.vec.release")
+            .unwrap();
+        self.builder
+            .build_call(self.runtime_fns.free_fn, &[to_free.into()], "")
+            .unwrap();
+        let buf = self
+            .builder
+            .build_select(empty, null, buf, "stats.vec.data")
+            .unwrap()
+            .into_pointer_value();
         let agg = vec_ty.const_zero();
         let agg = self
             .builder
