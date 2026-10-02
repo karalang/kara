@@ -144,6 +144,7 @@ fn param_fate_depth(
     let mut w = Walker {
         program,
         self_name: f.name.clone(),
+        param_name: name.clone(),
         depth,
         borrows: f
             .params
@@ -264,6 +265,8 @@ type Outs = Vec<(PState, Yield)>;
 struct Walker<'p> {
     program: Option<&'p Program>,
     self_name: String,
+    /// The parameter being followed.
+    param_name: String,
     depth: usize,
     /// `ref` / `mut ref` parameter names: stores through these outlive the call.
     borrows: BTreeSet<String>,
@@ -345,14 +348,23 @@ impl Walker<'_> {
 
     fn stmt(&mut self, st: &Stmt, s: PState) -> Vec<PState> {
         match &st.kind {
-            StmtKind::Let { pattern, value, .. } => self
-                .expr(value, s)
-                .into_iter()
-                .map(|(mut s, y)| {
-                    bind(&mut s, pattern, y);
-                    s
-                })
-                .collect(),
+            StmtKind::Let { pattern, value, .. } => {
+                let param = self.param_name.clone();
+                self.expr(value, s)
+                    .into_iter()
+                    .map(|(mut s, y)| {
+                        // Shadowing a LOCAL holder: the consumers key their
+                        // slots by name and lose the shadowed one, so this
+                        // fate is not a whole-value answer for them. The
+                        // parameter's own name is the exception rule 3 settles.
+                        s.moved |= pattern_names(pattern)
+                            .iter()
+                            .any(|n| *n != param && s.yield_of(n) != Yield::None);
+                        bind(&mut s, pattern, y);
+                        s
+                    })
+                    .collect()
+            }
             StmtKind::LetUninit { name, .. } => {
                 let mut s = s;
                 s.set(name, Yield::None);
@@ -434,6 +446,8 @@ impl Walker<'_> {
                         s.stored = true;
                     }
                 } else {
+                    // Overwriting a holder drops what it held, in this frame.
+                    s.moved |= s.yield_of(n) != Yield::None;
                     s.set(n, y);
                 }
             }
@@ -755,7 +769,32 @@ impl Walker<'_> {
                 .into_iter()
                 .map(|(s, _)| (s, Yield::None))
                 .collect(),
-            _ => vec![(s, Yield::None)],
+            ExprKind::InterpolatedStringLit(parts) => {
+                // Each hole is evaluated (a consuming call inside one is a
+                // real use); the formatted string owns nothing of a holder.
+                let mut states = vec![s];
+                for p in parts {
+                    if let ParsedInterpolationPart::Expr(x, _) = p {
+                        let mut next = Vec::new();
+                        for s in states {
+                            next.extend(self.expr(x, s).into_iter().map(|(s, _)| s));
+                        }
+                        states = next;
+                    }
+                }
+                self.cap(states.into_iter().map(|s| (s, Yield::None)).collect())
+            }
+            _ => {
+                // A shape the walk does not model: if it mentions a holder,
+                // whole-value consumers must not act on this fate.
+                let mut names = Vec::new();
+                collect_expr_names(e, &mut names);
+                let mut s = s;
+                if names.iter().any(|n| s.yield_of(n) != Yield::None) {
+                    s.moved = true;
+                }
+                vec![(s, Yield::None)]
+            }
         }
     }
 
@@ -888,6 +927,15 @@ impl Walker<'_> {
                 // consuming method we cannot resolve is unknown.
                 if oy != Yield::None && is_consuming_method(method) {
                     s.unknown = true;
+                }
+                // A user method taking `self` by value consumes the holder in
+                // ITS frame: the parameter's body is no longer this caller's.
+                if oy != Yield::None
+                    && self
+                        .program
+                        .is_some_and(|p| user_method_takes_owned_self(p, method))
+                {
+                    s.moved = true;
                 }
                 outs.push((s, Yield::None));
             }
@@ -1025,6 +1073,16 @@ fn is_consuming_method(m: &str) -> bool {
         m,
         "into_iter" | "unwrap" | "expect" | "unwrap_or" | "take" | "into" | "into_inner"
     )
+}
+
+fn user_method_takes_owned_self(program: &Program, name: &str) -> bool {
+    program.items.iter().any(|item| match item {
+        Item::ImplBlock(b) => b.items.iter().any(|ii| {
+            matches!(ii, ImplItem::Method(g)
+                if g.name == name && matches!(g.self_param, Some(SelfParam::Owned)))
+        }),
+        _ => false,
+    })
 }
 
 fn is_ctor_name(k: &str) -> bool {
@@ -1217,6 +1275,13 @@ fn collect_expr_names(e: &Expr, out: &mut Vec<String>) {
                 go(x, out);
             }
         }
+        ExprKind::InterpolatedStringLit(parts) => {
+            for p in parts {
+                if let ParsedInterpolationPart::Expr(x, _) = p {
+                    go(x, out);
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1240,8 +1305,20 @@ pub fn schedule_enabled() -> bool {
 /// answer differs by path. Each of those keeps the legacy machinery, which
 /// handles parts and per-path flags; the fact only settles the two
 /// unconditional, whole-value answers.
+/// Shapes whose consumers are not yet ready for the fact's answer, measured
+/// with the flag on: a lowered `self` receiver and a generic callee (the
+/// per-path conditional machinery mishandles both when the fact says
+/// "returned on some exits" where the legacy predicate said "never").
+fn flip_reaches(f: &Function, idx: usize) -> bool {
+    f.generic_params.is_none()
+        && !f
+            .params
+            .get(idx)
+            .is_some_and(|p| matches!(&p.pattern.kind, PatternKind::Binding(n) if n == "self"))
+}
+
 pub fn whole_param_leaves(program: Option<&Program>, f: &Function, idx: usize) -> Option<bool> {
-    if !schedule_enabled() {
+    if !schedule_enabled() || !flip_reaches(f, idx) {
         return None;
     }
     let fate = param_fate(program, f, idx).filter(|x| x.whole_only)?;
@@ -1318,7 +1395,10 @@ pub mod audit {
         // in place of the legacy predicate, for every consumer at once, so the
         // two backends cannot be flipped one at a time. An inexact fate
         // (an exit the walker could not follow) keeps the legacy answer.
-        if super::schedule_enabled() && !f.params.get(idx).is_some_and(|p| is_scalar_ty(&p.ty)) {
+        if super::schedule_enabled()
+            && !f.params.get(idx).is_some_and(|p| is_scalar_ty(&p.ty))
+            && super::flip_reaches(f, idx)
+        {
             if let Some(fate) = param_fate(program, f, idx).filter(|x| x.is_exact() && x.whole_only)
             {
                 return derive(&fate);
