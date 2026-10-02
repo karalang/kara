@@ -1333,6 +1333,29 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-23-21 — the type head of a TYPE-QUALIFIED associated call,
+    /// `H[i64].mk()`. That spelling parses as a `MethodCall` whose receiver is
+    /// a one-segment `Path` carrying the type arguments, not as the two-segment
+    /// callee `Path` the unqualified `H.mk()` becomes, so the let-site
+    /// resolvers sent it to `inferred_receiver_type`, which types VALUES and
+    /// answered `None`. An unannotated `let b = H[i64].mk()` then recorded no
+    /// element type and `b[0].n` failed the build with "cannot resolve field".
+    /// The key is the same `Type.method` the unqualified spelling uses: the
+    /// type arguments select the monomorph, not the declared return. Guarded
+    /// as `method_call.rs`'s dispatch twin is, so a local shadowing the head
+    /// keeps the value path.
+    fn assoc_call_type_head<'e>(&self, object: &'e Expr) -> Option<&'e str> {
+        match &object.kind {
+            ExprKind::Path {
+                segments,
+                generic_args: Some(_),
+            } if segments.len() == 1 && !self.variables.contains_key(segments[0].as_str()) => {
+                Some(segments[0].as_str())
+            }
+            _ => None,
+        }
+    }
+
     /// The `Array` half of [`Self::call_slice_return_elem_te`]: pull `T` out
     /// of a callee declared `-> Array[T, N]`.
     fn call_array_return_elem_te(&self, expr: &Expr) -> Option<TypeExpr> {
@@ -1349,7 +1372,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => return None,
             },
             ExprKind::MethodCall { object, method, .. } => {
-                format!("{}.{}", self.inferred_receiver_type(object)?, method)
+                match self.assoc_call_type_head(object) {
+                    Some(head) => format!("{head}.{method}"),
+                    None => format!("{}.{}", self.inferred_receiver_type(object)?, method),
+                }
             }
             _ => return None,
         };
