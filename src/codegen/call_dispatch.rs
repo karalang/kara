@@ -16219,7 +16219,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // runs the allocation the program actually writes.
             // B-2026-09-13-16 — through a payload constructor too
             // (`return Some(a);`), not only the bare `return a;`.
-            self.suppress_array_binding_move_through_ctor(expr);
+            self.suppress_array_binding_move_leaving_frame(expr);
             // B-2026-08-29-56 — the INLINE sibling of the boxed-payload
             // escape disarm below. `let buf = Some(f"zz"); buf` hands the
             // caller an `Option` whose payload words still point at THIS

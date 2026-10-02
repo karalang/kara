@@ -8659,10 +8659,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // `let` site retracts the box's interior walk for it
         // (`suppress_boxed_payload_view_move`), so the destination is the only
         // owner left and must take the memory drop.
+        // B-2026-09-27-83 — except one whose bodies a param's walk still runs:
+        // the `let` site leaves the box its memory for that walk.
         if self
             .payload_vars
             .boxed_optres_payload_view_vars
             .contains_key(src.as_str())
+            && !self.boxed_array_view_bodies_stay_with_param(src.as_str())
         {
             return false;
         }
@@ -8689,6 +8692,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 .array_elem_type_exprs
                 .contains_key(src.as_str())
             || self.var_types.array_var_elem_te.contains_key(src.as_str())
+    }
+
+    /// B-2026-09-27-83 — [`Self::suppress_array_binding_move_through_ctor`] at
+    /// a position where the value leaves the FRAME (`return e`, a function's
+    /// tail): its destination takes the elements' `Drop` bodies as well as
+    /// their memory, which is what lets a boxed-`Array` arm alias be disarmed
+    /// for an element that runs a body.
+    pub(super) fn suppress_array_binding_move_leaving_frame(&mut self, arg: &Expr) {
+        let saved = std::mem::replace(&mut self.array_alias_bodies_leave, true);
+        self.suppress_array_binding_move_through_ctor(arg);
+        self.array_alias_bodies_leave = saved;
     }
 
     /// Call-site source suppression for a whole owned `Array[T, N]` passed BY
@@ -9568,6 +9582,25 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        // B-2026-09-27-83 — an element that runs a user `Drop` body: the zero
+        // below would leave the source's bodies walk reading zeroed elements
+        // (`dR0 dR0`, measured on `E.A(v) => { return eat(v); }`), so it is
+        // emitted only where the bodies leave with the value. Anywhere else the
+        // entry is kept for a later hand-off that does.
+        if !self.array_alias_bodies_leave
+            && self
+                .enum_variant_field_type_exprs(enum_name.as_str())
+                .into_iter()
+                .find(|(_, v, _)| v == &variant)
+                .and_then(|(_, _, tes)| tes.get(pos).cloned())
+                .is_some_and(|te| self.elem_te_runs_user_drop(&te))
+        {
+            self.payload_vars.boxed_array_payload_alias.insert(
+                root.to_string(),
+                (slot, bound_slot, enum_name, variant, pos),
+            );
+            return;
+        }
         // Staleness guard — see the map's own doc. The `if let` / `while let` /
         // `let else` legs do not scope-restore this registry, so a later
         // binding reusing the NAME would otherwise zero a box whose enum is

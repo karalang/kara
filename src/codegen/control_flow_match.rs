@@ -1807,7 +1807,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Identifier(n) = &Self::block_tail_expr(&arm.body).kind {
                         let n = Self::arm_tail_rebind_root(&arm.body, n);
                         if arm.pattern.binding_names().contains(&n) {
+                            // B-2026-09-27-83 — the bodies leave with the
+                            // value only when the match IS the frame's
+                            // result; a match consumed in the frame
+                            // (`eat(match x { E.A(v) => v, .. })`) leaves
+                            // them with the box.
+                            let leaves = self
+                                .pattern_state
+                                .fn_escaping_branch_spans
+                                .contains(&crate::resolver::SpanKey::from_span(&scrutinee.span));
+                            let saved = self.array_alias_bodies_leave;
+                            self.array_alias_bodies_leave = saved || leaves;
                             self.suppress_boxed_array_payload_alias_move(&n);
+                            self.array_alias_bodies_leave = saved;
                         }
                     }
                     self.note_boxed_array_view_move(scrutinee, Self::block_tail_expr(&arm.body));
@@ -3070,7 +3082,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => None,
                 })
                 .is_some_and(|n| self.type_runs_user_drop(&n, &mut Vec::new()));
-            if elem_runs_body {
+            // B-2026-09-27-83 — admitted for a PLAIN enum, where the drop
+            // switch's `BoxedArray` arm is memory only and the bodies ride a
+            // walk of their own: `E.A(v) => { return v; }` over `Array[R, 2]`
+            // otherwise freed every element's heap in the box and again in
+            // the caller's result. The disarm then fires only where the bodies
+            // leave too (`array_alias_bodies_leave`). Still declined for a
+            // shared enum, whose box is not known to keep that split.
+            if elem_runs_body && layout.is_shared {
                 continue;
             }
             // The binding's own slot, for the staleness guard the map
@@ -20533,6 +20552,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_store(flag, self.context.bool_type().const_int(0, false));
         }
+        // B-2026-09-27-83 — the bodies leave with the view here, so the box's
+        // copy of a boxed `Array` payload can be zeroed even when its element
+        // runs a body: nothing reads it for a body on this path any more.
+        self.zero_boxed_array_payload_view(name, true);
     }
 
     /// B-2026-09-10-14 — `suppress_optres_payload_bodies_for_match` (the
@@ -21557,24 +21580,107 @@ impl<'ctx> super::Codegen<'ctx> {
     /// array is zeroed on this path, and the box's drop then frees only the
     /// box. Declined for an element that runs a user `Drop` body, which would
     /// then run over the zeroed element.
+    /// B-2026-09-27-83 — is `name` a boxed `Array` payload view whose
+    /// elements' `Drop` BODIES a by-value param's walk still runs
+    /// (`param_payload_arm_views`)? Those bodies run at the param's death,
+    /// after the arm, so the box must keep the elements' memory until then: a
+    /// rebind (`let u = t;`) is one more view of the box rather than the
+    /// memory's new owner. Taking the memory freed every element at the arm's
+    /// end and the param's walk then ran each body over freed heap.
+    pub(super) fn boxed_array_view_bodies_stay_with_param(&self, name: &str) -> bool {
+        if !self
+            .payload_vars
+            .boxed_optres_payload_view_vars
+            .contains_key(name)
+            || !self.payload_vars.param_payload_arm_views.contains(name)
+        {
+            return false;
+        }
+        let elem_te = self
+            .var_types
+            .array_elem_type_exprs
+            .get(name)
+            .cloned()
+            .or_else(|| {
+                self.var_types
+                    .array_var_elem_te
+                    .get(name)
+                    .map(|(te, _)| te.clone())
+            });
+        elem_te.is_some_and(|te| self.elem_te_runs_user_drop(&te))
+    }
+
+    /// B-2026-09-27-83 — make `dst` (slot `dst_ptr`), a rebind of the view
+    /// `src` that [`Self::boxed_array_view_bodies_stay_with_param`] admits, a
+    /// view of the same box, so a later `return dst` zeroes the box's copy
+    /// exactly as `return src` would.
+    pub(super) fn inherit_boxed_array_view(
+        &mut self,
+        dst: &str,
+        dst_ptr: PointerValue<'ctx>,
+        src: &str,
+    ) {
+        let Some(slot) = self
+            .payload_vars
+            .boxed_optres_payload_view_vars
+            .get(src)
+            .copied()
+        else {
+            return;
+        };
+        let Some(box_ptr) = self
+            .variables
+            .get(src)
+            .map(|v| v.ptr)
+            .and_then(|p| self.payload_vars.deboxed_payload_box_ptrs.get(&p).copied())
+        else {
+            return;
+        };
+        self.payload_vars
+            .boxed_optres_payload_view_vars
+            .insert(dst.to_string(), slot);
+        self.payload_vars
+            .deboxed_payload_box_ptrs
+            .insert(dst_ptr, box_ptr);
+    }
+
     pub(super) fn zero_boxed_array_payload_view_on_move(&mut self, value: &Expr) {
         let ExprKind::Identifier(name) = &value.kind else {
             return;
         };
+        self.zero_boxed_array_payload_view(name, false);
+    }
+
+    /// B-2026-09-27-83 — the body of
+    /// [`Self::zero_boxed_array_payload_view_on_move`], with `bodies_left`
+    /// saying whether the payload's `Drop` BODIES have left the place on this
+    /// path as well as its memory.
+    ///
+    /// An element that runs a body is zeroed only then. Anywhere else the
+    /// place's bodies walk still reads the box after this point and would run
+    /// each body over a zeroed element (`dR0 dR0` where `dR1 dR2` is due,
+    /// measured on `Some(t) => { let u = t; return u[0].id; }`, whose rebind
+    /// leaves the bodies with the param). A whole view of a callee-owned
+    /// param's payload hands its bodies on only by leaving the frame, so the
+    /// zero for it comes from
+    /// [`Self::disarm_callee_owned_payload_walk_for_returned_view`]. A view of
+    /// a box this frame owns needs no zero: its move sites retract the box's
+    /// interior walk instead ([`Self::suppress_boxed_payload_view_move`]).
+    pub(super) fn zero_boxed_array_payload_view(&mut self, name: &str, bodies_left: bool) {
         if !self
             .payload_vars
             .boxed_optres_payload_view_vars
-            .contains_key(name.as_str())
+            .contains_key(name)
         {
             return;
         }
-        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+        let Some(slot) = self.variables.get(name).copied() else {
             return;
         };
         let BasicTypeEnum::ArrayType(at) = slot.ty else {
             return;
         };
-        let elem_is_bodiless = match self.var_types.array_elem_type_exprs.get(name.as_str()) {
+        let elem_is_bodiless = match self.var_types.array_elem_type_exprs.get(name) {
             Some(te) => !self.elem_te_runs_user_drop(&te.clone()),
             None => {
                 let et = at.get_element_type();
@@ -21583,7 +21689,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     || et == BasicTypeEnum::StructType(self.vec_struct_type())
             }
         };
-        if !elem_is_bodiless {
+        if !elem_is_bodiless && !bodies_left {
             return;
         }
         let Some(box_ptr) = self

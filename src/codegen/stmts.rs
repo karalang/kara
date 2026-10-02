@@ -5261,10 +5261,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 let discards_payload_view = matches!(&pattern.kind, PatternKind::Wildcard)
                     && matches!(&value.kind, ExprKind::Identifier(n)
                         if self.payload_vars.boxed_optres_payload_view_vars.contains_key(n.as_str()));
-                if !discards_payload_view {
+                // B-2026-09-27-83 — nor a rebind of a boxed `Array` view whose
+                // bodies a param's walk still runs: the box keeps the memory
+                // for that walk (`boxed_array_view_bodies_stay_with_param`).
+                let view_stays_with_param = matches!(&value.kind, ExprKind::Identifier(n)
+                    if self.boxed_array_view_bodies_stay_with_param(n.as_str()));
+                if discards_payload_view {
+                    if let ExprKind::Identifier(n) = &value.kind {
+                        self.fire_container_elem_bodies_now(n);
+                    }
+                } else if !view_stays_with_param {
                     self.suppress_boxed_payload_view_move(value);
-                } else if let ExprKind::Identifier(n) = &value.kind {
-                    self.fire_container_elem_bodies_now(n);
                 }
                 // B-2026-10-01-10 — the same discard over any binding whose
                 // body an ENCLOSING frame owns fires at the statement too.
@@ -10882,6 +10889,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // `rebind_source_keeps_array_memory`.
                                 let rebind_of_live_array_owner =
                                     self.rebind_source_keeps_array_memory(value);
+                                // B-2026-09-27-83 — a rebind of a boxed `Array`
+                                // view whose bodies a param's walk runs is a
+                                // view of the same box.
+                                if let ExprKind::Identifier(src) = &value.kind {
+                                    if self.boxed_array_view_bodies_stay_with_param(src.as_str()) {
+                                        self.inherit_boxed_array_view(
+                                            var_name.as_str(),
+                                            slot.ptr,
+                                            src.as_str(),
+                                        );
+                                    }
+                                }
                                 // B-2026-09-10-6 — carry the boxed-payload
                                 // alias across the rebind. `let u = t` over an
                                 // arm-bound `Array` payload creates no owner

@@ -2250,15 +2250,21 @@ impl<'ctx> super::Codegen<'ctx> {
                             && Self::llvm_type_word_count(v.ty)
                                 > self.pattern_state.pattern_binding_scrutinee_optres_area
                     })
-                    // An element that runs a user `Drop` body is left alone:
-                    // its bodies ride a separate walk whose timing is its own
-                    // open question (B-2026-09-20-2), and this record's
-                    // retraction and zeroing both assume memory only.
+                    // B-2026-09-27-83 — an element that runs a user `Drop`
+                    // body is admitted too. It used to be left alone because
+                    // its bodies ride a separate walk and this record's
+                    // retraction and zeroing assume memory only, but leaving
+                    // it out left the MEMORY walk armed as well: `Some(t) =>
+                    // { return t; }` over `Option[Array[R, 2]]` freed every
+                    // element's heap in the box's drop and again in the
+                    // caller's `a`. The memory record is safe to keep for it
+                    // because the bodies walk is guarded where it is read:
+                    // `zero_boxed_array_payload_view_on_move` declines while
+                    // the bodies are still the place's to run.
                     && self
                         .var_types
                         .array_elem_type_exprs
-                        .get(name.as_str())
-                        .is_some_and(|te| !self.elem_te_runs_user_drop(&te.clone()))
+                        .contains_key(name.as_str())
                 {
                     if let Some(slot) = self.pattern_state.pattern_binding_scrutinee_optres_slot {
                         self.payload_vars

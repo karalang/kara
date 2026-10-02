@@ -1868,6 +1868,14 @@ pub(super) struct Codegen<'ctx> {
     /// exactly the containment test `suppress_source_vec_cleanup_for_arg_ex`
     /// runs.
     pub(crate) discarded_arm_tail_span: Option<(usize, usize)>,
+    /// B-2026-09-27-83 — set while a moved `Array` arm binding is handed to
+    /// a destination that also takes its elements' `Drop` BODIES: the
+    /// frame's result (`return v`, a function's tail, or the arm value of a
+    /// `match` that is itself the frame's result). Read by
+    /// `suppress_boxed_array_payload_alias_move`,
+    /// which may zero a box whose element runs a body only then; at any other
+    /// hand-off the source's bodies walk still reads that box.
+    pub(crate) array_alias_bodies_leave: bool,
     /// B-2026-09-01-5 — the SPAN of a DISCARDED STATEMENT's aggregate literal
     /// (`P { a: t.a, b: 1 };`), live only while that statement compiles.
     ///
@@ -6635,6 +6643,7 @@ impl<'ctx> Codegen<'ctx> {
             branch_arm_clone_taken: None,
             branch_arm_value_discarded: false,
             discarded_arm_tail_span: None,
+            array_alias_bodies_leave: false,
             discarded_stmt_literal_span: None,
             discarded_stmt_value_spans: Vec::new(),
             branch_tail_owner_slots: std::collections::HashMap::new(),
