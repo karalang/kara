@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 211 |
 | other | 164 |
 | diagnostics | 139 |
-| perf | 125 |
+| perf | 126 |
 | false-positive | 118 |
 | crash | 105 |
 | soundness | 97 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2579 |
+| codegen | 2580 |
 | interp | 791 |
 | typecheck | 322 |
 | other | 113 |
@@ -500,6 +500,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-68 | 2026-10-02 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY PASSED TO A GENERIC CALLEE LEAKS THE PAYLOAD'S HEAP -- `cls(Some(Some(mk(1))))` over `fn cls[T](x: Option[Option[T]]) -> i64` runs `dR1` but loses R's String (29 B at -O0); the non-generic `fn cls(x: Option[Option[R]])` is clean, and so is a tuple payload `Option[(R, i64)]` on both | — |
 | B-2026-10-02-69 | 2026-10-02 | codegen | high | `replace(d, v)` FORWARDED THROUGH A WRAPPER WITH A `mut ref String` PARAM DOUBLE-FREES COMPILED -- `fn rep(d: mut ref String, v: String) -> String { return replace(d, v) }` called as `rep(mut s, f"..")` aborts with `free(): double free detected in tcache 2` on JIT, -O0 and -O2; the interpreter is right, and `replace(mut s, f"..")` directly in `main` is clean | — |
 | B-2026-10-02-71 | 2026-10-02 | interp | medium | `--interp` CLOSURES CAPTURE THE WHOLE ITEM SCOPE and copy it into every call's frame, so a `sort_by` comparator costs a copy of every function in the program: sorting 8,000 pairs takes 11.8 s | — |
+| B-2026-10-02-70 | 2026-10-02 | codegen | medium | `for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)]` HEAP-ALLOCATES THE LITERAL ON EVERY EXECUTION under `karac build`, so a grid DFS that walks its four neighbours this way does one malloc/free per call and runs 1.42x slower than the same loop over an `Array` local | — |
 
 ### Relocated
 
