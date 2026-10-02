@@ -510,7 +510,13 @@ else:
         text = _texts(r)
         new = set(SHA.findall(text)) - set(SHA.findall(_texts(pub_rows.get(r["id"], {}))))
         new -= {t for t in cand if r["id"] in cand[t]}  # 6b already judged these
-        cited = set(SHA.findall(text))
+        # The twin test reads EVERY hex token, all-digit ones included: SHA
+        # requires a letter so that prose numbers are not judged as citations,
+        # but a live twin whose short form happens to be all digits (about one
+        # 7-char sha in 27) is still a citation of it. Reading only SHA's
+        # tokens failed a correctly recorded orphan on CI's selftest
+        # (B-2026-10-02-38: twin `9709689`).
+        cited = set(re.findall(r"\b[0-9a-f]{7,40}\b", text))
         for t in sorted(new):
             if _reach(t):
                 continue

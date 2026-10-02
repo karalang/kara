@@ -213,6 +213,25 @@ set_detail B-2026-01-01-1 "SHA NOTE: this first cited $porph, which a rebase orp
 out="$(lint)" || fail "rule 6c failed a row that records an orphan beside its twin:
 $out"
 
+# 7b. the same, when the live twin's short sha is ALL DIGITS. Rule 6c's twin
+# test used to read only letter-bearing tokens, so this shape (about one
+# 7-char sha in 27, and the seed commit is undated, so cell 7's twin is
+# random) failed the lint on CI (B-2026-10-02-38). Ground deterministically
+# here so the shape is always exercised rather than hit by chance.
+pdig=""
+for k in $(seq 0 1999); do
+    "${G[@]}" -C "$w" reset -q --soft "$base"
+    d="$(date -u -d "2026-04-03 00:00:00 UTC + $k seconds" '+%Y-%m-%dT%H:%M:%S+0000')"
+    GIT_AUTHOR_DATE="$d" GIT_COMMITTER_DATE="$d" \
+        "${G[@]}" -C "$w" commit -q -m "fix(selftest): the prose twin"
+    s="$("${G[@]}" -C "$w" rev-parse --short HEAD)"
+    case "$s" in *[a-f]*) ;; *) pdig="$s"; break ;; esac
+done
+[ -n "$pdig" ] || fail "could not grind an all-digit short sha for the live twin"
+set_detail B-2026-01-01-1 "SHA NOTE: this first cited $porph, which a rebase orphaned; the live commit is $pdig."
+out="$(lint)" || fail "rule 6c failed a recorded orphan whose live twin $pdig is all digits:
+$out"
+
 # 8. a prose sha that resolves to nothing WARNS and never errors.
 set_detail B-2026-01-01-1 "cites cafe123 from a clone nobody has."
 out="$(lint)" || fail "rule 6c errored on an unresolvable prose sha:
@@ -220,4 +239,4 @@ $out"
 grep -q "cafe123" <<<"$out" || fail "rule 6c said nothing about the unresolvable prose sha cafe123:
 $out"
 
-echo "bug-lint selftest: 8/8 cells pass (orphan detected, live sha silent, untouched row unjudged, recorded close caught, all-digit sha not skipped, prose orphan detected, recorded prose orphan silent, unresolvable prose sha warned)"
+echo "bug-lint selftest: 9/9 cells pass (orphan detected, live sha silent, untouched row unjudged, recorded close caught, all-digit sha not skipped, prose orphan detected, recorded prose orphan silent, recorded orphan beside an all-digit twin silent, unresolvable prose sha warned)"
