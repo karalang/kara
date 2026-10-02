@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 643 |
+| miscompile | 644 |
 | run-vs-build | 570 |
 | leak | 527 |
 | double-free | 397 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2573 |
-| interp | 788 |
+| codegen | 2574 |
+| interp | 790 |
 | typecheck | 322 |
 | other | 113 |
 | ownership | 80 |
@@ -424,7 +424,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-63 | 2026-09-30 | codegen | medium | A GENERIC CALLEE THAT HANDS ONE PART OF A FRESH `Option[(T, T)]` ARGUMENT OUT INSIDE A CONSTRUCTOR LOSES THE OTHER PART'S `Drop` BODY COMPILED -- `gt(Option.Some((mkr(5), mkr(6))))` over `fn gt[T](o: Option[(T, T)]) -> Option[T] { .. return Option.Some(t.0) .. }` prints `dR5 got end` at `build -O0`, element 1's body never running, where the concrete twin is correct | — |
 | B-2026-09-30-71 | 2026-09-30 | interp | medium | `--interp` runs an arm binding's `Drop` body TWICE when a bare (non-block) arm body hands the binding to a callee that returns it -- `let h = match o { Option.Some(x) => id(x), Option.None => R { id: 0 } }` over `fn id(r: R) -> R { r }` prints `d4 4 d4 after` where every compiled surface prints `4 d4 after` | — |
 | B-2026-09-30-72 | 2026-09-30 | codegen | medium | A by-value struct param returned through a whole-value `match` arm runs its field's `Drop` body TWICE on every compiled surface -- `fn f(g: H) -> H { match g { x => x } }` prints `d4 1 d4 after` where `--interp` and the `let x = g; x` spelling print `1 d4 after` | — |
-| B-2026-09-30-73 | 2026-09-30 | codegen | high | An irrefutable `if let x = g` over a named struct local DOUBLE-FREES on every compiled surface -- `let g = H { v: Rs { id: 4, s: mk(4) }, n: 1 }; if let x = g { println(x.n) }` aborts with `free(): double free detected in tcache 2` where `--interp` prints `1 ds4 31 after` | — |
 | B-2026-09-30-74 | 2026-09-30 | interp+codegen | medium | A whole-value `match` arm over a named ENUM local that moves its binding on runs the payload's `Drop` body TWICE on all four surfaces -- `let g = E.A(R { id: 4 }); let h = match g { x => x }; println("mid")` prints `d4 d4 mid after` everywhere against the due `d4 mid after` | — |
 | B-2026-09-30-75 | 2026-09-30 | interp | low | `--interp` runs two UNUSED struct-pattern arm bindings' `Drop` bodies in declaration order over a named local, where every compiled surface and every other spelling runs them in reverse -- `let p = P6 { a: R { id: 5 }, b: R { id: 6 }, n: 1 }; match p { P6 { a, b, n } => n }` prints `d5 d6 1` interpreted and `d6 d5 1` compiled | — |
 | B-2026-09-30-79 | 2026-09-30 | codegen | medium | A `Drop`-bodied leaf bound out of a heap-BOXED enum payload that holds a GENERIC struct, by a by-value param, runs no body on any compiled surface, flat or nested -- `fn f(e: E[G[R]]) -> i64 { match e { E.A { x: G { v, n }, k } => v.id + n + k, E.B => 0 } }` over `enum E[T] { A { x: T, k: i64 }, B }` prints `7 after` where `--interp` prints `d4 7 after`, and the same nest over a NON-generic `enum F2 { A(G[R], i64), B }` also leaks its 40 B payload box | — |
@@ -496,6 +495,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-61 | 2026-10-02 | interp | medium | `--interp` RE-DERIVES A BLOCK'S LAST-USE TABLE ON EVERY ENTRY AND THE BRANCH HAND-OVER TALLY ON EVERY CALL, so 40% of a memoized grid search's interpreter time is static analysis | — |
 | B-2026-10-02-63 | 2026-10-02 | interp+codegen | medium | A BY-VALUE USER-ENUM PARAM THAT IS ONLY THE SCRUTINEE OF AN UNTAKEN NESTED BRANCH NEVER RUNS ITS PAYLOAD'S `Drop` BODIES, ON EVERY SURFACE -- `fn e1(x: EArr, y: EArr) -> Array[R, 2] { if let EArr.A(v) = x { v } else if let EArr.A(w) = y { w } else { z() } }` called with two `A` values prints `k1 dR1 dR2 end` everywhere, where `y` dying at `e1`'s end owes `dR3 dR4` before `k1`; the nested-`match` spelling is the same, and an untouched `y` is correct | — |
 | B-2026-10-02-64 | 2026-10-02 | interp+codegen | medium | A DISCARDED `if let` WHOSE THEN-BLOCK IS THE BOXED `Array` PAYLOAD BINDING RUNS NO `Drop` BODY FOR THAT PAYLOAD ON ANY SURFACE, AND THE `match` SPELLING RUNS NONE COMPILED -- `if let EArr.A(v) = x { v } else { z() }; println("disc")` prints `disc g1 end` on `--interp`, the JIT and the default build, against the due `dR1 dR2 disc g1 end`; `match x { EArr.A(v) => v, EArr.B => z() };` is right on `--interp` and loses both bodies on the JIT and the build | — |
+| B-2026-10-02-62 | 2026-10-02 | codegen+interp | medium | A by-value struct param returned through `if let x = g { x }` or `let x = g else { .. }; x` runs its field's `Drop` body TWICE on every compiled surface, and the `let .. else` spelling twice on `--interp` too -- `fn f(g: H) -> H { if let x = g { x } else { .. } }` prints `ds17 35 ds17 35 r after` where `--interp` and `let x = g; x` print `ds17 35 r after` | — |
 
 ### Relocated
 
@@ -3500,6 +3500,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-64 | interp+codegen | medium | A FIELD READ THROUGH AN INDEX OF AN `Array` HANDED BACK BY AN ASSOCIATED FUNCTION OR A CLOSURE FAILS TO COMPILE -- `let r = Z.pa([w]); r[0].v` and `l… | 82097e763 |
 | B-2026-09-30-66 | codegen | high | A `match` PAYLOAD BINDING MOVED INTO AN `Array` LITERAL ARGUMENT THAT THE CALLEE HANDS BACK DOUBLE-FREES UNDER THE JIT AND RUNS ITS `Drop` BODY TWICE… | 5e36c7dc9 |
 | B-2026-09-30-50 | interp+codegen | medium | A BY-VALUE PARAM RETURNED THROUGH A WRAPPING LOCAL ON ONLY SOME PATHS RUNS ITS `Drop` BODY TWICE OR NOT AT ALL ON EVERY SURFACE, BY SPELLING -- `fn c… | 10273ee63 |
+| B-2026-09-30-73 | codegen+interp | high | An irrefutable `if let x = g` or `let x = g else` over a named struct local DOUBLE-FREES on every compiled surface, and `--interp` runs a `Drop` body… | 8498b7abe |
 | B-2026-09-30-67 | interp+codegen | medium | BY-VALUE PARAMS FORWARDED INTO A CALLEE THAT HANDS THEM BACK INSIDE AN `Array` OR `Vec` RUN THEIR `Drop` BODIES TWICE ON THE COMPILED SURFACES, AND T… | c9fa7f8b2 |
 | B-2026-09-30-68 | interp+codegen | medium | A DISCARDED GENERIC CALL WHOSE RESULT IS AN AGGREGATE ONLY THROUGH ITS TYPE ARGUMENT RUNS NO ELEMENT `Drop` BODY ON ANY SURFACE -- `pg([mk(40), mk(41… | 68cab70fb |
 | B-2026-09-30-76 | codegen | medium | A payload leaf whose type has its own `Drop` loses that body on every compiled surface when an arm over a by-value, TRANSFER-owned enum param MOVES t… | 5acabab44 |
