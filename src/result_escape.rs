@@ -43,6 +43,12 @@ pub type LentCallPolicy<'a> = dyn Fn(&Expr, usize) -> bool + 'a;
 
 #[derive(Default)]
 struct Acc<'a> {
+    /// B-2026-09-29-61 — the parameter names a seeded walk tracks through
+    /// shadowing, and how many enclosing blocks currently shadow each with a
+    /// `let`. A use of a shadowed name is the new binding's, so it is not
+    /// recorded against the parameter. Empty outside the seeded walks.
+    shadow_params: HashSet<&'a str>,
+    shadowed: HashMap<&'a str, u32>,
     /// B-2026-09-27-51 — the unmutated `let mut` rebinds of parameters, read
     /// as immutable aliases (`crate::ast::demoted_param_rebind_names`).
     demoted: HashSet<&'a str>,
@@ -298,6 +304,7 @@ fn seeded_acc<'a>(func: &'a Function) -> Acc<'a> {
         let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
             continue;
         };
+        acc.shadow_params.insert(name.as_str());
         let crate::ast::TypeKind::Path(path) = &p.ty.kind else {
             continue;
         };
@@ -1299,6 +1306,9 @@ fn variant_payload_binds(pattern: &crate::ast::Pattern) -> Option<(&str, Option<
 }
 
 fn record_use<'a>(acc: &mut Acc<'a>, name: &'a str, scrutinee: bool) {
+    if acc.shadowed.get(name).is_some_and(|n| *n > 0) {
+        return;
+    }
     let name = root(acc, name);
     let e = acc.counts.entry(name).or_insert((0, 0, 0));
     e.0 += 1;
@@ -1314,6 +1324,9 @@ fn record_use<'a>(acc: &mut Acc<'a>, name: &'a str, scrutinee: bool) {
 /// [`nonescaping_param_names`] (which never looks at that slot) keeps its
 /// stricter answer unchanged.
 fn record_read_only_use<'a>(acc: &mut Acc<'a>, name: &'a str) {
+    if acc.shadowed.get(name).is_some_and(|n| *n > 0) {
+        return;
+    }
     let name = root(acc, name);
     let e = acc.counts.entry(name).or_insert((0, 0, 0));
     e.0 += 1;
@@ -1337,6 +1350,7 @@ fn walk_scrutinee<'a>(acc: &mut Acc<'a>, scrutinee: &'a Expr) {
 }
 
 fn walk_block<'a>(b: &'a Block, acc: &mut Acc<'a>) {
+    let mut shadowed_here: Vec<&'a str> = Vec::new();
     for (i, s) in b.stmts.iter().enumerate() {
         // B-2026-09-28-28 — a seeded walk asks a refutable `let .. else`
         // binding's payload questions of the statements it lives on in.
@@ -1352,9 +1366,24 @@ fn walk_block<'a>(b: &'a Block, acc: &mut Acc<'a>) {
         }
         walk_stmt(s, acc);
         acc.let_else_rest = None;
+        // B-2026-09-29-61 — after its value is walked, a `let` naming a
+        // tracked parameter shadows it for the rest of this block.
+        if let StmtKind::Let { pattern, .. } = &s.kind {
+            if let crate::ast::PatternKind::Binding(n) = &pattern.kind {
+                if acc.shadow_params.contains(n.as_str()) && !acc.aliases.contains_key(n.as_str()) {
+                    *acc.shadowed.entry(n.as_str()).or_insert(0) += 1;
+                    shadowed_here.push(n.as_str());
+                }
+            }
+        }
     }
     if let Some(fe) = &b.final_expr {
         walk_expr(fe, acc);
+    }
+    for n in shadowed_here {
+        if let Some(c) = acc.shadowed.get_mut(n) {
+            *c -= 1;
+        }
     }
 }
 

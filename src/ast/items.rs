@@ -4499,6 +4499,9 @@ fn fn_always_returns_param_ex_uncached(
     allow_via_call: bool,
     none_ok: bool,
 ) -> bool {
+    if crate::param_fate::whole_param_never_returned(program, f, arg_index) {
+        return false;
+    }
     let Some(param) = f.params.get(arg_index) else {
         return false;
     };

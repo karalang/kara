@@ -1335,6 +1335,19 @@ pub fn whole_param_leaves(program: Option<&Program>, f: &Function, idx: usize) -
     }
 }
 
+/// Slice 4 step 2 — under the flag, an EXACT whole-value fate that never hands
+/// the parameter back answers every "returns the param" question no, however
+/// it is phrased (bare, through a call, or beside `None`). Those predicates
+/// match the parameter by NAME, so a body that shadows it (`fn k8(x: R) -> R {
+/// let x = mk(28); x }`, B-2026-09-29-61) read as returning it.
+pub fn whole_param_never_returned(program: Option<&Program>, f: &Function, idx: usize) -> bool {
+    schedule_enabled()
+        && !f.params.get(idx).is_some_and(|p| is_scalar_ty(&p.ty))
+        && flip_reaches(f, idx)
+        && param_fate(program, f, idx)
+            .is_some_and(|x| x.is_exact() && x.whole_only && x.returned_any() == Coverage::Never)
+}
+
 // ─────────────────────────────── audit ────────────────────────────────
 
 /// Step 1's only consumer: compare a legacy predicate's answer with the fact.
