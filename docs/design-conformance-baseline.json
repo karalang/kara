@@ -190,8 +190,8 @@
       "reason": "out-of-block declarations — the types this block names are introduced in prose, not in the block",
       "first_diagnostic": "undefined type 'Data'"
     },
-    "32c0f0d2de3f": {
-      "line": 10514,
+    "66cac7b3dcc1": {
+      "line": 10839,
       "heading": "Cross-target Compilation > Provider Injection for SSR-shared Code (primary pattern)",
       "outcome": "REJECTED",
       "reason": "out-of-block declarations — `AppError`, `UserId`, `Html` and the provider types are introduced in prose, not in the block",
