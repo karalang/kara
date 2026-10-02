@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 636 |
+| miscompile | 637 |
 | run-vs-build | 570 |
 | leak | 525 |
-| double-free | 391 |
+| double-free | 394 |
 | missing-feature | 216 |
 | codegen-gap | 209 |
 | other | 164 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2557 |
-| interp | 777 |
+| codegen | 2561 |
+| interp | 779 |
 | typecheck | 321 |
 | other | 113 |
 | ownership | 79 |
@@ -191,7 +191,6 @@ narrow -- it is the `ContainerElemBodies` walker for an ARRAY field being
 registered in the callee's prologue, not by-value struct params in general. | — |
 | B-2026-09-22-3 | 2026-09-22 | codegen | medium | MEASURED: `asan_slice_mutators_and_views_on_heap_elements` FAILS THE `KARAC_SSO=1` SANITIZER LANE INTERMITTENTLY ON CI — 4 reds in 7 consecutive `main` runs, INCLUDING A FAIL AND A PASS ON A BYTE-IDENTICAL TEST BINARY — and no ASAN report exists for ANY of them because the leg deleted it (B-2026-09-22-4). NOT a regression of cfe7a5f1c, to which it was attributed, and not a host difference either — NOW MEASURED (2026-09-22): ASAN PASSES AND THE FAILURE IS AN OUTPUT MISMATCH, one field of expected stdout reading `126` where `2` was due, so no sanitizer or leak column can see it and the oracle is expected output; the same run RE-RUN on the same tree goes green, which needs no commit pair to establish the intermittency. The leg was prescribing a memory-fault remedy for it the whole time (B-2026-09-22-15) | — |
 | B-2026-09-23-3 | 2026-09-23 | codegen+interp | medium | A DECLARED ENUM'S `Array[T, N]` PAYLOAD BUILT AS A FRESH-TEMP `match` SCRUTINEE RUNS NO ELEMENT `Drop` BODY WHEN THE ARM ONLY READS ITS BINDING, ON ALL FOUR SURFACES -- `match V.P1([S{a0}, S{a1}]) { V.P1(v) => { println(v[0].tag) } .. }` over `enum V { P1(Array[S, 2]), Q1 }` prints `r:a0 end` on `--interp`, the JIT, `-O0` and `-O2`, where `dSa0 dSa1` are due; memory is balanced. The same program with the ctor bound to a name first, with a GENERIC `enum Sl[T]` at `T = Array[S, 2]`, or with a consuming arm (`let u = v`) runs both bodies everywhere | — |
-| B-2026-09-23-4 | 2026-09-23 | codegen+interp | medium | A BY-VALUE STRUCT PARAM MOVED INTO A SEEDED `match` SCRUTINEE RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `fn inner(a: R) -> i64 { match Option.Some(a) { Option.Some(v) => { .. } .. } }` called as `inner(a)` prints `d1 d1` on `--interp`, the JIT, `-O0` and `-O2`, against the by-value control `fn eat(a: R)`'s single `d1`; an AGREED fault, so no differential instrument can see it. It is the struct half B-2026-09-22-8 split out and deliberately left alone | — |
 | B-2026-09-23-6 | 2026-09-23 | interp | low | THE INTERPRETER RUNS A BY-VALUE `Array` PARAM'S ELEMENT `Drop` BODIES TWICE WHEN THE CALLEE WRAPS IT IN A DISCARDED STRUCT LITERAL -- `fn b_discard(a: Array[R, 2]) -> i64 { B1 { v: a }; println("  in"); return 7 }` prints `d101 d102 in d101 d102` under `--interp` against `in d101 d102` on every compiled surface; the one cell of `asan_array_param_into_struct_literal_field_stays_with_caller` that B-2026-09-22-8's fix did not reach | — |
 | B-2026-09-23-14 | 2026-09-23 | codegen | medium | A USER-ENUM SEEDED ARM THAT REBINDS A CALLER-RETAINED `Array` PARAM RUNS ITS ELEMENTS' `Drop` BODIES TWICE ON EVERY COMPILED SURFACE WHILE `--interp` IS RIGHT -- `match W.P(a) { W.P(v) => { let u = v; .. } }` over `enum W { P(Array[R, 2]), Q }` inside `fn eat(a: Array[R, 2])` prints `d1 d2 r1 d1 d2` on the JIT, `-O0` and `-O2` against `r1 d1 d2`; memory is clean. The user-enum spelling of B-2026-09-23-5, which fixed `Option` / `Result` only | — |
 | B-2026-09-23-21 | 2026-09-23 | codegen | low | AN ASSOCIATED FUNCTION'S `Array` RESULT CANNOT BE INDEXED FOR A FIELD ON THE COMPILED BACKENDS -- `let b = H.mk(); println(f"y{b[0].id}")` over `impl H { fn mk() -> Array[P, 2] }` passes `karac check`, runs under `--interp`, and fails the JIT and `karac build` with `cannot resolve field 'id' on this receiver (its type was not recorded for codegen)`, even for a POD element; annotating the binding (`let b: Array[P, 2] = H.mk()`) makes it build and run correctly | — |
@@ -479,7 +478,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-57 | 2026-10-01 | codegen | medium | DISCARDING THE TUPLE PAYLOAD OF A BY-VALUE `Option[(W1, i64)]` PARAM LEAKS THE BOXED PAYLOAD ON EVERY COMPILED SURFACE -- `match o { Some(t) => { let _ = t; println("in") }, None => {} }` prints the right `in aft dW1_17 end` everywhere but valgrind at -O0 reports 72 bytes (40 direct, 32 indirect) definitely lost; the same for `let _ = [t];`, `[t];` and `let _ = (t, 2);` | — |
 | B-2026-10-01-53 | 2026-10-01 | codegen | low | A FRESH `Result.Ok(a)` SCRUTINEE WHOSE ERROR TYPE IS INFERRED ONLY FROM ITS `Err` ARM FAILS MODULE VERIFICATION COMPILED -- `fn ok1(a: Vec[i64]) -> Vec[i64] { match Result.Ok(a) { Ok(v) => v, Err(e) => e } }` stops `karac build` and the JIT with `Function return type does not match operand type of return inst! ret i64 0` against `{ ptr, i64, i64 }`, while `--interp` prints the right `y2` | — |
 | B-2026-10-02-31 | 2026-10-02 | codegen | medium | REMAINDER OF B-2026-10-01-38: A `?` THAT UNWRAPS A `Map` OUT OF AN `Option` OR `Result` LEAKS THE WHOLE MAP ON EVERY COMPILED SURFACE -- `let x = mk(k)?; x.len()` over `Option[Map[String, i64]]` loses 625 B (72 direct + 553 indirect), named `let r = mk(k); let x = r?` the same, and `Result[Map[String, i64], String]` 72 B direct; `match` and `unwrap()` over the same value are clean | — |
-| B-2026-10-02-33 | 2026-10-02 | codegen | high | A PLAIN enum's heap-BOXED tuple payload returned out of a `match` arm double-frees -- `fn take(s: E) -> T { match s { E.S(x) => { return x; } .. } }` over `enum E { S((Array[String, 2], i64)), N }` (2 invalid) and `S((Array[String, 2], Option[String]))` (3 invalid), at -O0 under valgrind; stdout right | — |
 | B-2026-10-02-34 | 2026-10-02 | codegen | medium | An arm-bound INLINE tuple payload holding a `Vec[String]`, rebound with `let u = x`, leaks the Vec's element strings -- `match s { S.S(x) => { let u = x; .. } }` over `S((Vec[String], i64))` loses 30 B (one element) at -O0 under valgrind, on a `shared` and a plain enum alike; `return x` and a read-only arm are clean | — |
 | B-2026-10-02-36 | 2026-10-02 | interp | medium | `--interp` RUNS A PAYLOAD BINDING'S `Drop` BODY AN EXTRA TIME, BEFORE ITS LAST READ, WHEN A `match` ON A LOCAL MOVES IT INTO AN ARM-TAIL AGGREGATE BESIDE A FRESH CALL -- `let t = match o { Some(w) => (w, mk(70)), None => (mk(0), mk(1)) }; println(f"{t.0.v}")` over a local `Option[W1]` prints `dW1_7 7 dW1_7 dW1_70 end` under `--interp` against `7 dW1_7 dW1_70 end` on the JIT, -O2 and -O2 auto-par; `(w, 70)` is right, so the fresh call beside the binding is the trigger | — |
 | B-2026-10-02-37 | 2026-10-02 | codegen | medium | A BLOCK-LOCAL MOVED INTO THE BLOCK'S TAIL TUPLE, STRUCT LITERAL OR ARRAY RUNS ITS `Drop` BODY TWICE ON EVERY COMPILED SURFACE -- `let t = { let x = mk(70); (1, x) }; println(f"{t.0}")` prints `dW1_70 1 dW1_70 end` on the JIT, -O2 and -O2 auto-par against `--interp`'s `1 dW1_70 end`, memory clean; a bare tail `x` and `Some(x)` are right | — |
@@ -487,6 +485,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-40 | 2026-10-02 | interp | medium | THE INTERPRETER RE-RUNS THE CALLEE-BODY OWNERSHIP WALKS ON EVERY CALL, so a call costs time proportional to the callee's SIZE: 13 us for a one-line body, 4.6 ms for a forty-`let` body, and kata:326's 1M-call sweep took 102 s under `--interp` | — |
 | B-2026-10-02-41 | 2026-10-02 | interp | medium | THE INTERPRETER COPIES A FUNCTION'S WHOLE BODY EVERY TIME IT LOOKS UP THE FUNCTION'S NAME: `Value::Function` holds its `Block` by value and `Env::get` returns a clone, so after B-2026-10-02-40's memo about 40% of a trivial call is cloning and freeing the callee's AST | — |
 | B-2026-10-02-42 | 2026-10-02 | parser+interp+codegen | low | F-STRING FORMAT SPECS HAVE NO SIGN FLAG: `f"{d:+}"` is rejected, and the error calls `+` an unsupported TYPE | — |
+| B-2026-10-02-43 | 2026-10-02 | codegen | high | AN EXPLICIT `return` OF A `Drop` STRUCT PAYLOAD BOUND OUT OF A BOXED `Option`/`Result` SCRUTINEE FREES ITS `String` TWICE ON THE JIT AND AT -O0 -- `fn g2() -> R { match Option.Some(mkr(2)) { Some(v) => { return v } None => { return mkr(0) } } }` aborts `free(): double free detected in tcache 2` under `karac run` and reports 1 invalid free under valgrind at -O0, while `--interp` and -O2 print the right `y2 d2`; the tail-value arm `Some(v) => v` is clean | — |
+| B-2026-10-02-44 | 2026-10-02 | codegen+interp | medium | A BY-VALUE STRUCT PARAM HANDED BACK ON ONE PATH ONLY OUT OF AN `Option` ENVELOPE'S ARM RUNS ITS `Drop` BODY TWICE, AND DOUBLE-FREES COMPILED WHEN THE ENVELOPE IS FRESH -- `fn hd(a: R, c: bool) -> R { let o = Some(a); match o { Some(v) => { if c { return v } return mkr(0) } None => { return mkr(0) } } }` prints `d4 y4 d4` on every surface at `c = true`, against the `y4 d4` of the plain `if c { return a } return mkr(0)` | — |
+| B-2026-10-02-45 | 2026-10-02 | codegen+interp | medium | PUSHING THE ARM BINDING OF AN `Option` ENVELOPE AROUND A BY-VALUE STRUCT PARAM INTO A `Vec` THAT DIES IN THE CALLEE RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY SURFACE -- `fn v2(a: R) -> i64 { let o = Some(a); match o { Some(v) => { let mut vs: Vec[R] = Vec.new(); vs.push(v); return vs.len() } None => { return 0 } } }` prints `d2 d2 y1`, where pushing the param itself (`vs.push(a)`) prints one `d1` | — |
+| B-2026-10-02-46 | 2026-10-02 | codegen | high | AN ARM BINDING OF A PLAIN ENUM'S HEAP-BOXED `Array` OR TUPLE PAYLOAD RE-BOUND BY `let` AND THEN RETURNED DOUBLE-FREES -- `fn r4(s: E) -> Array[String, 2] { match s { E.S(x) => { let u = x; return u; } E.N => { return mkt("z") } } }` over `enum E { S(Array[String, 2]), N }` reports 7 errors at -O0 under valgrind and aborts on the JIT and AOT, while `return x` straight from the arm is clean; `--interp` is right | — |
 
 ### Relocated
 
@@ -3181,6 +3183,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-22-17 | codegen | high | A USER-ENUM VARIANT CARRYING **TWO `Array` PARAMS** IS STILL FREED BY BOTH SIDES -- B-2026-09-22-9's fix relaxes the box-only drop twin's gate from "… | e94a50713 |
 | B-2026-09-23-1 | codegen | high | MEASURED: a user-enum variant holding a caller-retained by-value `Array` param BESIDE a callee-owned array (`Array[String, 2]` param) or BESIDE a loc… | 3f3b71c1c |
 | B-2026-09-23-2 | typecheck | low | MEASURED: a `ref`/`mut ref` bool or numeric scalar is still REFUSED in five operand positions that 42a9f2c's "reads as its value type in every value… | 6a9665a18 |
+| B-2026-09-23-4 | codegen+interp | medium | A BY-VALUE STRUCT PARAM MOVED INTO A SEEDED `match` SCRUTINEE RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE -- `fn inner(a: R) -> i64 { match Option.So… | 2ed1d4dd7 |
 | B-2026-09-23-5 | codegen | high | A BY-VALUE `Array` PARAM REBOUND INSIDE THE CALLEE HAS TWO OWNERS ON THE COMPILED BACKENDS WHILE `--interp` IS RIGHT -- `fn eat(a: Array[R, 2]) -> i6… | fa0e1af32 |
 | B-2026-09-23-7 | typecheck | low | MEASURED: an unsuffixed integer literal range bound does not take the other bound's integer type -- `for b in 1..m` with `m: u8` and `(0..hi).rev()`… | 16b434fc5 |
 | B-2026-09-23-8 | codegen | medium | MEASURED: a `for` over a range of any integer narrower than 64 bits FAILS LLVM module verification (`icmp slt i64 %i, i8 %m`, `sub i32 %hi, i64 1`) u… | 16b434fc5 |
@@ -3531,6 +3534,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-01-50 | codegen | medium | A USER TYPE NAMED `T` WHOSE VALUES RUN A `Drop` BODY CAPTURED `Option`/`Result`'S PAYLOAD PARAM, SO AN ARM THAT DISCARDS ITS `Some(w)` BINDING ON ONE… | e01560189 |
 | B-2026-10-01-52 | interp+codegen | high | A BY-VALUE PARAM HANDED BACK OUT OF A SEEDED CONSTRUCTOR'S ARM RUNS ITS `Drop` BODIES AT THE CALL AND AGAIN OVER THE RESULT, AND DOUBLE FREES COMPILE… | b0a18a59c |
 | B-2026-10-02-32 | codegen | high | A READ-ONLY `match` OR `if let` ARM OVER A LOCAL `Result` WHOSE PAYLOAD IS A VALUE STRUCT HOLDING A `shared` FIELD TAKES THE PAYLOAD ON EVERY COMPILE… | 66cb2b4f9 |
+| B-2026-10-02-33 | codegen | high | A PLAIN enum's heap-BOXED tuple payload returned out of a `match` arm double-frees -- `fn take(s: E) -> T { match s { E.S(x) => { return x; } . | 42d753223 |
 | B-2026-10-02-35 | codegen | medium | `Vec.swap` LOWERED TO A RUNTIME CALL THAT LLVM CANNOT INLINE, SO A SWAP-HEAVY LOOP RAN 1.57x SLOWER THAN THE C AND RUST MIRRORS -- kata 324's select… | 91e986697 |
 | B-2026-10-02-38 | other | medium | bug-lint rule 6c ERRORS on a correctly recorded orphan when the live twin's short sha is all digits, so the selftest's cell 7 fails at random (~1 in… | 55a335427 |
 
