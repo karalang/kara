@@ -181,8 +181,16 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             (val, false)
         };
-        let did_clone_ref_enum =
-            did_clone_ref_enum || did_clone_live_local_enum || did_clone_tuple_hop_field;
+        // B-2026-10-02-91 — the `for`-loop element leg `compile_match` has
+        // always run: an escaping binding over a loop element extracts from an
+        // independent deep copy. Disjoint from the live-local leg above, which
+        // skips `for_loop_owned_agg_vars` members.
+        let (val, did_clone_loop_elem) =
+            self.clone_escaping_owned_agg_loop_var_enum_core(value, val, live_local_escapes);
+        let did_clone_ref_enum = did_clone_ref_enum
+            || did_clone_live_local_enum
+            || did_clone_tuple_hop_field
+            || did_clone_loop_elem;
         let (val, refchain_struct_clone) = self.clone_escaping_borrowed_ref_chain_struct(
             value,
             val,
@@ -352,6 +360,9 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.scrutinee_is_readonly_borrowed_place_block(value, pattern, then_block)
             // B-2026-08-29-29 (`if let` leg) — the projection-place sibling.
             || self.scrutinee_is_readonly_owned_enum_projection_block(value, pattern, then_block)
+            // B-2026-10-02-91 — the `for`-loop element sibling the `match`
+            // path always had.
+            || self.scrutinee_is_readonly_owned_agg_loop_var_block(value, pattern, then_block)
             || self.pattern_state.pattern_binding_source_retains_inline_payload;
         // B-2026-07-30-11 (if-let leg): record which of this pattern's
         // binding names sit in a VARIANT payload position so
@@ -1269,7 +1280,12 @@ impl<'ctx> super::Codegen<'ctx> {
             body,
             None,
         );
-        let did_clone_ref_enum = did_clone_ref_enum || did_clone_live_local_enum;
+        // B-2026-10-02-91 — the `for`-loop element leg, per evaluation; see
+        // the `if let` site.
+        let (val, did_clone_loop_elem) =
+            self.clone_escaping_owned_agg_loop_var_enum_core(value, val, live_local_escapes);
+        let did_clone_ref_enum =
+            did_clone_ref_enum || did_clone_live_local_enum || did_clone_loop_elem;
         let cond = self.compile_pattern_condition(pattern, val)?;
         self.builder
             .build_conditional_branch(cond.into_int_value(), body_bb, miss_bb)
@@ -1371,6 +1387,9 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.scrutinee_is_readonly_borrowed_place_block(value, pattern, body)
             // B-2026-08-29-29 (`while let` leg) — the projection-place sibling.
             || self.scrutinee_is_readonly_owned_enum_projection_block(value, pattern, body)
+            // B-2026-10-02-91 — the `for`-loop element sibling the `match`
+            // path always had.
+            || self.scrutinee_is_readonly_owned_agg_loop_var_block(value, pattern, body)
             || self.pattern_state.pattern_binding_source_retains_inline_payload;
         // B-2026-07-30-11 (while-let leg): route a Drop-declaring variant
         // payload binding to the UserDrop channel — the match/if-let sites'

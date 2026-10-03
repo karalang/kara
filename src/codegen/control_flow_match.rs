@@ -4100,6 +4100,27 @@ impl<'ctx> super::Codegen<'ctx> {
         self.no_arm_payload_escapes(arms)
     }
 
+    /// B-2026-10-02-91 — the block-body sibling of
+    /// [`Self::scrutinee_is_readonly_owned_agg_loop_var`], for the `if let`
+    /// `then_block` / `while let` `body` scopes. Only the `match` site asked
+    /// it, so `for h in v { if let Hc.Full(s) = h { .. } }` over a concrete
+    /// heap enum took the payload as the binding's own and freed it again at
+    /// the container's element drop, where the `match` spelling read a view.
+    pub(super) fn scrutinee_is_readonly_owned_agg_loop_var_block(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        block: &crate::ast::Block,
+    ) -> bool {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return false;
+        };
+        self.borrow_vars
+            .for_loop_owned_agg_vars
+            .contains(name.as_str())
+            && !self.pattern_bindings_escape_in_block(pattern, block)
+    }
+
     /// B-2026-08-08-25 leg 3 — the USER-ENUM sibling of the two classifiers
     /// above: a read-only match over a bare local owning a heap-bearing
     /// value enum.
@@ -5529,6 +5550,22 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         arms: &[MatchArm],
     ) -> (BasicValueEnum<'ctx>, bool) {
+        let escapes = !self.no_arm_payload_escapes(arms);
+        self.clone_escaping_owned_agg_loop_var_enum_core(scrutinee, val, escapes)
+    }
+
+    /// B-2026-10-02-91 — the shared core of
+    /// [`Self::clone_escaping_owned_agg_loop_var_enum`], which the `if let` and
+    /// `while let` sites call with their own escape answer ("this pattern's
+    /// bindings escape this block"). Only the `match` site cloned, so `for h
+    /// in v { if let Hc.Full(s) = h { takes(s) } }` handed the container's own
+    /// payload to the callee and the element drop freed it again.
+    pub(super) fn clone_escaping_owned_agg_loop_var_enum_core(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+        escapes: bool,
+    ) -> (BasicValueEnum<'ctx>, bool) {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return (val, false);
         };
@@ -5541,7 +5578,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // Only an ESCAPING payload needs the independent buffer; a read-only
         // match is the borrow path (drop already suppressed) — cloning would leak.
-        if self.no_arm_payload_escapes(arms) {
+        if !escapes {
             return (val, false);
         }
         let Some(enum_name) = self.type_name_of_expr(scrutinee) else {
