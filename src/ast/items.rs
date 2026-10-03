@@ -11184,6 +11184,24 @@ mod outliving_store {
         }
     }
 
+    /// B-2026-10-03-18 — `replace(d, x)` (std.mem) stores `x` into the place
+    /// `d` names: a store into an outliving place exactly when `d` is rooted
+    /// at one. Without it `fn rep(d: mut ref R, v: R) -> R { return
+    /// replace(d, v) }` read as no store, and the caller ran `v`'s body at the
+    /// end of the call although `*d` now holds `v`.
+    pub(super) fn replace_stores(e: &Expr, name: &str, roots: &[&str]) -> bool {
+        match &e.kind {
+            ExprKind::Call { callee, args } => {
+                matches!(&callee.kind, ExprKind::Identifier(c) if c == "replace")
+                    && args.len() == 2
+                    && place_root_outlives(&args[0].value, roots)
+                    && moves(&args[1].value, name)
+            }
+            ExprKind::Return(Some(inner)) => replace_stores(inner, name, roots),
+            _ => false,
+        }
+    }
+
     /// Is `e` the bare parameter `name` itself?
     pub(super) fn is_bare(e: &Expr, name: &str) -> bool {
         matches!(&e.kind, ExprKind::Identifier(n) if n == name)
@@ -11230,6 +11248,7 @@ mod outliving_store {
                     || stores(object, name, roots)
                     || args.iter().any(|a| stores(&a.value, name, roots))
             }
+            _ if replace_stores(e, name, roots) => true,
             ExprKind::Call { args, .. } => args.iter().any(|a| stores(&a.value, name, roots)),
             ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) => {
                 walk_block(b, name, roots)
@@ -12828,6 +12847,7 @@ pub fn fn_always_moves_param_into_outliving_place(f: &Function, arg_index: usize
                 outliving_store::place_root_outlives(object, roots)
                     && args.iter().any(|a| outliving_store::moves(&a.value, name))
             }
+            _ if outliving_store::replace_stores(e, name, roots) => true,
             ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) => {
                 always_walk_block(b, name, roots)
             }
@@ -12866,6 +12886,7 @@ pub fn fn_always_moves_param_into_outliving_place(f: &Function, arg_index: usize
                 outliving_store::place_root_outlives(target, roots)
                     && outliving_store::moves(value, name)
             }
+            StmtKind::Let { value, .. } => outliving_store::replace_stores(value, name, roots),
             _ => false,
         }) || b
             .final_expr
