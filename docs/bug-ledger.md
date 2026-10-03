@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 656 |
-| run-vs-build | 574 |
+| miscompile | 657 |
+| run-vs-build | 575 |
 | leak | 537 |
 | double-free | 407 |
 | codegen-gap | 216 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2620 |
-| interp | 801 |
-| typecheck | 322 |
+| codegen | 2622 |
+| interp | 803 |
+| typecheck | 323 |
 | other | 113 |
 | ownership | 80 |
 | cli | 73 |
@@ -509,6 +509,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-28 | 2026-10-03 | codegen | high | A `Result[Option[R], E]` BY-VALUE PARAM OF A NON-GENERIC FUNCTION, WHERE `R` RUNS A USER `Drop`, READS FREED MEMORY AFTER THE CALL -- `rr(Ok(Some(mk(7))))` over `fn rr(x: Result[Option[R], i64]) -> i64 { match x { Ok(Some(w)) => 1, Ok(None) => 2, Err(e) => e } }` prints `dR94634127054421 1 end` on -O0 (garbage id, 1 invalid read) against the interpreter's `dR7 1 end`; a named-local argument reads freed memory the same way. The generic path's double free and the leaks of the same shape are B-2026-10-03-34 | — |
 | B-2026-10-03-29 | 2026-10-03 | interp+codegen | medium | A GUARDED NESTED ARM OVER A GENERIC BY-VALUE `Option[Option[T]]` PARAM LOSES THE PAYLOAD'S `Drop` BODY ON EVERY SURFACE WHEN THE GUARD FAILS, AND LEAKS -- `mx(Some(Some(mk(10))), false)` over `fn mx[T](x: Option[Option[T]], keep: bool) -> Option[T] { match x { Some(Some(w)) if keep => Some(w), _ => None } }` prints `b end` with no `dR10` on interp, -O0 and -O2, and loses 30 B; the non-generic twin loses the body only under `--interp` (B-2026-10-03-6) | — |
 | B-2026-10-03-34 | 2026-10-03 | codegen | high | A `Result[Option[R], E]` BY-VALUE PARAM, WHERE `R` RUNS A USER `Drop`, DOUBLE-FREES R'S HEAP ON THE GENERIC PATH WHEN THE ARGUMENT IS A NAMED LOCAL, AND LEAKS IN TWO OTHER SPELLINGS -- `rr(a)` over `fn rr[T](x: Result[Option[T], i64]) -> i64 { match x { Ok(Some(w)) => 1, Ok(None) => 2, Err(e) => e } }` with `let a: Result[Option[R], i64] = Ok(Some(mk(7)));` aborts with `free(): double free detected in tcache 2` at -O0 (-O2 prints `1 dR7 end`); the B-2026-10-03-28 remainder | — |
+| B-2026-10-03-32 | 2026-10-03 | interp+codegen | high | `<int>.parse` AND `<int>.from_str_radix` NEVER CHECK THE RESULT AGAINST THE RECEIVER'S WIDTH -- `u8.parse("300")` is `Some(300)` under `--interp` (a `u8` holding 300) and `Some(44)` compiled, `u8.parse("-1")` is `Some(-1)` / `Some(255)`, `i32.parse("3000000000")` is `Some(3000000000)` / `Some(-1294967296)`, and a `u64` above `i64::MAX` parses to `None` on both, because every width goes through the i64 parse | — |
+| B-2026-10-03-33 | 2026-10-03 | typecheck+interp+codegen | medium | A MIXED-SIGNEDNESS INTEGER COMPARISON TYPE-CHECKS AND THE BACKENDS DISAGREE ON IT -- `u > k` over `u: u8 = 3`, `k: i64 = -1` is `true` under `--interp` and `false` compiled, and so is `u > -1`, `s < t` over `s: i32 = -5`, `t: u32 = 4000000000` likewise; the arithmetic operators reject the same operand pairs | — |
 
 ### Relocated
 
