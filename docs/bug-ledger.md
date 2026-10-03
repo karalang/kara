@@ -93,14 +93,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 649 |
-| run-vs-build | 572 |
-| leak | 532 |
+| run-vs-build | 574 |
+| leak | 533 |
 | double-free | 406 |
 | missing-feature | 215 |
 | codegen-gap | 212 |
-| other | 165 |
+| other | 167 |
 | diagnostics | 139 |
-| perf | 126 |
+| perf | 128 |
 | false-positive | 118 |
 | crash | 106 |
 | soundness | 97 |
@@ -110,15 +110,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2600 |
-| interp | 795 |
+| codegen | 2603 |
+| interp | 796 |
 | typecheck | 322 |
 | other | 113 |
 | ownership | 80 |
 | cli | 73 |
-| autopar | 56 |
+| autopar | 58 |
+| runtime | 51 |
 | parser | 50 |
-| runtime | 48 |
 | effect | 30 |
 | resolver | 29 |
 | lexer | 11 |
@@ -507,6 +507,13 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-5 | 2026-10-03 | codegen | medium | A NESTED ARM THAT REWRAPS THE LEAF OF A BOXED `Option[Option[R]]` RUNS R'S `Drop` BODY TWICE -- `fn take(x: Option[Option[R]]) -> Option[R] { match x { Some(Some(r)) => Some(r), _ => None } }` prints `dR1 1 dR1 end` on JIT / -O0 / -O2 against the interpreter's `1 dR1 end`; valgrind is clean, so the memory is freed once and only the body is doubled | — |
 | B-2026-10-03-6 | 2026-10-03 | interp | medium | UNDER `--interp` A GUARDED ARM THAT FALLS THROUGH LOSES THE PARAM'S PAYLOAD `Drop` BODY -- `guard(Some(Some(mk(4))), false)` over `fn guard(x: Option[Option[R]], c: bool) -> Option[R] { match x { Some(inner) if c => inner, _ => None } }` prints `h end` with no `dR4`; every compiled surface prints `dR4 h end` | — |
 | B-2026-10-03-7 | 2026-10-03 | codegen | medium | A NON-GENERIC CALLEE TAKING A BOXED `Option[Option[R]]` BY VALUE RUNS THE PAYLOAD'S `Drop` BODY INSIDE THE CALL -- `println(cls(b))` over `fn cls(x: Option[Option[R]]) -> i64 { match x { Some(inner) => 7, None => 0 } }` prints `dR1 7 end` on -O0 / -O2 against the interpreter's `7 dR1 end`; the flat `Option[R]`, a plain struct param and the GENERIC `cls[T]` all print `7 dR1 end` on every surface; memory is clean | — |
+| B-2026-10-03-1 | 2026-10-03 | interp | low | The interpreter sent every lowered operator call (`a + b` -> `i64.add(a, b)`) through the general call path, and hashed every scope lookup with SipHash: about 17% of a scalar loop's instructions were call setup and scope hashing | — |
+| B-2026-10-03-2 | 2026-10-03 | codegen+runtime | medium | A panic inside an auto-parallelized statement group lost the output of every branch BEFORE it (a sequential run prints those lines first), and when a later branch panicked faster than an earlier one the LATER panic was reported, one the sequential program never reaches | — |
+| B-2026-10-03-3 | 2026-10-03 | codegen | medium | A STORED ITERATOR CANNOT BE PULLED BY HAND UNDER `karac build` OR `karac run`, ONLY UNDER `--interp` -- `let mut it = v.iter(); while let Some(x) = it.next() { .. }` is refused by codegen ("stateful `Iterator.next()` on a materialized iterator binding ... is not supported under `karac build`"), and `let mut p = v.iter().peekable(); while let Some(x) = p.peek() { .. }` fails with codegen's generic "no handler for method 'peekable' on non-identifier receiver ... this is a codegen bug". Both type-check clean and run correctly under `--interp`. | — |
+| B-2026-10-03-8 | 2026-10-03 | autopar | medium | Thirteen E2E tests about auto-par groups (`e2e_auto_par_branch_panic_fails_fast`, `test_e2e_par_group_serializes_for_iter_with_outer_mutable_write`, ...) sat in tests/codegen/, whose harness compiles with `concurrency: None` and so never forms a group: they checked the sequential program while claiming to gate the parallel one; tests/par_codegen.rs's own runtime lookup also soft-skipped every E2E test under CARGO_TARGET_DIR | — |
+| B-2026-10-03-9 | 2026-10-03 | autopar | low | Eleven of the thirteen auto-par-named E2E tests moved to tests/par_codegen.rs still form no parallel group there, so they pass without exercising the lowering their names describe (A3b's `e2e_auto_par_branch_panic_fails_fast` among them) | — |
+| B-2026-10-03-10 | 2026-10-03 | codegen+runtime | medium | `for tok in s.split(",")` heap-allocates and frees every token even when the loop only compares it, so kata 331's benchmark runs 5.3x Rust, 8.8x C and slower than CPython (2.31 s against 1.91 s) | — |
+| B-2026-10-03-11 | 2026-10-03 | runtime | low | Every compiled program that hashes a `Map` or `Set` key leaves a 48-byte "possibly lost" block under valgrind: the random hash seed mixes in `std::thread::current()`, which allocates the main thread's handle and never frees it, and that id is `ThreadId(1)` in every process, so it adds no entropy | — |
 
 ### Relocated
 
