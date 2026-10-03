@@ -22121,6 +22121,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // B-2026-10-03-52 — an arm that MOVES the envelope binding at depth 1
+        // (`Ok(o) => o`, `Ok(o) => vo.push(o)`) carries the box pointer out
+        // with it, so the source's `NestedBoxedEnumDrop` must not free that
+        // box on this path. Zeroed at runtime on the arm's edge rather than
+        // removed, so a path that does not take the arm still frees it. A
+        // binding the arm only reads or matches again keeps the box with the
+        // source, as before.
+        if self
+            .payload_vars
+            .nested_boxed_payload_vars
+            .contains(name.as_str())
+            && self.nested_box_leaf_depth_for(name.as_str()).is_some()
+        {
+            let mut names = Vec::new();
+            Self::pattern_names_at_depth(pattern, 1, &mut names);
+            if names.iter().any(|n| consumes(n)) {
+                self.suppress_nested_boxed_payload_move(scrutinee);
+            }
+        }
         let retract = if self
             .payload_vars
             .nested_boxed_payload_vars
