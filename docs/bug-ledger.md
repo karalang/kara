@@ -93,16 +93,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 649 |
-| run-vs-build | 571 |
+| run-vs-build | 572 |
 | leak | 532 |
-| double-free | 402 |
+| double-free | 406 |
 | missing-feature | 215 |
 | codegen-gap | 212 |
 | other | 165 |
 | diagnostics | 139 |
 | perf | 126 |
 | false-positive | 118 |
-| crash | 105 |
+| crash | 106 |
 | soundness | 97 |
 | use-after-free | 77 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2594 |
+| codegen | 2600 |
 | interp | 795 |
 | typecheck | 322 |
 | other | 113 |
@@ -494,6 +494,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-75 | 2026-10-02 | codegen | medium | Reassigning a GENERIC enum local inside a `match` arm over it leaks the REPLACEMENT value's heap payload on every compiled surface -- `let mut g: G[R] = G.X(mk(26)); match g { G.X(t) => { g = G.X(mk(3)); } G.Y => {} }` loses the 38-byte `t3-..` string under valgrind where the concrete `enum E` spelling is clean | — |
 | B-2026-10-02-77 | 2026-10-02 | codegen | medium | A GENERIC FUNCTION INSTANTIATED AT `T = Array[E, N]` FAILS LLVM MODULE VERIFICATION WHEN IT RETURNS A `match` OVER `Option[T]` -- `fn pick[T](a: Option[T], d: T) -> T { return match a { Some(x) => x, None => d } }` called as `pick(a, Array[3, 4])` with `a: Option[Array[i64, 2]]` passes `karac check`, prints `34` under `--interp`, and fails `karac build` with `Function return type does not match operand type of return inst! ret i64 0 [2 x i64]`; the same body written for the concrete type builds and runs | — |
 | B-2026-10-02-78 | 2026-10-02 | codegen | high | RETURNING A BY-VALUE `Array[String, N]` PARAMETER FROM A `match` ARM OVER A DIFFERENT SCRUTINEE FREES IT IN THE CALLEE AND HANDS IT BACK -- `fn g(a: Option[Array[String, 2]], d: Array[String, 2]) -> Array[String, 2] { return match a { Some(x) => x, None => d } }` called with `a = None` prints the right line and then reads and frees freed memory: valgrind at -O0 reports 2 invalid reads and 2 invalid frees, 11 allocs against 13 frees; the `Some` path and the `if`/`return d` spelling are clean | — |
+| B-2026-10-02-76 | 2026-10-02 | codegen | high | A CLOSURE THAT CONSUMES ITS CAPTURED HEAP-BEARING ENUM IN THE BODY BY ANY ROUTE OTHER THAN A BY-VALUE CALL FREES IT TWICE ON EVERY COMPILED SURFACE -- `let f = || { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; f()` aborts with an invalid free, and so do `if let Ho.Full(s) = h` and `let g = h; keep(g)` inside the closure; `--interp` prints the right values | — |
+| B-2026-10-02-90 | 2026-10-02 | codegen | high | A CLOSURE THAT CONSUMES A CAPTURED BOXED GENERIC ENUM, FOLLOWED BY A USE OF THE SAME LOCAL OUTSIDE THE CLOSURE, FREES THE BOX TWICE ON EVERY COMPILED SURFACE -- `let f = || keep(h); println(f"c{f()}"); println(f"k{keep(h)}")` over `h: Ho[String]` segfaults where `--interp` prints `c4 k4`; the concrete-enum and struct spellings are clean | — |
+| B-2026-10-02-91 | 2026-10-02 | codegen | high | AN `if let` OVER A `for` LOOP'S CONCRETE HEAP-ENUM ELEMENT FREES THE PAYLOAD TWICE ON EVERY COMPILED SURFACE -- `for h in v { if let Hc.Full(s) = h { println(f"c{s.len()}") } }` over `Vec[Hc]` reports an invalid free where the `match` spelling, the generic `Ho[String]` element and an `Option[String]` element are clean | — |
+| B-2026-10-02-92 | 2026-10-02 | codegen | high | A BOXED GENERIC-ENUM LOCAL HANDED BY VALUE TO A CALLEE INSIDE A `while` LOOP FREES THE BOX ONCE PER ITERATION ON EVERY COMPILED SURFACE -- `while i < 2 { n = n + keep(h); i = i + 1; }` over `h: Ho[String]` reports 2 invalid frees and 5 invalid reads where `--interp` prints `c8`; the concrete-enum spelling is clean | — |
+| B-2026-10-02-93 | 2026-10-02 | codegen | medium | READING A CONCRETE HEAP-ENUM LOCAL AFTER `let g = h` SEES IT AS EMPTY ON THE COMPILED BACKENDS -- `let h = Hc.Full(..); let g = h; println(f"c{gr(g)} {gr(h)}")` with `gr(h: ref Hc)` prints `c4 0` where `--interp` prints `c4 4`; the struct and `String` spellings print the right value | — |
+| B-2026-10-02-94 | 2026-10-02 | codegen | high | A CLOSURE PARAMETER NAMED LIKE AN OUTER LOCAL THAT IS USED AFTER THE CLOSURE SEGFAULTS EVERY COMPILED SURFACE BEFORE THE FIRST PRINT -- `let h = Hc.Full(..); let f = |h: Hc| keepc(h); let x = Hc.Full(..); println(f"c{f(x)}"); println(f"k{keepc(h)}")` exits 139 with no output where `--interp` prints `c2 k4` | — |
 | B-2026-10-02-82 | 2026-10-03 | codegen+interp | medium | A DISCARDED `if` INSIDE A `match` ARM WHOSE BRANCH TAILS ARE THE ARM'S BOXED `Array` PAYLOAD BINDING AND A FRESH ARRAY RUNS NONE OF THEIR `Drop` BODIES COMPILED AND LEAKS THE FRESH ONE -- `EArr.A(v) => { if c { v } else { z() }; 5 }` prints `got5` on the JIT and the build where `--interp` prints `dR1 dR2 got5`; with `c` false the compiled program leaks the discarded `z()` (valgrind -O0: 14 allocs / 12 frees, 4 bytes definitely lost), and `--interp` itself never runs `v`'s bodies on that edge | — |
 | B-2026-10-02-83 | 2026-10-03 | codegen+interp | medium | A `match` ARM'S BOXED `Array` PAYLOAD BINDING THAT A NESTED BRANCH DOES NOT HAND OUT NEVER RUNS ITS `Drop` BODIES, ON EVERY SURFACE -- `EArr.A(v) => { if c { v } else { z() } }` with `c` false prints `got0 dR0 dR0 end` everywhere, where `v`, never moved, owes `dR1 dR2` when the arm ends; memory is balanced, and the `match c` and `let`-bound spellings are the same | — |
 | B-2026-10-02-84 | 2026-10-03 | codegen | high | REASSIGNING A FIXED `Array` LOCAL WHOSE ELEMENTS OWN HEAP FROM ANYTHING BUT A CONTAINER LITERAL LEAKS THE DISPLACED ELEMENTS, AND FROM A NAMED SOURCE DOUBLE-FREES THEM -- `let mut k: Array[String, 2] = [..]; k = ys();` loses 4 B at -O0 with the right output, `k = w;` aborts `free(): double free detected in tcache 2` on the JIT, and a local that began as `let mut k = w;` double-frees even when reassigned from a literal; `Vec` is correct in every spelling | — |
