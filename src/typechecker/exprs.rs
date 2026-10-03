@@ -4126,7 +4126,7 @@ impl<'a> super::TypeChecker<'a> {
     /// int type. `None` for types a decimal `i64` literal can never overflow
     /// (i128; u64/u128 above the negative check baked into the min of 0)
     /// and for every non-int type.
-    fn int_literal_range(ty: &Type) -> Option<(i128, i128)> {
+    pub(super) fn int_literal_range(ty: &Type) -> Option<(i128, i128)> {
         Some(match ty {
             Type::Int(IntSize::I8) => (i8::MIN as i128, i8::MAX as i128),
             Type::Int(IntSize::I16) => (i16::MIN as i128, i16::MAX as i128),

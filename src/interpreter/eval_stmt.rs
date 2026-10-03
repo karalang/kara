@@ -13676,6 +13676,18 @@ impl<'a> super::Interpreter<'a> {
             if self.pending_cf.is_some() {
                 return Some(val);
             }
+            // B-2026-09-29-94 — `-1` beside a float (`f * -1`, `f.max(-1)`)
+            // is an integer literal the typechecker promoted to the float's
+            // type, as it does a bare `1`; the lowering then hands us
+            // `f32.neg(1)` with the magnitude still an `Int`. Give it the
+            // promoted type, or the float peer meets an `Int` it cannot mix
+            // with.
+            let val = match val {
+                Value::Int(n) if self.span_float_width(&args[0].value.span).is_some() => {
+                    Value::Float(n as f64)
+                }
+                other => other,
+            };
             return Some(self.eval_unary(&UnaryOp::Neg, val, span));
         }
         if method == "not" && args.len() == 1 {

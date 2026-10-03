@@ -360,7 +360,17 @@ impl<'a> super::Interpreter<'a> {
         if !is_promotable {
             return (l, r);
         }
-        let is_unsuffixed_int_lit = |e: &Expr| matches!(&e.kind, ExprKind::Integer(_, None));
+        // B-2026-09-29-94: a negated literal (`h * -2`) promotes as `h * 2`
+        // does. Where the lowering rewrote the minus (`f32.neg(2)`) the
+        // `neg` dispatch has already made it a `Float`; this is the shape
+        // it leaves in place.
+        let is_unsuffixed_int_lit = |e: &Expr| match &e.kind {
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => matches!(&operand.kind, ExprKind::Integer(_, None)),
+            kind => matches!(kind, ExprKind::Integer(_, None)),
+        };
         match (&l, &r) {
             (Value::Int(iv), Value::Float(_)) if is_unsuffixed_int_lit(left) => {
                 (Value::Float(*iv as f64), r)
@@ -370,6 +380,21 @@ impl<'a> super::Interpreter<'a> {
             }
             _ => (l, r),
         }
+    }
+
+    /// B-2026-09-29-94 — a literal argument of a float scalar method (`min` /
+    /// `max` / `clamp`) at the receiver's type. The typechecker promotes an
+    /// unsuffixed literal there, `f.max(2)` and `f.max(-1.5)` alike, but an
+    /// integer literal still evaluates to an `Int`, which no float arm takes,
+    /// and a float literal to full f64 bits a narrow receiver does not have
+    /// (codegen rounds it to the receiver's width when it materializes it).
+    /// Anything else is returned unchanged.
+    pub(super) fn literal_arg_at_float_receiver(&self, v: Value, arg: &Expr) -> Value {
+        let v = match v {
+            Value::Int(n) => Value::Float(n as f64),
+            other => other,
+        };
+        self.round_float_to_span_width(v, &arg.span)
     }
 
     /// Re-round a narrow-float binop RESULT to its declared width.

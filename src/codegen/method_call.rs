@@ -3689,6 +3689,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(method, "min" | "max") && args.len() == 1 {
             let a = self.compile_expr(object)?;
             let b = self.compile_expr(&args[0].value)?;
+            let b = self.fit_literal_arg_to_float_receiver(a, b);
             match (a, b) {
                 (BasicValueEnum::IntValue(av), BasicValueEnum::IntValue(mut bv)) => {
                     // Harmonize a bare-literal arg (default i64) down/up to the
@@ -3779,6 +3780,8 @@ impl<'ctx> super::Codegen<'ctx> {
             let v = self.compile_expr(object)?;
             let lo = self.compile_expr(&args[0].value)?;
             let hi = self.compile_expr(&args[1].value)?;
+            let lo = self.fit_literal_arg_to_float_receiver(v, lo);
+            let hi = self.fit_literal_arg_to_float_receiver(v, hi);
             match (v, lo, hi) {
                 (
                     BasicValueEnum::IntValue(vv),

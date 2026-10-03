@@ -302,8 +302,8 @@ impl<'a> super::TypeChecker<'a> {
             // types are a hard error; cast with `as`).
             let arg = &args[0].value;
             let arg_ty = self.infer_expr(arg);
-            if matches!(&arg.kind, ExprKind::Integer(_, None)) {
-                self.record_expr_type(&arg.span, receiver_for_lookup);
+            if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {
+                self.record_promoted_literal(arg, receiver_for_lookup);
                 return Some(receiver_for_lookup.clone());
             }
             if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
@@ -345,8 +345,8 @@ impl<'a> super::TypeChecker<'a> {
             }
             let arg = &args[0].value;
             let arg_ty = self.infer_expr(arg);
-            if matches!(&arg.kind, ExprKind::Integer(_, None)) {
-                self.record_expr_type(&arg.span, receiver_for_lookup);
+            if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {
+                self.record_promoted_literal(arg, receiver_for_lookup);
                 self.record_expr_type(args_close_span, receiver_for_lookup);
                 return Some(receiver_for_lookup.clone());
             }
@@ -403,8 +403,8 @@ impl<'a> super::TypeChecker<'a> {
                 let arg_ty = self.infer_expr(arg);
                 // Suffix-free integer literal arg promotes to the receiver type
                 // (mirrors `wrapping_*`); otherwise it must match exactly.
-                if matches!(&arg.kind, ExprKind::Integer(_, None)) {
-                    self.record_expr_type(&arg.span, receiver_for_lookup);
+                if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {
+                    self.record_promoted_literal(arg, receiver_for_lookup);
                 } else if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
                     self.type_error(
                         format!(
@@ -489,12 +489,9 @@ impl<'a> super::TypeChecker<'a> {
             }
             let arg = &args[0].value;
             let arg_ty = self.infer_expr(arg);
-            let is_bare_num_lit = matches!(
-                &arg.kind,
-                ExprKind::Integer(_, None) | ExprKind::Float(_, None)
-            );
+            let is_bare_num_lit = Self::unsuffixed_num_literal(arg, receiver_for_lookup).is_some();
             if is_bare_num_lit {
-                self.record_expr_type(&arg.span, receiver_for_lookup);
+                self.record_promoted_literal(arg, receiver_for_lookup);
             } else if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
                 self.type_error(
                     format!(
@@ -533,12 +530,10 @@ impl<'a> super::TypeChecker<'a> {
             for arg in args.iter() {
                 let arg = &arg.value;
                 let arg_ty = self.infer_expr(arg);
-                let is_bare_num_lit = matches!(
-                    &arg.kind,
-                    ExprKind::Integer(_, None) | ExprKind::Float(_, None)
-                );
+                let is_bare_num_lit =
+                    Self::unsuffixed_num_literal(arg, receiver_for_lookup).is_some();
                 if is_bare_num_lit {
-                    self.record_expr_type(&arg.span, receiver_for_lookup);
+                    self.record_promoted_literal(arg, receiver_for_lookup);
                 } else if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
                     self.type_error(
                         format!(
@@ -661,8 +656,8 @@ impl<'a> super::TypeChecker<'a> {
             let arg_ty = self.infer_expr(arg);
             // A suffix-free integer literal arg promotes to the receiver type;
             // otherwise it must match exactly (mirrors `checked_*`).
-            if matches!(&arg.kind, ExprKind::Integer(_, None)) {
-                self.record_expr_type(&arg.span, receiver_for_lookup);
+            if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {
+                self.record_promoted_literal(arg, receiver_for_lookup);
             } else if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
                 self.type_error(
                     format!(

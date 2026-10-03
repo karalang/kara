@@ -243,6 +243,51 @@ fn merge_tensor_dim(l: &DimArg, r: &DimArg) -> Result<DimArg, ()> {
 }
 
 impl<'a> super::TypeChecker<'a> {
+    /// Whether `e` is a literal Q4 promotion re-types to the numeric `peer`
+    /// type: an UNSUFFIXED literal, bare (`1`, `1.5`) or negated (`-1`,
+    /// `-1.5`, which parse as `Neg(literal)`). `Some(is_float)` when it is.
+    ///
+    /// B-2026-09-29-94: only the bare shape was recognised, so `a + 1` and
+    /// `a.min(1)` over `a: i32` type-checked while `a + -1` and `a.min(-1)`
+    /// were rejected for mixing `i32` with the literal's default `i64`.
+    /// `let x: i32 = -1` already took the negated form as a literal, so the
+    /// rule the author sees did not depend on width; only these sites did.
+    ///
+    /// A negated integer literal promotes only when its value fits `peer`.
+    /// Out of range (`-1` beside a `u8`, `-200` beside an `i8`) it keeps its
+    /// default type, and with it the meaning it had before: a mixed-width
+    /// comparison such as `u > -1` was accepted and compares the two values,
+    /// and promoting would turn it into a range error.
+    pub(super) fn unsuffixed_num_literal(e: &Expr, peer: &Type) -> Option<bool> {
+        let bare = |x: &Expr| match &x.kind {
+            ExprKind::Integer(_, None) => Some(false),
+            ExprKind::Float(_, None) => Some(true),
+            _ => None,
+        };
+        match &e.kind {
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => match &operand.kind {
+                ExprKind::Integer(n, None) => Self::int_literal_range(peer)
+                    .is_none_or(|(min, max)| (min..=max).contains(&-*n))
+                    .then_some(false),
+                _ => bare(operand),
+            },
+            _ => bare(e),
+        }
+    }
+
+    /// Record a literal [`Self::unsuffixed_num_literal`] accepted at the type
+    /// it promotes to. The negated form records its operand as well, so the
+    /// minus and the magnitude agree on the width the backends lower.
+    pub(super) fn record_promoted_literal(&mut self, e: &Expr, ty: &Type) {
+        self.record_expr_type(&e.span, ty);
+        if let ExprKind::Unary { operand, .. } = &e.kind {
+            self.record_expr_type(&operand.span, ty);
+        }
+    }
+
     /// Type-check `offset_of[T](field.path)`. Per `design.md § Field
     /// Offsets`, the target type must be a struct (concrete or
     /// generic-with-fully-resolved args); opaque foreign types and
@@ -2593,29 +2638,27 @@ impl<'a> super::TypeChecker<'a> {
         // match arms below. Initialised to the inferred types; overwritten when
         // promotion fires.
         let (eff_left_ty, eff_right_ty) = if is_promotable_op {
-            let left_is_unsuffixed = matches!(
-                &left.kind,
-                ExprKind::Integer(_, None) | ExprKind::Float(_, None)
-            );
-            let right_is_unsuffixed = matches!(
-                &right.kind,
-                ExprKind::Integer(_, None) | ExprKind::Float(_, None)
-            );
+            // B-2026-09-29-94: `-1` is a literal too (`Neg(Integer)`), so it
+            // promotes exactly as `1` does.
+            let left_lit = Self::unsuffixed_num_literal(left, &right_ty);
+            let right_lit = Self::unsuffixed_num_literal(right, &left_ty);
+            let left_is_unsuffixed = left_lit.is_some();
+            let right_is_unsuffixed = right_lit.is_some();
             if right_is_unsuffixed && !left_is_unsuffixed && is_numeric(&left_ty) {
                 // Float literal cannot be promoted to an integer type.
-                let can_promote = !(matches!(&right.kind, ExprKind::Float(_, None))
-                    && matches!(left_ty, Type::Int(_) | Type::UInt(_)));
+                let can_promote =
+                    !(right_lit == Some(true) && matches!(left_ty, Type::Int(_) | Type::UInt(_)));
                 if can_promote {
-                    self.record_expr_type(&right.span, &left_ty);
+                    self.record_promoted_literal(right, &left_ty);
                     (left_ty.clone(), left_ty.clone())
                 } else {
                     (left_ty.clone(), right_ty.clone())
                 }
             } else if left_is_unsuffixed && !right_is_unsuffixed && is_numeric(&right_ty) {
-                let can_promote = !(matches!(&left.kind, ExprKind::Float(_, None))
-                    && matches!(right_ty, Type::Int(_) | Type::UInt(_)));
+                let can_promote =
+                    !(left_lit == Some(true) && matches!(right_ty, Type::Int(_) | Type::UInt(_)));
                 if can_promote {
-                    self.record_expr_type(&left.span, &right_ty);
+                    self.record_promoted_literal(left, &right_ty);
                     (right_ty.clone(), right_ty.clone())
                 } else {
                     (left_ty.clone(), right_ty.clone())

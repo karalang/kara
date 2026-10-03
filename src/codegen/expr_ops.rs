@@ -6890,6 +6890,35 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-29-94 — bring a literal argument of a float scalar method
+    /// (`min` / `max` / `clamp`) to the receiver's width. The typechecker
+    /// promotes an unsuffixed literal there (`f.min(1.25)`, `f.max(-1)`,
+    /// `f.clamp(0, 1)` over `f: f32`), but codegen materializes a literal at
+    /// its own width -- `double`, or `i64` for an integer literal -- so the
+    /// argument reached `llvm.minnum.f32` as a `double` (module verification
+    /// failed) or reached no arm at all. A non-float receiver, or an argument
+    /// already at the receiver's type, is returned unchanged; the typechecker
+    /// admits a mismatched argument here only when it is such a literal.
+    pub(super) fn fit_literal_arg_to_float_receiver(
+        &self,
+        recv: BasicValueEnum<'ctx>,
+        arg: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let BasicValueEnum::FloatValue(rv) = recv else {
+            return arg;
+        };
+        let ft = rv.get_type();
+        match arg {
+            BasicValueEnum::FloatValue(fv) if fv.get_type() != ft => {
+                self.build_float_cast_bf16_safe(fv, ft, "lit.fc").into()
+            }
+            BasicValueEnum::IntValue(iv) => self
+                .build_int_to_float_bf16_safe(iv, ft, false, "lit.if")
+                .into(),
+            other => other,
+        }
+    }
+
     /// Float→float cast that never emits a standalone `fpext`/`fptrunc`
     /// node touching `bfloat`: LLVM 18's AArch64 backend cannot select ANY
     /// of them (verified with llc-18 on both `apple-m1` and `generic` v8a:

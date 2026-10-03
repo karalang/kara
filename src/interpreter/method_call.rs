@@ -4451,6 +4451,7 @@ impl<'a> super::Interpreter<'a> {
                     if self.pending_cf.is_some() {
                         return other;
                     }
+                    let other = self.literal_arg_at_float_receiver(other, &args[0].value);
                     if let Value::Float(g) = other {
                         return Value::Float(if method == "min" { f.min(g) } else { f.max(g) });
                     }
@@ -4496,6 +4497,8 @@ impl<'a> super::Interpreter<'a> {
                     if self.pending_cf.is_some() {
                         return hi;
                     }
+                    let lo = self.literal_arg_at_float_receiver(lo, &args[0].value);
+                    let hi = self.literal_arg_at_float_receiver(hi, &args[1].value);
                     if let (Value::Float(lo), Value::Float(hi)) = (lo, hi) {
                         let r = if v < lo {
                             lo
