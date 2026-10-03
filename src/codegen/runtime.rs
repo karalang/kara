@@ -94,6 +94,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let body = self.context.append_basic_block(panic_fn, "entry");
         let b = self.context.create_builder();
         b.position_at_end(body);
+        // B-2026-10-03-2 — before anything prints: inside a parallel branch,
+        // replay what the branches before it printed, as a sequential run
+        // would have, since `exit` below discards every unreplayed capture.
+        // A no-op body in a module with no `par`.
+        b.build_call(self.runtime_fns.par_panic_hook_fn, &[], "")
+            .unwrap();
 
         // design.md § Contracts rule 2: the fault-category prefix is decided at
         // RUNTIME by `karac_runtime_panic_prefix()`, which returns

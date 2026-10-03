@@ -1749,13 +1749,43 @@ fn main() {
     }
 
     fn run_program(src: &str) -> Option<String> {
-        use karac::codegen::{compile_to_object, link_executable};
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        // B-2026-08-11-26's deferred remainder: run==build parity for the
+        // AUTO-PAR surface. `KARAC_TEST_JIT=1` reroutes this lane through the
+        // JIT, exactly as `tests/codegen.rs` does, so the same ~150 programs
+        // are executed by both backends off one source.
+        //
+        // The sequential lane had this and the auto-par lane did not, which
+        // left the DEFAULT `karac build` configuration — auto-par is on unless
+        // `KARAC_AUTO_PAR=0` — with no parity coverage of any width. The
+        // sequential lane cannot stand in for it: it compiles with
+        // `concurrency: None`, so every auto-par lowering is dead there. A
+        // divergence that only appears once a loop is parallelized is
+        // invisible to it by construction.
+        //
+        // `Some(&analysis)` is as load-bearing here as `Some(&ownership)` was
+        // in -26 itself: passing `None` would emit sequential IR under a name
+        // claiming to test the parallel backend — the same "lane runs with
+        // degraded inputs" shape that row was filed for, which is why both are
+        // threaded together.
+        #[cfg(feature = "llvm")]
+        if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1") {
+            runtime_path()?;
+            let (program, ownership, analysis) = analyzed_pipeline(src);
+            return jit_dispatch_par(&program, &ownership, &analysis);
+        }
+        run_program_output(src).map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+    }
 
-        let rt = runtime_path()?;
-        std::env::set_var("KARAC_RUNTIME", &rt);
-
+    /// The full CLI-shaped front end `run_program` compiles from: resolve,
+    /// typecheck, lower, effects, ownership and the concurrency analysis,
+    /// with the same check gates `karac build` applies.
+    fn analyzed_pipeline(
+        src: &str,
+    ) -> (
+        karac::ast::Program,
+        karac::ownership::OwnershipCheckResult,
+        karac::concurrency::ConcurrencyAnalysis,
+    ) {
         let mut parsed = karac::parse(src);
         if !parsed.errors.is_empty() {
             let mut msg = String::from("test source failed to parse:\n");
@@ -1780,40 +1810,26 @@ fn main() {
         // Thread type info so method-call network fan-out (A2b-2 Phase 2 Slice 2)
         // is enabled end-to-end, as the real CLI pipeline does.
         let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
+        (parsed.program, ownership, analysis)
+    }
 
-        // B-2026-08-11-26's deferred remainder: run==build parity for the
-        // AUTO-PAR surface. `KARAC_TEST_JIT=1` reroutes this lane through the
-        // JIT, exactly as `tests/codegen.rs` does, so the same ~150 programs
-        // are executed by both backends off one source.
-        //
-        // The sequential lane had this and the auto-par lane did not, which
-        // left the DEFAULT `karac build` configuration — auto-par is on unless
-        // `KARAC_AUTO_PAR=0` — with no parity coverage of any width. The
-        // sequential lane cannot stand in for it: it compiles with
-        // `concurrency: None`, so every auto-par lowering is dead there. A
-        // divergence that only appears once a loop is parallelized is
-        // invisible to it by construction.
-        //
-        // `Some(&analysis)` is as load-bearing here as `Some(&ownership)` was
-        // in -26 itself: passing `None` would emit sequential IR under a name
-        // claiming to test the parallel backend — the same "lane runs with
-        // degraded inputs" shape that row was filed for, which is why both are
-        // threaded together.
-        #[cfg(feature = "llvm")]
-        if std::env::var("KARAC_TEST_JIT").as_deref() == Ok("1") {
-            return jit_dispatch_par(&parsed.program, &ownership, &analysis);
-        }
+    /// The AOT half of `run_program`, returning the whole `Output` so a test
+    /// can assert on the exit status and stderr as well as stdout. AOT only:
+    /// `KARAC_TEST_JIT` reroutes `run_program`, not this.
+    fn run_program_output(src: &str) -> Option<std::process::Output> {
+        use karac::codegen::{compile_to_object, link_executable};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let rt = runtime_path()?;
+        std::env::set_var("KARAC_RUNTIME", &rt);
+        let (program, ownership, analysis) = analyzed_pipeline(src);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_par_e2e_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_par_e2e_{}_{}", std::process::id(), id);
 
-        if let Err(e) = compile_to_object(
-            &parsed.program,
-            &obj_path,
-            Some(&ownership),
-            Some(&analysis),
-        ) {
+        if let Err(e) = compile_to_object(&program, &obj_path, Some(&ownership), Some(&analysis)) {
             panic!("codegen failed for test program: {}", e);
         }
         super::common::link_or_skip(link_executable(&obj_path, &exe_path))?;
@@ -1826,7 +1842,7 @@ fn main() {
         let _ = std::fs::remove_file(&obj_path);
         let _ = std::fs::remove_file(&exe_path);
 
-        Some(String::from_utf8_lossy(&output.stdout).to_string())
+        Some(output)
     }
 
     // ── Auto-par indexed-write fan-out (disjoint-writes lowering) ─────
@@ -14163,6 +14179,142 @@ fn main() {
                 out, "in\ngot13\ndR13\nin2\ndR32\ngot31\ndR31\nin3\ngot41\ndR41\nin4\ngot81\ndR81\nin\ndR91\nafter\nin5\ndR51\ngotz5\nend\n",
                 "the auto-par column owes the same single body per escaping field \
                  as the other three; got {out:?}"
+            );
+        }
+    }
+    // ── B-2026-10-03-2: a panicking auto-par branch keeps earlier output ──
+    //
+    // A panic inside an auto-parallelized statement group ended the process
+    // with every branch's output still captured, so the lines the branches
+    // BEFORE it print in a sequential run were lost. These live here rather
+    // than in `tests/codegen/` because that harness compiles with
+    // `concurrency: None`, where auto-par never fires and both cells passed
+    // before the fix (measured).
+
+    /// Seven statements `main` runs as one parallel group: four calls that print
+    /// and return, then a division by zero, an overflow and two more prints.
+    /// Sequentially the first four lines print, the division panics, and nothing
+    /// after it runs. Before the fix the default build printed `start` alone: the
+    /// four lines sat in their branches' captures when the panicking branch called
+    /// `exit`. The overflow branch is the second panic; only the EARLIER one may
+    /// report, as only it runs sequentially.
+    #[test]
+    fn e2e_par_branch_panic_keeps_the_output_of_earlier_branches() {
+        let src = r#"fn patches(nums: ref Vec[i64], n: i64) -> i64 {
+    let mut miss = 1;
+    let mut i = 0;
+    let mut count = 0;
+    while miss <= n {
+        if i < nums.len() and nums[i] <= miss {
+            miss += nums[i];
+            i += 1;
+        } else {
+            miss += miss;
+            count += 1;
+        }
+    }
+    return count;
+}
+fn spread(nums: ref Vec[i64], d: i64) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < nums.len() {
+        s += nums[i] / d;
+        i += 1;
+    }
+    return s;
+}
+fn show(nums: ref Vec[i64], n: i64) {
+    println(f"{nums} n={n} -> {patches(nums, n)}");
+}
+fn cut(nums: ref Vec[i64], d: i64) {
+    println(f"{nums} d={d} -> {spread(nums, d)}");
+}
+fn main() {
+    let v: Vec[i64] = [1, 5, 10];
+    println("start");
+    show(v, 20);
+    cut(v, 3);
+    show(v, 7);
+    cut(v, 0);
+    show(v, 4611686018427387904);
+    show(v, 9);
+    println("end");
+}
+"#;
+        if let Some(out) = run_program_output(src) {
+            let (stdout, stderr) = (
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            );
+            assert_eq!(out.status.code(), Some(101), "stderr={:?}", stderr);
+            assert_eq!(
+                stdout,
+                "start\n[1, 5, 10] n=20 -> 2\n[1, 5, 10] d=3 -> 4\n[1, 5, 10] n=7 -> 2\n"
+            );
+            assert!(
+                stderr.contains("division by zero") && !stderr.contains("overflow"),
+                "stderr={:?}",
+                stderr
+            );
+        }
+    }
+
+    /// The race half: the EARLIER panic (a division by zero after a long loop) is
+    /// the slow one, and the later one (an overflow) is reached almost at once.
+    /// Before the fix the overflow won the race to `exit` and was reported, a
+    /// panic the sequential program never reaches. The later branch must wait for
+    /// the earlier ones and then defer to the earlier panic.
+    #[test]
+    fn e2e_par_branch_panic_reports_the_earlier_panic_when_a_later_one_is_faster() {
+        let src = r#"fn busy(v: ref Vec[i64], rounds: i64, d: i64) -> i64 {
+    let mut s = 0;
+    let mut r = 0;
+    while r < rounds {
+        let mut i = 0;
+        while i < v.len() {
+            s = (s + v[i] * r) % 1000003;
+            i += 1;
+        }
+        r += 1;
+    }
+    return s / d;
+}
+fn grow(v: ref Vec[i64], n: i64) -> i64 {
+    let mut m = 1;
+    while m <= n {
+        m += m;
+    }
+    return m + v.len();
+}
+fn slow(v: ref Vec[i64], label: String, rounds: i64, d: i64) {
+    println(f"{label} {busy(v, rounds, d)}");
+}
+fn fast(v: ref Vec[i64], label: String, n: i64) {
+    println(f"{label} {grow(v, n)}");
+}
+fn main() {
+    let v: Vec[i64] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9];
+    println("start");
+    slow(v, "a", 200000, 1);
+    fast(v, "b", 10);
+    slow(v, "c", 300000, 0);
+    fast(v, "d", 4611686018427387904);
+    fast(v, "e", 3);
+    println("end");
+}
+"#;
+        if let Some(out) = run_program_output(src) {
+            let (stdout, stderr) = (
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            );
+            assert_eq!(out.status.code(), Some(101), "stderr={:?}", stderr);
+            assert_eq!(stdout, "start\na 680039\nb 31\n");
+            assert!(
+                stderr.contains("division by zero") && !stderr.contains("overflow"),
+                "stderr={:?}",
+                stderr
             );
         }
     }

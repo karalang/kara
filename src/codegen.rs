@@ -2957,6 +2957,12 @@ impl<'ctx> Codegen<'ctx> {
             write_console_type,
             Some(Linkage::Internal),
         );
+        // B-2026-10-03-2 — see `RuntimeFns::par_panic_hook_fn`.
+        let par_panic_hook_fn = module.add_function(
+            "__karac_par_panic_hook",
+            context.void_type().fn_type(&[], false),
+            Some(Linkage::Internal),
+        );
         // B-2026-07-30-9 — the line-atomic sibling. Body is emitted by
         // `finalize_write_console_line_wrapper`, which must run AFTER
         // `finalize_write_console_wrapper` so the callee already has one.
@@ -6672,6 +6678,7 @@ impl<'ctx> Codegen<'ctx> {
                 fprintf_fn,
                 snprintf_fn,
                 write_console_fn,
+                par_panic_hook_fn,
                 write_console_line_fn,
                 malloc_fn,
                 alloc_fallible_fn,
@@ -9829,6 +9836,26 @@ impl<'ctx> Codegen<'ctx> {
             || par_used("karac_par_reduce");
 
         let saved = self.builder.get_insert_block();
+        // B-2026-10-03-2 — the panic hook, on the same use-check.
+        let hook = self.runtime_fns.par_panic_hook_fn;
+        if hook.get_first_basic_block().is_none() {
+            let entry = self.context.append_basic_block(hook, "entry");
+            self.builder.position_at_end(entry);
+            if needs_capture {
+                let flush = self
+                    .module
+                    .get_function("karac_runtime_par_panic_flush")
+                    .unwrap_or_else(|| {
+                        self.module.add_function(
+                            "karac_runtime_par_panic_flush",
+                            self.context.void_type().fn_type(&[], false),
+                            Some(inkwell::module::Linkage::External),
+                        )
+                    });
+                self.builder.build_call(flush, &[], "").unwrap();
+            }
+            self.builder.build_return(None).unwrap();
+        }
         let entry = self.context.append_basic_block(wrapper, "entry");
         self.builder.position_at_end(entry);
         let data = wrapper.get_nth_param(0).unwrap();

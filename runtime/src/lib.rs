@@ -566,6 +566,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     keep!(
         karac_par_run,
         karac_par_run_auto,
+        // B-2026-10-03-2 — called by every panic body of a par-dispatching
+        // module.
+        karac_runtime_par_panic_flush,
         karac_par_reduce,
         karac_error_trace_push,
         karac_error_trace_clear,
@@ -1621,6 +1624,219 @@ pub unsafe extern "C" fn karac_runtime_write_console(
     }
 }
 
+// ── Ordered output across a panicking branch (B-2026-10-03-2) ──────────────
+//
+// A Kāra panic is `fprintf(stderr, ..)` + `exit(101)` emitted straight into the
+// user's code, so a panic inside a parallel branch used to end the process with
+// every branch's capture still unreplayed: the output of the branches BEFORE
+// it in source order, which a sequential run prints, was lost along with its
+// own. Measured: `show(v, 5); show(v, 7); show(v, 1 << 62)` auto-parallelized
+// printed nothing but the panic, where `KARAC_AUTO_PAR=0` printed both lines.
+//
+// Codegen's panic body now calls [`karac_runtime_par_panic_flush`] first (only
+// in a module that dispatches `par`; see `finalize_write_console_wrapper`). It
+// walks the panicking thread's branch chain outward. At each level it waits
+// until every EARLIER branch of that region has finished, replays those
+// branches' captures and then the panicking branch's own into the region's
+// enclosing context, and moves up. That is what the region's join would have
+// replayed had the panicking branch been the last one, which is the
+// sequential answer: everything before the panic, nothing after it.
+//
+// Two branches of one region can panic at once. Sequentially only the earlier
+// one ever runs, so each records its index with `fetch_min` and a branch that
+// sees an earlier index parks for good, leaving the process to the earlier
+// one's `exit`. That also keeps `exit` from being entered twice.
+
+/// The bookkeeping one `par` region exposes to the panic path. Lives on the
+/// stack of the call that dispatched the region, which cannot return while a
+/// branch of it is still panicking (that branch never finishes, so the join
+/// never passes).
+pub(crate) struct ParRegion {
+    captures: *const OutputCapture,
+    done: *const AtomicBool,
+    panicked_min: std::sync::atomic::AtomicUsize,
+    /// The dispatching thread's branch when the region started: the next
+    /// level of the chain. Null region at the top level.
+    parent: BranchCtx,
+    /// The dispatching thread's capture when the region started (null at the
+    /// top level), which is where the region's join replays to.
+    parent_redirect: *mut OutputCapture,
+    /// `Arc::as_ptr` of the pooled region's `ParCall`, so the panic path can
+    /// pick up the region's own still-queued earlier branches; 0 inline.
+    /// Unread on sequential wasm, which has no queue to pick from.
+    #[cfg_attr(
+        all(target_family = "wasm", not(feature = "wasm-threads")),
+        allow(dead_code)
+    )]
+    call_addr: usize,
+    /// The region promises sequential output: an auto-par group, or a region
+    /// run inline. A panic there WAITS for the earlier branches, because a
+    /// sequential run finishes them first. An explicit `par {}` makes no such
+    /// promise -- its siblings are cancelled by the failure, and may be
+    /// blocked on a rendezvous with the very branch that panicked, so waiting
+    /// could hang a program that should exit. There the panic replays only
+    /// the earlier branches that have already finished.
+    sequential: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct BranchCtx {
+    region: *const ParRegion,
+    idx: usize,
+}
+
+impl BranchCtx {
+    const TOP: BranchCtx = BranchCtx {
+        region: ptr::null(),
+        idx: 0,
+    };
+
+    /// The innermost branch this thread is running, or [`Self::TOP`].
+    fn current() -> BranchCtx {
+        BRANCH_STACK
+            .try_with(|s| s.borrow().last().copied())
+            .ok()
+            .flatten()
+            .unwrap_or(BranchCtx::TOP)
+    }
+}
+
+thread_local! {
+    /// The parallel branches this thread is running, innermost last: one
+    /// entry per branch body on this thread's stack, which is more than one
+    /// when a join work-helps another region's branch. Pushed and popped by
+    /// [`BranchGuard`], beside the `OUTPUT_REDIRECT` install.
+    static BRANCH_STACK: std::cell::RefCell<Vec<BranchCtx>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct BranchGuard;
+
+impl BranchGuard {
+    fn new(ctx: BranchCtx) -> Self {
+        let _ = BRANCH_STACK.try_with(|s| s.borrow_mut().push(ctx));
+        BranchGuard
+    }
+}
+
+impl Drop for BranchGuard {
+    fn drop(&mut self) {
+        let _ = BRANCH_STACK.try_with(|s| s.borrow_mut().pop());
+    }
+}
+
+/// Marks branch `idx` of a region finished when dropped: after the branch
+/// body returns, or when its task is discarded unrun (a cancelled region),
+/// which counts as finished too since it will never write anything.
+struct DoneMark {
+    done: usize,
+}
+
+impl Drop for DoneMark {
+    fn drop(&mut self) {
+        unsafe { (*(self.done as *const AtomicBool)).store(true, Ordering::Release) };
+    }
+}
+
+/// Replay, ahead of a panic message, the output a sequential run would have
+/// printed before it. See the section comment. A no-op outside a parallel
+/// branch.
+///
+/// # Safety
+///
+/// Called only from codegen's panic body, on the panicking thread, which
+/// exits right after.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_par_panic_flush() {
+    unsafe {
+        // Earlier branches suspended beneath this one on THIS thread (a join
+        // that work-helped its way here) can never finish first; their
+        // captures are stable because their thread is this one, so they are
+        // replayed as they stand rather than waited for.
+        let own: Vec<BranchCtx> = BRANCH_STACK
+            .try_with(|s| s.borrow().clone())
+            .unwrap_or_default();
+        let mut ctx = BranchCtx::current();
+        while !ctx.region.is_null() {
+            let r = &*ctx.region;
+            r.panicked_min.fetch_min(ctx.idx, Ordering::AcqRel);
+            let finished = |j: usize| {
+                (*r.done.add(j)).load(Ordering::Acquire)
+                    || own.contains(&BranchCtx {
+                        region: ctx.region,
+                        idx: j,
+                    })
+            };
+            loop {
+                if r.panicked_min.load(Ordering::Acquire) < ctx.idx {
+                    // An earlier branch is panicking: it owns the exit.
+                    loop {
+                        std::thread::park();
+                    }
+                }
+                if !r.sequential || (0..ctx.idx).all(finished) {
+                    break;
+                }
+                par_panic_help(r, ctx.idx);
+            }
+            {
+                let _redir = OutputRedirectGuard::new(r.parent_redirect);
+                for j in 0..ctx.idx {
+                    // Only reachable unfinished in an explicit region, where
+                    // the branch counts as cancelled; its capture is still
+                    // being written, so it is not read.
+                    if finished(j) {
+                        (*r.captures.add(j)).replay();
+                    }
+                }
+                (*r.captures.add(ctx.idx)).replay();
+            }
+            ctx = r.parent;
+        }
+        // One exit. Within a sequential region the earliest panic is the only
+        // one to get here; across explicit regions two can, and the loser
+        // parks rather than enter `exit` a second time.
+        if PAR_PANIC_EXITING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            loop {
+                std::thread::park();
+            }
+        }
+    }
+}
+
+/// Set by the first panic that leaves [`karac_runtime_par_panic_flush`].
+static PAR_PANIC_EXITING: AtomicBool = AtomicBool::new(false);
+
+/// While the panic path waits for a region's earlier branches, run any of
+/// them still sitting in the pool's queue, so the wait cannot depend on a
+/// worker coming free. Otherwise yield.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+fn par_panic_help(r: &ParRegion, idx: usize) {
+    if r.call_addr != 0 {
+        let task = {
+            let mut q = pool().queue.lock().unwrap_or_else(|e| e.into_inner());
+            q.iter()
+                .position(|t| {
+                    Arc::as_ptr(&t.call) as usize == r.call_addr && (t.branch_idx as usize) < idx
+                })
+                .and_then(|pos| q.remove(pos))
+        };
+        if let Some(task) = task {
+            execute_task(task);
+            return;
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_micros(50));
+}
+
+/// Sequential regions finish each branch before starting the next, so there
+/// is never an earlier branch left to wait for.
+#[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
+fn par_panic_help(_r: &ParRegion, _idx: usize) {}
+
 // ── Long-lived worker pool for `karac_par_run` ─────────────────────────────
 //
 // One global pool of N = `resolve_pool_workers()` worker threads,
@@ -1905,6 +2121,11 @@ fn execute_task(task: Task) {
             // Fail-fast: cancel siblings still in the queue.
             call.cancel.store(true, Ordering::Relaxed);
         }
+    } else {
+        // B-2026-10-03-2 — drop the unrun closure BEFORE the decrement below:
+        // its captures include the region's `DoneMark`, which points into the
+        // dispatching frame that the last decrement lets return.
+        drop(run);
     }
 
     // Decrement-and-signal happens unconditionally so the caller's
@@ -1996,7 +2217,7 @@ pub unsafe extern "C" fn karac_par_run(
 
         #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
         {
-            karac_par_run_pooled(branches, count, spawn_site_id, parent_cancel);
+            karac_par_run_pooled(branches, count, spawn_site_id, parent_cancel, false);
         }
     }
 }
@@ -2056,7 +2277,7 @@ pub unsafe extern "C" fn karac_par_run_auto(
             if PAR_REDUCE_DEPTH.with(|d| d.get()) >= resolve_max_fork_depth() {
                 seq_par_run(branches, count, spawn_site_id, parent_cancel);
             } else {
-                karac_par_run_pooled(branches, count, spawn_site_id, parent_cancel);
+                karac_par_run_pooled(branches, count, spawn_site_id, parent_cancel, true);
             }
         }
     }
@@ -2075,6 +2296,10 @@ unsafe fn karac_par_run_pooled(
     count: usize,
     spawn_site_id: u32,
     parent_cancel: *const AtomicBool,
+    // B-2026-10-03-2 — a compiler-derived region, whose branches are
+    // independent by construction, rather than an explicit `par {}`, whose
+    // branches may rendezvous. See `ParRegion::sequential`.
+    auto: bool,
 ) {
     unsafe {
         // A `?` chain crossing into these branches can no longer be recovered
@@ -2102,6 +2327,23 @@ unsafe fn karac_par_run_pooled(
         // task writes only its own element (through `OUTPUT_REDIRECT`); the parent
         // reads them only after the join barrier, which establishes happens-before.
         let mut captures: Vec<OutputCapture> = (0..count).map(|_| OutputCapture::new()).collect();
+        // B-2026-10-03-2 — what a panicking branch needs to replay the
+        // branches before it (see `karac_runtime_par_panic_flush`). One base
+        // pointer, so the per-branch addresses below derive from it.
+        let caps = captures.as_mut_ptr();
+        let done: Vec<AtomicBool> = (0..count).map(|_| AtomicBool::new(false)).collect();
+        let region = ParRegion {
+            captures: caps,
+            done: done.as_ptr(),
+            panicked_min: std::sync::atomic::AtomicUsize::new(usize::MAX),
+            parent: BranchCtx::current(),
+            parent_redirect: OUTPUT_REDIRECT
+                .try_with(|c| c.get())
+                .unwrap_or(ptr::null_mut()),
+            call_addr: Arc::as_ptr(&call) as usize,
+            sequential: auto,
+        };
+        let region_addr = &region as *const ParRegion as usize;
 
         // `dbg()` task tags (design.md § `dbg()` — "[task:3 src/main.kara:42]").
         // Reserved ONCE for the whole region, before any branch is queued, so
@@ -2114,7 +2356,8 @@ unsafe fn karac_par_run_pooled(
         let p = pool();
         {
             let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
-            for (i, cap) in captures.iter_mut().enumerate() {
+            for i in 0..count {
+                let cap = &mut *caps.add(i);
                 let b = &*branches.add(i);
                 // Round-trip the pointers through `usize` so the closure is
                 // `Send` without an unsafe impl on the raw FFI types. Slice
@@ -2126,15 +2369,27 @@ unsafe fn karac_par_run_pooled(
                 let ctx_addr = b.ctx as usize;
                 let cap_addr = (cap as *mut OutputCapture) as usize;
                 let task_id = task_id_base + i as u64;
+                // Set when the branch body returns, or when the task is
+                // dropped unrun; see `DoneMark`.
+                let mark = DoneMark {
+                    done: done.as_ptr().add(i) as usize,
+                };
                 q.push_back(Task {
                     call: Arc::clone(&call),
                     branch_idx: i as u32,
                     run: Box::new(move |cancel: &AtomicBool| {
+                        // Declared first, so it drops last: the branch counts
+                        // as finished only once its capture is complete.
+                        let _mark = mark;
                         // Redirect this branch's console output into its capture
                         // for the branch's whole extent (transitive prints from
                         // called fns included). RAII-restored on return OR unwind,
                         // and to the PREVIOUS value so a nested `par` branch nests.
                         let _redir = OutputRedirectGuard::new(cap_addr as *mut OutputCapture);
+                        let _branch = BranchGuard::new(BranchCtx {
+                            region: region_addr as *const ParRegion,
+                            idx: i,
+                        });
                         // This branch's `dbg()` task tag, RAII-restored to the
                         // enclosing branch's id (0 at the top level) so a nested
                         // `par` unwinds to its outer tag rather than to "no par".
@@ -2221,9 +2476,29 @@ pub(crate) unsafe fn seq_par_run(
         // pooled path. Stable addresses (no push after build), one writer per
         // element, read only after the (here implicit, source-order) join.
         let mut captures: Vec<OutputCapture> = (0..count).map(|_| OutputCapture::new()).collect();
+        // B-2026-10-03-2 — the panic path's view of this region; see the
+        // pooled path. Branches here finish in order on this thread, so a
+        // panicking one never waits.
+        let caps = captures.as_mut_ptr();
+        let done: Vec<AtomicBool> = (0..count).map(|_| AtomicBool::new(false)).collect();
+        let region = ParRegion {
+            captures: caps,
+            done: done.as_ptr(),
+            panicked_min: std::sync::atomic::AtomicUsize::new(usize::MAX),
+            parent: BranchCtx::current(),
+            parent_redirect: OUTPUT_REDIRECT
+                .try_with(|c| c.get())
+                .unwrap_or(ptr::null_mut()),
+            call_addr: 0,
+            sequential: true,
+        };
         // Same source-order `dbg()` task-id reservation as the pooled path.
         let task_id_base = crate::dbg::reserve_task_ids(count as u64);
-        for (i, cap) in captures.iter_mut().enumerate() {
+        for i in 0..count {
+            let cap = &mut *caps.add(i);
+            let _mark = DoneMark {
+                done: done.as_ptr().add(i) as usize,
+            };
             // Cascade an enclosing cancellation inward before each branch.
             if !parent_cancel.is_null() && (*parent_cancel).load(Ordering::Relaxed) {
                 cancel.store(true, Ordering::Relaxed);
@@ -2232,6 +2507,10 @@ pub(crate) unsafe fn seq_par_run(
             // Redirect this branch's console output into its capture (RAII-restored
             // to the enclosing context at iteration end, so a nested `par` nests).
             let _redir = OutputRedirectGuard::new(cap as *mut OutputCapture);
+            let _branch = BranchGuard::new(BranchCtx {
+                region: &region as *const ParRegion,
+                idx: i,
+            });
             let _task = crate::dbg::TaskIdGuard::new(task_id_base + i as u64);
             // B-2026-08-17-14 — same depth accounting as the pooled branch body.
             let _depth = ParReduceDepthGuard::enter();

@@ -60,6 +60,13 @@ pub(crate) struct RuntimeFns<'ctx> {
     /// work keeps sequential output order. `size_t`-width `len` (i32 wasm32 /
     /// i64 native) matches the runtime's `usize` parameter.
     pub(crate) write_console_fn: FunctionValue<'ctx>,
+    /// B-2026-10-03-2 — `void __karac_par_panic_hook()`, called by every
+    /// outlined panic body before it prints. Internal; its body is emitted by
+    /// `finalize_write_console_wrapper` once the par use-check is final: a call
+    /// to `karac_runtime_par_panic_flush` in a module that dispatches `par`
+    /// (so a panicking branch first replays what the branches before it
+    /// printed), an empty return otherwise, which inlines to nothing.
+    pub(crate) par_panic_hook_fn: FunctionValue<'ctx>,
     /// B-2026-07-30-9 — `__karac_write_console_line(data, len, nl, nl_len,
     /// stream)`: stage a payload and its trailing newline into ONE buffer and
     /// hand them to [`Self::write_console_fn`] as a single write, so a `println`
