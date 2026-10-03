@@ -244,6 +244,41 @@ impl<'a> super::Interpreter<'a> {
         false
     }
 
+    /// `<` / `<=` / `>` / `>=` on two tuples or two arrays whose static type
+    /// nests an unsigned 64/128-bit integer (B-2026-10-03-24): the typed walk
+    /// that reads each unsigned leaf as unsigned. `None` hands the operands
+    /// back to `eval_binary` unchanged, so every other comparison is exactly
+    /// what it was, and the same total-order gates the tuple and array arms
+    /// apply decline a bare-float element here too.
+    pub(crate) fn typed_aggregate_order(
+        &self,
+        op: &BinOp,
+        l: &Value,
+        r: &Value,
+        left_span: &Span,
+    ) -> Option<Value> {
+        let gated = match (l, r) {
+            (Value::Tuple(_), Value::Tuple(_)) => {
+                Self::value_is_totally_ordered(l) && Self::value_is_totally_ordered(r)
+            }
+            (Value::Array(_), Value::Array(_)) => {
+                Self::array_elems_totally_ordered(l) && Self::array_elems_totally_ordered(r)
+            }
+            _ => false,
+        };
+        if !gated {
+            return None;
+        }
+        let ty = self.span_nested_unsigned_type(left_span)?;
+        let ord = super::helpers::value_compare_typed(l, r, &ty);
+        Some(Value::Bool(match op {
+            BinOp::Lt => ord.is_lt(),
+            BinOp::LtEq => ord.is_le(),
+            BinOp::Gt => ord.is_gt(),
+            _ => ord.is_ge(),
+        }))
+    }
+
     /// `true` when every leaf of `v` carries a TOTAL order, so
     /// `value_compare`'s answer is the one `<` should give.
     ///
@@ -1833,6 +1868,19 @@ impl<'a> super::Interpreter<'a> {
     pub(crate) fn span_expr_type(&self, span: &Span) -> Option<crate::typechecker::Type> {
         let key = crate::resolver::SpanKey::from_span(span);
         self.typecheck_result.expr_types.get(&key).cloned()
+    }
+
+    /// The static type at `span` when it holds an unsigned 64/128-bit integer
+    /// nested inside a tuple or container element, for the typed comparator
+    /// (`value_compare_typed`, B-2026-10-03-24). `None` for every other type,
+    /// so the callers keep their existing comparator exactly.
+    pub(crate) fn span_nested_unsigned_type(
+        &self,
+        span: &Span,
+    ) -> Option<crate::typechecker::types::Type> {
+        let key = crate::resolver::SpanKey::from_span(span);
+        let ty = self.typecheck_result.expr_types.get(&key)?;
+        super::helpers::type_nests_unsigned(ty).then(|| ty.clone())
     }
 
     pub(crate) fn span_unsigned_int_width(&self, span: &Span) -> Option<u32> {

@@ -81,6 +81,105 @@ pub(super) fn value_compare_u128(a: &Value, b: &Value) -> std::cmp::Ordering {
     }
 }
 
+/// [`value_compare`] steered by the operands' static type, for an unsigned
+/// integer NESTED inside an aggregate (B-2026-10-03-24).
+///
+/// The i64 carrier makes `u64::MAX` and `-1` the same `Value::Int`, so the
+/// top-level unsigned dispatch (`value_compare_u64`, selected from the
+/// element type) cannot reach a `u64` that sits inside a tuple or a nested
+/// `Vec`: `(u64::MAX, 1) < (0, 1)` answered `true` and
+/// `Vec[(u64, i8)].sort()` put `u64::MAX` ahead of `0`, where both compiled
+/// backends order it last. This walks the type alongside the values and
+/// reinterprets each unsigned leaf it reaches; any shape it does not
+/// recognise falls back to the untyped comparator for that subtree.
+pub(super) fn value_compare_typed(
+    a: &Value,
+    b: &Value,
+    ty: &crate::typechecker::types::Type,
+) -> std::cmp::Ordering {
+    use crate::typechecker::types::{Type, UIntSize};
+    use std::cmp::Ordering;
+    fn lexi<'v>(
+        xs: impl Iterator<Item = (&'v Value, &'v Value)>,
+        tys: &mut dyn FnMut(usize) -> Option<Type>,
+        lens: (usize, usize),
+    ) -> Ordering {
+        for (i, (x, y)) in xs.enumerate() {
+            let ord = match tys(i) {
+                Some(t) => value_compare_typed(x, y, &t),
+                None => value_compare(x, y),
+            };
+            if ord != Ordering::Equal {
+                return ord;
+            }
+        }
+        lens.0.cmp(&lens.1)
+    }
+    match (ty, a, b) {
+        (Type::UInt(UIntSize::U64 | UIntSize::Usize), Value::Int(_), Value::Int(_)) => {
+            value_compare_u64(a, b)
+        }
+        (Type::UInt(UIntSize::U128), Value::Int(_), Value::Int(_)) => value_compare_u128(a, b),
+        (Type::Tuple(ts), Value::Tuple(xs), Value::Tuple(ys)) => lexi(
+            xs.iter().zip(ys.iter()),
+            &mut |i| ts.get(i).cloned(),
+            (xs.len(), ys.len()),
+        ),
+        (
+            Type::Array { element, .. } | Type::Slice { element, .. },
+            Value::Array(x),
+            Value::Array(y),
+        ) => {
+            let (xv, yv) = (x.read().unwrap(), y.read().unwrap());
+            lexi(
+                xv.iter().zip(yv.iter()),
+                &mut |_| Some((**element).clone()),
+                (xv.len(), yv.len()),
+            )
+        }
+        (Type::Named { name, args }, Value::Array(x), Value::Array(y))
+            if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+        {
+            let (xv, yv) = (x.read().unwrap(), y.read().unwrap());
+            lexi(
+                xv.iter().zip(yv.iter()),
+                &mut |_| Some(args[0].clone()),
+                (xv.len(), yv.len()),
+            )
+        }
+        _ => value_compare(a, b),
+    }
+}
+
+/// Whether `ty` holds a 64- or 128-bit unsigned integer BELOW an aggregate
+/// layer the typed comparator walks (a tuple element, or a nested container's
+/// element). A bare unsigned type answers `false`: the existing top-level
+/// dispatch already orders it. B-2026-10-03-24.
+pub(super) fn type_nests_unsigned(ty: &crate::typechecker::types::Type) -> bool {
+    use crate::typechecker::types::{Type, UIntSize};
+    fn any(t: &Type) -> bool {
+        match t {
+            Type::UInt(UIntSize::U64 | UIntSize::Usize | UIntSize::U128) => true,
+            Type::Tuple(ts) => ts.iter().any(any),
+            Type::Array { element, .. } | Type::Slice { element, .. } => any(element),
+            Type::Named { name, args }
+                if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+            {
+                any(&args[0])
+            }
+            _ => false,
+        }
+    }
+    match ty {
+        Type::Tuple(ts) => ts.iter().any(any),
+        Type::Array { element, .. } | Type::Slice { element, .. } => any(element),
+        Type::Named { name, args } if (name == "Vec" || name == "VecDeque") && args.len() == 1 => {
+            any(&args[0])
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a, b) {

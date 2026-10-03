@@ -4161,7 +4161,20 @@ impl<'a> super::Interpreter<'a> {
             }
         {
             let other = self.eval_expr_inner(&args[0].value);
-            let ord = value_compare(&obj, &other);
+            // B-2026-10-03-24 — a tuple with an unsigned leaf compares
+            // through the typed walk, as `<` and `sort()` do. The argument's
+            // span is the fallback because the receiver's may be clobbered by
+            // the call's own result type.
+            let nested = match &obj {
+                Value::Tuple(_) => self
+                    .span_nested_unsigned_type(&object.span)
+                    .or_else(|| self.span_nested_unsigned_type(&args[0].value.span)),
+                _ => None,
+            };
+            let ord = match &nested {
+                Some(ty) => super::helpers::value_compare_typed(&obj, &other, ty),
+                None => value_compare(&obj, &other),
+            };
             let ordering = Value::EnumVariant {
                 enum_name: "Ordering".to_string(),
                 variant: match ord {

@@ -11,7 +11,9 @@ use std::sync::Arc;
 use crate::ast::*;
 use crate::token::Span;
 
-use super::helpers::{eval_http_get, value_compare, value_compare_u128, value_compare_u64};
+use super::helpers::{
+    eval_http_get, value_compare, value_compare_typed, value_compare_u128, value_compare_u64,
+};
 use super::value::narrow_to_i64;
 use super::value::{try_write_or_panic, EnumData, IteratorSource, OrdValue, Value};
 use crate::interpreter::deep_clone_value;
@@ -1305,7 +1307,26 @@ impl<'a> super::Interpreter<'a> {
                         Some(128) => value_compare_u128,
                         _ => value_compare,
                     };
-                    return Some(match v.binary_search_by(|probe| cmp(probe, &needle)) {
+                    // B-2026-10-03-24 — an unsigned leaf inside the element
+                    // takes the typed walk; the receiver's type is `Vec[T]`, so
+                    // peel to `T` first.
+                    let nested =
+                        self.span_nested_unsigned_type(&object.span)
+                            .and_then(|t| match t {
+                                crate::typechecker::types::Type::Named { name, mut args }
+                                    if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                                {
+                                    Some(args.remove(0))
+                                }
+                                _ => None,
+                            });
+                    let found = match &nested {
+                        Some(ty) => {
+                            v.binary_search_by(|probe| value_compare_typed(probe, &needle, ty))
+                        }
+                        None => v.binary_search_by(|probe| cmp(probe, &needle)),
+                    };
+                    return Some(match found {
                         Ok(i) => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
@@ -1511,6 +1532,13 @@ impl<'a> super::Interpreter<'a> {
                     // clobbers the receiver span, so element signedness comes
                     // from the element type the typechecker stashes at the
                     // non-aliased close-paren leaf.
+                    // B-2026-10-03-24 — an unsigned leaf INSIDE the element
+                    // (`Vec[(u64, i8)]`) needs the typed walk.
+                    if let Some(ty) = self.span_nested_unsigned_type(args_close_span) {
+                        try_write_or_panic(rc, &label)
+                            .sort_by(|a, b| value_compare_typed(a, b, &ty));
+                        return Some(Value::Unit);
+                    }
                     let cmp = match self.span_unsigned_int_width(args_close_span) {
                         Some(64) => value_compare_u64,
                         Some(128) => value_compare_u128,
@@ -1659,9 +1687,15 @@ impl<'a> super::Interpreter<'a> {
                         Some(128) => value_compare_u128,
                         _ => value_compare,
                     };
-                    let sorted = v
-                        .windows(2)
-                        .all(|w| cmp(&w[0], &w[1]) != std::cmp::Ordering::Greater);
+                    // B-2026-10-03-24 — the typed walk, as `sort` uses.
+                    let nested = self.span_nested_unsigned_type(args_close_span);
+                    let sorted = v.windows(2).all(|w| {
+                        let ord = match &nested {
+                            Some(ty) => value_compare_typed(&w[0], &w[1], ty),
+                            None => cmp(&w[0], &w[1]),
+                        };
+                        ord != std::cmp::Ordering::Greater
+                    });
                     return Some(Value::Bool(sorted));
                 }
             }
@@ -1675,6 +1709,11 @@ impl<'a> super::Interpreter<'a> {
                     let mut v = rc.read().unwrap().clone();
                     // Unsigned order for `Vec[u64]` / `Vec[usize]` (B-2026-07-04-8);
                     // element signedness from the stashed close-paren leaf.
+                    if let Some(ty) = self.span_nested_unsigned_type(args_close_span) {
+                        // B-2026-10-03-24 — the typed walk, as `sort` uses.
+                        v.sort_by(|a, b| value_compare_typed(a, b, &ty));
+                        return Some(Value::array_of(v));
+                    }
                     let cmp = match self.span_unsigned_int_width(args_close_span) {
                         Some(64) => value_compare_u64,
                         Some(128) => value_compare_u128,

@@ -400,6 +400,14 @@ impl<'a> super::Interpreter<'a> {
                 let unsigned_hint = self
                     .span_unsigned_int_width(&left.span)
                     .or_else(|| self.span_unsigned_int_width(&right.span));
+                // B-2026-10-03-24 — the same question one level down: an
+                // unsigned element inside a tuple or array operand, which no
+                // single width hint can describe.
+                if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq) {
+                    if let Some(b) = self.typed_aggregate_order(op, &l, &r, &left.span) {
+                        return b;
+                    }
+                }
                 self.eval_binary(op, l, r, &expr.span, unsigned_hint)
             }
             ExprKind::Unary { op, operand } => {
