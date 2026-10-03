@@ -243,6 +243,49 @@ fn merge_tensor_dim(l: &DimArg, r: &DimArg) -> Result<DimArg, ()> {
 }
 
 impl<'a> super::TypeChecker<'a> {
+    /// B-2026-10-03-33 — a comparison between a signed and an unsigned
+    /// integer is a type error (design.md § Integer overflow: "Mixed-signedness
+    /// across `lhs` and `rhs` is a type error at the call site — cast
+    /// explicitly with `as`"). The arithmetic arm enforced it and the
+    /// comparison arms did not, so `u > k` over `u: u8`, `k: i64` type-checked
+    /// and the backends then disagreed: the interpreter compared the values
+    /// (`3 > -1` is true) and the compiled code compared at one width and one
+    /// signedness (`-1` became 255, so false). Emits the error and returns
+    /// true when the operands mix signedness; a literal promoted to its peer
+    /// has already taken the peer's type and never reaches here mixed.
+    ///
+    /// A literal beside a BORROWED integer (`b == 43` over a `ref u8` match
+    /// binding) is not promoted, because promotion asks `is_numeric` of the
+    /// unstripped type, so it still carries its default `i64` here. It is
+    /// exempt as long as promotion would have accepted it at the stripped
+    /// type; a negated literal out of the peer's range (`b > -1`) is not.
+    fn reject_mixed_signedness_compare(
+        &mut self,
+        (left_e, left): (&Expr, &Type),
+        (right_e, right): (&Expr, &Type),
+        span: &Span,
+    ) -> bool {
+        let mixed = matches!(
+            (left, right),
+            (Type::Int(_), Type::UInt(_)) | (Type::UInt(_), Type::Int(_))
+        ) && Self::unsuffixed_num_literal(left_e, right).is_none()
+            && Self::unsuffixed_num_literal(right_e, left).is_none();
+        if mixed {
+            self.type_error(
+                format!(
+                    "cannot compare '{}' and '{}': mixing signed and unsigned integers \
+                     is a type error -- cast one operand with `as` so both have the \
+                     same signedness",
+                    type_display(left),
+                    type_display(right)
+                ),
+                *span,
+                TypeErrorKind::InvalidBinaryOp,
+            );
+        }
+        mixed
+    }
+
     /// Whether `e` is a literal Q4 promotion re-types to the numeric `peer`
     /// type: an UNSUFFIXED literal, bare (`1`, `1.5`) or negated (`-1`,
     /// `-1.5`, which parse as `Neg(literal)`). `Some(is_float)` when it is.
@@ -2971,6 +3014,11 @@ impl<'a> super::TypeChecker<'a> {
                         *span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
+                } else if self.reject_mixed_signedness_compare(
+                    (left, cmp_left),
+                    (right, cmp_right),
+                    span,
+                ) {
                 } else if !self.type_supports_partial_eq(cmp_left) {
                     self.type_error(
                         // B-2026-08-25-30 — name the PARTIAL trait: the
@@ -3011,6 +3059,11 @@ impl<'a> super::TypeChecker<'a> {
                         *span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
+                } else if self.reject_mixed_signedness_compare(
+                    (left, cmp_left),
+                    (right, cmp_right),
+                    span,
+                ) {
                 } else if matches!(cmp_left, Type::Named { name, .. } if self.env.distinct_types.contains_key(name))
                     && !self.type_supports_partial_ord(cmp_left)
                     && !self.ordering_operator_dispatches(cmp_left)

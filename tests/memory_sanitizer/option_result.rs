@@ -3973,7 +3973,8 @@ fn from_arr(arr: Vec[i64]) -> Option[Node] {
     let head = Node { val: arr[0], next: None };
     let mut tail = head;
     let mut i = 1u64;
-    while i < n {
+    // `as u64`: comparing u64 with i64 is a type error (B-2026-10-03-33).
+    while i < n as u64 {
         let node = Node { val: arr[i], next: None };
         tail.next = Some(node);
         tail = node;
