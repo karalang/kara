@@ -162,6 +162,22 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Continuation
         self.builder.position_at_end(cont_bb);
+        // B-2026-09-26-28 — free a fresh `String` / `Vec` operand, exactly as
+        // the `==` operator site does (`exprs.rs`, B-2026-08-11-24). Both
+        // operands are compiled here and compared by value, so nothing else
+        // owns one that is a fresh temp: `assert_eq(mk(5), f"w5")` lost the
+        // call's buffer, and `assert_eq(if c { f"w{5}" } else { f"z" }, ..)`
+        // the taken tail's. `free_fresh_owned_str_arg` self-gates to
+        // fresh-owned shapes, so a binding, place or literal operand is
+        // untouched. Only the continuation needs it: the failure path exits.
+        // A fresh user-STRUCT operand (the operator's B-2026-08-11-33 arm) is
+        // left alone here, since owning it would also start running its
+        // `Drop` body.
+        for (arg, val) in [(&args[0].value, l_val), (&args[1].value, r_val)] {
+            if val.is_struct_value() && self.llvm_ty_is_vec_struct(val.get_type()) {
+                self.free_fresh_owned_str_arg(arg, val);
+            }
+        }
         Ok(self.context.i64_type().const_zero().into())
     }
 
