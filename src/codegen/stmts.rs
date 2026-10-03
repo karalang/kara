@@ -6935,6 +6935,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         && !crate::deque_head::expr_mentions_name_deep(value, n)
                     {
                         self.fn_ctx.current_fn_param_names.remove(n);
+                        // B-2026-10-03-26 — nor a caller-retained one: the
+                        // local's payload bodies are this frame's to run.
+                        self.payload_vars.caller_retained_optres_params.remove(n);
                     }
                 }
                 self.var_types.pending_let_elem_type = saved_pending_let_elem;

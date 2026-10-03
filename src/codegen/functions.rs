@@ -1533,6 +1533,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.cond_move_drop_flag_slots.clear();
         self.drop_rc.retracted_live_generations.clear();
         self.drop_rc.cond_move_mem_drop_flags.clear();
+        self.drop_rc.cond_move_box_drop_flags.clear();
         // B-2026-09-02-5 — keyed by the same function-scoped allocas.
         self.drop_rc.param_view_mem_drops.clear();
         self.drop_rc.optres_payload_bodies_flags.clear();

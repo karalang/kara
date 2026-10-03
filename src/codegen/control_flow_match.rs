@@ -21377,10 +21377,22 @@ impl<'ctx> super::Codegen<'ctx> {
         if !takes_payload && self.optres_scrutinee_payload_registers_no_drop(&name) {
             return;
         }
-        if self
-            .payload_vars
-            .callee_owned_payload_bodies_params
-            .contains(&name)
+        // B-2026-10-03-26 — a `let` view of a by-value param's envelope
+        // (`let r = if c { a } else { None }`) owns the bodies through its own
+        // walk, gated on the path that built its own value; on the path that
+        // took the param they are the caller's. An arm that only reads the
+        // payload is a view on both.
+        let let_view = !takes_payload
+            && self
+                .drop_rc
+                .let_view_owns_bits
+                .get(name.as_str())
+                .is_some_and(|(f, _)| Some(*f) == self.current_fn);
+        if (let_view
+            || self
+                .payload_vars
+                .callee_owned_payload_bodies_params
+                .contains(&name))
             && patterns.iter().all(|sub| {
                 matches!(sub.kind, PatternKind::Binding(_) | PatternKind::Wildcard)
                     || Self::is_optres_variant_pattern(sub)

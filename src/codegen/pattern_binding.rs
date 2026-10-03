@@ -1647,6 +1647,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // binding is the only owner left.
                                     && (!self.pattern_state.pattern_binding_scrutinee_is_owned_param
                                         || transfer_owned_payload)
+                                    // B-2026-10-03-26 — a `let` view of a by-value
+                                    // param's envelope: its own walk keeps the body.
+                                    && (self.pattern_state.pattern_binding_scrutinee_is_owned_param
+                                        || !self
+                                            .pattern_state
+                                            .pattern_binding_scrutinee_optres_bodies_are_caller_retained)
                                     && !payload_of_masked_slot
                                     && !self
                                         .pattern_state
@@ -1879,6 +1885,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .pattern_binding_scrutinee_payload_bodies_src
                                 .filter(|_| {
                                     !self.pattern_state.pattern_binding_scrutinee_is_owned_param
+                                        // B-2026-10-03-26 — nor a `let` view
+                                        // of one, whose own walk keeps them.
+                                        && !self
+                                            .pattern_state
+                                            .pattern_binding_scrutinee_optres_bodies_are_caller_retained
                                 });
                             // B-2026-08-28-63 — a boxed user ENUM payload takes
                             // this branch too. The inline enum arm below handles

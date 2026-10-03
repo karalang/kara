@@ -455,6 +455,9 @@ pub(super) struct VarEnvSnapshot<'ctx> {
     /// B-2026-09-29-51 — a `let` that shadows a parameter takes the name out
     /// of `current_fn_param_names`; the block's exit gives it back.
     current_fn_param_names: HashSet<String>,
+    /// B-2026-10-03-26 — the same shadow takes the name out of the
+    /// caller-retained set too, and a `let` view joins it; both are scoped.
+    caller_retained_optres_params: HashSet<String>,
     owned_vecstr_params: HashSet<String>,
     for_loop_borrow_vars: HashSet<String>,
     var_type_names: HashMap<String, String>,
@@ -505,6 +508,7 @@ impl<'ctx> super::Codegen<'ctx> {
         VarEnvSnapshot {
             variables: self.variables.clone(),
             current_fn_param_names: self.fn_ctx.current_fn_param_names.clone(),
+            caller_retained_optres_params: self.payload_vars.caller_retained_optres_params.clone(),
             owned_vecstr_params: self.borrow_vars.owned_vecstr_params.clone(),
             for_loop_borrow_vars: self.borrow_vars.for_loop_borrow_vars.clone(),
             var_type_names: self.var_types.var_type_names.clone(),
@@ -634,5 +638,6 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.rc_fallback_heap_types = snap.rc_fallback_heap_types;
         self.var_types.range_let_bindings = snap.range_let_bindings;
         self.fn_ctx.current_fn_param_names = snap.current_fn_param_names;
+        self.payload_vars.caller_retained_optres_params = snap.caller_retained_optres_params;
     }
 }

@@ -176,6 +176,10 @@ struct Acc<'a> {
     /// asked of it, as an `if let`'s are asked of its body. `None` keeps the
     /// old answer, that such a binding always takes the payload.
     let_else_rest: Option<Block>,
+    /// B-2026-10-03-26 — the branch-tail spans of a seeded param that a
+    /// `let` takes through a branch (`let r = if c { a } else { None }`): the
+    /// binding is a maybe-alias of the param, so those tails are not uses.
+    alias_tail_spans: HashSet<(usize, usize)>,
 }
 
 /// B-2026-09-24-20 — the param a use of `name` counts against.
@@ -1476,6 +1480,79 @@ fn walk_block<'a>(b: &'a Block, acc: &mut Acc<'a>) {
     }
 }
 
+/// B-2026-10-03-26 — the one seeded param `e`'s branch tails name, and those
+/// tails' spans: an `if`/`if let`/`match`/block whose value is, on some path,
+/// that param's whole envelope. `None` for a non-branch, a tail naming no
+/// seeded param, or tails naming two.
+fn branch_param_tails<'a>(acc: &Acc<'a>, e: &'a Expr) -> Option<(&'a str, Vec<(usize, usize)>)> {
+    fn walk<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+        match &e.kind {
+            ExprKind::Identifier(_) => out.push(e),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(t) = &then_block.final_expr {
+                    walk(t, out);
+                }
+                if let Some(x) = else_branch {
+                    walk(x, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    walk(&arm.body, out);
+                }
+            }
+            ExprKind::Block(b) => {
+                if let Some(t) = &b.final_expr {
+                    walk(t, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    if acc.alias_roots.is_empty()
+        || !matches!(
+            &e.kind,
+            ExprKind::If { .. }
+                | ExprKind::IfLet { .. }
+                | ExprKind::Match { .. }
+                | ExprKind::Block(_)
+        )
+    {
+        return None;
+    }
+    let mut tails = Vec::new();
+    walk(e, &mut tails);
+    let mut found: Option<&'a str> = None;
+    let mut spans = Vec::new();
+    for t in tails {
+        let ExprKind::Identifier(n) = &t.kind else {
+            continue;
+        };
+        if acc.shadowed.get(n.as_str()).is_some_and(|c| *c > 0) {
+            continue;
+        }
+        let r = root(acc, n.as_str());
+        if !acc.alias_roots.contains(r) {
+            continue;
+        }
+        if found.is_some_and(|f| f != r) {
+            return None;
+        }
+        found = Some(r);
+        spans.push((t.span.offset, t.span.length));
+    }
+    found.map(|r| (r, spans))
+}
+
 fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
     match &s.kind {
         StmtKind::Let {
@@ -1498,6 +1575,19 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                         && acc.alias_roots.contains(r)
                     {
                         acc.aliases.insert(name.as_str(), r);
+                        return;
+                    }
+                }
+                // B-2026-10-03-26 — `let r = if c { a } else { None }` over a
+                // seeded param: on the path that takes `a`, `r` is `a`, as
+                // `let r = a;` is, so `r`'s later uses count against `a` and
+                // the tail itself is no use. One param per binding; a tail
+                // naming two keeps the old answer.
+                if (!*is_mut || acc.demoted.contains(name.as_str())) && !acc.in_closure {
+                    if let Some((r, spans)) = branch_param_tails(acc, value) {
+                        acc.aliases.insert(name.as_str(), r);
+                        acc.alias_tail_spans.extend(spans);
+                        walk_expr(value, acc);
                         return;
                     }
                 }
@@ -1615,7 +1705,14 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         // A bare identifier reached HERE is a use in a non-`match`-scrutinee
         // position (the scrutinee case is intercepted in the `Match` arm below
         // and never recurses here), so it is an escape.
-        ExprKind::Identifier(n) => record_use(acc, n.as_str(), false),
+        ExprKind::Identifier(n) => {
+            if !acc
+                .alias_tail_spans
+                .contains(&(e.span.offset, e.span.length))
+            {
+                record_use(acc, n.as_str(), false)
+            }
+        }
         ExprKind::Match { scrutinee, arms } => {
             walk_scrutinee(acc, scrutinee);
             if let Some(n) = param_ident(acc, scrutinee) {
@@ -2225,6 +2322,50 @@ mod tests {
         assert!(
             !names.contains("d"),
             "binding captured by a closure must escape even if only matched inside"
+        );
+    }
+
+    fn by_value_nonescaping_params(src: &str) -> HashSet<String> {
+        let parsed = crate::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let func = parsed
+            .program
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("no function");
+        by_value_nonescaping_param_names(func)
+    }
+
+    /// B-2026-10-03-26 — a `let` that takes a seeded param through a branch is
+    /// the param on that path, as `let r = a` is: its reads are no escape, and
+    /// handing it on is.
+    #[test]
+    fn let_branch_of_seeded_param_is_an_alias() {
+        let read = by_value_nonescaping_params(
+            "fn f(a: Option[R], c: bool) -> i64 { let r = if c { a } else { None }; match r { Some(x) => 1, None => 0 } }",
+        );
+        assert!(
+            read.contains("a"),
+            "a branch view only read must not escape"
+        );
+        let returned = by_value_nonescaping_params(
+            "fn f(a: Option[R], c: bool) -> Option[R] { let r = if c { a } else { None }; r }",
+        );
+        assert!(!returned.contains("a"), "a returned branch view escapes");
+        let two = by_value_nonescaping_params(
+            "fn f(a: Option[R], b: Option[R], c: bool) -> i64 { let r = if c { a } else { b }; match r { _ => 0 } }",
+        );
+        assert!(
+            !two.contains("a") && !two.contains("b"),
+            "tails naming two params keep the old answer"
         );
     }
 }

@@ -4682,6 +4682,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 std::mem::take(&mut self.drop_rc.cond_move_drop_flag_slots);
             let saved_cond_move_mem_flags =
                 std::mem::take(&mut self.drop_rc.cond_move_mem_drop_flags);
+            let saved_cond_move_box_flags =
+                std::mem::take(&mut self.drop_rc.cond_move_box_drop_flags);
             let saved_optres_bodies_flags =
                 std::mem::take(&mut self.drop_rc.optres_payload_bodies_flags);
             let saved_cond_store_params = std::mem::take(&mut self.drop_rc.cond_store_flag_params);
@@ -4722,6 +4724,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
             self.drop_rc.cond_move_drop_flag_slots = saved_cond_move_flag_slots;
             self.drop_rc.cond_move_mem_drop_flags = saved_cond_move_mem_flags;
+            self.drop_rc.cond_move_box_drop_flags = saved_cond_move_box_flags;
             self.drop_rc.optres_payload_bodies_flags = saved_optres_bodies_flags;
             self.drop_rc.cond_store_flag_params = saved_cond_store_params;
             self.drop_rc.cond_take_box_params = saved_cond_take_box_params;
@@ -5622,6 +5625,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_cond_move_flag_slots =
             std::mem::take(&mut self.drop_rc.cond_move_drop_flag_slots);
         let saved_cond_move_mem_flags = std::mem::take(&mut self.drop_rc.cond_move_mem_drop_flags);
+        let saved_cond_move_box_flags = std::mem::take(&mut self.drop_rc.cond_move_box_drop_flags);
         let saved_optres_bodies_flags =
             std::mem::take(&mut self.drop_rc.optres_payload_bodies_flags);
         let saved_cond_store_params = std::mem::take(&mut self.drop_rc.cond_store_flag_params);
@@ -5642,6 +5646,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
         self.drop_rc.cond_move_drop_flag_slots = saved_cond_move_flag_slots;
         self.drop_rc.cond_move_mem_drop_flags = saved_cond_move_mem_flags;
+        self.drop_rc.cond_move_box_drop_flags = saved_cond_move_box_flags;
         self.drop_rc.optres_payload_bodies_flags = saved_optres_bodies_flags;
         self.drop_rc.cond_store_flag_params = saved_cond_store_params;
         self.drop_rc.cond_take_box_params = saved_cond_take_box_params;
@@ -6007,6 +6012,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.cond_move_drop_flag_slots.clear();
         self.drop_rc.retracted_live_generations.clear();
         self.drop_rc.cond_move_mem_drop_flags.clear();
+        self.drop_rc.cond_move_box_drop_flags.clear();
         self.drop_rc.optres_payload_bodies_flags.clear();
         self.drop_rc.cond_store_flag_params.clear();
         self.drop_rc.cond_take_box_params.clear();

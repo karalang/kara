@@ -262,6 +262,11 @@ pub(crate) struct DropRc<'ctx> {
     /// both halves — a flip-owned param whose body B-2026-09-05-13 already
     /// guarded — stores `false` once and disarms body and memory together.
     pub(crate) cond_move_mem_drop_flags: HashMap<PointerValue<'ctx>, PointerValue<'ctx>>,
+    /// B-2026-10-03-26 — the same bit for a slot's `BoxedEnumDrop`: a `let`
+    /// that took a by-value `Option`/`Result` param's envelope through a
+    /// branch holds the caller's box on that path and frees it only on the
+    /// path where it built its own.
+    pub(crate) cond_move_box_drop_flags: HashMap<PointerValue<'ctx>, PointerValue<'ctx>>,
     /// B-2026-09-02-5 — for a binding whose `cond_move_drop_flags` bit was
     /// cleared by a PARAM-VIEW ASSIGNMENT (`h2 = h`), the memory-only
     /// `__karac_drop_struct_<T>` to run on the flag-`false` path.

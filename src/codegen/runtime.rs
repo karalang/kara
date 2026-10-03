@@ -16177,7 +16177,12 @@ impl<'ctx> super::Codegen<'ctx> {
             && self.drop_rc.scope_cleanup_actions.iter().flatten().any(|a| {
                 matches!(a, CleanupAction::StructDrop { struct_alloca, .. } if *struct_alloca == slot.ptr)
             });
-        if !has_body && !array_mem {
+        // B-2026-10-03-26 — an `Option`/`Result` binding over a boxed payload:
+        // on the view path its slot holds the CALLER's box.
+        let box_mem = self.drop_rc.scope_cleanup_actions.iter().flatten().any(|a| {
+            matches!(a, CleanupAction::BoxedEnumDrop { enum_slot, .. } if *enum_slot == slot.ptr)
+        });
+        if !has_body && !array_mem && !box_mem {
             return;
         }
         let Some(flag) = self.cond_move_drop_flag_for(name) else {
@@ -16188,7 +16193,22 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let _ = self.builder.build_store(flag, v);
-        if array_mem {
+        // B-2026-10-03-26 — its arms read the payload as the param's are
+        // read: the bodies are the caller's on the view path and the
+        // binding's own gated walk's on the other, so no arm binding takes
+        // them.
+        if tails.values().any(|src| {
+            self.payload_vars
+                .caller_retained_optres_params
+                .contains(src.as_str())
+        }) {
+            self.payload_vars
+                .caller_retained_optres_params
+                .insert(name.clone());
+        }
+        if box_mem {
+            self.drop_rc.cond_move_box_drop_flags.insert(slot.ptr, flag);
+        } else if array_mem {
             self.drop_rc.cond_move_mem_drop_flags.insert(slot.ptr, flag);
         } else if let Some(tn) = self.var_types.var_type_names.get(name.as_str()).cloned() {
             if let Some(src) = tails.values().next().cloned() {
@@ -21597,6 +21617,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         &format!("{}_box_is_some", name),
                     )
                     .unwrap();
+                // B-2026-10-03-26 — a `let` view of a param's envelope frees
+                // nothing on the path that took the param.
+                let is_some = match self.drop_rc.cond_move_box_drop_flags.get(enum_slot) {
+                    Some(flag) => {
+                        let armed = self
+                            .builder
+                            .build_load(self.context.bool_type(), *flag, "cmbox.armed")
+                            .unwrap()
+                            .into_int_value();
+                        self.builder
+                            .build_and(is_some, armed, "cmbox.live")
+                            .unwrap()
+                    }
+                    None => is_some,
+                };
                 let do_bb = self.context.append_basic_block(fn_val, "boxdrop_do");
                 let join_bb = self.context.append_basic_block(fn_val, "boxdrop_join");
                 self.builder
