@@ -955,6 +955,17 @@ impl<'a> super::TypeChecker<'a> {
                 if self.user_clone_method_exists(name, args) {
                     return None;
                 }
+                // B-2026-10-02-59 — a `shared enum` / `par enum` clones as a
+                // refcount bump, like the `Type::Shared` arm above (which only
+                // ever sees STRUCT names: lowering leaves enums `Named`).
+                if self
+                    .env
+                    .enums
+                    .get(name)
+                    .is_some_and(|i| i.is_shared || i.is_par)
+                {
+                    return Some(ty.clone());
+                }
                 // `Option[T]`: structurally clonable when the payload is. Not
                 // payload-heap-specific — `Option[i64]` was rejected too.
                 if name == "Option" {

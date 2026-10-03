@@ -1270,7 +1270,11 @@ pub(crate) fn is_copy_type_in_scope(
             if let Some(info) = tc.struct_info.get(name) {
                 info.derived_traits.contains("Copy")
             } else if let Some(info) = tc.enum_info.get(name) {
-                info.derived_traits.contains("Copy")
+                // B-2026-10-02-59 — a `shared enum` / `par enum` is the same
+                // reference-counted handle as the `shared struct` arm above;
+                // it only reaches here as `Type::Named` because lowering
+                // turns STRUCT names alone into `Type::Shared`.
+                info.is_shared || info.is_par || info.derived_traits.contains("Copy")
             } else if let Some(traits) = tc.distinct_type_traits.get(name) {
                 traits.contains("Copy")
             } else {
