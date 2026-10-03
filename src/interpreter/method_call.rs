@@ -3229,22 +3229,21 @@ impl<'a> super::Interpreter<'a> {
                         return self.eval_expr_inner(&arg.value);
                     }
                 }
-                // `<int_type>.parse(s: String) -> Option[T]`. Base-10
-                // parse via Rust's `str::parse::<i64>()`. Currently all
-                // ints lower to `i64` at the Value layer, so every
-                // primitive-int type's `parse` produces `Value::Int`;
-                // narrower-typed `parse` (`i8.parse`, `u32.parse`,
-                // etc.) is a future codegen-time tweak.
+                // `<int_type>.parse(s: String) -> Option[T]`. Base-10, parsed
+                // AT `T`'s width by `parse_int_at_width`, so text outside
+                // `T`'s range is `None` (B-2026-10-03-32).
                 if method == "parse"
                     && matches!(
                         target,
                         "i8" | "i16"
                             | "i32"
                             | "i64"
+                            | "i128"
                             | "u8"
                             | "u16"
                             | "u32"
                             | "u64"
+                            | "u128"
                             | "usize"
                             | "isize"
                     )
@@ -3252,14 +3251,14 @@ impl<'a> super::Interpreter<'a> {
                     if let Some(arg) = args.first() {
                         let s_val = self.eval_expr_inner(&arg.value);
                         if let Value::String(s) = s_val {
-                            return match s.trim().parse::<i64>() {
-                                Ok(n) => Value::EnumVariant {
+                            return match parse_int_at_width(&s, 10, target) {
+                                Some(n) => Value::EnumVariant {
                                     enum_name: "Option".to_string(),
                                     variant: "Some".to_string(),
-                                    data: EnumData::Tuple(vec![Value::Int(n.into())]),
+                                    data: EnumData::Tuple(vec![Value::Int(n)]),
                                     rc: None,
                                 },
-                                Err(_) => Value::EnumVariant {
+                                None => Value::EnumVariant {
                                     enum_name: "Option".to_string(),
                                     variant: "None".to_string(),
                                     data: EnumData::Unit,
@@ -3304,7 +3303,7 @@ impl<'a> super::Interpreter<'a> {
                     return make_none();
                 }
                 // `<int_type>.from_str_radix(s: String, radix: u32) ->
-                // Option[i64]`. Radix 2..=36 via Rust's `i64::from_str_radix`.
+                // Option[T]`. Radix 2..=36, parsed at `T`'s width like `parse`.
                 // The self-hosting lexer's hex/binary/octal literal path.
                 if method == "from_str_radix"
                     && matches!(
@@ -3312,10 +3311,12 @@ impl<'a> super::Interpreter<'a> {
                         "i8" | "i16"
                             | "i32"
                             | "i64"
+                            | "i128"
                             | "u8"
                             | "u16"
                             | "u32"
                             | "u64"
+                            | "u128"
                             | "usize"
                             | "isize"
                     )
@@ -3330,15 +3331,14 @@ impl<'a> super::Interpreter<'a> {
                         let s_val = self.eval_expr_inner(&args[0].value);
                         let radix_val = self.eval_expr_inner(&args[1].value);
                         if let (Value::String(s), Value::Int(radix)) = (s_val, radix_val) {
-                            if (2..=36).contains(&radix) {
-                                if let Ok(n) = i64::from_str_radix(s.trim(), radix as u32) {
-                                    return Value::EnumVariant {
-                                        enum_name: "Option".to_string(),
-                                        variant: "Some".to_string(),
-                                        data: EnumData::Tuple(vec![Value::Int(n.into())]),
-                                        rc: None,
-                                    };
-                                }
+                            let radix = u32::try_from(radix).unwrap_or(0);
+                            if let Some(n) = parse_int_at_width(&s, radix, target) {
+                                return Value::EnumVariant {
+                                    enum_name: "Option".to_string(),
+                                    variant: "Some".to_string(),
+                                    data: EnumData::Tuple(vec![Value::Int(n)]),
+                                    rc: None,
+                                };
                             }
                         }
                     }
@@ -5808,5 +5808,41 @@ mod tests {
              (expected {EXPECTED}); see this test's doc comment — a rise means a new \
              by-value guard above the seq handler, which should borrow `&obj` instead"
         );
+    }
+}
+
+/// `<int>.parse` / `<int>.from_str_radix` for the integer primitive named
+/// `target`: the text (trimmed) parsed by `target`'s own Rust type in `radix`
+/// (2..=36), so a value outside the type's range is `None`, returned in the
+/// interpreter's `i128` carrier (a `u128` above `i128::MAX` as its bit
+/// pattern, the carrier's convention).
+///
+/// B-2026-10-03-32: every width parsed as an `i64`, so `u8.parse("300")` was
+/// `Some(300)` -- a `u8` holding 300 -- and a `u64` above `i64::MAX` was
+/// `None`. The compiled backends call `karac_runtime_parse_int`, whose
+/// `parse_int_at_width` (in `runtime/src/lib.rs`) is the twin of this one; the
+/// two must agree.
+fn parse_int_at_width(s: &str, radix: u32, target: &str) -> Option<i128> {
+    if !(2..=36).contains(&radix) {
+        return None;
+    }
+    let s = s.trim();
+    macro_rules! at {
+        ($t:ty) => {
+            <$t>::from_str_radix(s, radix).ok().map(|v| v as i128)
+        };
+    }
+    match target {
+        "i8" => at!(i8),
+        "i16" => at!(i16),
+        "i32" => at!(i32),
+        "i64" | "isize" => at!(i64),
+        "i128" => at!(i128),
+        "u8" => at!(u8),
+        "u16" => at!(u16),
+        "u32" => at!(u32),
+        "u64" | "usize" => at!(u64),
+        "u128" => at!(u128),
+        _ => None,
     }
 }

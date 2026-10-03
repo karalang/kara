@@ -7257,8 +7257,10 @@ fn test_ir_i64_from_str_radix_calls_runtime_extern() {
                  }\n\
              }",
     );
+    // B-2026-10-03-32: every width parses through `karac_runtime_parse_int`,
+    // which parses at the receiver's own width.
     assert!(
-        ir.contains("call i8 @karac_runtime_parse_i64_radix"),
+        ir.contains("call i8 @karac_runtime_parse_int"),
         "i64.from_str_radix should call the runtime extern:\n{ir}"
     );
 }
@@ -7273,8 +7275,9 @@ fn test_ir_i64_parse_calls_runtime_extern() {
                  }\n\
              }",
     );
+    // B-2026-10-03-32: every width parses through `karac_runtime_parse_int`.
     assert!(
-        ir.contains("call i8 @karac_runtime_parse_i64"),
+        ir.contains("call i8 @karac_runtime_parse_int"),
         "i64.parse should call the runtime extern:\n{ir}"
     );
 }

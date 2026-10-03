@@ -713,6 +713,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_http_request_query_val_at,
         karac_runtime_parse_i64,
         karac_runtime_parse_i64_radix,
+        karac_runtime_parse_int,
         karac_runtime_parse_f64,
         karac_runtime_cstr_to_string,
         karac_runtime_utf8_validate,
@@ -5806,6 +5807,80 @@ pub unsafe extern "C" fn karac_runtime_parse_i64_radix(
                 1
             }
             Err(_) => 0,
+        }
+    }
+}
+
+/// Parse `s` as an integer of exactly `bits` width and the given signedness,
+/// in `radix` (2..=36), after trimming surrounding whitespace. `None` when the
+/// text is not a number in that radix OR does not fit the width -- Rust's own
+/// `<int>::from_str_radix` for the named type decides both. The value comes
+/// back in an `i128` carrier; a `u128` above `i128::MAX` is its bit pattern.
+///
+/// B-2026-10-03-32: every width used to parse through `i64`, so `u8` accepted
+/// "300" and "-1" and the caller received a value its type cannot hold, and a
+/// `u64` above `i64::MAX` could not be parsed at all. The interpreter carries
+/// a copy of this function (`parse_int_at_width` in
+/// `src/interpreter/method_call.rs`); the two must agree.
+pub fn parse_int_at_width(s: &str, radix: u32, bits: u32, signed: bool) -> Option<i128> {
+    if !(2..=36).contains(&radix) {
+        return None;
+    }
+    let s = s.trim();
+    macro_rules! at {
+        ($t:ty) => {
+            <$t>::from_str_radix(s, radix).ok().map(|v| v as i128)
+        };
+    }
+    match (bits, signed) {
+        (8, true) => at!(i8),
+        (16, true) => at!(i16),
+        (32, true) => at!(i32),
+        (64, true) => at!(i64),
+        (128, true) => at!(i128),
+        (8, false) => at!(u8),
+        (16, false) => at!(u16),
+        (32, false) => at!(u32),
+        (64, false) => at!(u64),
+        (128, false) => at!(u128),
+        _ => None,
+    }
+}
+
+/// Parse a UTF-8 byte slice as an integer of `bits` width and signedness
+/// `signed` (nonzero = signed) in `radix`; see [`parse_int_at_width`].
+/// Returns `1` on success with the value written through `out` as an `i128`
+/// carrier, `0` on failure. Backs `<int>.parse(s)` (radix 10) and
+/// `<int>.from_str_radix(s, radix)` for every integer width, `i128` and
+/// `u128` included (B-2026-09-29-98).
+///
+/// # Safety
+///
+/// `data` must point at `len` initialized bytes (or be null with `len == 0`).
+/// `out` must be a valid, 16-byte-aligned `*mut i128`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_parse_int(
+    data: *const u8,
+    len: usize,
+    radix: u32,
+    bits: u32,
+    signed: u8,
+    out: *mut i128,
+) -> u8 {
+    unsafe {
+        if data.is_null() || len == 0 || out.is_null() {
+            return 0;
+        }
+        let slice = std::slice::from_raw_parts(data, len);
+        let Ok(s) = std::str::from_utf8(slice) else {
+            return 0;
+        };
+        match parse_int_at_width(s, radix, bits, signed != 0) {
+            Some(v) => {
+                *out = v;
+                1
+            }
+            None => 0,
         }
     }
 }

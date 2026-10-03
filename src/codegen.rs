@@ -4341,6 +4341,26 @@ impl<'ctx> Codegen<'ctx> {
             parse_i64_radix_type,
             Some(Linkage::External),
         );
+        // `karac_runtime_parse_int(data: *const u8, len: usize, radix: u32,
+        //  bits: u32, signed: u8, out: *mut i128) -> u8`. Backs `<int>.parse`
+        //  and `<int>.from_str_radix` at the receiver's own width
+        //  (B-2026-10-03-32).
+        let parse_int_type = context.i8_type().fn_type(
+            &[
+                ptr_type.into(),
+                i64_type.into(),
+                context.i32_type().into(),
+                context.i32_type().into(),
+                context.i8_type().into(),
+                ptr_type.into(),
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_parse_int",
+            parse_int_type,
+            Some(Linkage::External),
+        );
         // `karac_runtime_parse_f64(data: *const u8, len: usize, out: *mut f64)
         //  -> u8`. Backs `f64.parse(s) -> Option[f64]` — the self-hosting
         //  lexer's float-literal path.

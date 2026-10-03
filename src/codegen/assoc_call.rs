@@ -372,6 +372,137 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// `<int>.parse(s)` / `<int>.from_str_radix(s, radix)` -> `Option[<int>]`.
+    ///
+    /// B-2026-10-03-32: every width used to parse through
+    /// `karac_runtime_parse_i64` and store the i64 in the payload word, so
+    /// `u8.parse("300")` was `Some(44)` (and `Some(300)` under `--interp`),
+    /// `u8.parse("-1")` was `Some(255)`, and a `u64` above `i64::MAX` was
+    /// `None`. `karac_runtime_parse_int` parses with the receiver's own Rust
+    /// type, so out-of-range text is `None`; the value comes back in an `i128`
+    /// carrier and is narrowed here. That carrier is also what gives `i128` /
+    /// `u128` a parse at all (B-2026-09-29-98).
+    fn compile_int_parse(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let with_radix = method == "from_str_radix";
+        if args.is_empty() || (with_radix && args.len() < 2) {
+            return Err(format!(
+                "{type_name}.{method} requires a String{} argument",
+                if with_radix { " and a radix" } else { "" }
+            ));
+        }
+        let (bits, signed): (u32, bool) = match type_name {
+            "i8" => (8, true),
+            "i16" => (16, true),
+            "i32" => (32, true),
+            "i64" | "isize" => (64, true),
+            "i128" => (128, true),
+            "u8" => (8, false),
+            "u16" => (16, false),
+            "u32" => (32, false),
+            "u64" | "usize" => (64, false),
+            "u128" => (128, false),
+            _ => return Err(format!("{type_name}.{method}: not an integer type")),
+        };
+        let i8_t = self.context.i8_type();
+        let i32_t = self.context.i32_type();
+        let i128_t = self.context.i128_type();
+
+        let s_val = self.compile_expr(&args[0].value)?;
+        let (s_data, s_len) =
+            self.sso_string_parts_from_value(s_val.into_struct_value(), "parse.s");
+        let radix = if with_radix {
+            let r = self.compile_expr(&args[1].value)?.into_int_value();
+            self.builder
+                .build_int_cast_sign_flag(r, i32_t, false, "parse.radix")
+                .unwrap()
+        } else {
+            i32_t.const_int(10, false)
+        };
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| format!("{type_name}.{method} called outside fn"))?;
+        let out_slot = self.create_entry_alloca(fn_val, "parse.out", i128_t.into());
+        let parse_fn = self
+            .module
+            .get_function("karac_runtime_parse_int")
+            .expect("karac_runtime_parse_int declared in Codegen::new");
+        let success = self
+            .builder
+            .build_call(
+                parse_fn,
+                &[
+                    s_data.into(),
+                    s_len.into(),
+                    radix.into(),
+                    i32_t.const_int(u64::from(bits), false).into(),
+                    i8_t.const_int(u64::from(signed), false).into(),
+                    out_slot.into(),
+                ],
+                "parse.ok",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                success,
+                i8_t.const_zero(),
+                "parse.ok.bool",
+            )
+            .unwrap();
+
+        let some_bb = self.context.append_basic_block(fn_val, "parse.some");
+        let none_bb = self.context.append_basic_block(fn_val, "parse.none");
+        let merge_bb = self.context.append_basic_block(fn_val, "parse.merge");
+        self.builder
+            .build_conditional_branch(is_ok, some_bb, none_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        let wide = self
+            .builder
+            .build_load(i128_t, out_slot, "parse.value")
+            .unwrap()
+            .into_int_value();
+        let parsed = if bits == 128 {
+            wide
+        } else {
+            let narrow_t = match bits {
+                8 => self.context.i8_type(),
+                16 => self.context.i16_type(),
+                32 => i32_t,
+                _ => self.context.i64_type(),
+            };
+            self.builder
+                .build_int_truncate(wide, narrow_t, "parse.narrow")
+                .unwrap()
+        };
+        let some_payload_words = self.coerce_to_payload_words(parsed.into(), 3)?;
+        let some_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(none_bb);
+        let none_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        Ok(self.build_option_some_via_phis(
+            &some_payload_words,
+            some_end_bb,
+            none_end_bb,
+            "parse.opt",
+        ))
+    }
+
     pub(super) fn compile_assoc_call(
         &mut self,
         type_name: &str,
@@ -1071,196 +1202,27 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return self.compile_numeric_try_from(type_name, _args);
         }
-        // `<int_type>.parse(s: String) -> Option[i64]` — base-10 signed
-        // parse via the `karac_runtime_parse_i64` extern. Returns
-        // `Option.Some(value)` on success, `Option.None` on failure
-        // (rejects empty / non-numeric / overflow). Trims whitespace
-        // before parsing.
-        if method == "parse"
+        // `<int>.parse(s) -> Option[<int>]` (radix 10) and
+        // `<int>.from_str_radix(s, radix) -> Option[<int>]`, for every integer
+        // width. Both go through `karac_runtime_parse_int`, which parses AT
+        // the receiver's width (B-2026-10-03-32, B-2026-09-29-98).
+        if matches!(method, "parse" | "from_str_radix")
             && matches!(
                 type_name,
-                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize"
+                "i8" | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+                    | "isize"
             )
         {
-            if _args.is_empty() {
-                return Err(format!("{}.parse requires a String argument", type_name));
-            }
-            let i64_t = self.context.i64_type();
-            let i8_t = self.context.i8_type();
-            let ptr_ty = self.context.ptr_type(AddressSpace::default());
-
-            // Evaluate the String arg, extract `{data, len}`.
-            let s_val = self.compile_expr(&_args[0].value)?;
-            let s_struct = s_val.into_struct_value();
-            let (s_data, s_len) = self.sso_string_parts_from_value(s_struct, "parse.s");
-
-            // Allocate the out-i64 slot the runtime writes through.
-            let fn_val = self
-                .current_fn
-                .ok_or_else(|| "T.parse called outside fn".to_string())?;
-            let out_slot = self.create_entry_alloca(fn_val, "parse.out", i64_t.into());
-
-            // Call the runtime extern.
-            let parse_fn = self
-                .module
-                .get_function("karac_runtime_parse_i64")
-                .expect("karac_runtime_parse_i64 declared in Codegen::new");
-            let success = self
-                .builder
-                .build_call(
-                    parse_fn,
-                    &[s_data.into(), s_len.into(), out_slot.into()],
-                    "parse.ok",
-                )
-                .unwrap()
-                .try_as_basic_value()
-                .unwrap_basic()
-                .into_int_value();
-            let is_ok = self
-                .builder
-                .build_int_compare(
-                    inkwell::IntPredicate::NE,
-                    success,
-                    i8_t.const_zero(),
-                    "parse.ok.bool",
-                )
-                .unwrap();
-
-            // Branch on success: load the parsed value in the some
-            // branch; the none branch holds no payload.
-            let some_bb = self.context.append_basic_block(fn_val, "parse.some");
-            let none_bb = self.context.append_basic_block(fn_val, "parse.none");
-            let merge_bb = self.context.append_basic_block(fn_val, "parse.merge");
-
-            self.builder
-                .build_conditional_branch(is_ok, some_bb, none_bb)
-                .unwrap();
-
-            // Some: load *out, coerce to 3-word payload, branch to merge.
-            self.builder.position_at_end(some_bb);
-            let parsed = self
-                .builder
-                .build_load(i64_t, out_slot, "parse.value")
-                .unwrap();
-            let some_payload_words = self.coerce_to_payload_words(parsed, 3)?;
-            let some_end_bb = self.builder.get_insert_block().unwrap();
-            self.builder.build_unconditional_branch(merge_bb).unwrap();
-
-            // None: just branch to merge.
-            self.builder.position_at_end(none_bb);
-            let none_end_bb = self.builder.get_insert_block().unwrap();
-            self.builder.build_unconditional_branch(merge_bb).unwrap();
-
-            // Merge: PHI-assemble Option[i64].
-            self.builder.position_at_end(merge_bb);
-            // Suppress the unused-warning on `ptr_ty` when the helper
-            // closure doesn't touch it directly. (The build above
-            // consumes only the existing locals.)
-            let _ = ptr_ty;
-            let agg = self.build_option_some_via_phis(
-                &some_payload_words,
-                some_end_bb,
-                none_end_bb,
-                "parse.opt",
-            );
-            return Ok(agg);
-        }
-        // `<int_type>.from_str_radix(s: String, radix: u32) -> Option[i64]` —
-        // radix parse (2..=36) via the `karac_runtime_parse_i64_radix` extern.
-        // Mirrors the `parse` arm above; the self-hosting lexer's hex/binary/
-        // octal literal path (phase-12-self-hosting.md).
-        if method == "from_str_radix"
-            && matches!(
-                type_name,
-                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize"
-            )
-        {
-            if _args.len() < 2 {
-                return Err(format!(
-                    "{}.from_str_radix requires a String and a radix argument",
-                    type_name
-                ));
-            }
-            let i64_t = self.context.i64_type();
-            let i8_t = self.context.i8_type();
-            let i32_t = self.context.i32_type();
-
-            // String arg → {data, len}.
-            let s_val = self.compile_expr(&_args[0].value)?;
-            let s_struct = s_val.into_struct_value();
-            let (s_data, s_len) = self.sso_string_parts_from_value(s_struct, "radix.s");
-
-            // radix arg → i32 (the source value is i64-backed; truncate).
-            let radix_val = self.compile_expr(&_args[1].value)?.into_int_value();
-            let radix_i32 = self
-                .builder
-                .build_int_truncate(radix_val, i32_t, "radix.r")
-                .unwrap();
-
-            let fn_val = self
-                .current_fn
-                .ok_or_else(|| "T.from_str_radix called outside fn".to_string())?;
-            let out_slot = self.create_entry_alloca(fn_val, "radix.out", i64_t.into());
-
-            let parse_fn = self
-                .module
-                .get_function("karac_runtime_parse_i64_radix")
-                .expect("karac_runtime_parse_i64_radix declared in Codegen::new");
-            let success = self
-                .builder
-                .build_call(
-                    parse_fn,
-                    &[
-                        s_data.into(),
-                        s_len.into(),
-                        radix_i32.into(),
-                        out_slot.into(),
-                    ],
-                    "radix.ok",
-                )
-                .unwrap()
-                .try_as_basic_value()
-                .unwrap_basic()
-                .into_int_value();
-            let is_ok = self
-                .builder
-                .build_int_compare(
-                    inkwell::IntPredicate::NE,
-                    success,
-                    i8_t.const_zero(),
-                    "radix.ok.bool",
-                )
-                .unwrap();
-
-            let some_bb = self.context.append_basic_block(fn_val, "radix.some");
-            let none_bb = self.context.append_basic_block(fn_val, "radix.none");
-            let merge_bb = self.context.append_basic_block(fn_val, "radix.merge");
-
-            self.builder
-                .build_conditional_branch(is_ok, some_bb, none_bb)
-                .unwrap();
-
-            self.builder.position_at_end(some_bb);
-            let parsed = self
-                .builder
-                .build_load(i64_t, out_slot, "radix.value")
-                .unwrap();
-            let some_payload_words = self.coerce_to_payload_words(parsed, 3)?;
-            let some_end_bb = self.builder.get_insert_block().unwrap();
-            self.builder.build_unconditional_branch(merge_bb).unwrap();
-
-            self.builder.position_at_end(none_bb);
-            let none_end_bb = self.builder.get_insert_block().unwrap();
-            self.builder.build_unconditional_branch(merge_bb).unwrap();
-
-            self.builder.position_at_end(merge_bb);
-            let agg = self.build_option_some_via_phis(
-                &some_payload_words,
-                some_end_bb,
-                none_end_bb,
-                "radix.opt",
-            );
-            return Ok(agg);
+            return self.compile_int_parse(type_name, method, _args);
         }
         // `f64.parse(s: String) -> Option[f64]` — float parse via the
         // `karac_runtime_parse_f64` extern. Mirrors the int `parse` arm; the
