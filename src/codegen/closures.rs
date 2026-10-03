@@ -902,6 +902,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // restored so the outer fn / sibling closures don't inherit these names;
         // inserted at the capture-unpack step below.
         let saved_for_loop_borrow_vars = std::mem::take(&mut self.borrow_vars.for_loop_borrow_vars);
+        let saved_for_loop_owned_agg_vars = self.borrow_vars.for_loop_owned_agg_vars.clone();
+        let saved_for_loop_elem_struct_views = self.borrow_vars.for_loop_elem_struct_views.clone();
         // The borrow-mode registries for the closure's PARAMS (step 7b below
         // inserts a `ref T` / `mut ref T` param into both). Taken + restored
         // for the same reason as `variables` above: a param name is scoped to
@@ -1275,28 +1277,25 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-09-25-44 — the closure's tail gets the read level a function
         // body's tail does (`begin_fn_tail_freshtemp_reads`), asked about the
         // same expression: a block body's final expression, or the body.
-        // B-2026-09-27-33 — a stack-env closure's whole capture of a
-        // heap-bearing user struct or enum is a bit-copy of a value the
-        // ENCLOSING frame still owns and frees at its own scope exit. A body
-        // that moves it (`|| keep(h)`, a by-value callee that frees its param)
-        // is therefore a move whose source outlives it, which is exactly the
-        // question `uam_consume_sites` answers for the copy machinery: mark
-        // the capture's occurrences in the body for the body's compile, so a
-        // consume hands the callee its own copy. Vec/String captures take the
-        // borrow-alias route above and keep it; a heap-env closure owns its
-        // captures through the env-drop; a type that runs a user `Drop` body
-        // would gain a second body from the copy (B-2026-09-27-16's
-        // territory), so it is left alone.
-        let uam_capture_spans = if is_heap_env {
-            Vec::new()
-        } else {
-            self.stack_env_capture_consume_spans(
+        // B-2026-09-27-33 / B-2026-10-02-76 — a stack-env closure's whole
+        // capture of a heap-bearing user struct or enum is a bit-copy of a
+        // value the ENCLOSING frame still owns and frees at its own scope
+        // exit: exactly a `for` loop's binding over a container element, whose
+        // container frees the slot. So the body gets the loop binding's model
+        // (`adopt_stack_env_captures_as_loop_bindings`), and every consume in
+        // it -- a by-value call, a `match` / `if let` that takes the payload,
+        // `let g = h` -- takes the path a loop binding already takes. Vec/String
+        // captures take the borrow-alias route above and keep it; a heap-env
+        // closure owns its captures through the env-drop; a type that runs a
+        // user `Drop` body would gain a second body from a copy
+        // (B-2026-09-27-16's territory), so it is left alone.
+        if !is_heap_env {
+            self.adopt_stack_env_captures_as_loop_bindings(
                 &free_vars,
                 &mutref_caps,
                 path_layout.as_ref(),
-                body,
-            )
-        };
+            );
+        }
         self.freshtemp_read_levels
             .push(super::state::FreshTempReadLevel {
                 fn_val: self.current_fn,
@@ -1316,9 +1315,6 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => self.compile_expr(body),
         };
         self.end_freshtemp_reads();
-        for k in &uam_capture_spans {
-            self.span_tables.uam_consume_sites.remove(k);
-        }
         let mut result = body_result?;
         if self
             .builder
@@ -1448,6 +1444,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // env is built below (env-build reads `owned_vecstr_params`, not this
         // set, but keep the restore grouped with the other body-scoped state).
         self.borrow_vars.for_loop_borrow_vars = saved_for_loop_borrow_vars;
+        self.borrow_vars.for_loop_owned_agg_vars = saved_for_loop_owned_agg_vars;
+        self.borrow_vars.for_loop_elem_struct_views = saved_for_loop_elem_struct_views;
         // Drop this closure's param borrow marks (B-2026-08-08-30). Grouped
         // with the other body-scoped restores above; see the save site for why
         // leaving them behind miscompiles the outer fn's next same-named
@@ -1613,26 +1611,30 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(fat.into())
     }
 
-    /// B-2026-07-18-46: classify a closure capture as a whole heap-bearing
-    /// STRUCT/ENUM (a value struct/enum that owns a String/Vec below it), which
-    /// must be deep-cloned when returned from the body. Returns
-    /// `Some((name, type_name))` for such a capture; `None` for a Vec/String
-    /// capture (handled by the `for_loop_borrow_vars` flat-copy path,
-    /// B-2026-07-18-42), a shared (RC) aggregate (refcount machinery), a POD
-    /// aggregate (nothing to deep-copy), or an unknown/unnamed capture.
-    /// B-2026-09-27-33 — insert into `uam_consume_sites` the span of every
-    /// occurrence in `body` of a stack-env capture the enclosing frame owns
-    /// (a whole, by-value, non-shared user struct or enum that bears heap and
-    /// runs no user `Drop` body), returning the keys this call ADDED so the
-    /// caller removes exactly those after the body compile.
-    fn stack_env_capture_consume_spans(
+    /// B-2026-09-27-33 / B-2026-10-02-76 — give each stack-env capture the
+    /// enclosing frame owns (a whole, by-value, non-shared user struct or enum
+    /// that bears heap and runs no user `Drop` body) the model a `for` binding
+    /// over a container element has, because it is the same thing: a bit-copy
+    /// of a slot another owner frees.
+    ///
+    /// * A heap-BOXED enum payload (`Ho[String]`) makes the binding an owner of
+    ///   a box of its own for the call (`own_for_loop_boxed_enum_binding`,
+    ///   B-2026-09-26-12): the box is duplicated at entry and freed at the
+    ///   body's exit, so a consuming arm, a by-value call or `let g = h` moves
+    ///   the copy and the enclosing frame keeps its original.
+    /// * Anything else is marked as a loop element alias
+    ///   (`mark_for_loop_borrow_if_heap`), so a consuming arm aliases rather
+    ///   than owns and a whole-move to a new owner deep-copies.
+    ///
+    /// The marks are scoped to the body: the caller restores the loop-alias
+    /// sets after it, and the box drop lives in the closure's own frame.
+    fn adopt_stack_env_captures_as_loop_bindings(
         &mut self,
         free_vars: &[String],
         mutref_caps: &HashSet<String>,
         path_layout: Option<&CapturePathLayout<'ctx>>,
-        body: &Expr,
-    ) -> Vec<(usize, usize)> {
-        let names: HashSet<String> = free_vars
+    ) {
+        let names: Vec<String> = free_vars
             .iter()
             .filter(|n| !mutref_caps.contains(*n))
             .filter(|n| {
@@ -1645,38 +1647,40 @@ impl<'ctx> super::Codegen<'ctx> {
             .filter(|n| self.capture_owned_by_enclosing_frame(n))
             .cloned()
             .collect();
-        if names.is_empty() {
-            return Vec::new();
-        }
-        fn walk(
-            node: crate::index_disjoint::Child<'_>,
-            names: &HashSet<String>,
-            out: &mut Vec<(usize, usize)>,
-        ) {
-            match node {
-                crate::index_disjoint::Child::Expr(e) => {
-                    if let ExprKind::Identifier(n) = &e.kind {
-                        if names.contains(n) {
-                            out.push((e.span.offset, e.span.length));
-                        }
-                    }
-                    crate::index_disjoint::for_each_child_public(e, &mut |c| walk(c, names, out));
-                }
-                crate::index_disjoint::Child::Block(b) => {
-                    crate::index_disjoint::for_each_block_child(b, &mut |c| walk(c, names, out));
-                }
+        for n in &names {
+            let Some(te) = self.capture_type_expr(n) else {
+                continue;
+            };
+            if self.user_enum_boxed_payload_variants(&te).is_empty() {
+                self.mark_for_loop_borrow_if_heap(n, &te);
+            } else {
+                self.own_for_loop_boxed_enum_binding(n, &te);
             }
         }
-        let mut spans = Vec::new();
-        walk(crate::index_disjoint::Child::Expr(body), &names, &mut spans);
-        spans
-            .into_iter()
-            .filter(|k| self.span_tables.uam_consume_sites.insert(*k))
-            .collect()
+    }
+
+    /// The capture's instantiated type when one was recorded (`Ho[String]`),
+    /// else its bare type name.
+    fn capture_type_expr(&self, name: &str) -> Option<TypeExpr> {
+        let tn = self.var_types.var_type_names.get(name)?;
+        Some(
+            self.var_types
+                .var_enum_inst_te
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| TypeExpr {
+                    kind: TypeKind::Path(PathExpr {
+                        segments: vec![tn.clone()],
+                        generic_args: None,
+                        span: Span::default(),
+                    }),
+                    span: Span::default(),
+                }),
+        )
     }
 
     /// B-2026-09-27-33 — the capture-type half of
-    /// [`Self::stack_env_capture_consume_spans`].
+    /// [`Self::adopt_stack_env_captures_as_loop_bindings`].
     fn capture_owned_by_enclosing_frame(&self, name: &str) -> bool {
         if self.var_types.vec_elem_types.contains_key(name) {
             return false;
@@ -1695,22 +1699,19 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.type_runs_user_drop(tn.as_str(), &mut Vec::new()) {
             return false;
         }
-        let te = self
-            .var_types
-            .var_enum_inst_te
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| TypeExpr {
-                kind: TypeKind::Path(PathExpr {
-                    segments: vec![tn.clone()],
-                    generic_args: None,
-                    span: Span::default(),
-                }),
-                span: Span::default(),
-            });
+        let Some(te) = self.capture_type_expr(name) else {
+            return false;
+        };
         self.type_expr_has_drop_heap(&te) || !self.user_enum_boxed_payload_variants(&te).is_empty()
     }
 
+    /// B-2026-07-18-46: classify a closure capture as a whole heap-bearing
+    /// STRUCT/ENUM (a value struct/enum that owns a String/Vec below it), which
+    /// must be deep-cloned when returned from the body. Returns
+    /// `Some((name, type_name))` for such a capture; `None` for a Vec/String
+    /// capture (handled by the `for_loop_borrow_vars` flat-copy path,
+    /// B-2026-07-18-42), a shared (RC) aggregate (refcount machinery), a POD
+    /// aggregate (nothing to deep-copy), or an unknown/unnamed capture.
     fn captured_heap_agg_type(&self, name: &str) -> Option<(String, String)> {
         // Vec/String captures take the flat borrow-alias path.
         if self.var_types.vec_elem_types.contains_key(name) {
@@ -1735,8 +1736,16 @@ impl<'ctx> super::Codegen<'ctx> {
             span: Span::default(),
         };
         // Only a heap-BEARING aggregate needs the clone; a POD struct/enum is a
-        // bit-copy either way.
-        if !self.type_expr_has_drop_heap(&te) {
+        // bit-copy either way. B-2026-10-02-76 — a generic enum's bare name
+        // reads as POD (`T` classifies as nothing), so its instantiation is
+        // asked too: a heap-boxed payload (`Ho[String]`) needs the clone.
+        if !self.type_expr_has_drop_heap(&te)
+            && self
+                .var_types
+                .var_enum_inst_te
+                .get(name)
+                .is_none_or(|it| self.user_enum_boxed_payload_variants(it).is_empty())
+        {
             return None;
         }
         Some((name.to_string(), tn))
@@ -1757,9 +1766,9 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         captures: &HashMap<String, String>,
     ) -> BasicValueEnum<'ctx> {
-        let tn = match &tail.kind {
+        let (tn, inst_te) = match &tail.kind {
             ExprKind::Identifier(n) => match captures.get(n) {
-                Some(t) => t.clone(),
+                Some(t) => (t.clone(), self.var_types.var_enum_inst_te.get(n).cloned()),
                 None => return val,
             },
             ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
@@ -1795,6 +1804,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(clone_fn, &[src.into(), dst.into()], "cap.agg.clone")
             .unwrap();
+        // B-2026-10-02-76 — the name-keyed clone above shares a heap-BOXED
+        // generic payload (`Ho[String]`'s box) rather than copying it, so the
+        // returned value would alias the box the capture's owner frees: the
+        // enclosing frame (stack env), the env drop (heap env), or the
+        // closure's own per-call copy. Duplicate the boxes per instantiation.
+        if let Some(inst_te) = inst_te {
+            self.deep_copy_boxed_enum_payloads_in_place(&inst_te, dst);
+        }
         self.builder
             .build_load(val_ty, dst, "cap.agg.cloned")
             .unwrap()
