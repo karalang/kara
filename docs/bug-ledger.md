@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 650 |
 | run-vs-build | 574 |
-| leak | 534 |
+| leak | 535 |
 | double-free | 406 |
 | missing-feature | 215 |
 | codegen-gap | 213 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2606 |
+| codegen | 2607 |
 | interp | 796 |
 | typecheck | 322 |
 | other | 113 |
@@ -512,6 +512,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-12 | 2026-10-03 | codegen | high | `assert_eq` / `assert_ne` COMPARE `Vec`, TUPLE AND STRUCT OPERANDS BY LLVM SHAPE ON EVERY COMPILED SURFACE, SO AN ASSERTION OVER UNEQUAL VALUES CAN PASS SILENTLY -- `assert_eq(x, y)` with `x = [1, 2]` and `y = [1, 9]` (`Vec[i64]`) passes compiled and fails under `--interp`; two equal `Vec[String]` fail `assert_eq`; a struct `T3 { h: Node, a: i64, b: i64 }` (`Node` a `shared struct`) differing only in `b` fails `assert_ne`; a three-element tuple panics the compiler; an `Array[String, 2]` is refused | — |
 | B-2026-10-03-13 | 2026-10-03 | codegen | medium | A GENERIC FUNCTION INSTANTIATED AT `T = Array[E, N]` WITH A HEAP ELEMENT TYPE STILL FAILS LLVM MODULE VERIFICATION WHEN IT RETURNS A `match` OVER `Option[T]` -- `fn pick[T](a: Option[T], d: T) -> T { return match a { Some(x) => x, None => d } }` called with `a: Option[Array[String, 2]]` passes `karac check`, prints under `--interp`, and fails `karac build` with `ret i64 0 [2 x { ptr, i64, i64 }]`; scalar elements were fixed by B-2026-10-02-77 and this half is held back on purpose until B-2026-10-02-78 is fixed | — |
 | B-2026-10-03-14 | 2026-10-03 | codegen | medium | REASSIGNING A `String` FROM A BRANCH WHOSE OTHER ARM IS THE TARGET ITSELF STILL LEAKS THE OLD VALUE WHEN THE REPLACING ARM RUNS -- `let mut s = f"a{1}"; s = if c { f"q{2}" } else { s }` with `c = true` prints `q2` and valgrind at -O0 reports 2 bytes in 1 block definitely lost (the old `a1`); every other branch shape was fixed by B-2026-09-26-18 | — |
+| B-2026-10-03-17 | 2026-10-03 | codegen | medium | A `.clone()` OF A `shared` HANDLE PASSED STRAIGHT TO A BY-VALUE PARAMETER LEAKS THE WHOLE OBJECT -- `sg(a.clone())` over `fn sg(s: S) -> i64` and `shared struct S` prints the right value and valgrind at -O0 reports the object definitely lost (24 B for `S { id: i64, nx: Option[S] }`); `let b = a.clone(); sg(b)` and `sg(mk())` are clean | — |
 
 ### Relocated
 
