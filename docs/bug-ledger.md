@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 661 |
+| miscompile | 662 |
 | run-vs-build | 575 |
-| leak | 540 |
+| leak | 541 |
 | double-free | 408 |
 | codegen-gap | 216 |
 | missing-feature | 215 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2633 |
-| interp | 806 |
+| codegen | 2634 |
+| interp | 807 |
 | typecheck | 323 |
 | other | 113 |
 | ownership | 80 |
@@ -513,6 +513,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-37 | 2026-10-03 | codegen | high | A NESTED STRUCT-VARIANT PATTERN THROUGH A `shared enum`'S `shared enum` PAYLOAD SEGFAULTS WITH NO OUTPUT -- over `shared enum M2 { P { v: Vec[String], k: i64 }, Q }` and `shared enum H2 { Z(M2), N }`, `match H2.Z(M2.P { v: mkv(..), k: 4 }) { H2.Z(M2.P { v, k }) => v.len() + k, _ => 0 }` prints `6` under `--interp` and crashes compiled (invalid read at address 0x9) | — |
 | B-2026-10-03-38 | 2026-10-03 | codegen | high | A NESTED PATTERN THROUGH A VALUE ENUM'S `shared enum` PAYLOAD FREES THE MATCHED PAYLOAD TWICE -- over `enum V { Z(M), N }` and `shared enum M { My(Vec[String]), N }`, `match V.Z(M.My(mkv(..))) { V.Z(M.My(x)) => x.len(), _ => 0 }` prints `2` under `--interp` and nothing compiled (7 valgrind errors) | — |
 | B-2026-10-03-39 | 2026-10-03 | codegen | medium | A NESTED PATTERN THROUGH A `shared enum`'S VALUE-ENUM PAYLOAD LEAKS 32 B -- over `shared enum H4 { Z(E), N }` and `enum E { A(Vec[String]), B }`, `match H4.Z(E.A(mkv(..))) { H4.Z(E.A(x)) => x.len(), _ => 0 }` prints the right `2` and loses 32 B definitely | — |
+| B-2026-10-03-49 | 2026-10-03 | interp | medium | UNDER `--interp`, A `let Some(Some(w)) = x else { ... }` OVER A BY-VALUE `Option[Option[R]]` PARAM, WHERE `R` RUNS A USER `Drop`, RUNS THE BODY TWICE WHEN THE LEAF IS MOVED ON -- `let Some(Some(w)) = x else { return 0 }; v.push(w); return 1` prints `dR4 1 1 dR4` on the interpreter. The body runs once at the end of the call, although `w` now lives in `v`, and again when `v` drops. Compiled prints `1 1 dR4` (correct) since the B-2026-10-03-28 follow-up; before it, compiled agreed with the interpreter. | — |
+| B-2026-10-03-50 | 2026-10-03 | codegen | medium | AN UNCALLED FUNCTION'S PARAM CHANGES HOW ANOTHER FUNCTION WITH A SAME-NAMED PARAM FREES ITS NESTED-ENVELOPE PAYLOAD: `fn ie(x: Option[Option[R]]) { if let Some(Some(w)) = x { eat(w) ... } }` LEAKS R'S STRING (29 B) ONLY WHEN THE PROGRAM ALSO DEFINES `fn rd(x: Result[Option[R], i64]) { if let Ok(Some(w)) = x { return w.id } ... }`, AND RENAMING `rd`'S PARAM TO `y` REMOVES THE LEAK -- some per-function codegen state keyed by param or binding name survives from one function into the next. Output is correct on every surface (`e6 dR6 1 end`); only the free is lost. | — |
 
 ### Relocated
 
