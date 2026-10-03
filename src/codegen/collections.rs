@@ -1652,9 +1652,38 @@ impl<'ctx> super::Codegen<'ctx> {
         // `String.clone()` allocates — so the order matters; we
         // preserve source order.)
         let elem_hint = self.literal_pending_elem_hint();
+        // B-2026-10-03-23 — the element hints one level down, for a nested
+        // `Vec` literal element (`let n: Vec[Vec[(i32, i32)]] =
+        // vec![vec![(1, 2)]]`). The binding's hint describes THIS literal's
+        // elements, so an inner literal compiled under it saw `Vec[..]` and
+        // coerced nothing.
+        let inner_hints: Option<(TypeExpr, BasicTypeEnum<'ctx>)> = self
+            .var_types
+            .pending_let_elem_type_expr
+            .as_ref()
+            .and_then(vec_inner_type_expr)
+            .map(|te| {
+                let ty = self.llvm_type_for_type_expr(&te);
+                (te, ty)
+            });
         let mut vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(items.len());
         for e in items {
-            let v = self.compile_expr(e)?;
+            let nested = matches!(&e.kind, ExprKind::PrefixCollectionLiteral { type_name, .. } if type_name == "Vec");
+            let saved_hints = match (&inner_hints, nested) {
+                (Some((te, ty)), true) => Some((
+                    self.var_types
+                        .pending_let_elem_type_expr
+                        .replace(te.clone()),
+                    self.var_types.pending_let_elem_type.replace(*ty),
+                )),
+                _ => None,
+            };
+            let v = self.compile_expr(e);
+            if let Some((te, ty)) = saved_hints {
+                self.var_types.pending_let_elem_type_expr = te;
+                self.var_types.pending_let_elem_type = ty;
+            }
+            let v = v?;
             // B-2026-08-31-34 — an aggregate-literal ELEMENT that READS A HEAP
             // FIELD OFF A FRESH TEMP (`[mkp(1).a]`) is a MOVE, exactly as
             // `let a = mkp(1).a;` is. The let / assign / return / fn-tail sites
@@ -1737,7 +1766,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-07-02-6 — see `literal_pending_elem_hint`.
             vals.push(match elem_hint {
                 Some(h) => self.coerce_literal_elem_to_type_from(v, h, e),
-                None => v,
+                // B-2026-10-03-23 — a tuple element against the binding's
+                // declared tuple element type (`let a: Vec[(i32, i32)] =
+                // vec![(1, 2)]`), which `literal_pending_elem_hint` filters
+                // out as non-scalar. Without it the buffer was sized and laid
+                // out from the literal's `{i64, i64}` while every read used
+                // `{i32, i32}`.
+                None => match (v, self.var_types.pending_let_elem_type) {
+                    (BasicValueEnum::StructValue(sv), Some(BasicTypeEnum::StructType(st))) => {
+                        self.coerce_scalar_aggregate(sv, st, Some(e)).unwrap_or(v)
+                    }
+                    _ => v,
+                },
             });
         }
         let elem_ty = vals[0].get_type();

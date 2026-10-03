@@ -11695,7 +11695,104 @@ impl<'ctx> super::Codegen<'ctx> {
         target: BasicTypeEnum<'ctx>,
         src: &Expr,
     ) -> BasicValueEnum<'ctx> {
+        if let (BasicValueEnum::StructValue(sv), BasicTypeEnum::StructType(st)) = (val, target) {
+            if let Some(v) = self.coerce_scalar_aggregate(sv, st, Some(src)) {
+                return v;
+            }
+        }
         self.coerce_scalar_to_type_unsigned(val, target, self.expr_is_unsigned_int(src))
+    }
+
+    /// The aggregate leg of the boundary coercion (B-2026-10-03-23): a TUPLE
+    /// built at its values' widths, arriving at a slot declared with narrower
+    /// or wider scalar fields. `xs.push((1, 2))` on a `Vec[(i32, i32)]`
+    /// compiles the literal as `{i64, i64}` because nothing staged the
+    /// element's declared type, and the store then wrote 16 bytes into an
+    /// 8-byte slot: every element after the first read back the wrong
+    /// fields, and the last one wrote past the buffer. The `let`, argument,
+    /// return and struct-field positions stage the declared type before the
+    /// literal compiles (`stage_declared_aggregate_te`), so they never reach
+    /// here with a mismatch; the container positions did not.
+    ///
+    /// Rebuilds the value field by field, recursing into nested aggregates,
+    /// and declines (`None`) unless the two types have the same arity and
+    /// every leaf pair is scalar, so no other mismatch is reinterpreted.
+    /// Signedness comes from the literal's own element expressions when
+    /// `src` is a tuple literal; anything else widens with sext, the
+    /// historical default, and narrowing is signedness-blind.
+    pub(super) fn coerce_scalar_aggregate(
+        &self,
+        val: inkwell::values::StructValue<'ctx>,
+        target: inkwell::types::StructType<'ctx>,
+        src: Option<&Expr>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let from = val.get_type();
+        if from == target || !Self::scalar_aggregates_match(from, target) {
+            return None;
+        }
+        let elems: Option<&Vec<Expr>> = match src.map(|e| &e.kind) {
+            Some(ExprKind::Tuple(es)) if es.len() as u32 == target.count_fields() => Some(es),
+            _ => None,
+        };
+        let mut out = target.get_undef();
+        for i in 0..target.count_fields() {
+            let field = self
+                .builder
+                .build_extract_value(val, i, "agg.co.f")
+                .unwrap();
+            let dst = target.get_field_type_at_index(i)?;
+            let sub = elems.map(|es| &es[i as usize]);
+            let co = match (field, dst) {
+                (BasicValueEnum::StructValue(fs), BasicTypeEnum::StructType(ds)) => {
+                    if fs.get_type() == ds {
+                        field
+                    } else {
+                        self.coerce_scalar_aggregate(fs, ds, sub)?
+                    }
+                }
+                _ => match sub {
+                    Some(e) => self.coerce_scalar_to_type_unsigned(
+                        field,
+                        dst,
+                        self.expr_is_unsigned_int(e),
+                    ),
+                    None => self.coerce_scalar_to_type(field, dst),
+                },
+            };
+            out = self
+                .builder
+                .build_insert_value(out, co, i, "agg.co")
+                .unwrap()
+                .into_struct_value();
+        }
+        Some(out.into())
+    }
+
+    /// Same arity, and every leaf pair is int/float on both sides (nested
+    /// structs compared recursively). The shape test for
+    /// [`Self::coerce_scalar_aggregate`].
+    fn scalar_aggregates_match(
+        a: inkwell::types::StructType<'ctx>,
+        b: inkwell::types::StructType<'ctx>,
+    ) -> bool {
+        let n = a.count_fields();
+        if n == 0 || n != b.count_fields() {
+            return false;
+        }
+        (0..n).all(|i| {
+            match (a.get_field_type_at_index(i), b.get_field_type_at_index(i)) {
+                (Some(BasicTypeEnum::StructType(x)), Some(BasicTypeEnum::StructType(y))) => {
+                    x == y || Self::scalar_aggregates_match(x, y)
+                }
+                // The legs `coerce_scalar_to_type_unsigned` can convert:
+                // int/int, float/float, and int -> float.
+                (Some(x), Some(y)) => {
+                    (x.is_int_type() && (y.is_int_type() || y.is_float_type()))
+                        || (x.is_float_type() && y.is_float_type())
+                }
+                _ => false,
+            }
+        })
     }
 
     /// [`Self::coerce_scalar_to_type_from`] for a caller that may not have the
@@ -11772,6 +11869,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // the `_from` family resolves it from the source expression's Kāra
             // type; a caller with no source keeps `false`/`sitofp`, which is
             // the historical behaviour of the two positions that already work.
+            (BasicValueEnum::StructValue(sv), BasicTypeEnum::StructType(st)) => {
+                // B-2026-10-03-23 — see `coerce_scalar_aggregate`. No source
+                // expression here, so a widening field takes sext.
+                self.coerce_scalar_aggregate(sv, st, None).unwrap_or(val)
+            }
             (BasicValueEnum::IntValue(iv), BasicTypeEnum::FloatType(ft)) => {
                 if src_unsigned {
                     self.builder
