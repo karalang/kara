@@ -5283,6 +5283,27 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(en) = self.shared_unit_variant_owner(expr) {
             return self.type_decls.shared_types.get(&en).map(|i| i.heap_type);
         }
+        // B-2026-10-03-17 — `h.clone()` on a shared handle is the refcount
+        // bump, and the `+1` it returns is held by nothing else, so it owes
+        // the same caller-side release as a fresh box. It was answered `None`
+        // (not a `Call`), so `sg(a.clone())` left the object alive at exit.
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        {
+            if method == "clone" && args.is_empty() {
+                return self
+                    .shared_type_for_expr(object)
+                    .map(|(_, i)| i.heap_type)
+                    .or_else(|| {
+                        let n = self.type_name_of_expr(object)?;
+                        self.type_decls.shared_types.get(&n).map(|i| i.heap_type)
+                    });
+            }
+        }
         if !self.expr_yields_fresh_owned_temp(expr) {
             return None;
         }
