@@ -1403,7 +1403,7 @@ impl<'a> CfgBuilder<'a> {
                 c
             }
 
-            ExprKind::Closure { body, .. } => {
+            ExprKind::Closure { params, body, .. } => {
                 // Capture happens at the creation site; the body
                 // executes at an unknown future time (zero, one, or
                 // many invocations). For the formal RC predicate to
@@ -1434,7 +1434,31 @@ impl<'a> CfgBuilder<'a> {
                 // unperturbed (B-2026-07-11-9).
                 self.closure_body_blocks.insert(closure_body_block);
                 self.closure_depth += 1;
+                // B-2026-10-02-94 — scope the closure's params to a frame of
+                // their own, as an `if let` or `match` arm's bindings are: a
+                // param is a fresh binding per call, distinct from any outer
+                // local it shadows. Without the frame, `|h: Hc| keepc(h)`'s
+                // consume of the PARAM paired with a later outer `keepc(h)`,
+                // drew a false use-after-move, and the outer `h` was promoted
+                // to an RC box that codegen then also read the param through.
+                self.push_arm_rename_frame();
+                for p in params {
+                    for name in pattern_bindings(&p.pattern) {
+                        self.note_local_introduced(&name);
+                        self.record_use(
+                            closure_body_block,
+                            UseSite {
+                                binding: name,
+                                kind: UseKind::Define,
+                                span: p.pattern.span,
+                                consume_origin: ConsumeOrigin::Direct,
+                                place: PlacePath::new(),
+                            },
+                        );
+                    }
+                }
                 self.lower_expr(body, closure_body_block, exit, loops);
+                self.pop_cleanup_rename_frame();
                 self.closure_depth -= 1;
                 after_creation
             }

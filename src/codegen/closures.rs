@@ -1104,6 +1104,18 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // 7b. Bind closure params (fn params 1..n).
+        // B-2026-10-02-94 — a param is a fresh binding that SHADOWS any
+        // enclosing local of the same name, so the enclosing fn's RC-fallback
+        // box entry for that name must not reach the body: `load_variable`
+        // would read the param's plain value slot as a box pointer and
+        // dereference its first word (a segfault on `|h: Hc| keepc(h)` beside
+        // an RC-promoted outer `h`). Restored with the other body-scoped state.
+        let saved_rc_fallback_heap_types = self.drop_rc.rc_fallback_heap_types.clone();
+        for cp in params.iter() {
+            for name in cp.pattern.binding_names() {
+                self.drop_rc.rc_fallback_heap_types.remove(&name);
+            }
+        }
         for (i, (cp, ty)) in params.iter().zip(param_llvm_types.iter()).enumerate() {
             let param_val = closure_fn.get_nth_param((i + 1) as u32).unwrap();
             let param_name = match &cp.pattern.kind {
@@ -1453,6 +1465,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.ref_params = saved_ref_params;
         self.borrow_vars.signature_ref_params = saved_signature_ref_params;
         self.borrow_vars.elem_borrow_roots = saved_elem_borrow_roots;
+        self.drop_rc.rc_fallback_heap_types = saved_rc_fallback_heap_types;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
