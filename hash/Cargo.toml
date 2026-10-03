@@ -26,3 +26,8 @@ std = []
 [[test]]
 name = "seed_alloc"
 harness = false
+
+# Spawns its own child processes, each racing threads to the first hash.
+[[test]]
+name = "seed_race"
+harness = false

@@ -48,7 +48,12 @@ static INIT: AtomicU64 = AtomicU64::new(0);
 /// two tasks disagreeing about the seed would put the same key in two buckets.
 #[inline]
 pub fn seed() -> (u64, u64) {
-    if INIT.load(Ordering::Acquire) == 0 {
+    // Only 2 means the key is stored. The winner of `store`'s
+    // compare-exchange sets 1 before it writes the key, so a caller that saw
+    // 1 and read the key anyway hashed with a key that was still 0 or half
+    // written, and the `Map` it was filling lost those entries once the real
+    // key landed (B-2026-10-03-15). `init_once` waits for 2 in that case.
+    if INIT.load(Ordering::Acquire) != 2 {
         init_once();
     }
     (K0.load(Ordering::Relaxed), K1.load(Ordering::Relaxed))
