@@ -951,10 +951,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
         }
         // Load the env struct value through the env pointer.
-        let env_val = self
-            .builder
-            .build_load::<BasicTypeEnum<'ctx>>(env_struct_ty.into(), env_ptr, "__env")
-            .unwrap();
+        //
+        // B-2026-10-03-22 — not for a closure that captures nothing. Its env
+        // is the one-byte placeholder, allocated in the DEFINING frame, and
+        // nothing below reads it; loading it anyway reads a dead stack slot
+        // once a capture-less closure is returned out of that frame
+        // (`fn mk() -> Fn(i64) -> i64 { |x| x + 1 }`), which ASAN reports as
+        // a stack-use-after-return.
+        // Both layouts mark "no capture" the same way: the lone `i8`
+        // placeholder field (a path layout with no slots, or a per-name
+        // layout with no free vars).
+        let env_is_placeholder = match path_layout.as_ref() {
+            Some(layout) => layout.slot_tys.is_empty(),
+            None => free_vars.is_empty(),
+        };
+        let env_val: BasicValueEnum<'ctx> = if env_is_placeholder {
+            env_struct_ty.get_undef().into()
+        } else {
+            self.builder
+                .build_load::<BasicTypeEnum<'ctx>>(env_struct_ty.into(), env_ptr, "__env")
+                .unwrap()
+        };
 
         // B-2026-07-18-46: captured whole heap-bearing STRUCT/ENUM vars (a
         // struct with a String/Vec field, etc.) — the Vec/String sibling of the
