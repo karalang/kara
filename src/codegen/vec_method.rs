@@ -20,6 +20,19 @@ use inkwell::AddressSpace;
 
 use super::state::VarSlot;
 
+/// The comparison a monomorphized sort (`emit_sort_by_mono`) inlines at every
+/// compare: a user `sort_by` closure compiled in place, or a `karac_cmp_<T>`
+/// family function for bare `sort()`'s natural order (B-2026-10-03-25).
+#[derive(Clone, Copy)]
+pub(super) enum SortCmp<'a, 'ctx> {
+    Closure {
+        params: &'a [ClosureParam],
+        body: &'a Expr,
+        elem_type_name: Option<&'a str>,
+    },
+    Family(FunctionValue<'ctx>),
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     /// B-2026-08-01-24: a heap-owning `for`-loop struct ELEMENT binding pushed
     /// whole into a container (`for h in headers { out.push(h) }`). The loop
@@ -7546,10 +7559,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         // what put #1665 at parity with C's qsort and ~2x
                         // behind Rust.
                         let mono_fn = self.emit_sort_by_mono(
-                            params,
-                            body,
+                            SortCmp::Closure {
+                                params,
+                                body,
+                                elem_type_name: elem_type_name.as_deref(),
+                            },
                             elem_ty,
-                            elem_type_name.as_deref(),
                         )?;
                         let data_ptr_ptr = self
                             .builder
@@ -7801,7 +7816,41 @@ impl<'ctx> super::Codegen<'ctx> {
                     // floats, nested Vec/VecDeque (lexicographic, matching
                     // the interpreter's value_compare), tuples of ordered
                     // leaves — via the recursive karac_cmp_<T> family.
-                    self.emit_cmp_family_sort_thunk(cmp_fn)
+                    //
+                    // B-2026-10-03-25: that family function is inlined into
+                    // the same monomorphized merge sort `sort_by(|a, b|
+                    // a.cmp(b))` gets, rather than called through
+                    // `karac_vec_sort_by`'s function pointer. The callback
+                    // made the bare `sort()` the SLOWER spelling of the same
+                    // order: kata 336 spent ~40% of its time in it. Both
+                    // sorts are stable, so the permutation is unchanged.
+                    let mono_fn = self.emit_sort_by_mono(SortCmp::Family(cmp_fn), elem_ty)?;
+                    let data_ptr_ptr = self
+                        .builder
+                        .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
+                        .unwrap();
+                    let len_ptr = self
+                        .builder
+                        .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                        .unwrap();
+                    let data = self
+                        .builder
+                        .build_load(ptr_ty, data_ptr_ptr, "data")
+                        .unwrap()
+                        .into_pointer_value();
+                    let len = self
+                        .builder
+                        .build_load(i64_t, len_ptr, "len")
+                        .unwrap()
+                        .into_int_value();
+                    self.builder
+                        .build_call(
+                            mono_fn,
+                            &[data.into(), len.into(), i64_t.const_int(1, false).into()],
+                            "",
+                        )
+                        .unwrap();
+                    return Ok(i64_t.const_zero().into());
                 } else {
                     return Err(
                         "Vec.sort() in codegen supports integer, String, float, tuple, and \
@@ -10508,39 +10557,6 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(cmp_fn)
     }
 
-    /// Adapt a `karac_cmp_<T>(a, b)` family fn to the sort-thunk ABI
-    /// `(ctx, a, b) -> i64` (ctx ignored).
-    fn emit_cmp_family_sort_thunk(&mut self, cmp_fn: FunctionValue<'ctx>) -> FunctionValue<'ctx> {
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let i64_t = self.context.i64_type();
-        let id = self.closure_state.closure_counter;
-        self.closure_state.closure_counter += 1;
-        let name = format!("__sort_family_cmp_{}", id);
-        let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
-        let thunk_fn = self
-            .module
-            .add_function(&name, thunk_ty, Some(Linkage::Internal));
-        let saved_bb = self.builder.get_insert_block();
-        let saved_fn = self.current_fn;
-        self.current_fn = Some(thunk_fn);
-        let entry = self.context.append_basic_block(thunk_fn, "entry");
-        self.builder.position_at_end(entry);
-        let a = thunk_fn.get_nth_param(1).unwrap();
-        let b = thunk_fn.get_nth_param(2).unwrap();
-        let r = self
-            .builder
-            .build_call(cmp_fn, &[a.into(), b.into()], "cmp")
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic();
-        self.builder.build_return(Some(&r)).unwrap();
-        self.current_fn = saved_fn;
-        if let Some(bb) = saved_bb {
-            self.builder.position_at_end(bb);
-        }
-        thunk_fn
-    }
-
     pub(super) fn emit_default_sort_thunk(
         &mut self,
         elem_ty: BasicTypeEnum<'ctx>,
@@ -11761,13 +11777,34 @@ impl<'ctx> super::Codegen<'ctx> {
     fn emit_sort_by_inline_compare(
         &mut self,
         host_fn: FunctionValue<'ctx>,
-        params: &[ClosureParam],
-        body: &Expr,
-        elem_type_name: Option<&str>,
+        cmp: SortCmp<'_, 'ctx>,
         a_val: BasicValueEnum<'ctx>,
         b_val: BasicValueEnum<'ctx>,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let i64_t = self.context.i64_type();
+        let (params, body, elem_type_name) = match cmp {
+            SortCmp::Closure {
+                params,
+                body,
+                elem_type_name,
+            } => (params, body, elem_type_name),
+            SortCmp::Family(cmp_fn) => {
+                // The `karac_cmp_<T>` family takes its operands by pointer and
+                // already returns `-1 / 0 / +1`. It has internal linkage, so
+                // LLVM inlines it here exactly as it would the closure body.
+                let a_slot = self.create_entry_alloca(host_fn, "srt.fa", a_val.get_type());
+                let b_slot = self.create_entry_alloca(host_fn, "srt.fb", b_val.get_type());
+                self.builder.build_store(a_slot, a_val).unwrap();
+                self.builder.build_store(b_slot, b_val).unwrap();
+                return Ok(self
+                    .builder
+                    .build_call(cmp_fn, &[a_slot.into(), b_slot.into()], "srt.fcmp")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value());
+            }
+        };
         let param_vals = [a_val, b_val];
         for (i, cp) in params.iter().enumerate().take(2) {
             let val = param_vals[i];
@@ -11881,10 +11918,8 @@ impl<'ctx> super::Codegen<'ctx> {
     #[allow(clippy::too_many_lines)]
     pub(super) fn emit_sort_by_mono(
         &mut self,
-        params: &[ClosureParam],
-        body: &Expr,
+        cmp: SortCmp<'_, 'ctx>,
         elem_ty: BasicTypeEnum<'ctx>,
-        elem_type_name: Option<&str>,
     ) -> Result<FunctionValue<'ctx>, String> {
         /// Insertion-sort base run length. Matches the runtime's
         /// `sort_fixed_width::RUN` so the two backends do the same work.
@@ -12331,8 +12366,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let d0_v = self.builder.build_load(elem_ty, d0_addr, "d0").unwrap();
         let d1_v = self.builder.build_load(elem_ty, d1_addr, "d1").unwrap();
-        let c_dir =
-            self.emit_sort_by_inline_compare(sort_fn, params, body, elem_type_name, d0_v, d1_v)?;
+        let c_dir = self.emit_sort_by_inline_compare(sort_fn, cmp, d0_v, d1_v)?;
         let is_desc = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SGT, c_dir, zero, "is.desc")
@@ -12375,8 +12409,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let dp_v = self.builder.build_load(elem_ty, dp_addr, "dp").unwrap();
         let dc_v = self.builder.build_load(elem_ty, dc_addr, "dc").unwrap();
-        let c_desc =
-            self.emit_sort_by_inline_compare(sort_fn, params, body, elem_type_name, dp_v, dc_v)?;
+        let c_desc = self.emit_sort_by_inline_compare(sort_fn, cmp, dp_v, dc_v)?;
         let desc_go = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SGT, c_desc, zero, "desc.go")
@@ -12498,8 +12531,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let ap_v = self.builder.build_load(elem_ty, ap_addr, "ap").unwrap();
         let ac_v = self.builder.build_load(elem_ty, ac_addr, "ac").unwrap();
-        let c_asc =
-            self.emit_sort_by_inline_compare(sort_fn, params, body, elem_type_name, ap_v, ac_v)?;
+        let c_asc = self.emit_sort_by_inline_compare(sort_fn, cmp, ap_v, ac_v)?;
         let asc_go = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SLE, c_asc, zero, "asc.go")
@@ -12614,14 +12646,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(elem_ty, prev_addr, "prev.load")
             .unwrap();
         let hold_v1 = self.builder.build_load(elem_ty, hold_a, "hold.v1").unwrap();
-        let c1 = self.emit_sort_by_inline_compare(
-            sort_fn,
-            params,
-            body,
-            elem_type_name,
-            prev_v,
-            hold_v1,
-        )?;
+        let c1 = self.emit_sort_by_inline_compare(sort_fn, cmp, prev_v, hold_v1)?;
         let c1_gt = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SGT, c1, zero, "p1.cmp.gt")
@@ -12915,8 +12940,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let ea_v = self.builder.build_load(elem_ty, ea_addr, "ea").unwrap();
         let eb_v = self.builder.build_load(elem_ty, eb_addr, "eb").unwrap();
-        let c2 =
-            self.emit_sort_by_inline_compare(sort_fn, params, body, elem_type_name, ea_v, eb_v)?;
+        let c2 = self.emit_sort_by_inline_compare(sort_fn, cmp, ea_v, eb_v)?;
         let take_a = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SLE, c2, zero, "take.a")
@@ -13169,8 +13193,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem_ty, pr_eb_addr, "pr.eb")
             .unwrap();
-        let pr_c =
-            self.emit_sort_by_inline_compare(sort_fn, params, body, elem_type_name, pr_ea, pr_eb)?;
+        let pr_c = self.emit_sort_by_inline_compare(sort_fn, cmp, pr_ea, pr_eb)?;
         let pr_take_a = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SLE, pr_c, zero, "pr.take.a")
@@ -13354,8 +13377,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem_ty, bl_eb_addr, "bl.eb")
             .unwrap();
-        let bl_c =
-            self.emit_sort_by_inline_compare(sort_fn, params, body, elem_type_name, bl_ea, bl_eb)?;
+        let bl_c = self.emit_sort_by_inline_compare(sort_fn, cmp, bl_ea, bl_eb)?;
         let bl_take_a = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SLE, bl_c, zero, "bl.take.a")
@@ -13677,17 +13699,9 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // sort_fn is complete, so the mutually recursive partner can be
         // defined now.
-        self.emit_sort_partition_body(
-            qpart_fn,
-            sort_fn,
-            isort_fn,
-            params,
-            body,
-            elem_ty,
-            elem_type_name,
-        )?;
-        self.emit_sort_isort_body(isort_fn, params, body, elem_ty, elem_type_name)?;
-        self.emit_sort_probe_body(probe_fn, params, body, elem_ty, elem_type_name)?;
+        self.emit_sort_partition_body(qpart_fn, sort_fn, isort_fn, cmp, elem_ty)?;
+        self.emit_sort_isort_body(isort_fn, cmp, elem_ty)?;
+        self.emit_sort_probe_body(probe_fn, cmp, elem_ty)?;
 
         // Restore outer state.
         self.mono_state.type_subst = saved_subst;
@@ -13761,10 +13775,8 @@ impl<'ctx> super::Codegen<'ctx> {
         qpart_fn: FunctionValue<'ctx>,
         sort_fn: FunctionValue<'ctx>,
         isort_fn: FunctionValue<'ctx>,
-        params: &[ClosureParam],
-        body: &Expr,
+        cmp: SortCmp<'_, 'ctx>,
         elem_ty: BasicTypeEnum<'ctx>,
-        elem_type_name: Option<&str>,
     ) -> Result<(), String> {
         /// Ranges at or below this stop partitioning and are sorted directly by
         /// `isort_fn` (a longer one that reaches the leaf from the tie gate or
@@ -14194,30 +14206,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // Select the median's INDEX rather than its value: i64 selects are
         // unconditionally safe for every element type this path admits.
-        let c_ab = self.emit_sort_by_inline_compare(
-            qpart_fn,
-            params,
-            body,
-            elem_type_name,
-            vals[0],
-            vals[1],
-        )?;
-        let c_bc = self.emit_sort_by_inline_compare(
-            qpart_fn,
-            params,
-            body,
-            elem_type_name,
-            vals[1],
-            vals[2],
-        )?;
-        let c_ac = self.emit_sort_by_inline_compare(
-            qpart_fn,
-            params,
-            body,
-            elem_type_name,
-            vals[0],
-            vals[2],
-        )?;
+        let c_ab = self.emit_sort_by_inline_compare(qpart_fn, cmp, vals[0], vals[1])?;
+        let c_bc = self.emit_sort_by_inline_compare(qpart_fn, cmp, vals[1], vals[2])?;
+        let c_ac = self.emit_sort_by_inline_compare(qpart_fn, cmp, vals[0], vals[2])?;
         let lt = |s: &mut Self, c: IntValue<'ctx>, n: &str| {
             s.builder
                 .build_int_compare(inkwell::IntPredicate::SLT, c, zero, n)
@@ -14319,8 +14310,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let cv = self.builder.build_load(elem_ty, cv_p, "q.cv").unwrap();
         let pv_v = self.builder.build_load(elem_ty, piv_a, "q.pv.v").unwrap();
-        let cc =
-            self.emit_sort_by_inline_compare(qpart_fn, params, body, elem_type_name, cv, pv_v)?;
+        let cc = self.emit_sort_by_inline_compare(qpart_fn, cmp, cv, pv_v)?;
         let is_lt = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SLT, cc, zero, "q.is.lt")
@@ -14519,14 +14509,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let sv = self.builder.build_load(elem_ty, sv_p, "q.sv").unwrap();
             let pv_v2 = self.builder.build_load(elem_ty, piv_a, "q.pv.v2").unwrap();
-            let sc = self.emit_sort_by_inline_compare(
-                qpart_fn,
-                params,
-                body,
-                elem_type_name,
-                sv,
-                pv_v2,
-            )?;
+            let sc = self.emit_sort_by_inline_compare(qpart_fn, cmp, sv, pv_v2)?;
             let goes_left = match pred {
                 // `nlt == 0`: the pivot is the range minimum, so the left half
                 // is the block equal to it and the split is on `<=`.
@@ -14628,8 +14611,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let fv = self.builder.build_load(elem_ty, fv_p, "q.fv").unwrap();
             let fpv = self.builder.build_load(elem_ty, piv_a, "q.fpv").unwrap();
-            let fc =
-                self.emit_sort_by_inline_compare(qpart_fn, params, body, elem_type_name, fv, fpv)?;
+            let fc = self.emit_sort_by_inline_compare(qpart_fn, cmp, fv, fpv)?;
             let f_left = self
                 .builder
                 .build_int_compare(inkwell::IntPredicate::SLT, fc, zero, "q.f.lt")
@@ -14957,10 +14939,8 @@ impl<'ctx> super::Codegen<'ctx> {
     fn emit_sort_isort_body(
         &mut self,
         isort_fn: FunctionValue<'ctx>,
-        params: &[ClosureParam],
-        body: &Expr,
+        cmp: SortCmp<'_, 'ctx>,
         elem_ty: BasicTypeEnum<'ctx>,
-        elem_type_name: Option<&str>,
     ) -> Result<(), String> {
         let i64_t = self.context.i64_type();
         let zero = i64_t.const_zero();
@@ -15072,14 +15052,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem_ty, hold_a, "is.hold1")
             .unwrap();
-        let c = self.emit_sort_by_inline_compare(
-            isort_fn,
-            params,
-            body,
-            elem_type_name,
-            prev_v,
-            hold_v1,
-        )?;
+        let c = self.emit_sort_by_inline_compare(isort_fn, cmp, prev_v, hold_v1)?;
         let c_gt = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SGT, c, zero, "is.cmp.gt")
@@ -15193,10 +15166,8 @@ impl<'ctx> super::Codegen<'ctx> {
     fn emit_sort_probe_body(
         &mut self,
         probe_fn: FunctionValue<'ctx>,
-        params: &[ClosureParam],
-        body: &Expr,
+        cmp: SortCmp<'_, 'ctx>,
         elem_ty: BasicTypeEnum<'ctx>,
-        elem_type_name: Option<&str>,
     ) -> Result<(), String> {
         const PROBE_N: u64 = 512;
         const PART_GATE: u64 = 64;
@@ -15326,13 +15297,12 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let y = self.builder.build_load(elem_ty, yp, "pt.y").unwrap();
         let pv2 = self.builder.build_load(elem_ty, piv_a, "pt.pv2").unwrap();
-        let ct =
-            self.emit_sort_by_inline_compare(probe_fn, params, body, elem_type_name, x, pv2)?;
+        let ct = self.emit_sort_by_inline_compare(probe_fn, cmp, x, pv2)?;
         let tie_b = self
             .builder
             .build_int_compare(inkwell::IntPredicate::EQ, ct, zero, "pt.tie.b")
             .unwrap();
-        let co = self.emit_sort_by_inline_compare(probe_fn, params, body, elem_type_name, x, y)?;
+        let co = self.emit_sort_by_inline_compare(probe_fn, cmp, x, y)?;
         let ord_b = self
             .builder
             .build_int_compare(inkwell::IntPredicate::SLE, co, zero, "pt.ord.b")
