@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 646 |
+| miscompile | 649 |
 | run-vs-build | 571 |
 | leak | 532 |
 | double-free | 402 |
@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 118 |
 | crash | 105 |
 | soundness | 97 |
-| use-after-free | 76 |
+| use-after-free | 77 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2591 |
-| interp | 794 |
+| codegen | 2594 |
+| interp | 795 |
 | typecheck | 322 |
 | other | 113 |
 | ownership | 80 |
@@ -488,7 +488,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-62 | 2026-10-02 | codegen+interp | medium | A by-value struct param returned through `if let x = g { x }` or `let x = g else { .. }; x` runs its field's `Drop` body TWICE on every compiled surface, and the `let .. else` spelling twice on `--interp` too -- `fn f(g: H) -> H { if let x = g { x } else { .. } }` prints `ds17 35 ds17 35 r after` where `--interp` and `let x = g; x` print `ds17 35 r after` | — |
 | B-2026-10-02-67 | 2026-10-02 | codegen | high | A NESTED `Option[Option[R]]` LOCAL ALIASED THROUGH AN IDENTITY CALL AND THEN PASSED BY VALUE READS FREED MEMORY -- `let c = id(b); println(cls(c))` with non-generic `id`/`cls` over `Option[Option[R]]` prints `dR1 7 end` compiled (body before the callee's result) with 3 invalid reads of size 8 under valgrind at -O0; the interpreter and the generic `fn cls[T](x: Option[Option[T]])` print the due `7 dR1 end` clean | — |
 | B-2026-10-02-69 | 2026-10-02 | codegen | high | `replace(d, v)` FORWARDED THROUGH A WRAPPER WITH A `mut ref String` PARAM DOUBLE-FREES COMPILED -- `fn rep(d: mut ref String, v: String) -> String { return replace(d, v) }` called as `rep(mut s, f"..")` aborts with `free(): double free detected in tcache 2` on JIT, -O0 and -O2; the interpreter is right, and `replace(mut s, f"..")` directly in `main` is clean | — |
-| B-2026-10-02-72 | 2026-10-02 | codegen | high | A FRESH NESTED `Option[Option[R]]` TEMPORARY WHOSE INNER `Option` A CALLEE RETURNS OUT OF A MATCH ARM IS FREED TWICE -- `let a = take(Some(Some(mk(1))))` over `fn take[T](x: Option[Option[T]]) -> Option[T] { match x { Some(inner) => inner, None => None } }` aborts with `free(): double free` on JIT / -O0 / -O2 against the interpreter's `dR1 a end`; the non-generic twin prints NOTHING at -O0 with invalid reads | — |
 | B-2026-10-02-73 | 2026-10-02 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY MATCHED TWO LEVELS DEEP BY A GENERIC CALLEE LEAKS THE LEAF'S HEAP -- `deep(Some(Some(mk(2))))` over `fn deep[T](x: Option[Option[T]]) -> i64 { match x { Some(Some(w)) => 1, _ => 0 } }` runs `dR2` but loses R's String (29 B at -O0); the non-generic twin is clean. B-2026-10-02-68's remainder | — |
 | B-2026-10-02-80 | 2026-10-02 | codegen | medium | A `let`-BOUND `match` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM, WHERE `R` RUNS A `Drop` BODY, RUNS EVERY BODY TWICE ON THE COMPILED SURFACES -- `let k: Array[R, 2] = match x { Some(v) => v, None => z() }` prints `mid dR1 dR2 dR1 dR2 got1 end` on the JIT and the default build against `--interp`'s `mid dR1 dR2 got1 end`; memory is balanced | — |
 | B-2026-10-02-81 | 2026-10-02 | interp+codegen | high | ASSIGNING A `match` OVER A BY-VALUE USER-ENUM PARAM'S BOXED `Array` PAYLOAD TO AN EXISTING LOCAL IS WRONG ON EVERY SURFACE -- `let mut k: Array[R, 2] = z(); k = match x { EArr.A(v) => v, EArr.B => z() };` runs the new value's bodies twice under `--interp` (`dR0 dR0 mid dR1 dR2 dR1 dR2 got1 end`) and aborts with `free(): double free detected in tcache 2` on the JIT and the default build (valgrind -O0: 18 allocs / 18 frees, 4 errors, 4 bytes definitely lost) | — |
@@ -498,6 +497,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-82 | 2026-10-03 | codegen+interp | medium | A DISCARDED `if` INSIDE A `match` ARM WHOSE BRANCH TAILS ARE THE ARM'S BOXED `Array` PAYLOAD BINDING AND A FRESH ARRAY RUNS NONE OF THEIR `Drop` BODIES COMPILED AND LEAKS THE FRESH ONE -- `EArr.A(v) => { if c { v } else { z() }; 5 }` prints `got5` on the JIT and the build where `--interp` prints `dR1 dR2 got5`; with `c` false the compiled program leaks the discarded `z()` (valgrind -O0: 14 allocs / 12 frees, 4 bytes definitely lost), and `--interp` itself never runs `v`'s bodies on that edge | — |
 | B-2026-10-02-83 | 2026-10-03 | codegen+interp | medium | A `match` ARM'S BOXED `Array` PAYLOAD BINDING THAT A NESTED BRANCH DOES NOT HAND OUT NEVER RUNS ITS `Drop` BODIES, ON EVERY SURFACE -- `EArr.A(v) => { if c { v } else { z() } }` with `c` false prints `got0 dR0 dR0 end` everywhere, where `v`, never moved, owes `dR1 dR2` when the arm ends; memory is balanced, and the `match c` and `let`-bound spellings are the same | — |
 | B-2026-10-02-84 | 2026-10-03 | codegen | high | REASSIGNING A FIXED `Array` LOCAL WHOSE ELEMENTS OWN HEAP FROM ANYTHING BUT A CONTAINER LITERAL LEAKS THE DISPLACED ELEMENTS, AND FROM A NAMED SOURCE DOUBLE-FREES THEM -- `let mut k: Array[String, 2] = [..]; k = ys();` loses 4 B at -O0 with the right output, `k = w;` aborts `free(): double free detected in tcache 2` on the JIT, and a local that began as `let mut k = w;` double-frees even when reassigned from a literal; `Vec` is correct in every spelling | — |
+| B-2026-10-03-4 | 2026-10-03 | codegen | high | B-2026-10-02-72'S REMAINDER: THREE SPELLINGS OF MOVING THE INNER `Option` OUT OF A BOXED `Option[Option[R]]` STILL READ FREED MEMORY -- an arm that REBINDS it (`Some(inner) => { let k = inner; .. }`), a GUARDED arm that takes it (`Some(inner) if c => inner`), and a NAMED binding passed to a GENERIC `take[T]` (`let b = ..; take(b)`); all three were broken the same way before -72 | — |
+| B-2026-10-03-5 | 2026-10-03 | codegen | medium | A NESTED ARM THAT REWRAPS THE LEAF OF A BOXED `Option[Option[R]]` RUNS R'S `Drop` BODY TWICE -- `fn take(x: Option[Option[R]]) -> Option[R] { match x { Some(Some(r)) => Some(r), _ => None } }` prints `dR1 1 dR1 end` on JIT / -O0 / -O2 against the interpreter's `1 dR1 end`; valgrind is clean, so the memory is freed once and only the body is doubled | — |
+| B-2026-10-03-6 | 2026-10-03 | interp | medium | UNDER `--interp` A GUARDED ARM THAT FALLS THROUGH LOSES THE PARAM'S PAYLOAD `Drop` BODY -- `guard(Some(Some(mk(4))), false)` over `fn guard(x: Option[Option[R]], c: bool) -> Option[R] { match x { Some(inner) if c => inner, _ => None } }` prints `h end` with no `dR4`; every compiled surface prints `dR4 h end` | — |
+| B-2026-10-03-7 | 2026-10-03 | codegen | medium | A NON-GENERIC CALLEE TAKING A BOXED `Option[Option[R]]` BY VALUE RUNS THE PAYLOAD'S `Drop` BODY INSIDE THE CALL -- `println(cls(b))` over `fn cls(x: Option[Option[R]]) -> i64 { match x { Some(inner) => 7, None => 0 } }` prints `dR1 7 end` on -O0 / -O2 against the interpreter's `7 dR1 end`; the flat `Option[R]`, a plain struct param and the GENERIC `cls[T]` all print `7 dR1 end` on every surface; memory is clean | — |
 
 ### Relocated
 
@@ -3572,6 +3575,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-68 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY PASSED TO A GENERIC CALLEE LEAKS THE PAYLOAD'S HEAP -- `cls(Some(Some(mk(1))))` over `fn cls[T](x: Optio… | baab0f800 |
 | B-2026-10-02-71 | interp | medium | `--interp` CLOSURES CAPTURE THE WHOLE ITEM SCOPE and copy it into every call's frame, so a `sort_by` comparator costs a copy of every function in the… | c8e87b65d |
 | B-2026-10-02-70 | codegen | medium | `for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)]` HEAP-ALLOCATES THE LITERAL ON EVERY EXECUTION under `karac build`, so a grid DFS that walks its… | b50bfacd3 |
+| B-2026-10-02-72 | codegen | high | A FRESH NESTED `Option[Option[R]]` TEMPORARY WHOSE INNER `Option` A CALLEE RETURNS OUT OF A MATCH ARM IS FREED TWICE -- `let a = take(Some(Some(mk(1)… | 4af17ba71 |
 | B-2026-10-02-79 | codegen | high | A `match` ARM WHOSE BLOCK ENDS IN AN `if` THAT HANDS OUT THE BOXED `Array` PAYLOAD BINDING DOUBLE-FREES ON THE JIT AND AT -O0, AS A FUNCTION'S TAIL O… | e9fb65b66 |
 
 </details>
