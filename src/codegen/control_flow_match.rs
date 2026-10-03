@@ -9922,11 +9922,52 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let actual_tag = self.extract_enum_tag(scrut, variant_name)?;
                     let expected_tag = self.context.i64_type().const_int(tag, false);
-                    return Ok(self
+                    let cond = self
                         .builder
                         .build_int_compare(IntPredicate::EQ, actual_tag, expected_tag, "tag_eq")
-                        .unwrap()
-                        .into());
+                        .unwrap();
+                    // B-2026-10-03-37 — a SHARED enum's struct variant whose
+                    // field carries a nested variant pattern
+                    // (`H5.Z { m: M2.P { .. }, j }`) tests that field's tag too,
+                    // through the same box-reading path the tuple-variant arm
+                    // takes. Lined up by declared field position; an unnamed
+                    // or shorthand field is a wildcard and adds no test. (A
+                    // value enum cannot nest an enum in a variant payload, so
+                    // the shared outer is where this shape lives.)
+                    if scrut.is_pointer_value() {
+                        if let (Some(en), PatternKind::Struct { fields, .. }) =
+                            (self.variant_pattern_enum_name(pattern), &pattern.kind)
+                        {
+                            if self.type_decls.shared_types.contains_key(&en) {
+                                if let Some(names) =
+                                    self.enum_variant_struct_field_names(&en, variant_name)
+                                {
+                                    let positional: Vec<Pattern> = names
+                                        .iter()
+                                        .map(|n| {
+                                            fields
+                                                .iter()
+                                                .find(|f| &f.name == n)
+                                                .and_then(|f| f.pattern.clone())
+                                                .unwrap_or(Pattern {
+                                                    kind: PatternKind::Wildcard,
+                                                    span: pattern.span,
+                                                })
+                                        })
+                                        .collect();
+                                    let cond = self.and_in_nested_variant_conditions(
+                                        scrut,
+                                        Some(&en),
+                                        variant_name,
+                                        &positional,
+                                        cond,
+                                    )?;
+                                    return Ok(cond.into());
+                                }
+                            }
+                        }
+                    }
+                    return Ok(cond.into());
                 }
                 Ok(tru.into())
             }
@@ -11269,6 +11310,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // field stayed unbound ("Undefined variable").
             PatternKind::Struct { path, .. } => {
                 if let Some(enum_name) = self.variant_pattern_enum_name(pat) {
+                    // B-2026-10-03-37 — a SHARED enum's struct variant is an
+                    // RC handle, one word, exactly as the TupleVariant arm
+                    // above says. Sized at the inline layout, a nested
+                    // `H2.Z(M2.P { v, k })` deboxed the handle as if it
+                    // pointed at an inline `M2` and read the RC count as one.
+                    if self.type_decls.shared_types.contains_key(&enum_name) {
+                        return 1;
+                    }
                     return self
                         .type_decls
                         .enum_layouts
@@ -11485,6 +11534,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // both see the right shape.
             PatternKind::Struct { path, .. } => {
                 if let Some(enum_name) = self.variant_pattern_enum_name(pat) {
+                    // B-2026-10-03-37 — the load-shape twin of the word-count
+                    // arm: a shared enum's struct variant is its RC handle.
+                    if self.type_decls.shared_types.contains_key(&enum_name) {
+                        return self.context.ptr_type(AddressSpace::default()).into();
+                    }
                     if let Some(layout) = self.type_decls.enum_layouts.get(&enum_name) {
                         return layout.llvm_type.into();
                     }
@@ -17426,54 +17480,70 @@ impl<'ctx> super::Codegen<'ctx> {
         // would. Recurse into that inner box so its moved-out words are
         // zeroed too; without it `x` and the inner box's release both freed
         // the `Vec`. The handle word itself stays: `H` still owns `M`.
-        if let PatternKind::TupleVariant { patterns, .. } = &pattern.kind {
-            for &pos in &consumed_positions {
-                let Some(sub) = patterns.get(pos) else {
-                    continue;
-                };
-                if !matches!(
-                    sub.kind,
-                    PatternKind::TupleVariant { .. } | PatternKind::Struct { .. }
-                ) {
-                    continue;
-                }
-                let Some(inner_en) = self.variant_pattern_enum_name(sub) else {
-                    continue;
-                };
-                if !self
-                    .type_decls
-                    .shared_types
-                    .get(&inner_en)
-                    .is_some_and(|i| i.is_enum)
-                {
-                    continue;
-                }
-                let Some(&(start_word, _)) = offsets.get(pos) else {
-                    continue;
-                };
-                let Ok(word_ptr) = self.builder.build_struct_gep(
-                    heap_type,
-                    box_ptr,
-                    (start_word + 2) as u32,
-                    "match.sh.nested.wp",
-                ) else {
-                    continue;
-                };
-                let handle = self
-                    .builder
-                    .build_load(i64_t, word_ptr, "match.sh.nested.h")
-                    .unwrap()
-                    .into_int_value();
-                let inner_box = self
-                    .builder
-                    .build_int_to_ptr(
-                        handle,
-                        self.context.ptr_type(AddressSpace::default()),
-                        "match.sh.nested.box",
-                    )
-                    .unwrap();
-                self.suppress_shared_enum_payload_move_out(inner_box, &inner_en, sub);
+        // B-2026-10-03-37 — a struct-variant outer (`H5.Z { m: M2.P { .. }, j }`)
+        // lines its field sub-patterns up by declared position, the same
+        // positions `consumed_positions` holds.
+        let subs_by_pos: Vec<Option<&Pattern>> = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns.iter().map(Some).collect(),
+            PatternKind::Struct { fields, .. } => self
+                .enum_variant_struct_field_names(enum_name, variant_name)
+                .unwrap_or_default()
+                .iter()
+                .map(|n| {
+                    fields
+                        .iter()
+                        .find(|f| &f.name == n)
+                        .and_then(|f| f.pattern.as_ref())
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        for &pos in &consumed_positions {
+            let Some(Some(sub)) = subs_by_pos.get(pos).copied() else {
+                continue;
+            };
+            if !matches!(
+                sub.kind,
+                PatternKind::TupleVariant { .. } | PatternKind::Struct { .. }
+            ) {
+                continue;
             }
+            let Some(inner_en) = self.variant_pattern_enum_name(sub) else {
+                continue;
+            };
+            if !self
+                .type_decls
+                .shared_types
+                .get(&inner_en)
+                .is_some_and(|i| i.is_enum)
+            {
+                continue;
+            }
+            let Some(&(start_word, _)) = offsets.get(pos) else {
+                continue;
+            };
+            let Ok(word_ptr) = self.builder.build_struct_gep(
+                heap_type,
+                box_ptr,
+                (start_word + 2) as u32,
+                "match.sh.nested.wp",
+            ) else {
+                continue;
+            };
+            let handle = self
+                .builder
+                .build_load(i64_t, word_ptr, "match.sh.nested.h")
+                .unwrap()
+                .into_int_value();
+            let inner_box = self
+                .builder
+                .build_int_to_ptr(
+                    handle,
+                    self.context.ptr_type(AddressSpace::default()),
+                    "match.sh.nested.box",
+                )
+                .unwrap();
+            self.suppress_shared_enum_payload_move_out(inner_box, &inner_en, sub);
         }
         // B-2026-09-19-53 — a generic shared enum's erased `T` payload is
         // heap-boxed (`coerce_to_payload_words`) and the box, interior
