@@ -823,7 +823,7 @@ impl<'a> super::Interpreter<'a> {
         // runtime_errors, control_flow_or_value)
         type BranchResult = (
             usize,
-            HashMap<String, Value>,
+            super::exec::Scope,
             Vec<ConsoleSeg>,
             Vec<String>,
             Vec<crate::interpreter::RuntimeError>,
@@ -922,7 +922,7 @@ impl<'a> super::Interpreter<'a> {
                     let defined_vars = if let Some(scope) = branch_interp.env.scopes.last() {
                         scope.clone()
                     } else {
-                        HashMap::new()
+                        Default::default()
                     };
 
                     let console = branch_interp.captured_console.unwrap_or_default();

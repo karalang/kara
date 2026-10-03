@@ -99,6 +99,21 @@ impl<'a> super::Interpreter<'a> {
     /// `codegen/method_call.rs` had already had to special-case the method
     /// shape and its comment says so; this is the interpreter catching up
     /// rather than a second, drifting copy.
+    /// A `<prim>.<op>(..)` call the operator lowering wrote: a primitive (or
+    /// total-order float wrapper) head, and a method `dispatch_lowered_op`
+    /// maps, with that method's arity.
+    fn is_lowered_op_call(target: &str, method: &str, args: &[CallArg]) -> bool {
+        let arity_ok = match method {
+            "add" | "sub" | "mul" | "div" | "rem" | "eq" | "ne" | "lt" | "le" | "gt" | "ge"
+            | "bitand" | "bitor" | "bitxor" | "shl" | "shr" => args.len() == 2,
+            "neg" | "not" => args.len() == 1,
+            _ => false,
+        };
+        arity_ok
+            && (crate::prelude::PRELUDE_PRIMITIVES.contains(&target)
+                || matches!(target, "F32" | "F64" | "F16" | "Bf16"))
+    }
+
     pub(crate) fn eval_process_exit(&mut self, args: &[CallArg]) -> Value {
         self.track_effect("panics");
         let code = if let Some(arg) = args.first() {
@@ -115,6 +130,25 @@ impl<'a> super::Interpreter<'a> {
     }
 
     pub(crate) fn eval_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Value {
+        // B-2026-10-03-1 — the lowered scalar operator, first. `karac::lower`
+        // rewrites every `a + b`, `s >= 3`, `-x` on a primitive into
+        // `<prim>.<op>(..)`, so this is the hottest call shape the interpreter
+        // sees, and it used to be answered by `dispatch_lowered_op` only at
+        // the very end of the path-call match below, after ~1,700 lines of
+        // intercepts (each costing hash lookups, and one a `segments.join`
+        // allocation per call). None of those intercepts can claim a
+        // primitive head with an operator method name, so answering it here
+        // changes no result. The name list is exactly the set
+        // `dispatch_lowered_op` maps; anything else on a primitive head
+        // (`i64.from`, `f64.parse`, …) still takes the long road.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && Self::is_lowered_op_call(&segments[0], &segments[1], args) {
+                if let Some(result) = self.dispatch_lowered_op(&segments[1], args, span) {
+                    return result;
+                }
+            }
+        }
+
         // Comptime `Type` reflection in the path-call form: `MyType.fields()`,
         // `MyType.name()`, … parse as `Call(Path([Type, method]))`. The
         // typechecker has already validated this is a reflection call on a

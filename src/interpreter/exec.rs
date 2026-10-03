@@ -1061,9 +1061,16 @@ pub(crate) fn push_drops_for_stmt_except(
 
 // ── Scoped Environment ──────────────────────────────────────────
 
+/// B-2026-10-03-1 — one scope's bindings. Fx-hashed: every variable read and
+/// write in the interpreter is a lookup here, and SipHash's per-key setup was
+/// 18% of a scalar loop's instructions. The order of a scope's entries is not
+/// observable (nothing walks a scope to decide what runs), and std's
+/// `RandomState` already made it differ between runs.
+pub(crate) type Scope = rustc_hash::FxHashMap<String, Value>;
+
 #[derive(Debug, Clone)]
 pub(crate) struct Env {
-    pub(crate) scopes: Vec<HashMap<String, Value>>,
+    pub(crate) scopes: Vec<Scope>,
     /// Active slot-write watches (B-2026-07-28-7), innermost last. Each entry
     /// is `(binding name, was it written)`; `set` flips the flag of every entry
     /// naming the slot it writes. `eval_match` uses this to learn whether a
@@ -1088,7 +1095,7 @@ pub(crate) struct Env {
 impl Env {
     pub(crate) fn new() -> Self {
         Env {
-            scopes: vec![HashMap::new()],
+            scopes: vec![Scope::default()],
             watches: Vec::new(),
             frame_starts: Vec::new(),
         }
@@ -1106,13 +1113,13 @@ impl Env {
     }
 
     pub(crate) fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
+        self.scopes.push(Scope::default());
     }
 
     /// Push the first scope of a call frame: a function, method or closure
     /// body. See `frame_starts`.
     pub(crate) fn push_frame_scope(&mut self) {
-        self.scopes.push(HashMap::new());
+        self.scopes.push(Scope::default());
         self.frame_starts.push(self.scopes.len() - 1);
     }
 
