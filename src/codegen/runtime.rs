@@ -16006,9 +16006,30 @@ impl<'ctx> super::Codegen<'ctx> {
             for n in names {
                 self.disarm_callee_owned_payload_walk_for_returned_view(&n);
             }
+        } else {
+            self.disarm_callee_owned_payload_walk_for_let_tail(expr);
         }
         self.disarm_escaping_tail_projection(expr);
         self.clear_cond_move_flags_for_tail_sources(expr);
+    }
+
+    /// B-2026-10-02-80 — a named `let` initializer is the other owner waiting
+    /// for a whole-payload view of a callee-owned param (`let k = match x {
+    /// Some(v) => v, .. }`): the binding registers its own walk over the
+    /// payload, so the param's walk ran every body a second time. A call
+    /// argument under the `let` is not an owner of the bodies and keeps the
+    /// walk, as [`Self::disarm_callee_owned_payload_walk_for_returned_view`]
+    /// records for `return sink(t)`. Path-local, like the `return` case.
+    pub(super) fn disarm_callee_owned_payload_walk_for_let_tail(&mut self, expr: &Expr) {
+        let ExprKind::Identifier(n) = &expr.kind else {
+            return;
+        };
+        let key = (expr.span.offset, expr.span.length);
+        if self.drop_rc.cond_move_let_sites.contains(&key)
+            && !self.drop_rc.cond_move_call_arg_sites.contains(&key)
+        {
+            self.disarm_callee_owned_payload_walk_for_returned_view(n);
+        }
     }
 
     /// B-2026-09-27-3 — a ONE-HOP projection off a local at an escaping tail

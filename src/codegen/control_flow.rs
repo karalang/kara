@@ -778,6 +778,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|b| b.get_terminator().is_none())
         {
             if let Some(fe) = then_block.final_expr.as_deref() {
+                // B-2026-10-02-80 — and a view of a callee-owned param's
+                // payload handed to a `let`: this arm compiles through plain
+                // `compile_block`, so the block-tail hook never saw it.
+                self.disarm_callee_owned_payload_walk_for_let_tail(fe);
                 if let ExprKind::Identifier(n) = &Self::block_tail_expr(fe).kind {
                     let n = Self::block_tail_rebind_root(then_block, n);
                     // B-2026-10-02-79 — or an enclosing construct's binding.
