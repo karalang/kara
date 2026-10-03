@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 645 |
+| miscompile | 646 |
 | run-vs-build | 570 |
 | leak | 530 |
-| double-free | 399 |
+| double-free | 401 |
 | missing-feature | 216 |
 | codegen-gap | 211 |
 | other | 164 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2582 |
-| interp | 791 |
+| codegen | 2585 |
+| interp | 792 |
 | typecheck | 322 |
 | other | 113 |
 | ownership | 80 |
@@ -482,7 +482,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-44 | 2026-10-02 | codegen+interp | medium | A BY-VALUE STRUCT PARAM HANDED BACK ON ONE PATH ONLY OUT OF AN `Option` ENVELOPE'S ARM RUNS ITS `Drop` BODY TWICE, AND DOUBLE-FREES COMPILED WHEN THE ENVELOPE IS FRESH (CORRECTION 2026-10-02: the compiled double free on the fresh envelope was B-2026-10-02-43's and is gone since 0e2807a8f; that cell now prints the same wrong `d2 y2 d2` on every surface) -- `fn hd(a: R, c: bool) -> R { let o = Some(a); match o { Some(v) => { if c { return v } return mkr(0) } None => { return mkr(0) } } }` prints `d4 y4 d4` on every surface at `c = true`, against the `y4 d4` of the plain `if c { return a } return mkr(0)` | — |
 | B-2026-10-02-45 | 2026-10-02 | codegen+interp | medium | PUSHING THE ARM BINDING OF AN `Option` ENVELOPE AROUND A BY-VALUE STRUCT PARAM INTO A `Vec` THAT DIES IN THE CALLEE RUNS THE PARAM'S `Drop` BODY TWICE ON EVERY SURFACE -- `fn v2(a: R) -> i64 { let o = Some(a); match o { Some(v) => { let mut vs: Vec[R] = Vec.new(); vs.push(v); return vs.len() } None => { return 0 } } }` prints `d2 d2 y1`, where pushing the param itself (`vs.push(a)`) prints one `d1` | — |
 | B-2026-10-02-48 | 2026-10-02 | codegen | low | `karac build` SPENDS 2 SECONDS RE-WALKING A SELF-RECURSIVE FUNCTION THROUGH THE PART-PATH OWNERSHIP PREDICATES -- the cycle guards stop the recursion but nothing remembers an answer, so every call site re-asks the whole tree | — |
-| B-2026-10-02-50 | 2026-10-02 | codegen | high | A `let k: Array[R, 2] = match x { EArr.A(v) => v, EArr.B => z() }` OVER A BY-VALUE USER-ENUM PARAM WHOSE `Array` ELEMENT RUNS A `Drop` BODY DOUBLE-FREES ON THE JIT AND AT -O0 -- valgrind 14 allocs / 16 frees against `--interp`'s `dR1 dR2 got1 end`; the `Array[String, 2]` twin is correct | — |
 | B-2026-10-02-51 | 2026-10-02 | codegen+interp | high | PUSHING A BOXED `Array` PAYLOAD BINDING WHOSE ELEMENT RUNS A `Drop` BODY INTO A LOCAL `Vec` RUNS EVERY BODY TWICE ON EVERY SURFACE, AND THE USER-ENUM SPELLING ALSO DOUBLE-FREES COMPILED -- `match x { EArr.A(v) => { w.push(v); } .. }` prints `dR1 dR2 dR1 dR2` under `--interp` and aborts with `free(): double free detected in tcache 2` on the JIT and the default build | — |
 | B-2026-10-02-52 | 2026-10-02 | codegen | medium | HANDING A BY-VALUE `Option[Array[R, 2]]` PARAM'S PAYLOAD BINDING TO A BY-VALUE `Array` CALLEE LEAKS EVERY ELEMENT'S HEAP COMPILED WHEN THE ELEMENT RUNS A `Drop` BODY -- `match x { Some(t) => { return eat(t); } .. }` and `Some(t) => eat(t)` print the right bodies but valgrind -O0 reports 14 allocs / 12 frees, 4 bytes definitely lost; the plain user-enum spelling is clean | — |
 | B-2026-10-02-53 | 2026-10-02 | interp+codegen | medium | A CONDITIONAL `return` OF A BOXED `Array` PAYLOAD BINDING RUNS NO ELEMENT `Drop` BODY ON THE PATH THAT DOES NOT RETURN -- `Some(t) => { if c { return t; } println("nc"); return [mk(5), mk(6)]; }` with `c = false` prints `nc got5 dR5 dR6` under `--interp` (no `dR1 dR2`), and the user-enum spelling prints the same on EVERY surface | — |
@@ -500,6 +499,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-70 | 2026-10-02 | codegen | medium | `for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)]` HEAP-ALLOCATES THE LITERAL ON EVERY EXECUTION under `karac build`, so a grid DFS that walks its four neighbours this way does one malloc/free per call and runs 1.42x slower than the same loop over an `Array` local | — |
 | B-2026-10-02-72 | 2026-10-02 | codegen | high | A FRESH NESTED `Option[Option[R]]` TEMPORARY WHOSE INNER `Option` A CALLEE RETURNS OUT OF A MATCH ARM IS FREED TWICE -- `let a = take(Some(Some(mk(1))))` over `fn take[T](x: Option[Option[T]]) -> Option[T] { match x { Some(inner) => inner, None => None } }` aborts with `free(): double free` on JIT / -O0 / -O2 against the interpreter's `dR1 a end`; the non-generic twin prints NOTHING at -O0 with invalid reads | — |
 | B-2026-10-02-73 | 2026-10-02 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY MATCHED TWO LEVELS DEEP BY A GENERIC CALLEE LEAKS THE LEAF'S HEAP -- `deep(Some(Some(mk(2))))` over `fn deep[T](x: Option[Option[T]]) -> i64 { match x { Some(Some(w)) => 1, _ => 0 } }` runs `dR2` but loses R's String (29 B at -O0); the non-generic twin is clean. B-2026-10-02-68's remainder | — |
+| B-2026-10-02-79 | 2026-10-02 | codegen | high | A `match` ARM WHOSE BLOCK ENDS IN AN `if` THAT HANDS OUT THE BOXED `Array` PAYLOAD BINDING DOUBLE-FREES ON THE JIT AND AT -O0, AS A FUNCTION'S TAIL OR A `let` VALUE -- `match x { EArr.A(v) => { if c { v } else { z() } } EArr.B => z() }` with `c` true aborts `free(): double free detected in tcache 2` on the JIT (valgrind -O0: 14 allocs / 16 frees, 2 errors) against `--interp`'s correct output; the bare `EArr.A(v) => v` arm is clean since B-2026-09-27-83 / B-2026-10-02-50 | — |
+| B-2026-10-02-80 | 2026-10-02 | codegen | medium | A `let`-BOUND `match` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM, WHERE `R` RUNS A `Drop` BODY, RUNS EVERY BODY TWICE ON THE COMPILED SURFACES -- `let k: Array[R, 2] = match x { Some(v) => v, None => z() }` prints `mid dR1 dR2 dR1 dR2 got1 end` on the JIT and the default build against `--interp`'s `mid dR1 dR2 got1 end`; memory is balanced | — |
+| B-2026-10-02-81 | 2026-10-02 | interp+codegen | high | ASSIGNING A `match` OVER A BY-VALUE USER-ENUM PARAM'S BOXED `Array` PAYLOAD TO AN EXISTING LOCAL IS WRONG ON EVERY SURFACE -- `let mut k: Array[R, 2] = z(); k = match x { EArr.A(v) => v, EArr.B => z() };` runs the new value's bodies twice under `--interp` (`dR0 dR0 mid dR1 dR2 dR1 dR2 got1 end`) and aborts with `free(): double free detected in tcache 2` on the JIT and the default build (valgrind -O0: 18 allocs / 18 frees, 4 errors, 4 bytes definitely lost) | — |
 
 ### Relocated
 
@@ -3558,6 +3560,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-46 | codegen | high | AN ARM BINDING OF A PLAIN ENUM'S HEAP-BOXED `Array` OR TUPLE PAYLOAD RE-BOUND BY `let` AND THEN RETURNED DOUBLE-FREES -- `fn r4(s: E) -> Array[String… | 4b86bdf2e |
 | B-2026-10-02-47 | codegen | medium | AN EMPTY `SortedMap.range`, `Column.sorted()`/`argsort()` OR `Stats.sort`/`argsort` RESULT LEAKS ITS SCRATCH BUFFER -- the result Vec is built with `… | 17a385c45 |
 | B-2026-10-02-49 | codegen | high | AN `if let` OVER A BY-VALUE USER-ENUM PARAM WHOSE THEN-BRANCH IS THE BOXED `Array` PAYLOAD BINDING, AS THE FUNCTION'S TAIL, DOUBLE-FREES ON THE COMPI… | 4a5bf3113 |
+| B-2026-10-02-50 | codegen | high | A `let k: Array[R, 2] = match x { EArr.A(v) => v, EArr.B => z() }` OVER A BY-VALUE USER-ENUM PARAM WHOSE `Array` ELEMENT RUNS A `Drop` BODY DOUBLE-FR… | eb73c4c0b |
 | B-2026-10-02-57 | interp | high | `--interp` SCOPES NAMES DYNAMICALLY: a callee's free function or constant resolves to a CALLER'S LOCAL of the same name, and every global lookup walk… | f868e4639 |
 | B-2026-10-02-60 | codegen | medium | A LOCAL CLOSURE IN ONE FUNCTION BREAKS `karac build` OF A CALL TO THE SAME-NAMED FREE FUNCTION IN EVERY FUNCTION COMPILED AFTER IT: `Undefined variab… | 9b322b2ca |
 | B-2026-10-02-61 | interp | medium | `--interp` RE-DERIVES A BLOCK'S LAST-USE TABLE ON EVERY ENTRY AND THE BRANCH HAND-OVER TALLY ON EVERY CALL, so 40% of a memoized grid search's interp… | 2025d6e66 |
