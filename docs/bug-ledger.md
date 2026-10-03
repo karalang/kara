@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 650 |
+| miscompile | 651 |
 | run-vs-build | 574 |
 | leak | 535 |
 | double-free | 406 |
 | missing-feature | 215 |
-| codegen-gap | 213 |
+| codegen-gap | 214 |
 | other | 167 |
 | diagnostics | 139 |
 | perf | 128 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2607 |
-| interp | 796 |
+| codegen | 2609 |
+| interp | 797 |
 | typecheck | 322 |
 | other | 113 |
 | ownership | 80 |
@@ -484,8 +484,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-63 | 2026-10-02 | interp+codegen | medium | A BY-VALUE USER-ENUM PARAM THAT IS ONLY THE SCRUTINEE OF AN UNTAKEN NESTED BRANCH NEVER RUNS ITS PAYLOAD'S `Drop` BODIES, ON EVERY SURFACE -- `fn e1(x: EArr, y: EArr) -> Array[R, 2] { if let EArr.A(v) = x { v } else if let EArr.A(w) = y { w } else { z() } }` called with two `A` values prints `k1 dR1 dR2 end` everywhere, where `y` dying at `e1`'s end owes `dR3 dR4` before `k1`; the nested-`match` spelling is the same, and an untouched `y` is correct | — |
 | B-2026-10-02-64 | 2026-10-02 | interp+codegen | medium | A DISCARDED `if let` WHOSE THEN-BLOCK IS THE BOXED `Array` PAYLOAD BINDING RUNS NO `Drop` BODY FOR THAT PAYLOAD ON ANY SURFACE, AND THE `match` SPELLING RUNS NONE COMPILED -- `if let EArr.A(v) = x { v } else { z() }; println("disc")` prints `disc g1 end` on `--interp`, the JIT and the default build, against the due `dR1 dR2 disc g1 end`; `match x { EArr.A(v) => v, EArr.B => z() };` is right on `--interp` and loses both bodies on the JIT and the build | — |
 | B-2026-10-02-62 | 2026-10-02 | codegen+interp | medium | A by-value struct param returned through `if let x = g { x }` or `let x = g else { .. }; x` runs its field's `Drop` body TWICE on every compiled surface, and the `let .. else` spelling twice on `--interp` too -- `fn f(g: H) -> H { if let x = g { x } else { .. } }` prints `ds17 35 ds17 35 r after` where `--interp` and `let x = g; x` print `ds17 35 r after` | — |
-| B-2026-10-02-67 | 2026-10-02 | codegen | high | A NESTED `Option[Option[R]]` LOCAL ALIASED THROUGH AN IDENTITY CALL AND THEN PASSED BY VALUE READS FREED MEMORY -- `let c = id(b); println(cls(c))` with non-generic `id`/`cls` over `Option[Option[R]]` prints `dR1 7 end` compiled (body before the callee's result) with 3 invalid reads of size 8 under valgrind at -O0; the interpreter and the generic `fn cls[T](x: Option[Option[T]])` print the due `7 dR1 end` clean | — |
-| B-2026-10-02-69 | 2026-10-02 | codegen | high | `replace(d, v)` FORWARDED THROUGH A WRAPPER WITH A `mut ref String` PARAM DOUBLE-FREES COMPILED -- `fn rep(d: mut ref String, v: String) -> String { return replace(d, v) }` called as `rep(mut s, f"..")` aborts with `free(): double free detected in tcache 2` on JIT, -O0 and -O2; the interpreter is right, and `replace(mut s, f"..")` directly in `main` is clean | — |
 | B-2026-10-02-73 | 2026-10-02 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY MATCHED TWO LEVELS DEEP BY A GENERIC CALLEE LEAKS THE LEAF'S HEAP -- `deep(Some(Some(mk(2))))` over `fn deep[T](x: Option[Option[T]]) -> i64 { match x { Some(Some(w)) => 1, _ => 0 } }` runs `dR2` but loses R's String (29 B at -O0); the non-generic twin is clean. B-2026-10-02-68's remainder | — |
 | B-2026-10-02-80 | 2026-10-02 | codegen | medium | A `let`-BOUND `match` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM, WHERE `R` RUNS A `Drop` BODY, RUNS EVERY BODY TWICE ON THE COMPILED SURFACES -- `let k: Array[R, 2] = match x { Some(v) => v, None => z() }` prints `mid dR1 dR2 dR1 dR2 got1 end` on the JIT and the default build against `--interp`'s `mid dR1 dR2 got1 end`; memory is balanced | — |
 | B-2026-10-02-81 | 2026-10-02 | interp+codegen | high | ASSIGNING A `match` OVER A BY-VALUE USER-ENUM PARAM'S BOXED `Array` PAYLOAD TO AN EXISTING LOCAL IS WRONG ON EVERY SURFACE -- `let mut k: Array[R, 2] = z(); k = match x { EArr.A(v) => v, EArr.B => z() };` runs the new value's bodies twice under `--interp` (`dR0 dR0 mid dR1 dR2 dR1 dR2 got1 end`) and aborts with `free(): double free detected in tcache 2` on the JIT and the default build (valgrind -O0: 18 allocs / 18 frees, 4 errors, 4 bytes definitely lost) | — |
@@ -513,6 +511,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-13 | 2026-10-03 | codegen | medium | A GENERIC FUNCTION INSTANTIATED AT `T = Array[E, N]` WITH A HEAP ELEMENT TYPE STILL FAILS LLVM MODULE VERIFICATION WHEN IT RETURNS A `match` OVER `Option[T]` -- `fn pick[T](a: Option[T], d: T) -> T { return match a { Some(x) => x, None => d } }` called with `a: Option[Array[String, 2]]` passes `karac check`, prints under `--interp`, and fails `karac build` with `ret i64 0 [2 x { ptr, i64, i64 }]`; scalar elements were fixed by B-2026-10-02-77 and this half is held back on purpose until B-2026-10-02-78 is fixed | — |
 | B-2026-10-03-14 | 2026-10-03 | codegen | medium | REASSIGNING A `String` FROM A BRANCH WHOSE OTHER ARM IS THE TARGET ITSELF STILL LEAKS THE OLD VALUE WHEN THE REPLACING ARM RUNS -- `let mut s = f"a{1}"; s = if c { f"q{2}" } else { s }` with `c = true` prints `q2` and valgrind at -O0 reports 2 bytes in 1 block definitely lost (the old `a1`); every other branch shape was fixed by B-2026-09-26-18 | — |
 | B-2026-10-03-17 | 2026-10-03 | codegen | medium | A `.clone()` OF A `shared` HANDLE PASSED STRAIGHT TO A BY-VALUE PARAMETER LEAKS THE WHOLE OBJECT -- `sg(a.clone())` over `fn sg(s: S) -> i64` and `shared struct S` prints the right value and valgrind at -O0 reports the object definitely lost (24 B for `S { id: i64, nx: Option[S] }`); `let b = a.clone(); sg(b)` and `sg(mk())` are clean | — |
+| B-2026-10-03-18 | 2026-10-03 | interp+codegen | medium | `replace(d, v)` THROUGH A WRAPPER RUNS THE MOVED PARAM'S `Drop` BODY TWICE ON EVERY BACKEND -- `fn rep(d: mut ref R, v: R) -> R { return replace(d, v) }` called as `rep(mut r, R { id: 2, .. })` prints `dR2 1 dR1 2 dR2` on interp, -O0 and -O2; the value moved into `*d` is the one `r` holds afterwards, so its body is due once, at `r`'s scope end; valgrind is clean, only the body is doubled | — |
+| B-2026-10-03-19 | 2026-10-03 | codegen | low | `replace(h.name, v)` ON A FIELD REACHED THROUGH A `mut ref` PARAM DOES NOT COMPILE -- `fn rep(h: mut ref H, v: String) -> String { return replace(h.name, v) }` fails with `std.mem swap/replace: unsupported `mut ref` place expression`; the interpreter runs it, and `replace(d, v)` on the whole `mut ref` param works | — |
 
 ### Relocated
 
@@ -3586,7 +3586,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-61 | interp | medium | `--interp` RE-DERIVES A BLOCK'S LAST-USE TABLE ON EVERY ENTRY AND THE BRANCH HAND-OVER TALLY ON EVERY CALL, so 40% of a memoized grid search's interp… | 2025d6e66 |
 | B-2026-10-02-65 | codegen | medium | A FRESH `Tensor` TEMPORARY PASSED TO A GENERIC CALLEE LEAKS ITS BUFFER -- `eat(make())` over `fn eat[T](t: T) -> i64 { 1 }` loses 56 B per call at -O… | 333d7ddb9 |
 | B-2026-10-02-66 | codegen | medium | A `let` LOCAL HANDED TO A GENERIC CALLEE INSIDE ONE BRANCH LOSES ITS `Drop` BODY ON THE BRANCH NOT TAKEN -- `let t = E.A(mks(1)); if c { let k = keep… | e1912c2b6 |
+| B-2026-10-02-67 | codegen | high | A NESTED `Option[Option[R]]` LOCAL ALIASED THROUGH AN IDENTITY CALL AND THEN PASSED BY VALUE READS FREED MEMORY -- `let c = id(b); println(cls(c))` w… | a852e7d83 |
 | B-2026-10-02-68 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY PASSED TO A GENERIC CALLEE LEAKS THE PAYLOAD'S HEAP -- `cls(Some(Some(mk(1))))` over `fn cls[T](x: Optio… | baab0f800 |
+| B-2026-10-02-69 | codegen | high | `replace(d, v)` FORWARDED THROUGH A WRAPPER WITH A `mut ref String` PARAM DOUBLE-FREES COMPILED -- `fn rep(d: mut ref String, v: String) -> String {… | 644b837be |
 | B-2026-10-02-71 | interp | medium | `--interp` CLOSURES CAPTURE THE WHOLE ITEM SCOPE and copy it into every call's frame, so a `sort_by` comparator costs a copy of every function in the… | c8e87b65d |
 | B-2026-10-02-70 | codegen | medium | `for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)]` HEAP-ALLOCATES THE LITERAL ON EVERY EXECUTION under `karac build`, so a grid DFS that walks its… | b50bfacd3 |
 | B-2026-10-02-72 | codegen | high | A FRESH NESTED `Option[Option[R]]` TEMPORARY WHOSE INNER `Option` A CALLEE RETURNS OUT OF A MATCH ARM IS FREED TWICE -- `let a = take(Some(Some(mk(1)… | 4af17ba71 |
