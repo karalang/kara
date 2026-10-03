@@ -9877,8 +9877,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .builder
                         .build_int_compare(IntPredicate::EQ, actual_tag, expected_tag, "tag_eq")
                         .unwrap();
-                    let cond =
-                        self.and_in_nested_variant_conditions(scrut, variant_name, patterns, cond)?;
+                    let outer_enum = self.variant_pattern_enum_name(pattern);
+                    let cond = self.and_in_nested_variant_conditions(
+                        scrut,
+                        outer_enum.as_deref(),
+                        variant_name,
+                        patterns,
+                        cond,
+                    )?;
                     return Ok(cond.into());
                 }
                 Ok(tru.into())
@@ -10767,12 +10773,31 @@ impl<'ctx> super::Codegen<'ctx> {
     fn and_in_nested_variant_conditions(
         &mut self,
         scrut: BasicValueEnum<'ctx>,
+        outer_enum: Option<&str>,
         outer_variant_name: &str,
         sub_patterns: &[Pattern],
         cond: inkwell::values::IntValue<'ctx>,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
-        let BasicValueEnum::StructValue(sv) = scrut else {
-            return Ok(cond);
+        // B-2026-10-03-36 — a SHARED outer enum is an RC handle, not a
+        // `{ tag, payload.. }` struct value. This used to return `cond`
+        // unchanged for it, so `H.Z(M.My(x))` over a `shared enum H` tested
+        // `H`'s tag alone and `H.Z(M.N)` entered the `M.My` arm. Its payload
+        // words are read out of the heap box instead (the layout
+        // `bind_pattern_values` binds from), once the outer tag has matched.
+        let payload_src = match scrut {
+            BasicValueEnum::StructValue(sv) => NestedPayloadSrc::Inline(sv),
+            BasicValueEnum::PointerValue(ptr) => {
+                let Some((en, info)) = outer_enum.and_then(|en| {
+                    self.type_decls
+                        .shared_types
+                        .get(en)
+                        .map(|info| (en.to_string(), info.heap_type))
+                }) else {
+                    return Ok(cond);
+                };
+                NestedPayloadSrc::SharedBox(ptr, info, en)
+            }
+            _ => return Ok(cond),
         };
         if !sub_patterns.iter().any(|p| {
             self.variant_pattern_enum_and_tag(p).is_some() || Self::pattern_tests_payload_value(p)
@@ -10818,7 +10843,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.pattern_state.match_scrutinee_payload_tes = Self::payload_tes_below(payload_te);
         }
         let r = self.and_in_nested_variant_conditions_inner(
-            sv,
+            payload_src,
             outer_variant_name,
             sub_patterns,
             entry_bb,
@@ -10834,18 +10859,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// both the value and the `?` error paths.
     fn and_in_nested_variant_conditions_inner(
         &mut self,
-        sv: inkwell::values::StructValue<'ctx>,
+        payload_src: NestedPayloadSrc<'ctx>,
         outer_variant_name: &str,
         sub_patterns: &[Pattern],
         entry_bb: inkwell::basic_block::BasicBlock<'ctx>,
         merge_bb: inkwell::basic_block::BasicBlock<'ctx>,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let mut inner_cond = self.context.bool_type().const_int(1, false);
-        let offsets = self.resolve_variant_field_offsets(
-            outer_variant_name,
-            Some(sv.get_type()),
-            sub_patterns.len(),
-        );
+        let offsets = match &payload_src {
+            NestedPayloadSrc::Inline(sv) => self.resolve_variant_field_offsets(
+                outer_variant_name,
+                Some(sv.get_type()),
+                sub_patterns.len(),
+            ),
+            NestedPayloadSrc::SharedBox(_, _, en) => self
+                .type_decls
+                .enum_layouts
+                .get(en)
+                .and_then(|l| l.field_word_offsets.get(outer_variant_name).cloned())
+                .unwrap_or_else(|| (0..sub_patterns.len()).map(|i| (i, 1)).collect()),
+        };
         for (i, sub) in sub_patterns.iter().enumerate() {
             let variant_tag = self.variant_pattern_enum_and_tag(sub).map(|(_, t)| t);
             // Skip leaves that always match (`Some(x)`, `Some(_)`); reconstruct
@@ -10858,11 +10891,28 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut field_words: Vec<inkwell::values::IntValue<'ctx>> =
                 Vec::with_capacity(num_words);
             for j in 0..num_words {
-                let w = self
-                    .builder
-                    .build_extract_value(sv, (start_word + j + 1) as u32, "ncond.w")
-                    .unwrap()
-                    .into_int_value();
+                let w = match &payload_src {
+                    NestedPayloadSrc::Inline(sv) => self
+                        .builder
+                        .build_extract_value(*sv, (start_word + j + 1) as u32, "ncond.w")
+                        .unwrap()
+                        .into_int_value(),
+                    NestedPayloadSrc::SharedBox(ptr, heap_ty, _) => {
+                        let word_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                *heap_ty,
+                                *ptr,
+                                (start_word + j + 2) as u32,
+                                "ncond.shw",
+                            )
+                            .map_err(|e| format!("nested shared payload word: {e}"))?;
+                        self.builder
+                            .build_load(self.context.i64_type(), word_ptr, "ncond.w")
+                            .unwrap()
+                            .into_int_value()
+                    }
+                };
                 field_words.push(w);
             }
             let inner = self.reconstruct_payload_value(sub, &field_words)?;
@@ -10914,8 +10964,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // matched.
             if let PatternKind::TupleVariant { path, patterns } = &sub.kind {
                 let inner_variant = path.last().map(|s| s.as_str()).unwrap_or("");
+                let inner_enum = self.variant_pattern_enum_name(sub);
                 inner_cond = self.and_in_nested_variant_conditions(
                     inner,
+                    inner_enum.as_deref(),
                     inner_variant,
                     patterns,
                     inner_cond,
@@ -17366,6 +17418,61 @@ impl<'ctx> super::Codegen<'ctx> {
                 ) {
                     let _ = self.builder.build_store(word_ptr, zero);
                 }
+            }
+        }
+        // B-2026-10-03-36 — a consumed field that is itself a SHARED enum,
+        // matched by a nested variant pattern (`H.Z(M.My(x))`), hands its
+        // own payload to the leaf binding exactly as a top-level `M.My(x)`
+        // would. Recurse into that inner box so its moved-out words are
+        // zeroed too; without it `x` and the inner box's release both freed
+        // the `Vec`. The handle word itself stays: `H` still owns `M`.
+        if let PatternKind::TupleVariant { patterns, .. } = &pattern.kind {
+            for &pos in &consumed_positions {
+                let Some(sub) = patterns.get(pos) else {
+                    continue;
+                };
+                if !matches!(
+                    sub.kind,
+                    PatternKind::TupleVariant { .. } | PatternKind::Struct { .. }
+                ) {
+                    continue;
+                }
+                let Some(inner_en) = self.variant_pattern_enum_name(sub) else {
+                    continue;
+                };
+                if !self
+                    .type_decls
+                    .shared_types
+                    .get(&inner_en)
+                    .is_some_and(|i| i.is_enum)
+                {
+                    continue;
+                }
+                let Some(&(start_word, _)) = offsets.get(pos) else {
+                    continue;
+                };
+                let Ok(word_ptr) = self.builder.build_struct_gep(
+                    heap_type,
+                    box_ptr,
+                    (start_word + 2) as u32,
+                    "match.sh.nested.wp",
+                ) else {
+                    continue;
+                };
+                let handle = self
+                    .builder
+                    .build_load(i64_t, word_ptr, "match.sh.nested.h")
+                    .unwrap()
+                    .into_int_value();
+                let inner_box = self
+                    .builder
+                    .build_int_to_ptr(
+                        handle,
+                        self.context.ptr_type(AddressSpace::default()),
+                        "match.sh.nested.box",
+                    )
+                    .unwrap();
+                self.suppress_shared_enum_payload_move_out(inner_box, &inner_en, sub);
             }
         }
         // B-2026-09-19-53 — a generic shared enum's erased `T` payload is
@@ -27884,4 +27991,17 @@ enum NestedWalkFrame {
     Here,
     Above,
     Nowhere,
+}
+
+/// Where [`Codegen::and_in_nested_variant_conditions`] reads an outer
+/// variant's payload words from: an inline `{ tag, payload.. }` struct value,
+/// or a shared enum's RC heap box `{ rc, tag, payload.. }` (with the enum's
+/// name, for its word offsets). B-2026-10-03-36.
+enum NestedPayloadSrc<'ctx> {
+    Inline(inkwell::values::StructValue<'ctx>),
+    SharedBox(
+        inkwell::values::PointerValue<'ctx>,
+        StructType<'ctx>,
+        String,
+    ),
 }
