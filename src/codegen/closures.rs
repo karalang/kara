@@ -1227,6 +1227,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     .owned_vecstr_params
                     .insert(param_name.clone());
             }
+            // B-2026-10-03-16 — an owned heap-bearing user struct or enum
+            // param is caller-retained too (the call site keeps the argument
+            // and frees it), so the body holds a view of a value another frame
+            // frees: the same thing a `for` binding over a container element
+            // is, and a captured local is (B-2026-10-02-76). Give it that
+            // model, so a consuming `match` arm aliases instead of freeing the
+            // caller's payload, and a boxed generic enum owns a box of its own
+            // for the call.
+            if !is_borrow_param {
+                if let Some(te) = effective_te.cloned() {
+                    self.adopt_closure_param_as_loop_binding(&param_name, &te);
+                    // Returned whole (`|q| q`), the view is handed back as an
+                    // independent deep copy, as a returned capture is.
+                    if let Some((n, tn)) = self.captured_heap_agg_type(&param_name) {
+                        heap_struct_captures.insert(n, tn);
+                    }
+                }
+            }
         }
 
         // 7b½. Currying (B-2026-07-12-12): if this closure's tail is itself a
@@ -1672,6 +1690,46 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-10-03-16 — is a by-value closure param of type `te` a VIEW of a
+    /// value the caller retains and frees: a heap-bearing user struct or enum
+    /// with no user `Drop` body. `Some(true)` when it is a heap-boxed generic
+    /// enum (the body takes a box of its own), `Some(false)` for any other
+    /// such type (the body aliases), `None` when the old owned-param model
+    /// still applies. Asked by the param bind AND by the call site, which owns
+    /// a fresh argument exactly when this answers `Some(true)`; the two must
+    /// never disagree, so both ask this one question of the same type.
+    pub(super) fn closure_param_is_caller_retained_view(&self, te: &TypeExpr) -> Option<bool> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let tn = p.segments.last()?;
+        if self.type_decls.shared_types.contains_key(tn.as_str())
+            || !(self.type_decls.struct_types.contains_key(tn.as_str())
+                || self.type_decls.enum_layouts.contains_key(tn.as_str()))
+            || self.type_runs_user_drop(tn.as_str(), &mut Vec::new())
+        {
+            return None;
+        }
+        if !self.user_enum_boxed_payload_variants(te).is_empty() {
+            return Some(true);
+        }
+        self.type_expr_has_drop_heap(te).then_some(false)
+    }
+
+    /// B-2026-10-03-16 — [`Self::adopt_stack_env_captures_as_loop_bindings`]
+    /// for a by-value closure PARAM, whose type is its annotation (or the
+    /// inferred one) rather than a recorded capture type.
+    fn adopt_closure_param_as_loop_binding(&mut self, name: &str, te: &TypeExpr) {
+        if self.var_types.vec_elem_types.contains_key(name) {
+            return;
+        }
+        match self.closure_param_is_caller_retained_view(te) {
+            Some(true) => self.own_for_loop_boxed_enum_binding(name, te),
+            Some(false) => self.mark_for_loop_borrow_if_heap(name, te),
+            None => {}
+        }
+    }
+
     /// The capture's instantiated type when one was recorded (`Ho[String]`),
     /// else its bare type name.
     fn capture_type_expr(&self, name: &str) -> Option<TypeExpr> {
@@ -1984,7 +2042,20 @@ impl<'ctx> super::Codegen<'ctx> {
             // double-free direction, not a bookkeeping detail, so this fires
             // only for the shapes that genuinely have no owner: a named struct
             // or an enum ctor temp.
-            if self.tuple_arg_elem_type_exprs(&arg.value).is_none() {
+            // B-2026-10-03-16 — a FRESH heap-boxed generic enum argument
+            // (`f(mk())`, `f(Ho.Full(..))`) to a param the body treats as a
+            // caller-retained view: the body takes a box of its own, so the
+            // caller owns this temp and frees it once the call returns, as it
+            // would a discarded one. A named argument already has its owner.
+            let fresh_boxed_view = !matches!(
+                arg.value.kind,
+                ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::Index { .. }
+            ) && self
+                .enum_inst_type_from_span(&arg.value)
+                .is_some_and(|te| self.closure_param_is_caller_retained_view(&te) == Some(true));
+            if fresh_boxed_view {
+                self.track_discarded_owned_aggregate_temp(val, &arg.value);
+            } else if self.tuple_arg_elem_type_exprs(&arg.value).is_none() {
                 self.track_inline_owned_aggregate_arg(val, &arg.value, false);
             }
             // B-2026-09-30-49 — the closure leg of the struct-literal source
