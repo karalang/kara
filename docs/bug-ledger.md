@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 574 |
 | leak | 536 |
 | double-free | 406 |
-| codegen-gap | 215 |
+| codegen-gap | 216 |
 | missing-feature | 215 |
 | other | 167 |
 | diagnostics | 139 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2615 |
+| codegen | 2616 |
 | interp | 800 |
 | typecheck | 322 |
 | other | 113 |
@@ -510,6 +510,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-89 | 2026-10-03 | codegen | low | HANDING A `match` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM STRAIGHT TO A BY-VALUE CALLEE LEAKS 4 B COMPILED -- `eat(match x { Some(v) => v, None => z() })` prints the right bodies on every surface, and valgrind at `-O0` reports 14 allocs / 12 frees, 4 B definitely lost | — |
 | B-2026-10-03-15 | 2026-10-03 | runtime | high | An auto-parallelised loop whose body fills a `Map` intermittently loses entries (about one process in 5,000 on x86, and the intermittent arm64 ASAN red on `asan_map_remove_string_key_vec_value_both_heap_halves`, 21593 against 21600): `seed()` in hash/src/seed.rs reads the key whenever `INIT` is non-zero, but the initialising thread sets 1 before it stores the key, so a racing worker hashes with a key that is still 0 | — |
 | B-2026-10-03-20 | 2026-10-03 | codegen | low | A scan loop with several early returns runs about 23% slower compiled than the same loop in Rust or C with overflow checks: once the function is inlined, the optimiser merges its `return true` and `return false` exits into one flag recomputed on every iteration (`lea; cmp; setb`) instead of setting the answer on each exit path (kata 335: 124 ms vs 101 ms equal-safety Rust and 100 ms C) | — |
+| B-2026-10-03-30 | 2026-10-03 | codegen | medium | `self.clone()` INSIDE AN IMPL BODY FAILS `karac build` WITH `no handler for method 'clone' on non-identifier receiver` WHILE `--interp` RUNS IT -- `impl S { fn me(ref self) -> S { return self.clone(); } }` fails for a `shared struct`, a `shared enum` (now that B-2026-10-02-59 admits `.clone()` on one), a `#[derive(Clone)]` struct with heap fields and a `#[derive(Clone)]` enum, over both `self` and `ref self` receivers | — |
 
 ### Relocated
 
