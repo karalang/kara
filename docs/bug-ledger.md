@@ -94,11 +94,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 646 |
 | run-vs-build | 571 |
-| leak | 531 |
-| double-free | 401 |
+| leak | 532 |
+| double-free | 402 |
 | missing-feature | 215 |
 | codegen-gap | 211 |
-| other | 164 |
+| other | 165 |
 | diagnostics | 139 |
 | perf | 126 |
 | false-positive | 118 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2586 |
-| interp | 792 |
+| codegen | 2589 |
+| interp | 794 |
 | typecheck | 322 |
 | other | 113 |
 | ownership | 80 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-03). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -495,10 +495,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-69 | 2026-10-02 | codegen | high | `replace(d, v)` FORWARDED THROUGH A WRAPPER WITH A `mut ref String` PARAM DOUBLE-FREES COMPILED -- `fn rep(d: mut ref String, v: String) -> String { return replace(d, v) }` called as `rep(mut s, f"..")` aborts with `free(): double free detected in tcache 2` on JIT, -O0 and -O2; the interpreter is right, and `replace(mut s, f"..")` directly in `main` is clean | — |
 | B-2026-10-02-72 | 2026-10-02 | codegen | high | A FRESH NESTED `Option[Option[R]]` TEMPORARY WHOSE INNER `Option` A CALLEE RETURNS OUT OF A MATCH ARM IS FREED TWICE -- `let a = take(Some(Some(mk(1))))` over `fn take[T](x: Option[Option[T]]) -> Option[T] { match x { Some(inner) => inner, None => None } }` aborts with `free(): double free` on JIT / -O0 / -O2 against the interpreter's `dR1 a end`; the non-generic twin prints NOTHING at -O0 with invalid reads | — |
 | B-2026-10-02-73 | 2026-10-02 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY MATCHED TWO LEVELS DEEP BY A GENERIC CALLEE LEAKS THE LEAF'S HEAP -- `deep(Some(Some(mk(2))))` over `fn deep[T](x: Option[Option[T]]) -> i64 { match x { Some(Some(w)) => 1, _ => 0 } }` runs `dR2` but loses R's String (29 B at -O0); the non-generic twin is clean. B-2026-10-02-68's remainder | — |
-| B-2026-10-02-79 | 2026-10-02 | codegen | high | A `match` ARM WHOSE BLOCK ENDS IN AN `if` THAT HANDS OUT THE BOXED `Array` PAYLOAD BINDING DOUBLE-FREES ON THE JIT AND AT -O0, AS A FUNCTION'S TAIL OR A `let` VALUE -- `match x { EArr.A(v) => { if c { v } else { z() } } EArr.B => z() }` with `c` true aborts `free(): double free detected in tcache 2` on the JIT (valgrind -O0: 14 allocs / 16 frees, 2 errors) against `--interp`'s correct output; the bare `EArr.A(v) => v` arm is clean since B-2026-09-27-83 / B-2026-10-02-50 | — |
 | B-2026-10-02-80 | 2026-10-02 | codegen | medium | A `let`-BOUND `match` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM, WHERE `R` RUNS A `Drop` BODY, RUNS EVERY BODY TWICE ON THE COMPILED SURFACES -- `let k: Array[R, 2] = match x { Some(v) => v, None => z() }` prints `mid dR1 dR2 dR1 dR2 got1 end` on the JIT and the default build against `--interp`'s `mid dR1 dR2 got1 end`; memory is balanced | — |
 | B-2026-10-02-81 | 2026-10-02 | interp+codegen | high | ASSIGNING A `match` OVER A BY-VALUE USER-ENUM PARAM'S BOXED `Array` PAYLOAD TO AN EXISTING LOCAL IS WRONG ON EVERY SURFACE -- `let mut k: Array[R, 2] = z(); k = match x { EArr.A(v) => v, EArr.B => z() };` runs the new value's bodies twice under `--interp` (`dR0 dR0 mid dR1 dR2 dR1 dR2 got1 end`) and aborts with `free(): double free detected in tcache 2` on the JIT and the default build (valgrind -O0: 18 allocs / 18 frees, 4 errors, 4 bytes definitely lost) | — |
 | B-2026-10-02-75 | 2026-10-02 | codegen | medium | Reassigning a GENERIC enum local inside a `match` arm over it leaks the REPLACEMENT value's heap payload on every compiled surface -- `let mut g: G[R] = G.X(mk(26)); match g { G.X(t) => { g = G.X(mk(3)); } G.Y => {} }` loses the 38-byte `t3-..` string under valgrind where the concrete `enum E` spelling is clean | — |
+| B-2026-10-02-82 | 2026-10-03 | codegen+interp | medium | A DISCARDED `if` INSIDE A `match` ARM WHOSE BRANCH TAILS ARE THE ARM'S BOXED `Array` PAYLOAD BINDING AND A FRESH ARRAY RUNS NONE OF THEIR `Drop` BODIES COMPILED AND LEAKS THE FRESH ONE -- `EArr.A(v) => { if c { v } else { z() }; 5 }` prints `got5` on the JIT and the build where `--interp` prints `dR1 dR2 got5`; with `c` false the compiled program leaks the discarded `z()` (valgrind -O0: 14 allocs / 12 frees, 4 bytes definitely lost), and `--interp` itself never runs `v`'s bodies on that edge | — |
+| B-2026-10-02-83 | 2026-10-03 | codegen+interp | medium | A `match` ARM'S BOXED `Array` PAYLOAD BINDING THAT A NESTED BRANCH DOES NOT HAND OUT NEVER RUNS ITS `Drop` BODIES, ON EVERY SURFACE -- `EArr.A(v) => { if c { v } else { z() } }` with `c` false prints `got0 dR0 dR0 end` everywhere, where `v`, never moved, owes `dR1 dR2` when the arm ends; memory is balanced, and the `match c` and `let`-bound spellings are the same | — |
+| B-2026-10-02-84 | 2026-10-03 | codegen | high | REASSIGNING A FIXED `Array` LOCAL WHOSE ELEMENTS OWN HEAP FROM ANYTHING BUT A CONTAINER LITERAL LEAKS THE DISPLACED ELEMENTS, AND FROM A NAMED SOURCE DOUBLE-FREES THEM -- `let mut k: Array[String, 2] = [..]; k = ys();` loses 4 B at -O0 with the right output, `k = w;` aborts `free(): double free detected in tcache 2` on the JIT, and a local that began as `let mut k = w;` double-frees even when reassigned from a literal; `Vec` is correct in every spelling | — |
 
 ### Relocated
 
@@ -3568,6 +3570,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-68 | codegen | medium | A FRESH NESTED `Option[Option[R]]` TEMPORARY PASSED TO A GENERIC CALLEE LEAKS THE PAYLOAD'S HEAP -- `cls(Some(Some(mk(1))))` over `fn cls[T](x: Optio… | baab0f800 |
 | B-2026-10-02-71 | interp | medium | `--interp` CLOSURES CAPTURE THE WHOLE ITEM SCOPE and copy it into every call's frame, so a `sort_by` comparator costs a copy of every function in the… | c8e87b65d |
 | B-2026-10-02-70 | codegen | medium | `for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)]` HEAP-ALLOCATES THE LITERAL ON EVERY EXECUTION under `karac build`, so a grid DFS that walks its… | b50bfacd3 |
+| B-2026-10-02-79 | codegen | high | A `match` ARM WHOSE BLOCK ENDS IN AN `if` THAT HANDS OUT THE BOXED `Array` PAYLOAD BINDING DOUBLE-FREES ON THE JIT AND AT -O0, AS A FUNCTION'S TAIL O… | e9fb65b66 |
 
 </details>
 
