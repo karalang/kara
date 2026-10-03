@@ -547,11 +547,23 @@ fn visit_expr(e: &Expr, visit: &mut impl FnMut(&Span)) {
                 visit_call_arg(a, visit);
             }
         }
-        ExprKind::MethodCall { object, args, .. } => {
+        ExprKind::MethodCall {
+            object,
+            args,
+            args_close_span,
+            ..
+        } => {
             visit_expr(object, visit);
             for a in args {
                 visit_call_arg(a, visit);
             }
+            // The closing `)`'s own span, which no other span covers: the
+            // typechecker keys side-table entries on it (a bit intrinsic's
+            // receiver width, a sort's element type). B-2026-10-03-47: the
+            // f-string rebase skipped it, so every method call inside a hole
+            // kept the synthetic wrapper's coordinates and two holes'
+            // entries collided, the later one winning.
+            visit(args_close_span);
         }
         ExprKind::FieldAccess { object, .. } => visit_expr(object, visit),
         ExprKind::TupleIndex { object, .. } => visit_expr(object, visit),
@@ -899,11 +911,18 @@ pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
                 visit_call_arg_spans_mut(a, visit);
             }
         }
-        ExprKind::MethodCall { object, args, .. } => {
+        ExprKind::MethodCall {
+            object,
+            args,
+            args_close_span,
+            ..
+        } => {
             visit_expr_spans_mut(object, visit);
             for a in args {
                 visit_call_arg_spans_mut(a, visit);
             }
+            // See `visit_expr` — this is the arm B-2026-10-03-47 was filed for.
+            visit(args_close_span);
         }
         ExprKind::FieldAccess { object, .. } => visit_expr_spans_mut(object, visit),
         ExprKind::TupleIndex { object, .. } => visit_expr_spans_mut(object, visit),
