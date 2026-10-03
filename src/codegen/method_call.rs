@@ -10230,6 +10230,53 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(arg) = self.container_receiver_elem_arg(object) {
                             return Some(vec![arg]);
                         }
+                        // B-2026-09-27-117 — a CONCRETE impl (`impl G[R]`) has
+                        // no impl params: the merged `generic_params` are the
+                        // method's own (`fn wg[U]`), so the receiver's args are
+                        // not a prefix of them, and binding `R` to `U` built
+                        // `G.wg$R` taking a `G[R]` where the call passed an
+                        // `i64`. The `self` param's type is the impl's target
+                        // type expr (`make_generic_impl_method_function`); when
+                        // none of its args names one of this function's
+                        // params (or it has none, the bare head a non-generic
+                        // impl's `self` carries), there is no impl axis to
+                        // bind, and the method's own params are inferred from
+                        // the arguments.
+                        let gp_names: Vec<&str> = generic_fn
+                            .generic_params
+                            .as_ref()
+                            .map(|gp| gp.params.iter().map(|p| p.name.as_str()).collect())
+                            .unwrap_or_default();
+                        let self_target = generic_fn.params.first().map(|p| match &p.ty.kind {
+                            TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                            _ => &p.ty,
+                        });
+                        if let Some(TypeExpr {
+                            kind: TypeKind::Path(sp),
+                            ..
+                        }) = self_target
+                        {
+                            let names_param = |a: &GenericArg| match a {
+                                GenericArg::Type(TypeExpr {
+                                    kind: TypeKind::Path(ap),
+                                    ..
+                                }) => {
+                                    ap.segments.len() == 1
+                                        && gp_names.contains(&ap.segments[0].as_str())
+                                }
+                                _ => false,
+                            };
+                            // A non-generic impl's `self` is the bare head
+                            // (`make_impl_method_function`), so no args at all
+                            // means the same thing as args naming no param.
+                            if !sp
+                                .generic_args
+                                .as_ref()
+                                .is_some_and(|sargs| sargs.iter().any(names_param))
+                            {
+                                return None;
+                            }
+                        }
                         // Recover the receiver's concrete struct instantiation
                         // (`Box[f64]`). Identifier receivers (`b.get()`) and
                         // `self` receivers (a nested `self.hi()` inside another
