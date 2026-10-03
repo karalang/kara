@@ -2465,18 +2465,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     // unordered map happens to yield first. Try the hint enum
                     // before the general scan (the scan stays as the fallback
                     // for the no-hint / unresolved-scrutinee case).
+                    //
+                    // B-2026-09-28-60 — and `matched_enum` before the hint. It
+                    // is the enum `offsets` came from (a qualified `M.Y(x)`
+                    // names it outright), so the heap type must come from the
+                    // same enum. Under `if let` the hint can be absent or name
+                    // another enum, and the scan then took whichever shared
+                    // enum declaring a `Y` the unordered map yielded first,
+                    // indexing `M`'s offsets into `G`'s heap type: an ICE at
+                    // the GEP below in about half of all builds.
                     let ordered: Vec<String> = {
                         let mut names: Vec<String> = Vec::new();
-                        if let Some(h) = self
-                            .pattern_state
-                            .match_scrutinee_enum_hint
-                            .as_ref()
-                            .filter(|h| self.type_decls.shared_types.contains_key(h.as_str()))
+                        for h in [
+                            matched_enum.as_ref(),
+                            self.pattern_state.match_scrutinee_enum_hint.as_ref(),
+                        ]
+                        .into_iter()
+                        .flatten()
                         {
-                            names.push(h.clone());
+                            if self.type_decls.shared_types.contains_key(h.as_str())
+                                && !names.contains(h)
+                            {
+                                names.push(h.clone());
+                            }
                         }
                         for en in self.type_decls.enum_layouts.keys() {
-                            if Some(en) != names.first() {
+                            if !names.contains(en) {
                                 names.push(en.clone());
                             }
                         }
