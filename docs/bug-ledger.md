@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 663 |
+| miscompile | 664 |
 | run-vs-build | 575 |
-| leak | 541 |
-| double-free | 408 |
+| leak | 543 |
+| double-free | 409 |
 | codegen-gap | 216 |
 | missing-feature | 215 |
 | other | 167 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2636 |
-| interp | 807 |
+| codegen | 2640 |
+| interp | 808 |
 | typecheck | 323 |
 | other | 113 |
 | ownership | 80 |
@@ -501,7 +501,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-31 | 2026-10-03 | codegen | medium | AN OWNED-`self` METHOD WITH ITS OWN TYPE PARAMS LEAKS A GENERIC ENUM RECEIVER'S HEAP PAYLOAD ON EVERY COMPILED SURFACE -- `impl[T] H[T] { fn hw[U](self, u: U) -> U { return u; } }` called as `h.hw(8)` on `h: H[String] = H.A(f"h{1}")` prints `8` and valgrind at -O0 reports the 2-byte String definitely lost; the same receiver through a non-generic owned-`self` method (`fn ea(self) -> i64`) is clean, and so is a payload-free receiver | — |
 | B-2026-10-03-28 | 2026-10-03 | codegen | high | A `Result[Option[R], E]` BY-VALUE PARAM OF A NON-GENERIC FUNCTION, WHERE `R` RUNS A USER `Drop`, READS FREED MEMORY AFTER THE CALL -- `rr(Ok(Some(mk(7))))` over `fn rr(x: Result[Option[R], i64]) -> i64 { match x { Ok(Some(w)) => 1, Ok(None) => 2, Err(e) => e } }` prints `dR94634127054421 1 end` on -O0 (garbage id, 1 invalid read) against the interpreter's `dR7 1 end`; a named-local argument reads freed memory the same way. The generic path's double free and the leaks of the same shape are B-2026-10-03-34 | — |
 | B-2026-10-03-29 | 2026-10-03 | interp+codegen | medium | A GUARDED NESTED ARM OVER A GENERIC BY-VALUE `Option[Option[T]]` PARAM LOSES THE PAYLOAD'S `Drop` BODY ON EVERY SURFACE WHEN THE GUARD FAILS, AND LEAKS -- `mx(Some(Some(mk(10))), false)` over `fn mx[T](x: Option[Option[T]], keep: bool) -> Option[T] { match x { Some(Some(w)) if keep => Some(w), _ => None } }` prints `b end` with no `dR10` on interp, -O0 and -O2, and loses 30 B; the non-generic twin loses the body only under `--interp` (B-2026-10-03-6) | — |
-| B-2026-10-03-34 | 2026-10-03 | codegen | high | A `Result[Option[R], E]` BY-VALUE PARAM, WHERE `R` RUNS A USER `Drop`, DOUBLE-FREES R'S HEAP ON THE GENERIC PATH WHEN THE ARGUMENT IS A NAMED LOCAL, AND LEAKS IN TWO OTHER SPELLINGS -- `rr(a)` over `fn rr[T](x: Result[Option[T], i64]) -> i64 { match x { Ok(Some(w)) => 1, Ok(None) => 2, Err(e) => e } }` with `let a: Result[Option[R], i64] = Ok(Some(mk(7)));` aborts with `free(): double free detected in tcache 2` at -O0 (-O2 prints `1 dR7 end`); the B-2026-10-03-28 remainder | — |
+| B-2026-10-03-34 | 2026-10-03 | codegen | high | A `Result[Option[R], E]` BY-VALUE PARAM, WHERE `R` RUNS A USER `Drop`, DOUBLE-FREES R'S HEAP ON THE GENERIC PATH WHEN THE ARGUMENT IS A NAMED LOCAL, AND LEAKS IN TWO OTHER SPELLINGS -- `rr(a)` over `fn rr[T](x: Result[Option[T], i64]) -> i64 { match x { Ok(Some(w)) => 1, Ok(None) => 2, Err(e) => e } }` with `let a: Result[Option[R], i64] = Ok(Some(mk(7)));` aborts with `free(): double free detected in tcache 2` at -O0 (-O2 prints `1 dR7 end`); the B-2026-10-03-28 remainder [The non-generic `res6t` leak named below is split out as B-2026-10-03-51, fixed there; this row is the generic path.] | — |
 | B-2026-10-03-21 | 2026-10-03 | interp | low | `--interp` spends about 44,000 instructions (5 µs) on every call to a two-line user function, almost all of it in per-call ownership bookkeeping (`record_passthrough_arg_moves`, `run_fresh_temp_arg_drops`, memo lookups, AST and Value clones) rather than in the body: 200,000 calls of `fn f(a: i64, k: i64) -> i64 { return a + k; }` take 1.0 s where the same loop with `i + j` inlined takes 0.13 s | — |
 | B-2026-10-03-45 | 2026-10-03 | codegen | high | Iterating a `shared struct`'s `mut` Vec field while pushing to it through the same handle reads a freed buffer on every compiled surface, where design.md § Part 5 says the write must panic: `for x in self.v.iter() { if self.v.len() < 64 { self.v.push(x + 1); } }` inside a `ref self` method of `shared struct Bag { mut v: Vec[i64] }` returns a garbage total under the JIT and both `karac build` modes, valgrind reports `Invalid read of size 8 ... inside a block of size 24 free'd` by `karac_realloc_or_panic`, and `--interp` prints `6 6` without the specified panic | — |
 | B-2026-10-03-46 | 2026-10-03 | codegen | low | A recursive function taking `ref Vec[T]` reloads the Vec's length and data pointer and repeats the bounds check after every recursive call, because a Freeze `ref` parameter carries LLVM `readonly` but not `noalias`: kata 337's bench runs 1.88 s where the same code taking `Slice[Node]` runs 1.76 s and Rust with overflow checks 1.77 s; adding `noalias` by hand removes the reloads, but it would be unsound today because a `shared struct` handle can still write the referent during the call | — |
@@ -511,6 +511,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-49 | 2026-10-03 | interp | medium | UNDER `--interp`, A `let Some(Some(w)) = x else { ... }` OVER A BY-VALUE `Option[Option[R]]` PARAM, WHERE `R` RUNS A USER `Drop`, RUNS THE BODY TWICE WHEN THE LEAF IS MOVED ON -- `let Some(Some(w)) = x else { return 0 }; v.push(w); return 1` prints `dR4 1 1 dR4` on the interpreter. The body runs once at the end of the call, although `w` now lives in `v`, and again when `v` drops. Compiled prints `1 1 dR4` (correct) since the B-2026-10-03-28 follow-up; before it, compiled agreed with the interpreter. | — |
 | B-2026-10-03-50 | 2026-10-03 | codegen | medium | AN UNCALLED FUNCTION'S PARAM CHANGES HOW ANOTHER FUNCTION WITH A SAME-NAMED PARAM FREES ITS NESTED-ENVELOPE PAYLOAD: `fn ie(x: Option[Option[R]]) { if let Some(Some(w)) = x { eat(w) ... } }` LEAKS R'S STRING (29 B) ONLY WHEN THE PROGRAM ALSO DEFINES `fn rd(x: Result[Option[R], i64]) { if let Ok(Some(w)) = x { return w.id } ... }`, AND RENAMING `rd`'S PARAM TO `y` REMOVES THE LEAK -- some per-function codegen state keyed by param or binding name survives from one function into the next. Output is correct on every surface (`e6 dR6 1 end`); only the free is lost. | — |
 | B-2026-10-03-27 | 2026-10-03 | codegen | medium | A `let` THAT TAKES ONE OF TWO by-value `Option[R]` PARAMS THROUGH A BRANCH (`let r = if c { a } else { b }`), WHERE `R` RUNS A `Drop` BODY AND `r` DIES IN THE CALLEE, RUNS NEITHER PARAM'S BODY compiled -- `mtrue mtrue` against `--interp`'s `mtrue d2 d1 mtrue d4 d3`; before B-2026-10-03-26 the same cell segfaulted at `-O0` | — |
+| B-2026-10-03-51 | 2026-10-03 | codegen | medium | A NESTED `Result[Option[R], E]` BOX, WHERE `R` RUNS A USER `Drop`, IS FREED WITHOUT R'S FIELDS WHENEVER NOTHING BINDS THE LEAF, AND A `let ... else` THAT MOVES THE LEAF OUT OF A LOCAL FREES IT TWICE -- a by-value param matched `Ok(_) => 1` / `Ok(o) => 1` / not matched at all leaks R's String (29 B per call), the same for a local matched `Ok(o) => 1`, `Ok(_)` beside `Err(e)`, or `if let Ok(o) = c` read-only; `let Ok(Some(w)) = d else { return }; v.push(w)` over a local aborts with `free(): double free` at -O0 and -O2. Output is otherwise right. This is B-2026-10-03-34's `res6t` spelling and its neighbours. | — |
+| B-2026-10-03-52 | 2026-10-03 | codegen | high | MOVING THE `Option[R]` ENVELOPE OUT OF A `Result[Option[R], E]`, WHERE `R` RUNS A USER `Drop`, FREES R'S HEAP TWICE -- `fn f(x: Result[Option[R], i64]) -> Option[R] { match x { Ok(o) => o, Err(e) => None } }` called as `let r = f(Ok(Some(mk(3))))` prints nothing at -O0 and aborts with `free(): double free detected in tcache 2` at -O2 (interp `dR3 end`); `Ok(o) => { vo.push(o); 1 }` into a `Vec[Option[R]]` (param or local, `match`, `if let` or `let ... else`) crashes the same way. The `Option[Option[R]]` spelling of the same return is clean. | — |
+| B-2026-10-03-53 | 2026-10-03 | interp+codegen | medium | A LOCAL `Result[Option[R], E]` MATCHED `Ok(o) => 1`, OR `if let Ok(o) = c { ... }` THAT ONLY READS `o`, NEVER RUNS R'S `Drop` BODY ON ANY SURFACE -- `let a: Result[Option[R], i64] = Ok(Some(mk(1))); let k = match a { Ok(o) => 1, Err(e) => e };` prints no `dR1` anywhere; the by-value PARAM spelling prints it. All surfaces agree, so only an expected-output oracle sees it. | — |
+| B-2026-10-03-54 | 2026-10-03 | codegen | medium | AN ARM THAT BINDS THE `Option[R]` ENVELOPE OF A `Result[Option[R], E]` AND MATCHES IT AGAIN WITH AN INNER ARM THAT ONLY READS THE LEAF LEAKS R'S HEAP -- `match x { Ok(o) => match o { Some(i) => i.id, None => 0 }, Err(e) => e }` over a by-value param prints `dR7 7 end` everywhere and loses 29 B (R's String); the local spelling also loses the `Drop` body on the compiled backends (interp `dR7 7 end`, -O0/-O2 `7 end`). | — |
 
 ### Relocated
 
