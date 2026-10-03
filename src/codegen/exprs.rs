@@ -1178,6 +1178,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // return in a non-Result/Option-returning function.
                 let is_error_exit = val.as_deref().is_some_and(Self::is_error_exit_value);
                 if let Some(e) = val {
+                    // B-2026-10-02-78 — a `return` operand is a frame-escaping
+                    // site wherever the `return` sits. `note_escaping_stmt_sites`
+                    // seeds the STATEMENT spelling (`return match ..;`) and
+                    // `compile_function` seeds a body tail, but a `return` that
+                    // IS a block's tail (`{ return match a { .. None => d } }`,
+                    // no semicolon, the function's own tail or an `if`'s) was
+                    // seeded by neither, so an arm handing back a by-value
+                    // `Array[String, N]` param never cleared its
+                    // conditional-move flag and the frame's exit freed the
+                    // elements it had just handed back. Seeding is idempotent
+                    // and runs before the operand compiles, which is where its
+                    // arm tails read the set. Interp twin: the tail `return`
+                    // leg of `eval_block` (B-2026-08-29-21).
+                    self.note_frame_escaping_site(e);
                     // Move-out cleanup suppression (Vec/String `cap = 0`,
                     // Map/Set FreeMapHandle queue retract, user-`impl Drop`
                     // skip) is applied AFTER the return value is compiled —
