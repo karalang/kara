@@ -3314,6 +3314,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         .cloned()
                     {
                         self.suppress_boxed_enum_payload_cleanup_for_owner(&owner);
+                        // B-2026-10-02-67 — and the ALIAS's own bodies walk.
+                        // `let c = id(b); cls(c)` registers a payload-bodies
+                        // walk on `c` that reads the box through `c`'s slot,
+                        // which the word-scoped disarm above leaves intact: the
+                        // callee freed the box and the walk read it after the
+                        // call (3 invalid reads at -O0). The box moved owner,
+                        // so the walk over it moves too — masking one channel
+                        // and not the other is worse than masking neither.
+                        if self.container_bodies_owned_by_let_slot(n) {
+                            self.suppress_container_elem_bodies_for_receiver(n);
+                        }
                     }
                 }
             }
