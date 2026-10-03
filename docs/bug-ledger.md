@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 655 |
 | run-vs-build | 574 |
-| leak | 536 |
+| leak | 537 |
 | double-free | 406 |
 | codegen-gap | 216 |
 | missing-feature | 215 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2616 |
+| codegen | 2617 |
 | interp | 800 |
 | typecheck | 322 |
 | other | 113 |
@@ -510,6 +510,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-15 | 2026-10-03 | runtime | high | An auto-parallelised loop whose body fills a `Map` intermittently loses entries (about one process in 5,000 on x86, and the intermittent arm64 ASAN red on `asan_map_remove_string_key_vec_value_both_heap_halves`, 21593 against 21600): `seed()` in hash/src/seed.rs reads the key whenever `INIT` is non-zero, but the initialising thread sets 1 before it stores the key, so a racing worker hashes with a key that is still 0 | — |
 | B-2026-10-03-20 | 2026-10-03 | codegen | low | A scan loop with several early returns runs about 23% slower compiled than the same loop in Rust or C with overflow checks: once the function is inlined, the optimiser merges its `return true` and `return false` exits into one flag recomputed on every iteration (`lea; cmp; setb`) instead of setting the answer on each exit path (kata 335: 124 ms vs 101 ms equal-safety Rust and 100 ms C) | — |
 | B-2026-10-03-30 | 2026-10-03 | codegen | medium | `self.clone()` INSIDE AN IMPL BODY FAILS `karac build` WITH `no handler for method 'clone' on non-identifier receiver` WHILE `--interp` RUNS IT -- `impl S { fn me(ref self) -> S { return self.clone(); } }` fails for a `shared struct`, a `shared enum` (now that B-2026-10-02-59 admits `.clone()` on one), a `#[derive(Clone)]` struct with heap fields and a `#[derive(Clone)]` enum, over both `self` and `ref self` receivers | — |
+| B-2026-10-03-31 | 2026-10-03 | codegen | medium | AN OWNED-`self` METHOD WITH ITS OWN TYPE PARAMS LEAKS A GENERIC ENUM RECEIVER'S HEAP PAYLOAD ON EVERY COMPILED SURFACE -- `impl[T] H[T] { fn hw[U](self, u: U) -> U { return u; } }` called as `h.hw(8)` on `h: H[String] = H.A(f"h{1}")` prints `8` and valgrind at -O0 reports the 2-byte String definitely lost; the same receiver through a non-generic owned-`self` method (`fn ea(self) -> i64`) is clean, and so is a payload-free receiver | — |
 
 ### Relocated
 
