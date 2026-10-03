@@ -130,7 +130,7 @@ pub fn param_fate(program: Option<&Program>, f: &Function, idx: usize) -> Option
 /// check against an address reused by a later clone (a monomorph shares its
 /// template's span).
 type FateMemoKey = (usize, usize, usize, usize, usize, usize);
-type FateMemoMap = rustc_hash::FxHashMap<FateMemoKey, (String, Option<ParamFate>)>;
+type FateMemoMap = rustc_hash::FxHashMap<FateMemoKey, (u64, Option<ParamFate>)>;
 thread_local! {
     static FATE_MEMO: std::cell::RefCell<Option<FateMemoMap>> =
         const { std::cell::RefCell::new(None) };
@@ -169,13 +169,46 @@ impl Drop for FateMemo {
     }
 }
 
-fn fate_memo_check(f: &Function) -> String {
-    let mut c = f.name.clone();
+/// The check is a structural hash rather than the types' `Debug` text: it is
+/// computed on every lookup, hits included, and rendering every param type per
+/// call made the memo the hottest thing in a call-heavy `--interp` run (a third
+/// of the instructions, measured by the kata thread 2026-10-03).
+fn fate_memo_check(f: &Function) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = rustc_hash::FxHasher::default();
+    f.name.hash(&mut h);
+    f.params.len().hash(&mut h);
     for p in &f.params {
-        c.push('|');
-        c.push_str(&format!("{:?}", p.ty.kind));
+        ty_fingerprint(&p.ty, &mut h);
     }
-    c
+    h.finish()
+}
+
+/// Enough of a type's shape to tell one instantiation from another: the kind,
+/// a path's segments and its type arguments, recursively.
+fn ty_fingerprint(t: &TypeExpr, h: &mut rustc_hash::FxHasher) {
+    use std::hash::Hash;
+    std::mem::discriminant(&t.kind).hash(h);
+    match &t.kind {
+        TypeKind::Path(p) => {
+            p.segments.hash(h);
+            for a in p.generic_args.iter().flatten() {
+                match a {
+                    GenericArg::Type(t) => ty_fingerprint(t, h),
+                    other => std::mem::discriminant(other).hash(h),
+                }
+            }
+        }
+        TypeKind::Tuple(ts) => ts.iter().for_each(|t| ty_fingerprint(t, h)),
+        TypeKind::Ref(t)
+        | TypeKind::MutRef(t)
+        | TypeKind::Frozen(t)
+        | TypeKind::MutSlice(t)
+        | TypeKind::Weak(t) => ty_fingerprint(t, h),
+        TypeKind::Array { element, .. } => ty_fingerprint(element, h),
+        TypeKind::Pointer { inner, .. } => ty_fingerprint(inner, h),
+        _ => (t.span.offset, t.span.length).hash(h),
+    }
 }
 
 const MAX_CALL_DEPTH: usize = 4;
@@ -187,6 +220,12 @@ fn param_fate_depth(
     idx: usize,
     depth: usize,
 ) -> Option<ParamFate> {
+    // A borrowed or pattern param has no fate; answer before the memo, as the
+    // uncached walk would.
+    let p = f.params.get(idx)?;
+    if is_borrow_ty(&p.ty) || !matches!(p.pattern.kind, PatternKind::Binding(_)) {
+        return None;
+    }
     if !FATE_MEMO.with(|m| m.borrow().is_some()) {
         return param_fate_depth_uncached(program, f, idx, depth);
     }
