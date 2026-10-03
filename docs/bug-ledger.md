@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 118 |
 | crash | 106 |
 | soundness | 97 |
-| use-after-free | 78 |
+| use-after-free | 79 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2623 |
+| codegen | 2624 |
 | interp | 803 |
 | typecheck | 323 |
 | other | 113 |
@@ -509,6 +509,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-34 | 2026-10-03 | codegen | high | A `Result[Option[R], E]` BY-VALUE PARAM, WHERE `R` RUNS A USER `Drop`, DOUBLE-FREES R'S HEAP ON THE GENERIC PATH WHEN THE ARGUMENT IS A NAMED LOCAL, AND LEAKS IN TWO OTHER SPELLINGS -- `rr(a)` over `fn rr[T](x: Result[Option[T], i64]) -> i64 { match x { Ok(Some(w)) => 1, Ok(None) => 2, Err(e) => e } }` with `let a: Result[Option[R], i64] = Ok(Some(mk(7)));` aborts with `free(): double free detected in tcache 2` at -O0 (-O2 prints `1 dR7 end`); the B-2026-10-03-28 remainder | — |
 | B-2026-10-03-33 | 2026-10-03 | typecheck+interp+codegen | medium | A MIXED-SIGNEDNESS INTEGER COMPARISON TYPE-CHECKS AND THE BACKENDS DISAGREE ON IT -- `u > k` over `u: u8 = 3`, `k: i64 = -1` is `true` under `--interp` and `false` compiled, and so is `u > -1`, `s < t` over `s: i32 = -5`, `t: u32 = 4000000000` likewise; the arithmetic operators reject the same operand pairs | — |
 | B-2026-10-03-16 | 2026-10-03 | codegen | medium | A CLOSURE WHOSE BY-VALUE PARAM IS A HEAP-BOXED GENERIC ENUM LEAKS THE PARAM'S BOX WHEN THE BODY'S `match` TAKES THE PAYLOAD -- `let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; f(mkh("xx"))` reports 24 bytes definitely lost where the same `match` in a `fn g(q: Ho[String])` is clean | — |
+| B-2026-10-03-22 | 2026-10-03 | codegen | medium | A CLOSURE THAT CAPTURES NOTHING, RETURNED OUT OF THE FN THAT MADE IT, READS ITS PLACEHOLDER ENV FROM THAT FN'S DEAD STACK FRAME ON EVERY CALL -- `fn mk() -> Fn(i64) -> i64 { |x: i64| x + 1 }; let g = mk(); g(4)` prints the right `5` and ASAN's instrumented -O0 leg reports stack-use-after-return | — |
 
 ### Relocated
 
