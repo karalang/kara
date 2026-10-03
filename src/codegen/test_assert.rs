@@ -110,24 +110,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let l_val = self.compile_expr(&args[0].value)?;
         let r_val = self.compile_expr(&args[1].value)?;
 
-        // B-2026-08-27-17 — route two ENUM operands through the same decision
-        // the `==` operator site makes. `compile_binop` dispatches an aggregate
-        // by shape and would send an enum to the word-wise `compile_struct_eq`,
+        // B-2026-08-27-17 — route the operands through the same decision the
+        // `==` operator site makes. `compile_binop` dispatches an aggregate by
+        // shape and would send an enum to the word-wise `compile_struct_eq`,
         // comparing a heap-owning payload's POINTER words: an assertion over
         // two structurally-equal enums then passed on the interpreter and
         // failed compiled. Unlike `Vec.contains`, this site HAS the operand
         // expressions, so it can reach the operator's own path rather than
-        // needing the pointer comparator.
-        let eq_bv = match self.try_compile_enum_operand_eq(
-            &BinOp::Eq,
-            &args[0].value,
-            &args[1].value,
-            l_val,
-            r_val,
-        ) {
-            Some(r) => r?,
-            None => self.compile_binop(&BinOp::Eq, l_val, r_val)?,
-        };
+        // needing the pointer comparator. B-2026-10-03-12 widened the enum-only
+        // route to the operator's whole type-directed chain.
+        let eq_bv = self.compile_assert_operand_eq(&args[0].value, &args[1].value, l_val, r_val)?;
         let eq_i1 = eq_bv.into_int_value();
 
         let cur_fn = self
@@ -181,6 +173,105 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self.context.i64_type().const_zero().into())
     }
 
+    /// The comparison `assert_eq` / `assert_ne` make, decided by the operand's
+    /// TYPE the way the `==` operator decides it (`exprs.rs`, the `Binary`
+    /// arm), before the shape-directed `compile_binop` fallback.
+    ///
+    /// `compile_binop` dispatches an aggregate by LLVM SHAPE, and a `Vec`,
+    /// a `String` and a struct whose first field is a pointer all lower to
+    /// `{ptr, i64, i64}`: a `Vec` operand went to the String byte compare and
+    /// read `len` BYTES of an ELEMENT buffer. The operator routes each of these
+    /// to its own comparator (B-2026-08-27-10 / -24 / -25 / -33,
+    /// B-2026-08-12-5, B-2026-06-19-9); this is the same chain in the same
+    /// order, without the operator's operand frees, which `compile_assert_eq`
+    /// does on its continuation path instead.
+    fn compile_assert_operand_eq(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let op = BinOp::Eq;
+        if let Some(r) = self.try_compile_enum_operand_eq(&op, left, right, lhs, rhs) {
+            return r;
+        }
+        if let Some((elem_te, n)) = self
+            .array_te_of_operand(left)
+            .or_else(|| self.array_te_of_operand(right))
+        {
+            return self.compile_array_eq(&op, &elem_te, n, lhs, rhs, (left, right));
+        }
+        if let Some(elem_te) = self
+            .slice_elem_te_of_operand(left)
+            .or_else(|| self.slice_elem_te_of_operand(right))
+        {
+            return self.compile_slice_eq(&op, &elem_te, lhs, rhs);
+        }
+        if lhs.is_struct_value() && rhs.is_struct_value() {
+            if let Some(elem_te) = self
+                .vec_elem_te_of_operand(left)
+                .or_else(|| self.vec_elem_te_of_operand(right))
+            {
+                return self.compile_vec_eq(
+                    &op,
+                    &elem_te,
+                    lhs.into_struct_value(),
+                    rhs.into_struct_value(),
+                );
+            }
+        }
+        if lhs.is_pointer_value() && rhs.is_pointer_value() {
+            if let Some((name, info)) = self
+                .shared_type_for_expr(left)
+                .or_else(|| self.shared_type_for_expr(right))
+            {
+                if !info.is_enum {
+                    let eq_fn = self.emit_shared_struct_eq_fn(&name);
+                    let r = self
+                        .builder
+                        .build_call(
+                            eq_fn,
+                            &[
+                                lhs.into_pointer_value().into(),
+                                rhs.into_pointer_value().into(),
+                            ],
+                            "assert.sheq",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic();
+                    return Ok(r);
+                }
+            }
+        }
+        if lhs.is_struct_value() && rhs.is_struct_value() {
+            if let Some(te) = self
+                .tuple_te_of_operand(left)
+                .or_else(|| self.tuple_te_of_operand(right))
+            {
+                if let Some(r) = self.compile_tuple_eq_te(
+                    &op,
+                    &te,
+                    lhs.into_struct_value(),
+                    rhs.into_struct_value(),
+                )? {
+                    return Ok(r);
+                }
+            }
+            if let Some(r) = self.try_compile_struct_eq_typed(
+                &op,
+                left,
+                right,
+                lhs.into_struct_value(),
+                rhs.into_struct_value(),
+            ) {
+                return Ok(r);
+            }
+        }
+        self.compile_binop(&op, lhs, rhs)
+    }
+
     /// Format an assert operand for the runtime failure record. Returns
     /// `(ptr, len)` for v1-supported types (int, bool, char, float, and
     /// the String 3-field struct layout). Returns `None` for everything
@@ -200,6 +291,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(self.compile_fstr_part_to_cstr(val, src))
             }
             BasicValueEnum::StructValue(sv) => {
+                // A `Vec`, a tuple or a user struct can share the String's
+                // `{ptr, i64, i64}` shape; formatting one as text reads its
+                // element buffer or a field's pointee as bytes
+                // (B-2026-10-03-12). Only a real `String` is formatted.
+                if self.vec_elem_te_of_operand(src).is_some()
+                    || self.tuple_te_of_operand(src).is_some()
+                    || self
+                        .type_name_of_expr(src)
+                        .is_some_and(|n| self.type_decls.struct_types.contains_key(n.as_str()))
+                {
+                    return None;
+                }
                 let st = sv.get_type();
                 if st.count_fields() != 3 {
                     return None;
