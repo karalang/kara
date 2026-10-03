@@ -1586,6 +1586,17 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.boxed_enum_payload_vars.clear();
         self.payload_vars.boxed_struct_payload_param_vars.clear();
         self.payload_vars.callee_owned_payload_bodies_params.clear();
+        // B-2026-10-03-50 — the nested-box registrations are keyed by a
+        // param's or local's NAME like every set cleared here, and were not
+        // cleared: a `Result[Option[R], E]` param `x` in one function left
+        // `x` in `nested_boxed_payload_vars`, so a later function's
+        // `Option[Option[R]]` param `x` took the nested family's "retract on
+        // any binding" rule and its box freed R's struct without R's fields
+        // (29 B lost per call, clean under any other name). Clearing that
+        // set alone fixes it; `boxed_leaf_owning_depth`, read by the same
+        // retraction, has the same keying and goes with it.
+        self.payload_vars.nested_boxed_payload_vars.clear();
+        self.payload_vars.boxed_leaf_owning_depth.clear();
         self.payload_vars.boxed_payload_alias.clear();
         self.payload_vars.boxed_array_payload_alias.clear();
         self.payload_vars.boxed_optres_payload_view_vars.clear();
