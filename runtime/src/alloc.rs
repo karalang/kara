@@ -394,13 +394,33 @@ pub extern "C" fn karac_alloc_zeroed_or_panic(count: usize, size: usize) -> *mut
     // also respect the `KARAC_MAX_ALLOC_BYTES` ceiling (see the const's
     // invariant note) — a non-wrapping product beyond it must fail the same
     // way, not reach the allocator.
-    match (count as u64).checked_mul(size as u64) {
-        Some(total) if total <= KARAC_MAX_ALLOC_BYTES => {}
+    let total = match (count as u64).checked_mul(size as u64) {
+        Some(total) if total <= KARAC_MAX_ALLOC_BYTES => total as usize,
         _ => {
             crate::fatal::write_stderr(b"panic: out of memory\n");
             std::process::abort();
         }
+    };
+    // A large zeroed buffer is served from the recycling cache too, zeroed by
+    // hand (B-2026-10-03-48). `karac_free_buf` parks every large Vec buffer it can,
+    // so before this a `vec![0; n]` rebuilt in a loop parked its first two
+    // buffers, never took them back, and paid a fresh calloc each round: the
+    // parked pages were pure retained memory (16 MB of an 8 MB kernel's
+    // 25 MB peak). Zeroing a parked buffer touches pages that are already
+    // mapped, which is what the cache is for; calloc's lazily-zeroed pages
+    // only win when most of the buffer is never written.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    if total >= BUF_CACHE_MIN_BYTES && buf_cache::enabled() {
+        let p = buf_cache::take(total);
+        if !p.is_null() {
+            // Safety: a cache hit owns at least `total` usable bytes (`take`
+            // checks the allocator's own usable size against the request).
+            unsafe { std::ptr::write_bytes(p, 0, total) };
+            return p;
+        }
     }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let _ = total; // no cache on this platform
     let p = unsafe { calloc(count, size) };
     if p.is_null() {
         crate::fatal::write_stderr(b"panic: out of memory\n");
@@ -1098,6 +1118,26 @@ mod buf_cache_tests {
         // Same-size request must come back as the SAME buffer, pages intact.
         let q = karac_alloc_fallible(2 * MB);
         assert_eq!(q, p, "same-size alloc after free_buf must recycle");
+        karac_free_buf(q, 2 * MB);
+        buf_cache::drain_for_test();
+    }
+
+    /// B-2026-10-03-48: the `vec![0; n]` path takes a parked buffer back, and the
+    /// buffer it hands out is zero over the whole request even though its last
+    /// owner left it dirty.
+    #[test]
+    fn zeroed_alloc_recycles_a_parked_buffer_and_zeroes_it() {
+        let _g = cache_lock();
+        let p = karac_alloc_or_panic(2 * MB);
+        unsafe { std::ptr::write_bytes(p, 0xA5, 2 * MB) };
+        karac_free_buf(p, 2 * MB);
+        let q = karac_alloc_zeroed_or_panic(2 * MB / 8, 8);
+        assert_eq!(q, p, "a zeroed alloc after free_buf must recycle");
+        let bytes = unsafe { std::slice::from_raw_parts(q, 2 * MB) };
+        assert!(
+            bytes.iter().all(|&b| b == 0),
+            "a recycled buffer must be zeroed"
+        );
         karac_free_buf(q, 2 * MB);
         buf_cache::drain_for_test();
     }
