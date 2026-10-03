@@ -517,6 +517,21 @@ pub(crate) fn binding_only_read_through_borrow_aware(
     t.verdict()
 }
 
+/// `Block` sibling of [`binding_only_read_through_borrow_aware`].
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn binding_only_read_through_block_borrow_aware(
+    name: &str,
+    b: &Block,
+    borrows: &BorrowOracle<'_>,
+) -> bool {
+    let mut t = Tally {
+        borrows: Some(borrows),
+        ..Default::default()
+    };
+    walk_block(Target::Bare(name), b, &mut t);
+    t.verdict()
+}
+
 /// `Block` sibling of [`binding_only_read_through`], for the `if let`
 /// `then_block` / `while let` body scopes where the binding lives directly in a
 /// block rather than in a single arm expression.

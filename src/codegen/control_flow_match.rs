@@ -21183,6 +21183,53 @@ impl<'ctx> super::Codegen<'ctx> {
         body: &Expr,
         guard: Option<&Expr>,
     ) {
+        let read = |n: &str, e: &Expr| {
+            crate::binding_use::binding_only_read_through_borrow_aware(
+                n,
+                e,
+                &Self::nested_leaf_plain_fn_arg,
+            )
+        };
+        self.disarm_callee_owned_bodies_for_nested_leaf_move_with(scrutinee, pattern, &|n| {
+            read(n, body) && guard.is_none_or(|g| read(n, g))
+        });
+    }
+
+    /// Block form of [`Self::disarm_callee_owned_bodies_for_nested_leaf_move`],
+    /// for the `if let` / `while let` / `let ... else` bodies.
+    pub(super) fn disarm_callee_owned_bodies_for_nested_leaf_move_block(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        block: &Block,
+    ) {
+        self.disarm_callee_owned_bodies_for_nested_leaf_move_with(scrutinee, pattern, &|n| {
+            crate::binding_use::binding_only_read_through_block_borrow_aware(
+                n,
+                block,
+                &Self::nested_leaf_plain_fn_arg,
+            )
+        });
+    }
+
+    /// Handing the leaf to a plain function (`eat(r)`) counts as a read: the
+    /// leaf is a view, so the place's walk is still the one body that callee's
+    /// param has (`leaf-moved-into-a-call`, B-2026-09-10-19). A variant
+    /// constructor (`Some(r)`) or a method argument (`v.push(r)`) gives the
+    /// leaf an owner that runs it.
+    fn nested_leaf_plain_fn_arg(callee: &Expr, _: usize) -> bool {
+        match &callee.kind {
+            ExprKind::Identifier(f) => f.chars().next().is_some_and(|c| c.is_lowercase()),
+            _ => false,
+        }
+    }
+
+    fn disarm_callee_owned_bodies_for_nested_leaf_move_with(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        only_read: &dyn Fn(&str) -> bool,
+    ) {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };
@@ -21197,23 +21244,8 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         // A read THROUGH the leaf (`w.id`, even as the arm's value) leaves it
-        // where it is; only a use OF it moves it on. Handing it to a plain
-        // function (`eat(r)`) counts as a read here: the leaf is a view, so the
-        // place's walk is still the one body that callee's param has
-        // (`leaf-moved-into-a-call`, B-2026-09-10-19). A variant constructor
-        // (`Some(r)`) or a method argument (`v.push(r)`) gives the leaf an
-        // owner that runs it.
-        let plain_fn = |callee: &Expr, _: usize| match &callee.kind {
-            ExprKind::Identifier(f) => f.chars().next().is_some_and(|c| c.is_lowercase()),
-            _ => false,
-        };
-        let read = |n: &str, e: &Expr| {
-            crate::binding_use::binding_only_read_through_borrow_aware(n, e, &plain_fn)
-        };
-        let moved = names
-            .iter()
-            .any(|n| !read(n, body) || guard.is_some_and(|g| !read(n, g)));
-        if !moved {
+        // where it is; only a use OF it moves it on.
+        if names.iter().all(|n| only_read(n)) {
             return;
         }
         if let Some(flag) = self.optres_payload_bodies_flag_for(name) {

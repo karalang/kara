@@ -611,6 +611,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             &|n| crate::consume_class::binding_only_borrowed_block(n, then_block),
                         );
                 self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
+                // B-2026-10-03-5 / B-2026-10-03-28 — see the `match` arm twin.
+                self.disarm_callee_owned_bodies_for_nested_leaf_move_block(
+                    value, pattern, then_block,
+                );
             }
         }
         // B-2026-07-21-16: `if let Some(s) = a.opt { … }` over an OWNED place
@@ -1579,6 +1583,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     crate::consume_class::binding_only_borrowed_block(n, body)
                 });
             self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
+            // B-2026-10-03-5 / B-2026-10-03-28 — see the `match` arm twin.
+            self.disarm_callee_owned_bodies_for_nested_leaf_move_block(value, pattern, body);
         }
         // B-2026-09-17-14 — the `while let` leg of the reversal above.
         self.reverse_destructured_optres_tuple_walk(value, pattern, true, &|n: &str| {
@@ -3086,6 +3092,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
             });
             self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
+            if let Some(rest) = param_rest {
+                self.disarm_callee_owned_bodies_for_nested_leaf_move_block(value, pattern, rest);
+            }
             if takes {
                 self.fund_let_else_tuple_payload_binding(value, pattern);
             }

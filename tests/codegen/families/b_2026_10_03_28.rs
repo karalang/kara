@@ -67,3 +67,68 @@ fn main() {
     assert_eq!(interp_out.join(""), want, "interpreter");
     assert_eq!(run_program(src).as_deref(), Some(want), "AOT");
 }
+
+/// B-2026-10-03-28 / B-2026-10-03-5 — the `if let` / `let ... else` spellings.
+/// The first fix stood the callee's bodies walk down on the `match` arm path
+/// only, so `if let Ok(Some(w)) = x { v.push(w) }` still ran the body inside
+/// the callee and again when `v` dropped, and a read-only `if let` over the
+/// `Result` spelling lost its body. A `let ... else` push is asserted on AOT
+/// alone: the interpreter runs that body twice (B-2026-10-03-49).
+/// PREDICTS B-2026-10-03-49: once it closes, widen that cell to interp == AOT.
+#[test]
+fn e2e_nested_envelope_param_block_forms_run_leaf_body_once() {
+    let src = r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+fn keep(x: Option[Option[R]], v: mut ref Vec[R]) -> i64 {
+    if let Some(Some(w)) = x { v.push(w); return 1 }
+    return 0
+}
+fn rkeep(x: Result[Option[R], i64], v: mut ref Vec[R]) -> i64 {
+    if let Ok(Some(w)) = x { v.push(w); return 1 }
+    return 0
+}
+fn rd(x: Result[Option[R], i64]) -> i64 {
+    if let Ok(Some(w)) = x { return w.id }
+    return 0
+}
+fn lr(x: Option[Option[R]]) -> i64 {
+    let Some(Some(w)) = x else { return 0 };
+    return w.id
+}
+fn main() {
+    let mut v: Vec[R] = Vec.new();
+    println(keep(Some(Some(mk(1))), mut v));
+    println(rkeep(Ok(Some(mk(2))), mut v));
+    println(rd(Ok(Some(mk(3)))));
+    println(lr(Some(Some(mk(4)))));
+    println(v.len());
+    println("end");
+}
+"#;
+    let want = "1\n1\ndR3\n3\ndR4\n4\n2\ndR1\ndR2\nend\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    assert_eq!(run_program(src).as_deref(), Some(want), "AOT");
+
+    let le = r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn le(x: Option[Option[R]], v: mut ref Vec[R]) -> i64 {
+    let Some(Some(w)) = x else { return 0 };
+    v.push(w);
+    return 1
+}
+fn main() {
+    let mut v: Vec[R] = Vec.new();
+    println(le(Some(Some(R { id: 5, s: f"heap-string-longer-than-sso-5" })), mut v));
+    println(v.len());
+    println("end");
+}
+"#;
+    assert_eq!(
+        run_program(le).as_deref(),
+        Some("1\n1\ndR5\nend\n"),
+        "AOT let-else"
+    );
+}
