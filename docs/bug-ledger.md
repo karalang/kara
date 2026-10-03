@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 662 |
+| miscompile | 663 |
 | run-vs-build | 575 |
 | leak | 541 |
 | double-free | 408 |
@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 139 |
 | perf | 133 |
 | false-positive | 118 |
-| crash | 107 |
+| crash | 108 |
 | soundness | 97 |
 | use-after-free | 80 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2634 |
+| codegen | 2636 |
 | interp | 807 |
 | typecheck | 323 |
 | other | 113 |
@@ -511,6 +511,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-39 | 2026-10-03 | codegen | medium | A NESTED PATTERN THROUGH A `shared enum`'S VALUE-ENUM PAYLOAD LEAKS 32 B -- over `shared enum H4 { Z(E), N }` and `enum E { A(Vec[String]), B }`, `match H4.Z(E.A(mkv(..))) { H4.Z(E.A(x)) => x.len(), _ => 0 }` prints the right `2` and loses 32 B definitely | — |
 | B-2026-10-03-49 | 2026-10-03 | interp | medium | UNDER `--interp`, A `let Some(Some(w)) = x else { ... }` OVER A BY-VALUE `Option[Option[R]]` PARAM, WHERE `R` RUNS A USER `Drop`, RUNS THE BODY TWICE WHEN THE LEAF IS MOVED ON -- `let Some(Some(w)) = x else { return 0 }; v.push(w); return 1` prints `dR4 1 1 dR4` on the interpreter. The body runs once at the end of the call, although `w` now lives in `v`, and again when `v` drops. Compiled prints `1 1 dR4` (correct) since the B-2026-10-03-28 follow-up; before it, compiled agreed with the interpreter. | — |
 | B-2026-10-03-50 | 2026-10-03 | codegen | medium | AN UNCALLED FUNCTION'S PARAM CHANGES HOW ANOTHER FUNCTION WITH A SAME-NAMED PARAM FREES ITS NESTED-ENVELOPE PAYLOAD: `fn ie(x: Option[Option[R]]) { if let Some(Some(w)) = x { eat(w) ... } }` LEAKS R'S STRING (29 B) ONLY WHEN THE PROGRAM ALSO DEFINES `fn rd(x: Result[Option[R], i64]) { if let Ok(Some(w)) = x { return w.id } ... }`, AND RENAMING `rd`'S PARAM TO `y` REMOVES THE LEAK -- some per-function codegen state keyed by param or binding name survives from one function into the next. Output is correct on every surface (`e6 dR6 1 end`); only the free is lost. | — |
+| B-2026-10-03-26 | 2026-10-03 | codegen | high | A `let` THAT TAKES A BY-VALUE `Option`/`Result` PARAM THROUGH A BRANCH (`let r = if c { a } else { None }`), WHERE THE PAYLOAD RUNS A `Drop` BODY AND `r` DIES IN THE CALLEE, SEGFAULTS COMPILED ON THE PATH THAT TOOK THE PARAM -- the callee frees the caller's box and the caller frees it again; the path that did not take it loses the param's body instead. `--interp` is right throughout | — |
+| B-2026-10-03-27 | 2026-10-03 | codegen | medium | A `let` THAT TAKES ONE OF TWO by-value `Option[R]` PARAMS THROUGH A BRANCH (`let r = if c { a } else { b }`), WHERE `R` RUNS A `Drop` BODY AND `r` DIES IN THE CALLEE, RUNS NEITHER PARAM'S BODY compiled -- `mtrue mtrue` against `--interp`'s `mtrue d2 d1 mtrue d4 d3`; before B-2026-10-03-26 the same cell segfaulted at `-O0` | — |
 
 ### Relocated
 
