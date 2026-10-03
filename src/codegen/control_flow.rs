@@ -645,9 +645,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-29-2 — the `if let` twin of the match site's leaf-drop
         // retraction: an arm that binds the leaf out already owns it, so the
         // box's interior drop has to stand down or free it twice.
-        self.retract_boxed_leaf_drop_for_consuming_pattern(value, pattern, |n| {
-            !crate::consume_class::binding_only_borrowed_block(n, then_block)
-        });
+        self.retract_boxed_leaf_drop_for_consuming_pattern(
+            value,
+            pattern,
+            |n| !crate::consume_class::binding_only_borrowed_block(n, then_block),
+            |n| crate::binding_use::binding_is_nested_match_scrutinee_block(n, then_block),
+        );
         // Slice 3t: boxed-payload struct-destructure field suppression — zero
         // the consumed fields inside the box so the binding owns them and the
         // box's inner walk frees only what the pattern left unbound.
@@ -1588,6 +1591,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-10-03-5 / B-2026-10-03-28 — see the `match` arm twin.
             self.disarm_callee_owned_bodies_for_nested_leaf_move_block(value, pattern, body);
         }
+        // B-2026-10-03-51 — the `while let` twin of the `if let` / `match`
+        // leaf-drop retraction, needed once a by-value param's nested box
+        // frees its leaf: without it a body that moves the leaf or its
+        // envelope on (`vo.push(o)`) left the box freeing it as well.
+        self.retract_boxed_leaf_drop_for_consuming_pattern(
+            value,
+            pattern,
+            |n| !crate::consume_class::binding_only_borrowed_block(n, body),
+            |n| crate::binding_use::binding_is_nested_match_scrutinee_block(n, body),
+        );
         // B-2026-09-17-14 — the `while let` leg of the reversal above.
         self.reverse_destructured_optres_tuple_walk(value, pattern, true, &|n: &str| {
             crate::binding_use::binding_only_read_through_block(n, body)
@@ -3101,6 +3114,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.fund_let_else_tuple_payload_binding(value, pattern);
             }
         }
+        // B-2026-10-03-51 — the `let ... else` twin of the `if let` / `match`
+        // leaf-drop retraction. The bindings escape into the enclosing block,
+        // so they count as taking the value unless this is an owned param
+        // whose rest of block only reads them.
+        self.retract_boxed_leaf_drop_for_consuming_pattern(
+            value,
+            pattern,
+            |n| {
+                param_rest
+                    .is_none_or(|rest| !crate::consume_class::binding_only_borrowed_block(n, rest))
+            },
+            |n| {
+                param_rest.is_none_or(|rest| {
+                    crate::binding_use::binding_is_nested_match_scrutinee_block(n, rest)
+                })
+            },
+        );
         // B-2026-08-05-3 (Option leg): a let-else binding escapes into the
         // enclosing scope, so it always takes the boxed tuple's interior.
         // B-2026-09-17-16 — except a VIEW of a callee-owned param's payload

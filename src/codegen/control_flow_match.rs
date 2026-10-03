@@ -1450,6 +1450,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             arm.guard.is_none()
                                 && !crate::consume_class::binding_only_borrowed(n, &arm.body)
                         },
+                        |n| crate::binding_use::binding_is_nested_match_scrutinee(n, &arm.body),
                     );
                     // Slice 3t: struct-destructure of a BOXED payload — zero
                     // the consumed fields inside the box so the binding's
@@ -22055,6 +22056,7 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
         consumes: impl Fn(&str) -> bool,
+        destructured: impl Fn(&str) -> bool,
     ) {
         if self.pattern_state.pattern_binding_is_borrow {
             return;
@@ -22124,7 +22126,35 @@ impl<'ctx> super::Codegen<'ctx> {
             .nested_boxed_payload_vars
             .contains(name.as_str())
         {
-            Self::pattern_binds_any_name(pattern)
+            // B-2026-10-03-51 — except a binding of an ENVELOPE level that the
+            // arm only reads. `Ok(o) => 1` over a by-value
+            // `Result[Option[R], E]` param binds `o`, an `Option[R]` that runs
+            // no drop of its own, so retracting left R's fields owned by
+            // nobody (29 B lost per call). A binding at or below the leaf
+            // still retracts (its own drop frees the leaf), and so does an
+            // envelope binding the arm moves on or matches further.
+            //
+            // And only an arm on the BOXED variant can bind anything of the
+            // box: `Err(e) => e` beside `Ok(_) => 1` binds an `i64` from the
+            // other variant, and retracting on it left the `Ok` path's leaf
+            // owned by nobody.
+            let leaf_depth = self.nested_box_leaf_depth_for(name.as_str());
+            match leaf_depth {
+                Some((_, enum_ty, outer_tag))
+                    if self.pattern_only_matches_other_variant(pattern, enum_ty, outer_tag) =>
+                {
+                    false
+                }
+                Some((leaf, _, _)) => {
+                    Self::pattern_binds_name_outside_envelope(pattern, 0, leaf)
+                        || (1..leaf).any(|d| {
+                            let mut names = Vec::new();
+                            Self::pattern_names_at_depth(pattern, d, &mut names);
+                            names.iter().any(|n| consumes(n) || destructured(n))
+                        })
+                }
+                None => Self::pattern_binds_any_name(pattern),
+            }
         } else {
             let Some(depth) = self
                 .payload_vars
@@ -22185,6 +22215,93 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The NESTED-box rule (see `retract_boxed_leaf_drop_for_consuming_pattern`):
     /// there the inline payload is a type the program names, so any binding
     /// inside the variant pattern carries the box pointer out with it.
+    /// B-2026-10-03-51 — the depth of the leaf a nested-box binding's queued
+    /// `NestedBoxedEnumDrop` frees: the outer enum's payload is the inner
+    /// enum (depth 1), whose box holds the next level, so the leaf sits one
+    /// level below the last envelope.
+    fn nested_box_leaf_depth_for(
+        &self,
+        name: &str,
+    ) -> Option<(usize, inkwell::types::StructType<'ctx>, u64)> {
+        let slot = self.variables.get(name).copied()?;
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .find_map(|a| match a {
+                super::state::CleanupAction::NestedBoxedEnumDrop {
+                    enum_slot,
+                    enum_ty,
+                    outer_tag,
+                    deeper_tags,
+                    ..
+                } if *enum_slot == slot.ptr => Some((2 + deeper_tags.len(), *enum_ty, *outer_tag)),
+                _ => None,
+            })
+    }
+
+    /// B-2026-10-03-51 — can `pattern` only match a variant of the outer enum
+    /// OTHER than the one at `outer_tag`? Answered off the layout whose LLVM
+    /// type is the box's outer enum and which names the pattern's variant;
+    /// anything it cannot place (a binding, a wildcard, an unknown name)
+    /// answers `false`, which keeps the retraction as it was.
+    fn pattern_only_matches_other_variant(
+        &self,
+        pattern: &Pattern,
+        enum_ty: inkwell::types::StructType<'ctx>,
+        outer_tag: u64,
+    ) -> bool {
+        match &pattern.kind {
+            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                let Some(v) = path.last() else {
+                    return false;
+                };
+                self.type_decls
+                    .enum_layouts
+                    .values()
+                    .find_map(|l| {
+                        (l.llvm_type == enum_ty)
+                            .then(|| l.tags.get(v.as_str()))
+                            .flatten()
+                    })
+                    .is_some_and(|t| *t != outer_tag)
+            }
+            PatternKind::Or(alts) => {
+                !alts.is_empty()
+                    && alts
+                        .iter()
+                        .all(|a| self.pattern_only_matches_other_variant(a, enum_ty, outer_tag))
+            }
+            _ => false,
+        }
+    }
+
+    /// B-2026-10-03-51 — does `pattern` bind a name anywhere other than an
+    /// envelope level (`1..leaf`)? The whole scrutinee (depth 0), the leaf and
+    /// anything destructured inside it all count; a by-ref `@` binding owns
+    /// nothing and does not.
+    fn pattern_binds_name_outside_envelope(pattern: &Pattern, depth: usize, leaf: usize) -> bool {
+        let envelope = (1..leaf).contains(&depth);
+        match &pattern.kind {
+            PatternKind::Binding(_) => !envelope,
+            PatternKind::AtBinding {
+                pattern: inner,
+                by_ref,
+                ..
+            } => {
+                (!*by_ref && !envelope)
+                    || Self::pattern_binds_name_outside_envelope(inner, depth, leaf)
+            }
+            PatternKind::Or(alts) => alts
+                .iter()
+                .any(|a| Self::pattern_binds_name_outside_envelope(a, depth, leaf)),
+            PatternKind::TupleVariant { patterns, .. } => patterns
+                .iter()
+                .any(|p| Self::pattern_binds_name_outside_envelope(p, depth + 1, leaf)),
+            _ => Self::pattern_binds_any_name(pattern),
+        }
+    }
+
     fn pattern_binds_any_name(pattern: &Pattern) -> bool {
         match &pattern.kind {
             PatternKind::Binding(_) => true,

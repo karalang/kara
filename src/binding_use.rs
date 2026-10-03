@@ -574,6 +574,25 @@ pub(crate) fn binding_only_nested_match_scrutinee_block(name: &str, b: &Block) -
     !t.captured && t.mentions > 0 && t.mentions == t.match_scrutinee
 }
 
+/// B-2026-10-03-51 — is `name` the direct scrutinee of a nested `match` /
+/// `if let` / `while let` ANYWHERE in `e`? The any-mention sibling of
+/// [`binding_only_nested_match_scrutinee`]: a binding that is destructured
+/// further hands what it holds to the inner arms, whatever else it does.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn binding_is_nested_match_scrutinee(name: &str, e: &Expr) -> bool {
+    let mut t = Tally::default();
+    walk_expr(Target::Bare(name), e, &mut t);
+    t.match_scrutinee > 0
+}
+
+/// `Block` sibling of [`binding_is_nested_match_scrutinee`].
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn binding_is_nested_match_scrutinee_block(name: &str, b: &Block) -> bool {
+    let mut t = Tally::default();
+    walk_block(Target::Bare(name), b, &mut t);
+    t.match_scrutinee > 0
+}
+
 /// B-2026-08-31-3 — "does the callee at this argument position take a borrow?",
 /// answered by whoever has the signatures. Named rather than spelled inline so
 /// the three places that pass it around agree, and so `Tally` stays readable.

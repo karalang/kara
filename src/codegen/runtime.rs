@@ -3641,6 +3641,10 @@ impl<'ctx> super::Codegen<'ctx> {
         clippy::too_many_arguments,
         reason = "each parameter is a distinct layout coordinate of the two-tag walk (outer/inner enum and variant, plus the deeper tag chain); bundling them into a struct would move the arity, not remove it"
     )]
+    #[allow(
+        dead_code,
+        reason = "B-2026-10-03-51 moved its last caller, the by-value param entry, to the `_at_field` form so it can pass the box contents; kept because this doc is the one that describes the box-only population and is cited from three places"
+    )]
     pub(super) fn track_nested_boxed_enum_var(
         &mut self,
         name: &str,

@@ -3394,14 +3394,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     for (outer_enum, outer_variant, inner_enum, inner_variant, deeper) in
                         nested_boxed
                     {
-                        self.track_nested_boxed_enum_var(
+                        // B-2026-10-03-51 — with the box's CONTENTS, as the
+                        // let site has passed since B-2026-08-29-18. The note
+                        // on `track_nested_boxed_enum_var` that the interior
+                        // is "owned by other frames" stopped being true when
+                        // this callee started freeing the box: nothing can
+                        // free the leaf after that, so a body that does not
+                        // bind it (`Ok(_)`, `Ok(o) => 1`, no match at all)
+                        // leaked R's fields, 29 B per call. An arm that binds
+                        // the leaf retracts this drop as it does at the let
+                        // site.
+                        self.track_nested_boxed_enum_var_at_field(
                             &param_name,
                             alloca,
                             outer_enum,
                             outer_variant,
+                            1,
                             inner_enum,
                             inner_variant,
                             deeper,
+                            Self::path_generic_arg(&mono_ty, 0).cloned(),
                         );
                     }
                     // B-2026-10-03-28 — B-2026-09-10-9's move of the payload's
