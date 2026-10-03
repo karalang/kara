@@ -1107,12 +1107,45 @@ impl<'ctx> super::Codegen<'ctx> {
             if !is_param(pname) {
                 continue;
             }
-            let Some(te) = self.tuple_te_of_operand(&arg.value) else {
+            if let Some(te) = self.tuple_te_of_operand(&arg.value) {
+                if Self::type_expr_is_structural_type_arg(&te) {
+                    structural.push((pname.clone(), te));
+                }
                 continue;
-            };
-            if Self::type_expr_is_structural_type_arg(&te) {
-                structural.push((pname.clone(), te));
             }
+            // B-2026-10-02-77 — the ARRAY twin of the tuple leg, as the explicit-args
+            // loop's B-2026-09-20-39 arm is for an impl method's `T`. A free
+            // generic fn bound `T = Array[E, N]` only through the LLVM subst,
+            // so a body pattern over `Option[T]` (`Some(x) => x`) typed `x` at
+            // the erased one-word width and returned `i64 0`, which failed
+            // module verification against the `[N x E]` return type.
+            //
+            // SCALAR ELEMENTS ONLY, deliberately. With a heap element the
+            // typed body reaches the ownership defect B-2026-10-02-78 measures on the
+            // NON-generic spelling (returning `match a { Some(x) => x, None =>
+            // d }` over a by-value `Array[String, 2]` reads freed memory), so
+            // admitting it would trade this loud verification failure for a
+            // silent memory error. Widen once that row is fixed.
+            if let Some(te) = self.array_operand_te(&arg.value) {
+                if self.builtin_generic_type_arg(&te) && self.array_type_arg_is_scalar(&te) {
+                    structural.push((pname.clone(), te));
+                }
+            }
+        }
+    }
+
+    /// B-2026-10-02-77 — is `te` a fixed array whose every leaf is a scalar (nested
+    /// arrays of scalars included)? The gate on the free-function array leg of
+    /// `resolve_structural_param_substs`.
+    fn array_type_arg_is_scalar(&self, te: &TypeExpr) -> bool {
+        let Some((elem, _)) = self.array_elem_and_len(te) else {
+            return false;
+        };
+        match &elem.kind {
+            TypeKind::Path(p) if p.segments.len() == 1 && p.generic_args.is_none() => {
+                Self::is_scalar_type_name(&p.segments[0])
+            }
+            _ => self.array_type_arg_is_scalar(&elem),
         }
     }
 
