@@ -11459,7 +11459,15 @@ impl<'ctx> super::Codegen<'ctx> {
         if !(is_shared || is_value_enum || is_plain_struct) {
             return Ok(None);
         }
-        let qualified = format!("{type_name}.{method}");
+        // B-2026-09-27-120 — ask about the name THIS call site dispatches to.
+        // With two concrete impls on one head (`impl G1[Vec[i64]]` beside
+        // `impl G1[String]`), every method of the colliding group is emitted
+        // under its qualified segment and no bare `G1.show` exists, so the
+        // bare-head gate declined and the temp receiver fell through to the
+        // loud "non-identifier receiver" bail. The re-entry below passes the
+        // same `call_span`, so the Identifier path reads the same segment.
+        let head = self.impl_dispatch_segment_at(call_span, method, &type_name);
+        let qualified = format!("{head}.{method}");
         // Accept a concrete `Type.method` (declared) OR a GENERIC impl method
         // registered in `generic_fns` (B-2026-07-03-15): materialize the
         // fresh-temp receiver into a synth local and re-enter, which routes the
