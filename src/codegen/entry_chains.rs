@@ -156,10 +156,16 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         object: &Expr,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let ExprKind::Identifier(name) = &object.kind else {
-            return Ok(None);
+        // `self.clone()` inside an impl body reads the bound local `"self"`,
+        // exactly as `shared_type_for_expr` resolves a `SelfValue` receiver.
+        // It fell through to the loud "non-identifier receiver" bail, so a
+        // `fn me(ref self) -> S { self.clone() }` failed `karac build` while
+        // `--interp` ran it (B-2026-10-03-30).
+        let name_owned = match &object.kind {
+            ExprKind::Identifier(name) => name.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return Ok(None),
         };
-        let name_owned = name.clone();
         let (te, clone_fn) = match self.receiver_collection_type_expr(&name_owned)? {
             Some(te) => {
                 // B-2026-09-10-37 — an `Array[T, N]` receiver goes STRAIGHT to
