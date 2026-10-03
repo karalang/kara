@@ -1326,7 +1326,7 @@ fn whole_payload_bind(pattern: &crate::ast::Pattern) -> bool {
 /// `None` for any other shape. Such a chain moves nothing out of the payload
 /// except through its leaf, so the arm takes the payload exactly when the leaf
 /// is used as more than a borrow. An empty list (`Some(Some(_))`) takes nothing.
-fn nested_optres_chain_names(pattern: &crate::ast::Pattern) -> Option<Vec<&str>> {
+pub(crate) fn nested_optres_chain_names(pattern: &crate::ast::Pattern) -> Option<Vec<&str>> {
     fn chain(p: &crate::ast::Pattern) -> Option<Option<&str>> {
         match &p.kind {
             crate::ast::PatternKind::Binding(n) => Some(Some(n.as_str())),

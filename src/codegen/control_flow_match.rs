@@ -1339,6 +1339,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             &arm.pattern,
                             takes,
                         );
+                        self.disarm_callee_owned_bodies_for_nested_leaf_move(
+                            scrutinee,
+                            &arm.pattern,
+                            &arm.body,
+                            arm.guard.as_ref(),
+                        );
                     }
                     // Fresh-temp inline `Result` scrutinee (B-2026-07-12-2 gap
                     // 2): suppress the source's payload free on a CONSUMING arm so
@@ -20985,6 +20991,63 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Some`/`Ok`/`Err` pattern is borrowed rather than materialized, by the
     /// same `consume_class::binding_only_borrowed` classifier the arm loop uses
     /// per binding. `true` reproduces every pre-existing caller exactly.
+    /// B-2026-10-03-5 / B-2026-10-03-28 — a NESTED envelope arm
+    /// (`Some(Some(w))`, `Ok(Some(w))`) over a param whose payload bodies this
+    /// frame runs keeps the place's walk armed (B-2026-09-10-19), which is
+    /// right while the leaf is only read and runs its body a second time once
+    /// the arm moves the leaf on: `Some(Some(r)) => Some(r)` printed
+    /// `dR1 1 dR1`, and `Ok(Some(w)) => v.push(w)` printed the body inside
+    /// the call and again when `v` dropped. The leaf's new owner runs it, so
+    /// the walk stands down on this arm's edge.
+    pub(super) fn disarm_callee_owned_bodies_for_nested_leaf_move(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        body: &Expr,
+        guard: Option<&Expr>,
+    ) {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return;
+        };
+        if !self
+            .payload_vars
+            .callee_owned_payload_bodies_params
+            .contains(name)
+        {
+            return;
+        }
+        let Some(names) = crate::result_escape::nested_optres_chain_names(pattern) else {
+            return;
+        };
+        // A read THROUGH the leaf (`w.id`, even as the arm's value) leaves it
+        // where it is; only a use OF it moves it on. Handing it to a plain
+        // function (`eat(r)`) counts as a read here: the leaf is a view, so the
+        // place's walk is still the one body that callee's param has
+        // (`leaf-moved-into-a-call`, B-2026-09-10-19). A variant constructor
+        // (`Some(r)`) or a method argument (`v.push(r)`) gives the leaf an
+        // owner that runs it.
+        let plain_fn = |callee: &Expr, _: usize| match &callee.kind {
+            ExprKind::Identifier(f) => f.chars().next().is_some_and(|c| c.is_lowercase()),
+            _ => false,
+        };
+        let read = |n: &str, e: &Expr| {
+            crate::binding_use::binding_only_read_through_borrow_aware(n, e, &plain_fn)
+        };
+        let moved = names
+            .iter()
+            .any(|n| !read(n, body) || guard.is_some_and(|g| !read(n, g)));
+        if !moved {
+            return;
+        }
+        if let Some(flag) = self.optres_payload_bodies_flag_for(name) {
+            let _ = self
+                .builder
+                .build_store(flag, self.context.bool_type().const_int(0, false));
+            return;
+        }
+        self.suppress_container_elem_bodies_for_var(name);
+    }
+
     pub(super) fn suppress_optres_payload_bodies_for_match_scoped(
         &mut self,
         scrutinee: &Expr,

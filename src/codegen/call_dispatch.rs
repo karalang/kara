@@ -3276,6 +3276,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         .contains(src.as_str())
                     {
                         self.suppress_nested_boxed_drop_for_var(&src);
+                        // B-2026-10-03-28 — the binding's payload-bodies walk
+                        // reads through the box the callee now frees, and the
+                        // callee runs those bodies itself (functions.rs), so
+                        // the walk moves with the box.
+                        if self.container_bodies_owned_by_let_slot(&src) {
+                            self.suppress_container_elem_bodies_for_receiver(&src);
+                        }
                     }
                 }
                 // B-2026-07-28-16 — the same move, but from a FIELD rather than
@@ -7244,10 +7251,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // into its own gate, so a param that reaches here always satisfies the
         // callee's escape condition too.
         if !caller_owns_box
-            && self
+            && (self
                 .boxed_enum_payload_variants(param_te)
                 .iter()
                 .any(|(_, _, inner_struct)| inner_struct.is_none())
+                // B-2026-10-03-28 — a box one level down is the callee's too.
+                || !self.nested_boxed_enum_payload_variants(param_te).is_empty())
         {
             return;
         }

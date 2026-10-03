@@ -3376,8 +3376,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // terminal consumer stays the only owner (B-2026-08-05-7's
                     // argument, reused).
                     //
+                    let nested_boxed = self.nested_boxed_enum_payload_variants(&mono_ty);
+                    let nested_box_owned = !nested_boxed.is_empty();
                     for (outer_enum, outer_variant, inner_enum, inner_variant, deeper) in
-                        self.nested_boxed_enum_payload_variants(&mono_ty)
+                        nested_boxed
                     {
                         self.track_nested_boxed_enum_var(
                             &param_name,
@@ -3388,6 +3390,34 @@ impl<'ctx> super::Codegen<'ctx> {
                             inner_variant,
                             deeper,
                         );
+                    }
+                    // B-2026-10-03-28 — B-2026-09-10-9's move of the payload's
+                    // `Drop` BODIES onto the callee, for a box one level DOWN
+                    // (`Result[Option[R], E]`). The `NestedBoxedEnumDrop` just
+                    // registered frees that box before the return, so the
+                    // caller's walk read it after the call (one invalid read
+                    // per call, a garbage id printed). Registered after the
+                    // drop so it drains ahead of it; the caller stands down on
+                    // the same test (`track_optres_arg_temp_bodies_owning`).
+                    if nested_box_owned
+                        && !self
+                            .payload_vars
+                            .callee_owned_payload_bodies_params
+                            .contains(&param_name)
+                    {
+                        if let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(&mono_ty)
+                        {
+                            self.track_user_drop_var_with_fn(
+                                "",
+                                &param_name,
+                                alloca,
+                                bodies,
+                                crate::codegen::state::UserDropKind::ContainerElemBodies,
+                            );
+                            self.payload_vars
+                                .callee_owned_payload_bodies_params
+                                .insert(param_name.clone());
+                        }
                     }
                     // B-2026-08-12-19 — B-2026-08-12-15's struct-field
                     // population, which this loop used to decline. Its
