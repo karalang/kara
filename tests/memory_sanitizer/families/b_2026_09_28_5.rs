@@ -70,6 +70,6 @@ fn main() {
             "end",
         ],
         "asan_borrow_accessor_unbound_option_frees_box_shell",
-        20,
+        17,
     );
 }

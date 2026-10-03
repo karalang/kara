@@ -5824,7 +5824,7 @@ fn main() {\n\
                 "c13", "c14", "dR215", "c15", "dR216", "c16", "dC17", "c17", "dC18", "c18", "end",
             ],
             "by_value_enum_param_owning_struct_payload_transfers",
-            26,
+            23,
         );
 }
 

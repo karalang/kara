@@ -3387,7 +3387,7 @@ fn main() {
             "end",
         ],
         "asan_fresh_temp_projection_moved_into_a_container_sink_is_freed_once",
-        64,
+        61,
     );
 }
 
@@ -3517,7 +3517,7 @@ fn main() {
             "end",
         ],
         "asan_drop_field_of_a_named_local_moved_into_a_builtin_sink_runs_once",
-        47,
+        44,
     );
 }
 
