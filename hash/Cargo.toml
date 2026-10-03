@@ -20,3 +20,9 @@ license = "MIT OR Apache-2.0"
 # (see `seed.rs` — the flooding threat model does not describe those targets).
 default = ["std"]
 std = []
+
+# Runs on the MAIN thread, which is the only place the defect it guards shows
+# (see the file's header).
+[[test]]
+name = "seed_alloc"
+harness = false

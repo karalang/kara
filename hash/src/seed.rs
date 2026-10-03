@@ -146,7 +146,8 @@ fn splitmix64(mut x: u64) -> u64 {
 /// Per-process entropy.
 ///
 /// `RandomState`'s own trick: the address of a fresh heap allocation is
-/// ASLR-derived, and the monotonic clock supplies the rest. This is
+/// ASLR-derived, and the clock, the process id and a stack address supply
+/// the rest. This is
 /// deliberately NOT a cryptographic RNG — it does not need to be. The seed
 /// must be unpredictable to a remote attacker submitting keys, not
 /// unguessable by someone with local process introspection, and it must cost
@@ -161,19 +162,19 @@ fn random_pair() -> (u64, u64) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
-    let tid = {
-        // Thread identity varies between processes on every platform that has
-        // it and costs nothing where it does not.
-        let t = std::thread::current();
-        let id = format!("{:?}", t.id());
-        let mut acc = 0u64;
-        for b in id.as_bytes() {
-            acc = acc.rotate_left(7) ^ (*b as u64);
-        }
-        acc
-    };
+    // The process id differs between processes, and the address of a stack
+    // local carries the stack's ASLR offset, which is independent of the
+    // heap's. Neither allocates. This term used to be the current thread's id
+    // (B-2026-10-03-11): `std::thread::current()` allocates the main thread's
+    // handle and never frees it, so valgrind reported a "possibly lost" block
+    // in every compiled program that hashes a key, and the main thread's id is
+    // `ThreadId(1)` in every process, so it added nothing where most seeds are
+    // drawn.
+    let local = 0u8;
+    let stack = (core::hint::black_box(&local) as *const u8) as u64;
+    let pid = std::process::id() as u64;
     let k0 = splitmix64(addr ^ nanos);
-    let k1 = splitmix64(k0 ^ tid ^ addr.rotate_left(17));
+    let k1 = splitmix64(k0 ^ pid ^ stack.rotate_left(29) ^ addr.rotate_left(17));
     (k0, k1)
 }
 
