@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 657 |
+| miscompile | 660 |
 | run-vs-build | 575 |
 | leak | 538 |
 | double-free | 407 |
@@ -100,25 +100,25 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 215 |
 | other | 167 |
 | diagnostics | 139 |
-| perf | 129 |
+| perf | 133 |
 | false-positive | 118 |
 | crash | 106 |
 | soundness | 97 |
-| use-after-free | 79 |
+| use-after-free | 80 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2624 |
-| interp | 803 |
+| codegen | 2628 |
+| interp | 806 |
 | typecheck | 323 |
 | other | 113 |
 | ownership | 80 |
 | cli | 73 |
 | autopar | 58 |
-| runtime | 52 |
-| parser | 50 |
+| runtime | 53 |
+| parser | 51 |
 | effect | 30 |
 | resolver | 29 |
 | lexer | 11 |
@@ -492,7 +492,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-3 | 2026-10-03 | codegen | medium | A STORED ITERATOR CANNOT BE PULLED BY HAND UNDER `karac build` OR `karac run`, ONLY UNDER `--interp` -- `let mut it = v.iter(); while let Some(x) = it.next() { .. }` is refused by codegen ("stateful `Iterator.next()` on a materialized iterator binding ... is not supported under `karac build`"), and `let mut p = v.iter().peekable(); while let Some(x) = p.peek() { .. }` fails with codegen's generic "no handler for method 'peekable' on non-identifier receiver ... this is a codegen bug". Both type-check clean and run correctly under `--interp`. | — |
 | B-2026-10-03-9 | 2026-10-03 | autopar | low | Eleven of the thirteen auto-par-named E2E tests moved to tests/par_codegen.rs still form no parallel group there, so they pass without exercising the lowering their names describe (A3b's `e2e_auto_par_branch_panic_fails_fast` among them) | — |
 | B-2026-10-03-10 | 2026-10-03 | codegen+runtime | medium | `for tok in s.split(",")` heap-allocates and frees every token even when the loop only compares it, so kata 331's benchmark runs 5.3x Rust, 8.8x C and slower than CPython (2.31 s against 1.91 s) | — |
-| B-2026-10-03-11 | 2026-10-03 | runtime | low | Every compiled program that hashes a `Map` or `Set` key leaves a 48-byte "possibly lost" block under valgrind: the random hash seed mixes in `std::thread::current()`, which allocates the main thread's handle and never frees it, and that id is `ThreadId(1)` in every process, so it adds no entropy | — |
 | B-2026-10-03-13 | 2026-10-03 | codegen | medium | A GENERIC FUNCTION INSTANTIATED AT `T = Array[E, N]` WITH A HEAP ELEMENT TYPE STILL FAILS LLVM MODULE VERIFICATION WHEN IT RETURNS A `match` OVER `Option[T]` -- `fn pick[T](a: Option[T], d: T) -> T { return match a { Some(x) => x, None => d } }` called with `a: Option[Array[String, 2]]` passes `karac check`, prints under `--interp`, and fails `karac build` with `ret i64 0 [2 x { ptr, i64, i64 }]`; scalar elements were fixed by B-2026-10-02-77 and this half is held back on purpose until B-2026-10-02-78 is fixed | — |
 | B-2026-10-03-14 | 2026-10-03 | codegen | medium | REASSIGNING A `String` FROM A BRANCH WHOSE OTHER ARM IS THE TARGET ITSELF STILL LEAKS THE OLD VALUE WHEN THE REPLACING ARM RUNS -- `let mut s = f"a{1}"; s = if c { f"q{2}" } else { s }` with `c = true` prints `q2` and valgrind at -O0 reports 2 bytes in 1 block definitely lost (the old `a1`); every other branch shape was fixed by B-2026-09-26-18 | — |
 | B-2026-10-03-19 | 2026-10-03 | codegen | low | `replace(h.name, v)` ON A FIELD REACHED THROUGH A `mut ref` PARAM DOES NOT COMPILE -- `fn rep(h: mut ref H, v: String) -> String { return replace(h.name, v) }` fails with `std.mem swap/replace: unsupported `mut ref` place expression`; the interpreter runs it, and `replace(d, v)` on the whole `mut ref` param works | — |
@@ -501,7 +500,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-87 | 2026-10-03 | codegen | medium | REMAINDER OF B-2026-10-02-77: A GENERIC `match` OVER A BY-VALUE `Option[T]` PARAM INSTANTIATED AT A FIXED `Array` OF `String` OR OF A STRUCT STILL FAILS MODULE VERIFICATION -- `fn p3[T](x: Option[T], d: T) -> T { match x { Some(v) => v, None => d } }` at `T = Array[String, 2]` stops `karac build` with `ret i64 0` against `[2 x { ptr, i64, i64 }]`; the interpreter prints the right answer, and `Array[i64, 2]` builds since B-2026-10-02-77's fix | — |
 | B-2026-10-02-88 | 2026-10-03 | codegen+interp | medium | `x.unwrap_or(z())` ON A BY-VALUE `Option[Array[R, 2]]` PARAM IS WRONG ON EVERY SURFACE, EACH DIFFERENTLY -- `--interp` runs the payload's `Drop` bodies twice (`dR0 dR0 mid dR1 dR2 dR1 dR2 got1`), the JIT and the default build never run the unused default's (`mid dR1 dR2 got1`) and leak 4 B at `-O0` | — |
 | B-2026-10-02-89 | 2026-10-03 | codegen | low | HANDING A `match` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM STRAIGHT TO A BY-VALUE CALLEE LEAKS 4 B COMPILED -- `eat(match x { Some(v) => v, None => z() })` prints the right bodies on every surface, and valgrind at `-O0` reports 14 allocs / 12 frees, 4 B definitely lost | — |
-| B-2026-10-03-15 | 2026-10-03 | runtime | high | An auto-parallelised loop whose body fills a `Map` intermittently loses entries (about one process in 5,000 on x86, and the intermittent arm64 ASAN red on `asan_map_remove_string_key_vec_value_both_heap_halves`, 21593 against 21600): `seed()` in hash/src/seed.rs reads the key whenever `INIT` is non-zero, but the initialising thread sets 1 before it stores the key, so a racing worker hashes with a key that is still 0 | — |
 | B-2026-10-03-20 | 2026-10-03 | codegen | low | A scan loop with several early returns runs about 23% slower compiled than the same loop in Rust or C with overflow checks: once the function is inlined, the optimiser merges its `return true` and `return false` exits into one flag recomputed on every iteration (`lea; cmp; setb`) instead of setting the answer on each exit path (kata 335: 124 ms vs 101 ms equal-safety Rust and 100 ms C) | — |
 | B-2026-10-03-31 | 2026-10-03 | codegen | medium | AN OWNED-`self` METHOD WITH ITS OWN TYPE PARAMS LEAKS A GENERIC ENUM RECEIVER'S HEAP PAYLOAD ON EVERY COMPILED SURFACE -- `impl[T] H[T] { fn hw[U](self, u: U) -> U { return u; } }` called as `h.hw(8)` on `h: H[String] = H.A(f"h{1}")` prints `8` and valgrind at -O0 reports the 2-byte String definitely lost; the same receiver through a non-generic owned-`self` method (`fn ea(self) -> i64`) is clean, and so is a payload-free receiver | — |
 | B-2026-10-03-28 | 2026-10-03 | codegen | high | A `Result[Option[R], E]` BY-VALUE PARAM OF A NON-GENERIC FUNCTION, WHERE `R` RUNS A USER `Drop`, READS FREED MEMORY AFTER THE CALL -- `rr(Ok(Some(mk(7))))` over `fn rr(x: Result[Option[R], i64]) -> i64 { match x { Ok(Some(w)) => 1, Ok(None) => 2, Err(e) => e } }` prints `dR94634127054421 1 end` on -O0 (garbage id, 1 invalid read) against the interpreter's `dR7 1 end`; a named-local argument reads freed memory the same way. The generic path's double free and the leaks of the same shape are B-2026-10-03-34 | — |
@@ -510,6 +508,14 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-33 | 2026-10-03 | typecheck+interp+codegen | medium | A MIXED-SIGNEDNESS INTEGER COMPARISON TYPE-CHECKS AND THE BACKENDS DISAGREE ON IT -- `u > k` over `u: u8 = 3`, `k: i64 = -1` is `true` under `--interp` and `false` compiled, and so is `u > -1`, `s < t` over `s: i32 = -5`, `t: u32 = 4000000000` likewise; the arithmetic operators reject the same operand pairs | — |
 | B-2026-10-03-16 | 2026-10-03 | codegen | medium | A CLOSURE WHOSE BY-VALUE PARAM IS A HEAP-BOXED GENERIC ENUM LEAKS THE PARAM'S BOX WHEN THE BODY'S `match` TAKES THE PAYLOAD -- `let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; f(mkh("xx"))` reports 24 bytes definitely lost where the same `match` in a `fn g(q: Ho[String])` is clean | — |
 | B-2026-10-03-22 | 2026-10-03 | codegen | medium | A CLOSURE THAT CAPTURES NOTHING, RETURNED OUT OF THE FN THAT MADE IT, READS ITS PLACEHOLDER ENV FROM THAT FN'S DEAD STACK FRAME ON EVERY CALL -- `fn mk() -> Fn(i64) -> i64 { |x: i64| x + 1 }; let g = mk(); g(4)` prints the right `5` and ASAN's instrumented -O0 leg reports stack-use-after-return | — |
+| B-2026-10-03-21 | 2026-10-03 | interp | low | `--interp` spends about 44,000 instructions (5 µs) on every call to a two-line user function, almost all of it in per-call ownership bookkeeping (`record_passthrough_arg_moves`, `run_fresh_temp_arg_drops`, memo lookups, AST and Value clones) rather than in the body: 200,000 calls of `fn f(a: i64, k: i64) -> i64 { return a + k; }` take 1.0 s where the same loop with `i + j` inlined takes 0.13 s | — |
+| B-2026-10-03-23 | 2026-10-03 | codegen | high | A tuple LITERAL stored into a container whose element type has narrower integer fields is laid out at the literal's default `i64` widths on every compiled surface, so the store writes past its slot and every read gets the wrong fields: `let mut v: Vec[(i32, i32)] = Vec.with_capacity(2); v.push((1, 2)); v.push((3, 4));` prints `1 0 3 0` where `--interp` prints `1 2 3 4`, and valgrind reports `Invalid write of size 8 ... 0 bytes after a block of size 16`; `vec![..]`, `insert`, an index assignment, `VecDeque.push_back/front`, a `Map` value (reads garbage), `SortedSet.insert` (loses a member) and a nested `vec!` all do the same | — |
+| B-2026-10-03-24 | 2026-10-03 | interp | medium | `--interp` orders a `u64` INSIDE a tuple or a nested `Vec` as signed, where both compiled backends order it unsigned: `(u64::MAX, 1) < (0, 1)` is `true`, `Vec[(u64, i8)].sort()` puts every value past `i64::MAX` ahead of `0`, `binary_search` then misses, and `sort_by(|x, y| x.cmp(y))` disagrees with `sort()` | — |
+| B-2026-10-03-25 | 2026-10-03 | codegen | low | A bare `Vec.sort()` over tuples, `F64`, nested `Vec`s or derived-`Ord` structs calls its natural-order comparator through `karac_vec_sort_by`'s function pointer on every comparison, so it is SLOWER than the `sort_by(|a, b| a.cmp(b))` spelling of the same order, which inlines it: kata 336 runs 859 ms with `pairs.sort()` and 731 ms with the `sort_by` spelling, Rust 650 ms | — |
+| B-2026-10-03-45 | 2026-10-03 | codegen | high | Iterating a `shared struct`'s `mut` Vec field while pushing to it through the same handle reads a freed buffer on every compiled surface, where design.md § Part 5 says the write must panic: `for x in self.v.iter() { if self.v.len() < 64 { self.v.push(x + 1); } }` inside a `ref self` method of `shared struct Bag { mut v: Vec[i64] }` returns a garbage total under the JIT and both `karac build` modes, valgrind reports `Invalid read of size 8 ... inside a block of size 24 free'd` by `karac_realloc_or_panic`, and `--interp` prints `6 6` without the specified panic | — |
+| B-2026-10-03-46 | 2026-10-03 | codegen | low | A recursive function taking `ref Vec[T]` reloads the Vec's length and data pointer and repeats the bounds check after every recursive call, because a Freeze `ref` parameter carries LLVM `readonly` but not `noalias`: kata 337's bench runs 1.88 s where the same code taking `Slice[Node]` runs 1.76 s and Rust with overflow checks 1.77 s; adding `noalias` by hand removes the reloads, but it would be unsound today because a `shared struct` handle can still write the referent during the call | — |
+| B-2026-10-03-47 | 2026-10-03 | parser+interp | medium | Under `--interp`, a method call inside an f-string hole can read another hole's type entry, because the f-string rebase left the call's `args_close_span` at the synthetic wrapper's coordinates: `let a: i64 = 1; println(f"{a.leading_zeros()}"); let b: i32 = 1; println(f"x{b.leading_zeros()}");` prints `31` and `x31` where every compiled surface prints `63` and `x31`, and the same collision reaches `count_ones`, `trailing_zeros` and any other entry keyed on that span | — |
+| B-2026-10-03-48 | 2026-10-03 | runtime | medium | PERF: a large Vec built and dropped in a loop re-faulted every page each round. The runtime's mallopt tuning pinned glibc's mmap threshold at 1 MiB, which also turns off glibc's dynamic threshold, so every 1-32 MiB block was mmap'd and munmap'd for the life of the program; and the `vec![0; n]` path never took back the buffers `karac_free_buf` parked, so two sat retained and unused. | — |
 
 ### Relocated
 
@@ -3607,9 +3613,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-1 | interp | low | The interpreter sent every lowered operator call (`a + b` -> `i64.add(a, b)`) through the general call path, and hashed every scope lookup with SipHa… | 671a33989 |
 | B-2026-10-03-2 | codegen+runtime | medium | A panic inside an auto-parallelized statement group lost the output of every branch BEFORE it (a sequential run prints those lines first), and when a… | 21be9bcc1 |
 | B-2026-10-03-8 | autopar | medium | Thirteen E2E tests about auto-par groups (`e2e_auto_par_branch_panic_fails_fast`, `test_e2e_par_group_serializes_for_iter_with_outer_mutable_write`,… | 0b44a668a |
+| B-2026-10-03-11 | runtime | low | Every compiled program that hashes a `Map` or `Set` key leaves a 48-byte "possibly lost" block under valgrind: the random hash seed mixes in `std::th… | f44b35c59 |
 | B-2026-10-03-12 | codegen | high | `assert_eq` / `assert_ne` COMPARE `Vec`, TUPLE AND STRUCT OPERANDS BY LLVM SHAPE ON EVERY COMPILED SURFACE, SO AN ASSERTION OVER UNEQUAL VALUES CAN P… | e7a2be85f |
 | B-2026-10-03-17 | codegen | medium | A `.clone()` OF A `shared` HANDLE PASSED STRAIGHT TO A BY-VALUE PARAMETER LEAKS THE WHOLE OBJECT -- `sg(a.clone())` over `fn sg(s: S) -> i64` and `sh… | 13ca44402 |
 | B-2026-10-03-18 | interp+codegen | medium | `replace(d, v)` THROUGH A WRAPPER RUNS THE MOVED PARAM'S `Drop` BODY TWICE ON EVERY BACKEND -- `fn rep(d: mut ref R, v: R) -> R { return replace(d, v… | 369e2aab4 |
+| B-2026-10-03-15 | runtime | high | An auto-parallelised loop whose body fills a `Map` intermittently loses entries (about one process in 5,000 on x86, and the intermittent arm64 ASAN r… | 262f9c387 |
 | B-2026-10-03-30 | codegen | medium | `self.clone()` INSIDE AN IMPL BODY FAILS `karac build` WITH `no handler for method 'clone' on non-identifier receiver` WHILE `--interp` RUNS IT -- `i… | 5a5f4283b |
 | B-2026-10-03-32 | interp+codegen | high | `<int>.parse` AND `<int>.from_str_radix` NEVER CHECK THE RESULT AGAINST THE RECEIVER'S WIDTH -- `u8.parse("300")` is `Some(300)` under `--interp` (a… | c775869b6 |
 
