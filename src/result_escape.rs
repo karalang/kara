@@ -1022,9 +1022,18 @@ fn variant_arm_takes_payload<'a>(
         None => crate::consume_class::binding_only_borrowed(v, e),
     };
     match binds {
-        // A per-element destructure (`Some((a, b))`) gives every leaf its own
-        // owner unconditionally.
-        None => Some(variant),
+        // B-2026-10-02-73 — a nested `Some(Some(w))` chain whose leaves are
+        // only read leaves the payload with the caller, like a whole-payload
+        // binding that is only read.
+        None => match nested_optres_chain_names(pattern) {
+            Some(names) => (!names
+                .iter()
+                .all(|v| borrowed(v, body) && guard.is_none_or(|g| borrowed(v, g))))
+            .then_some(variant),
+            // A per-element destructure (`Some((a, b))`) gives every leaf its
+            // own owner unconditionally.
+            None => Some(variant),
+        },
         Some(names) => (!names
             .iter()
             .all(|v| borrowed(v, body) && guard.is_none_or(|g| borrowed(v, g))))
@@ -1279,7 +1288,16 @@ fn variant_arm_takes_payload_block<'a>(
 ) -> Option<&'a str> {
     let (variant, binds) = variant_payload_binds(pattern)?;
     match (binds, block) {
-        (None, _) => Some(variant),
+        // B-2026-10-02-73 — see `variant_arm_takes_payload`.
+        (None, Some(b)) => match nested_optres_chain_names(pattern) {
+            Some(names) => (!names.iter().all(|v| match copy_read {
+                Some(cr) => crate::consume_class::binding_only_borrowed_block_with(v, b, cr),
+                None => crate::consume_class::binding_only_borrowed_block(v, b),
+            }))
+            .then_some(variant),
+            None => Some(variant),
+        },
+        (None, None) => Some(variant),
         (Some(_), None) => Some(variant),
         (Some(names), Some(b)) => (!names.iter().all(|v| match copy_read {
             Some(cr) => crate::consume_class::binding_only_borrowed_block_with(v, b, cr),
@@ -1300,6 +1318,38 @@ fn variant_arm_takes_payload_block<'a>(
 /// destructuring sub-pattern?
 fn whole_payload_bind(pattern: &crate::ast::Pattern) -> bool {
     matches!(variant_payload_binds(pattern), Some((_, Some(_))))
+}
+
+/// B-2026-10-02-73 — the names a `Some`/`Ok`/`Err` pattern binds when its
+/// payload sub-pattern is a pure chain of further `Some`/`Ok`/`Err` patterns
+/// ending in a `Binding` or `Wildcard` (`Some(Some(w))`, `Ok(Some(_))`), and
+/// `None` for any other shape. Such a chain moves nothing out of the payload
+/// except through its leaf, so the arm takes the payload exactly when the leaf
+/// is used as more than a borrow. An empty list (`Some(Some(_))`) takes nothing.
+fn nested_optres_chain_names(pattern: &crate::ast::Pattern) -> Option<Vec<&str>> {
+    fn chain(p: &crate::ast::Pattern) -> Option<Option<&str>> {
+        match &p.kind {
+            crate::ast::PatternKind::Binding(n) => Some(Some(n.as_str())),
+            crate::ast::PatternKind::Wildcard => Some(None),
+            crate::ast::PatternKind::TupleVariant { path, patterns }
+                if matches!(path.last().map(|s| s.as_str()), Some("Some" | "Ok" | "Err"))
+                    && patterns.len() == 1 =>
+            {
+                chain(&patterns[0])
+            }
+            _ => None,
+        }
+    }
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return None;
+    };
+    let [sub] = patterns.as_slice() else {
+        return None;
+    };
+    if !matches!(&sub.kind, crate::ast::PatternKind::TupleVariant { .. }) {
+        return None;
+    }
+    chain(sub).map(|leaf| leaf.into_iter().collect())
 }
 
 fn variant_payload_binds(pattern: &crate::ast::Pattern) -> Option<(&str, Option<Vec<&str>>)> {
