@@ -630,7 +630,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-29-2 — the `if let` twin of the match site's leaf-drop
         // retraction: an arm that binds the leaf out already owns it, so the
         // box's interior drop has to stand down or free it twice.
-        self.retract_boxed_leaf_drop_for_consuming_pattern(value, pattern);
+        self.retract_boxed_leaf_drop_for_consuming_pattern(value, pattern, |n| {
+            !crate::consume_class::binding_only_borrowed_block(n, then_block)
+        });
         // Slice 3t: boxed-payload struct-destructure field suppression — zero
         // the consumed fields inside the box so the binding owns them and the
         // box's inner walk frees only what the pattern left unbound.

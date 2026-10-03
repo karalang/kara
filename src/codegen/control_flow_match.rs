@@ -1434,7 +1434,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     // question here is ownership of the leaf, not whether the
                     // source keeps its payload, and the depth test is what
                     // makes it precise.
-                    self.retract_boxed_leaf_drop_for_consuming_pattern(scrutinee, &arm.pattern);
+                    self.retract_boxed_leaf_drop_for_consuming_pattern(
+                        scrutinee,
+                        &arm.pattern,
+                        // B-2026-10-02-72 — a GUARDED arm can fall through
+                        // to a later one, and these retractions are static,
+                        // so only an unguarded arm counts as moving.
+                        |n| {
+                            arm.guard.is_none()
+                                && !crate::consume_class::binding_only_borrowed(n, &arm.body)
+                        },
+                    );
                     // Slice 3t: struct-destructure of a BOXED payload — zero
                     // the consumed fields inside the box so the binding's
                     // BoxedEnumDrop inner walk frees only unbound fields.
@@ -21723,6 +21733,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
+        consumes: impl Fn(&str) -> bool,
     ) {
         if self.pattern_state.pattern_binding_is_borrow {
             return;
@@ -21749,6 +21760,44 @@ impl<'ctx> super::Codegen<'ctx> {
         // on any binding is conservative in the only safe direction — it can
         // leave the pre-existing leak, never add a free — and the shapes this
         // row is about (`Ok(_)`, or no match at all) bind nothing.
+        // B-2026-10-02-72 — an arm that MOVES a binding at an ENVELOPE level
+        // (`Some(inner) => inner` over `Option[Option[R]]`, whose `Option[R]`
+        // payload boxes again) carries that level's box, and everything below
+        // it, out with the binding. The scrutinee's drop keeps the levels above
+        // and stands down from the rest -- the chain is cut at the binding and
+        // the leaf drop goes with it -- or it frees the box the result holds.
+        // Static, like the leaf retraction below: a path that does not take
+        // the arm leaks the levels it would have freed, never frees twice.
+        if !self
+            .payload_vars
+            .nested_boxed_payload_vars
+            .contains(name.as_str())
+        {
+            let moved_depth = (1..=8).find(|&d| {
+                let mut names = Vec::new();
+                Self::pattern_names_at_depth(pattern, d, &mut names);
+                names.iter().any(|n| consumes(n))
+            });
+            if let (Some(d), Some(slot)) = (moved_depth, self.variables.get(name.as_str()).copied())
+            {
+                for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+                    for action in frame.iter_mut() {
+                        if let super::state::CleanupAction::BoxedEnumDrop {
+                            enum_slot,
+                            inner_drop_fn,
+                            deeper_tags,
+                            ..
+                        } = action
+                        {
+                            if *enum_slot == slot.ptr && d <= deeper_tags.len() {
+                                deeper_tags.truncate(d - 1);
+                                *inner_drop_fn = None;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let retract = if self
             .payload_vars
             .nested_boxed_payload_vars
@@ -21764,7 +21813,19 @@ impl<'ctx> super::Codegen<'ctx> {
             else {
                 return;
             };
+            // B-2026-10-02-72 — or ONE LEVEL UP, at the leaf itself, when the
+            // arm MOVES that binding. The owning depth names the heap INSIDE an
+            // `Option`/`Result` leaf (`Option[Option[String]]`'s `String`), and
+            // a moved binding of the leaf value (`Some(inner) => inner`) carries
+            // that heap out just the same: the box's leaf drop then freed what
+            // the result still held. A leaf binding the arm only reads takes no
+            // drop of its own, so the box stays its owner there.
             Self::pattern_binds_name_at_depth(pattern, depth)
+                || (depth >= 2 && {
+                    let mut names = Vec::new();
+                    Self::pattern_names_at_depth(pattern, depth - 1, &mut names);
+                    names.iter().any(|n| consumes(n))
+                })
         };
         if !retract {
             return;
@@ -21818,6 +21879,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 .iter()
                 .any(|f| f.pattern.as_ref().is_none_or(Self::pattern_binds_any_name)),
             _ => false,
+        }
+    }
+
+    /// B-2026-10-02-72 — the by-value names [`Self::pattern_binds_name_at_depth`]
+    /// asks about, collected.
+    fn pattern_names_at_depth(pattern: &Pattern, depth: usize, out: &mut Vec<String>) {
+        match &pattern.kind {
+            PatternKind::Binding(n) if depth == 0 => out.push(n.clone()),
+            PatternKind::AtBinding {
+                name,
+                pattern,
+                by_ref,
+            } => {
+                if depth == 0 && !*by_ref {
+                    out.push(name.clone());
+                }
+                Self::pattern_names_at_depth(pattern, depth, out);
+            }
+            PatternKind::Or(alts) => {
+                for a in alts {
+                    Self::pattern_names_at_depth(a, depth, out);
+                }
+            }
+            PatternKind::TupleVariant { patterns, .. } if depth > 0 => {
+                for p in patterns {
+                    Self::pattern_names_at_depth(p, depth - 1, out);
+                }
+            }
+            _ => {}
         }
     }
 

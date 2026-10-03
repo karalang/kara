@@ -7592,6 +7592,7 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         inst_te: &TypeExpr,
         payload_taken_by_callee: &std::collections::HashSet<String>,
+        payload_taken_whole_by_callee: &std::collections::HashSet<String>,
     ) {
         let variants = self.boxed_enum_payload_variants(inst_te);
         if variants.is_empty() {
@@ -7618,9 +7619,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // it here would be the second owner that gate exists to avoid.
                 continue;
             }
-            let deeper = Self::option_generic_arg_type_expr(inst_te)
-                .map(|inner| self.nested_box_deeper_tag_chain(&inner))
-                .unwrap_or_default();
+            // B-2026-10-02-72 — a callee arm that takes this variant's payload
+            // takes the envelope boxes under it too (`Some(inner) => inner`
+            // over `Option[Option[R]]` returns `Option[R]` with its box), so
+            // the caller frees only the outer box then: walking the chain
+            // freed the box the result still held.
+            let deeper = if payload_taken_whole_by_callee.contains(variant) {
+                Vec::new()
+            } else {
+                Self::option_generic_arg_type_expr(inst_te)
+                    .map(|inner| self.nested_box_deeper_tag_chain(&inner))
+                    .unwrap_or_default()
+            };
             // B-2026-09-06-48 — a boxed TUPLE payload's own heap elements,
             // owned here rather than by nobody. Verbatim B-2026-09-04-12's
             // derivation for the NON-GENERIC twin (`compile_function`'s leg A),

@@ -86,6 +86,11 @@ struct Acc<'a> {
     /// [`optres_payload_consuming_param_variants`]; see that function for why the
     /// question has to be answered from the CALLER's side on the generic path.
     payload_consumers: HashMap<&'a str, HashSet<&'a str>>,
+    /// B-2026-10-02-72 — the subset of `payload_consumers` whose arm takes the
+    /// payload through a WHOLE-payload binding (`Some(inner) => inner`), which
+    /// carries every envelope box under the variant out with it. A nested or
+    /// destructuring pattern takes only what it names.
+    whole_payload_consumers: HashMap<&'a str, HashSet<&'a str>>,
     /// B-2026-09-12-15 — the BODIES sibling of `payload_consumers`, and a
     /// separate map because the two questions want opposite conservatism.
     ///
@@ -932,6 +937,33 @@ pub fn optres_payload_consuming_param_variants(
         .collect()
 }
 
+/// B-2026-10-02-72 — [`optres_payload_consuming_param_variants`] narrowed to
+/// the arms that take the payload WHOLE (`Some(inner) => inner`): those carry
+/// the envelope boxes under the variant out too, so a caller owning the box
+/// chain must stop at the outer box for them.
+pub fn optres_whole_payload_taking_param_variants(
+    func: &Function,
+) -> HashMap<String, HashSet<String>> {
+    let mut acc = seeded_acc(func);
+    walk_block(&func.body, &mut acc);
+    func.params
+        .iter()
+        .filter_map(|p| {
+            let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+                return None;
+            };
+            acc.whole_payload_consumers.get(name.as_str()).map(|vs| {
+                (
+                    name.clone(),
+                    vs.iter()
+                        .map(|v| (*v).to_string())
+                        .collect::<HashSet<String>>(),
+                )
+            })
+        })
+        .collect()
+}
+
 /// B-2026-09-17-23 — [`optres_payload_consuming_param_variants`] with a
 /// COPY-READ policy for the arm bindings, supplied by a caller that holds the
 /// instantiated payload type.
@@ -1263,6 +1295,13 @@ fn variant_arm_takes_payload_block<'a>(
 /// whole result is `None` for a pattern this predicate does not recognise (a
 /// wildcard `Some(_)` included, which binds nothing and therefore takes
 /// nothing).
+/// B-2026-10-02-72 — does `pattern` take its variant's payload through a
+/// whole-payload binding (`Some(inner)`), rather than a nested or
+/// destructuring sub-pattern?
+fn whole_payload_bind(pattern: &crate::ast::Pattern) -> bool {
+    matches!(variant_payload_binds(pattern), Some((_, Some(_))))
+}
+
 fn variant_payload_binds(pattern: &crate::ast::Pattern) -> Option<(&str, Option<Vec<&str>>)> {
     let crate::ast::PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
         return None;
@@ -1449,6 +1488,12 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                         variant_arm_takes_payload_block(pattern, rest.as_ref(), acc.take_copy_read)
                     {
                         acc.payload_consumers.entry(root_n).or_default().insert(v);
+                        if whole_payload_bind(pattern) {
+                            acc.whole_payload_consumers
+                                .entry(root_n)
+                                .or_default()
+                                .insert(v);
+                        }
                     }
                     if let Some(v) = variant_arm_payload_escapes_block(pattern, rest.as_ref()) {
                         acc.payload_escapers.entry(root_n).or_default().insert(v);
@@ -1535,6 +1580,12 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                         acc.take_copy_read,
                     ) {
                         acc.payload_consumers.entry(root_n).or_default().insert(v);
+                        if whole_payload_bind(&a.pattern) {
+                            acc.whole_payload_consumers
+                                .entry(root_n)
+                                .or_default()
+                                .insert(v);
+                        }
                     }
                     if let Some(v) =
                         variant_arm_payload_escapes(&a.pattern, a.guard.as_ref(), &a.body)
@@ -1723,6 +1774,12 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                     variant_arm_takes_payload_block(pattern, Some(then_block), acc.take_copy_read)
                 {
                     acc.payload_consumers.entry(root_n).or_default().insert(v);
+                    if whole_payload_bind(pattern) {
+                        acc.whole_payload_consumers
+                            .entry(root_n)
+                            .or_default()
+                            .insert(v);
+                    }
                 }
                 if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(then_block)) {
                     acc.payload_escapers.entry(root_n).or_default().insert(v);
@@ -1774,6 +1831,12 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
                     variant_arm_takes_payload_block(pattern, Some(body), acc.take_copy_read)
                 {
                     acc.payload_consumers.entry(root_n).or_default().insert(v);
+                    if whole_payload_bind(pattern) {
+                        acc.whole_payload_consumers
+                            .entry(root_n)
+                            .or_default()
+                            .insert(v);
+                    }
                 }
                 if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(body)) {
                     acc.payload_escapers.entry(root_n).or_default().insert(v);

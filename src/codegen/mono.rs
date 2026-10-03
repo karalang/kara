@@ -3244,7 +3244,22 @@ impl<'ctx> super::Codegen<'ctx> {
                             .map(str::to_string)
                             .collect(),
                     };
-                    self.track_boxed_optres_arg_temp(val, &inst, &taken);
+                    // B-2026-10-02-72 — the arms that take the payload WHOLE.
+                    let taken_whole: std::collections::HashSet<String> =
+                        match generic_fn.params.get(i).map(|p| &p.pattern.kind) {
+                            Some(crate::ast::PatternKind::Binding(n)) => {
+                                crate::result_escape::optres_whole_payload_taking_param_variants(
+                                    &generic_fn,
+                                )
+                                .remove(n.as_str())
+                                .unwrap_or_default()
+                            }
+                            _ => ["Some", "Ok", "Err"]
+                                .into_iter()
+                                .map(str::to_string)
+                                .collect(),
+                        };
+                    self.track_boxed_optres_arg_temp(val, &inst, &taken, &taken_whole);
                     // B-2026-09-28-7 — the variants the line above declines: a
                     // box whose payload is a user STRUCT or ENUM. Declined there
                     // because that interior has its own machinery, which is
