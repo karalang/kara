@@ -10217,8 +10217,22 @@ static KARAC_SPAWN_SITES: SpawnSiteEntryStandIn = SpawnSiteEntryStandIn(KaracSpa
 // So this trades no measured memory for a 2.5-3x wall-clock win.
 //
 // Deliberately modest values rather than "never trim": 64 MiB covers the
-// working set of a realistic batch kernel, and 1 MiB is the smallest mmap
-// threshold that captured the full win in the sweep (256 KiB did not).
+// working set of a realistic batch kernel. The sweep found 1 MiB the smallest
+// mmap threshold that captured the full win (256 KiB did not), but the value
+// is 32 MiB, glibc's own ceiling for its dynamic threshold (B-2026-10-03-48).
+// Setting either knob turns that dynamic threshold OFF, and with it pinned at
+// 1 MiB every block between 1 and 32 MiB was mmap'd on allocation and
+// munmap'd on free, for the life of the program. glibc's default would have
+// moved its threshold past such a block on the first free. LeetCode 338's
+// bench, which builds and drops an 8 MB `Vec` 300 times, spent 0.65 s of its
+// 0.95 s in the kernel re-faulting it, against 0.34 s with no tuning at all.
+// 32 MiB keeps every shape above as fast as 1 MiB did (measured: 3 KB,
+// 300 KB and 304 B rows unchanged, 8 MB rows 0.13 s -> 0.03 s) and stays
+// under the trim threshold, so a freed block of up to 32 MiB is kept.
+// The cost: a big zeroed buffer that is mostly never written no longer gets
+// lazily zeroed pages from a fresh mapping. 300 rounds of an 8 MB `vec![0; n]`
+// with one write each went 0.00 s -> 0.09 s, the same 0.09 s Rust's `vec!`
+// takes on glibc's defaults.
 //
 // glibc only. musl and macOS have no `mallopt` with these parameters; both are
 // cfg'd out and keep the platform default. `KARAC_MALLOC_TUNE=0` restores the
@@ -10234,7 +10248,7 @@ mod malloc_tuning {
     const M_MMAP_THRESHOLD: i32 = -3;
 
     const TRIM_BYTES: i32 = 64 * 1024 * 1024;
-    const MMAP_BYTES: i32 = 1024 * 1024;
+    const MMAP_BYTES: i32 = 32 * 1024 * 1024;
 
     extern "C" {
         fn mallopt(param: i32, value: i32) -> i32;
