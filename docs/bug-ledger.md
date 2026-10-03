@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 649 |
+| miscompile | 650 |
 | run-vs-build | 574 |
-| leak | 533 |
+| leak | 534 |
 | double-free | 406 |
 | missing-feature | 215 |
-| codegen-gap | 212 |
+| codegen-gap | 213 |
 | other | 167 |
 | diagnostics | 139 |
 | perf | 128 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2603 |
+| codegen | 2606 |
 | interp | 796 |
 | typecheck | 322 |
 | other | 113 |
@@ -214,7 +214,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-9 | 2026-09-26 | interp+codegen | low | A PLAIN STRUCT HOLDING A `shared struct` RELEASES IT AT LEXICAL SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE HOLDER'S LIVE-RANGE END UNDER `--interp` -- `let h = Hold { s: mksh(3) }; println(f"h{h.s.k}"); println("after")` prints `h3 dSh3nm3 dD3 after end` interpreted and `h3 after end dSh3nm3 dD3` on jit / -O2 seq / -O2 par; the `shared struct` sibling of B-2026-09-19-18's `shared enum` | — |
 | B-2026-09-26-13 | 2026-09-26 | interp+codegen | medium | `Option.map` WITH A CLOSURE THAT CONSUMES A `Drop` PAYLOAD RUNS THE BODY ON NO SURFACE WHEN THE PAYLOAD HAS A `shared` FIELD, AND SPLITS WHEN IT DOES NOT -- `let o = Some(mk2(2)); let n = o.map(|s| s.id)` prints `m2 end` everywhere and loses 16 B at -O0, while the same over `Some(R { id: 1 })` prints `dR1 m1 end` compiled and `m1 end` under `--interp` | — |
 | B-2026-09-26-16 | 2026-09-26 | codegen | low | TWO `match`ES OVER ONE LET-BOUND `Option` WHOSE PAYLOAD IS A `Drop` STRUCT WITH A `shared` FIELD RUN ONE BODY ON EVERY COMPILED SURFACE WHERE `--interp` RUNS ONE PER ARM -- `let o = Some(mk2(26)); match o { Some(x) => print a } match o { Some(x) => print b }` prints `a26 b26 dS26 end` compiled and `a26 dS26 b26 dS26 end` under `--interp`; the `R` (no shared field) twin prints the interpreter's answer on all four | — |
-| B-2026-09-26-18 | 2026-09-26 | codegen | medium | REASSIGNING A `String` BINDING FROM AN `if`, `match` OR BLOCK EXPRESSION LEAKS THE OLD VALUE ON EVERY COMPILED SURFACE -- `let mut s = f"a"; s = if true { f"q" } else { f"z" }; println(s)` prints `q end` everywhere and valgrind reports 1 block definitely lost at `-O0`, where `s = f"q";` and `s = pick(true);` are clean | — |
 | B-2026-09-26-20 | 2026-09-26 | codegen | medium | A `let ... else` OVER A GENERIC USER ENUM WHOSE PAYLOAD STRUCT DECLINES COPY SUPPORT LOSES THE PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `let o = Ho.Full(mk2(15)); let Ho.Full(x) = o else { return }; println(f"x{x.id}")` prints `x15 end` where `--interp` prints `x15 dS15 end`; memory is clean since 133a79f1b | — |
 | B-2026-09-26-21 | 2026-09-26 | codegen | medium | A `while let` OVER A GENERIC USER ENUM WHOSE BODY REASSIGNS THE SCRUTINEE LOSES THE PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `let mut o = mkh(mk2(18)); while let Ho.Full(x) = o { println(f"w{x.id}"); o = Ho.Empty; }` prints `w18 end` where `--interp` prints `w18 dS18 end`; memory clean -- WIDER: a plain `g = H.Y` on a generic box loses the displaced payload's body with no loop at all (interp `dR1 a`, compiled `a`); the concrete enum keeps it | — |
 | B-2026-09-26-22 | 2026-09-26 | codegen | medium | A `match` ARM THAT MOVES ITS BINDING ON ONLY ONE INNER BRANCH LOSES THE PAYLOAD'S `Drop` BODY ON THE OTHER BRANCH AND LEAKS ITS `shared` FIELD -- `match o { Ho.Full(x) => { if c { println(x.id) } else { let y = x } } .. }` at `c = true` prints `a19 end` where `--interp` prints `a19 dS19 end`, and loses 16 B at `-O0`, on every compiled surface | — |
@@ -491,7 +490,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-80 | 2026-10-02 | codegen | medium | A `let`-BOUND `match` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM, WHERE `R` RUNS A `Drop` BODY, RUNS EVERY BODY TWICE ON THE COMPILED SURFACES -- `let k: Array[R, 2] = match x { Some(v) => v, None => z() }` prints `mid dR1 dR2 dR1 dR2 got1 end` on the JIT and the default build against `--interp`'s `mid dR1 dR2 got1 end`; memory is balanced | — |
 | B-2026-10-02-81 | 2026-10-02 | interp+codegen | high | ASSIGNING A `match` OVER A BY-VALUE USER-ENUM PARAM'S BOXED `Array` PAYLOAD TO AN EXISTING LOCAL IS WRONG ON EVERY SURFACE -- `let mut k: Array[R, 2] = z(); k = match x { EArr.A(v) => v, EArr.B => z() };` runs the new value's bodies twice under `--interp` (`dR0 dR0 mid dR1 dR2 dR1 dR2 got1 end`) and aborts with `free(): double free detected in tcache 2` on the JIT and the default build (valgrind -O0: 18 allocs / 18 frees, 4 errors, 4 bytes definitely lost) | — |
 | B-2026-10-02-75 | 2026-10-02 | codegen | medium | Reassigning a GENERIC enum local inside a `match` arm over it leaks the REPLACEMENT value's heap payload on every compiled surface -- `let mut g: G[R] = G.X(mk(26)); match g { G.X(t) => { g = G.X(mk(3)); } G.Y => {} }` loses the 38-byte `t3-..` string under valgrind where the concrete `enum E` spelling is clean | — |
-| B-2026-10-02-77 | 2026-10-02 | codegen | medium | A GENERIC FUNCTION INSTANTIATED AT `T = Array[E, N]` FAILS LLVM MODULE VERIFICATION WHEN IT RETURNS A `match` OVER `Option[T]` -- `fn pick[T](a: Option[T], d: T) -> T { return match a { Some(x) => x, None => d } }` called as `pick(a, Array[3, 4])` with `a: Option[Array[i64, 2]]` passes `karac check`, prints `34` under `--interp`, and fails `karac build` with `Function return type does not match operand type of return inst! ret i64 0 [2 x i64]`; the same body written for the concrete type builds and runs | — |
 | B-2026-10-02-78 | 2026-10-02 | codegen | high | RETURNING A BY-VALUE `Array[String, N]` PARAMETER FROM A `match` ARM OVER A DIFFERENT SCRUTINEE FREES IT IN THE CALLEE AND HANDS IT BACK -- `fn g(a: Option[Array[String, 2]], d: Array[String, 2]) -> Array[String, 2] { return match a { Some(x) => x, None => d } }` called with `a = None` prints the right line and then reads and frees freed memory: valgrind at -O0 reports 2 invalid reads and 2 invalid frees, 11 allocs against 13 frees; the `Some` path and the `if`/`return d` spelling are clean | — |
 | B-2026-10-02-90 | 2026-10-02 | codegen | high | A CLOSURE THAT CONSUMES A CAPTURED BOXED GENERIC ENUM, FOLLOWED BY A USE OF THE SAME LOCAL OUTSIDE THE CLOSURE, FREES THE BOX TWICE ON EVERY COMPILED SURFACE -- `let f = || keep(h); println(f"c{f()}"); println(f"k{keep(h)}")` over `h: Ho[String]` segfaults where `--interp` prints `c4 k4`; the concrete-enum and struct spellings are clean | — |
 | B-2026-10-02-92 | 2026-10-02 | codegen | high | A BOXED GENERIC-ENUM LOCAL HANDED BY VALUE TO A CALLEE INSIDE A `while` LOOP FREES THE BOX ONCE PER ITERATION ON EVERY COMPILED SURFACE -- `while i < 2 { n = n + keep(h); i = i + 1; }` over `h: Ho[String]` reports 2 invalid frees and 5 invalid reads where `--interp` prints `c8`; the concrete-enum spelling is clean | — |
@@ -511,6 +509,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-9 | 2026-10-03 | autopar | low | Eleven of the thirteen auto-par-named E2E tests moved to tests/par_codegen.rs still form no parallel group there, so they pass without exercising the lowering their names describe (A3b's `e2e_auto_par_branch_panic_fails_fast` among them) | — |
 | B-2026-10-03-10 | 2026-10-03 | codegen+runtime | medium | `for tok in s.split(",")` heap-allocates and frees every token even when the loop only compares it, so kata 331's benchmark runs 5.3x Rust, 8.8x C and slower than CPython (2.31 s against 1.91 s) | — |
 | B-2026-10-03-11 | 2026-10-03 | runtime | low | Every compiled program that hashes a `Map` or `Set` key leaves a 48-byte "possibly lost" block under valgrind: the random hash seed mixes in `std::thread::current()`, which allocates the main thread's handle and never frees it, and that id is `ThreadId(1)` in every process, so it adds no entropy | — |
+| B-2026-10-03-12 | 2026-10-03 | codegen | high | `assert_eq` / `assert_ne` COMPARE `Vec`, TUPLE AND STRUCT OPERANDS BY LLVM SHAPE ON EVERY COMPILED SURFACE, SO AN ASSERTION OVER UNEQUAL VALUES CAN PASS SILENTLY -- `assert_eq(x, y)` with `x = [1, 2]` and `y = [1, 9]` (`Vec[i64]`) passes compiled and fails under `--interp`; two equal `Vec[String]` fail `assert_eq`; a struct `T3 { h: Node, a: i64, b: i64 }` (`Node` a `shared struct`) differing only in `b` fails `assert_ne`; a three-element tuple panics the compiler; an `Array[String, 2]` is refused | — |
+| B-2026-10-03-13 | 2026-10-03 | codegen | medium | A GENERIC FUNCTION INSTANTIATED AT `T = Array[E, N]` WITH A HEAP ELEMENT TYPE STILL FAILS LLVM MODULE VERIFICATION WHEN IT RETURNS A `match` OVER `Option[T]` -- `fn pick[T](a: Option[T], d: T) -> T { return match a { Some(x) => x, None => d } }` called with `a: Option[Array[String, 2]]` passes `karac check`, prints under `--interp`, and fails `karac build` with `ret i64 0 [2 x { ptr, i64, i64 }]`; scalar elements were fixed by B-2026-10-02-77 and this half is held back on purpose until B-2026-10-02-78 is fixed | — |
+| B-2026-10-03-14 | 2026-10-03 | codegen | medium | REASSIGNING A `String` FROM A BRANCH WHOSE OTHER ARM IS THE TARGET ITSELF STILL LEAKS THE OLD VALUE WHEN THE REPLACING ARM RUNS -- `let mut s = f"a{1}"; s = if c { f"q{2}" } else { s }` with `c = true` prints `q2` and valgrind at -O0 reports 2 bytes in 1 block definitely lost (the old `a1`); every other branch shape was fixed by B-2026-09-26-18 | — |
 
 ### Relocated
 
@@ -3323,6 +3324,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-26-14 | codegen | high | A HEAP FIELD MOVED OFF A FRESH TEMP THROUGH AN `if` OR `match` ARM IS FREED TWICE ON EVERY COMPILED SURFACE, ONE HOP DEEP AND WITH NO `Drop` ANYWHERE… | ce0e39b3a |
 | B-2026-09-26-15 | codegen | high | A PAYLOAD MOVED OUT OF A GENERIC FN'S ENUM HAND-BACK OF A FORWARDED STRUCT IS FREED TWICE ON EVERY COMPILED SURFACE -- `let o = mid(s, true); let v =… | 133a79f1b |
 | B-2026-09-26-17 | codegen | medium | A CONCRETE FN THAT WRAPS A FORWARDED `Drop` STRUCT WITH A `shared` FIELD IN AN ENUM LEAKS THE FIELD -- `let o = wrapS(s)` over `fn wrapS(v: S2) -> Op… | 82b5a42c0 |
+| B-2026-09-26-18 | codegen | medium | REASSIGNING A `String` BINDING FROM AN `if`, `match` OR BLOCK EXPRESSION LEAKS THE OLD VALUE ON EVERY COMPILED SURFACE -- `let mut s = f"a"; s = if t… | bc22c5fe2 |
 | B-2026-09-26-19 | codegen | high | A FIELD PROJECTION OFF A FRESH TEMP PASSED AS A CALL ARGUMENT IS FREED WRONGLY ON EVERY COMPILED SURFACE -- `bor(mkq(3).name)` with `fn bor(s: ref St… | 188d0ea8b |
 | B-2026-09-26-23 | interp+codegen | medium | A `Drop`-BEARING FIELD PROJECTED OFF A FRESH TEMP AND HANDED BY VALUE TO A CALLEE RUNS NEITHER ITS OWN BODY NOR ITS SIBLINGS', ON ALL FOUR SURFACES A… | 3e0068df6 |
 | B-2026-09-26-27 | codegen+interp | high | TWO MORE HAND-BACK SPELLINGS OF A STRUCT WITH A `shared` FIELD DOUBLE FREE ON EVERY COMPILED SURFACE -- a concrete conditional hand-back of a `Drop`-… | 0fb958d50 |
@@ -3588,6 +3590,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-02-70 | codegen | medium | `for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)]` HEAP-ALLOCATES THE LITERAL ON EVERY EXECUTION under `karac build`, so a grid DFS that walks its… | b50bfacd3 |
 | B-2026-10-02-72 | codegen | high | A FRESH NESTED `Option[Option[R]]` TEMPORARY WHOSE INNER `Option` A CALLEE RETURNS OUT OF A MATCH ARM IS FREED TWICE -- `let a = take(Some(Some(mk(1)… | 4af17ba71 |
 | B-2026-10-02-79 | codegen | high | A `match` ARM WHOSE BLOCK ENDS IN AN `if` THAT HANDS OUT THE BOXED `Array` PAYLOAD BINDING DOUBLE-FREES ON THE JIT AND AT -O0, AS A FUNCTION'S TAIL O… | e9fb65b66 |
+| B-2026-10-02-77 | codegen | medium | A GENERIC FUNCTION INSTANTIATED AT `T = Array[E, N]` FAILS LLVM MODULE VERIFICATION WHEN IT RETURNS A `match` OVER `Option[T]` -- `fn pick[T](a: Opti… | 017aab3f5 |
 | B-2026-10-02-76 | codegen | high | A CLOSURE THAT CONSUMES ITS CAPTURED HEAP-BEARING ENUM IN THE BODY BY ANY ROUTE OTHER THAN A BY-VALUE CALL FREES IT TWICE ON EVERY COMPILED SURFACE -… | ba49fab1c |
 | B-2026-10-02-91 | codegen | high | AN `if let` OVER A `for` LOOP'S CONCRETE HEAP-ENUM ELEMENT FREES THE PAYLOAD TWICE ON EVERY COMPILED SURFACE -- `for h in v { if let Hc.Full(s) = h {… | f5e03768e |
 
