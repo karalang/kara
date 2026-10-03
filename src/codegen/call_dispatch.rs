@@ -980,6 +980,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if name == "replace" && args.len() == 2 && !self.user_shadows_mem_builtin("replace") {
             let (pd, old) = self.mem_place_ptr_and_value(&args[0].value)?;
             let new = self.compile_expr(&args[1].value)?;
+            // B-2026-10-02-69 — a caller-retained by-value PARAM moved into
+            // `*dest` (`fn rep(d: mut ref String, v: String) { replace(d, v) }`)
+            // leaves as a copy, like every other owning sink this hook serves:
+            // the caller still frees its argument after the call, so storing
+            // the param's own buffer freed it twice.
+            let new = self.maybe_defensive_copy_param_arg(&args[1].value, new);
             self.builder.build_store(pd, new).unwrap();
             // `value` is MOVED into `*dest` — the place now owns its buffer.
             // Neutralize the value temp's own scope-exit cleanup so it isn't
