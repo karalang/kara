@@ -1680,6 +1680,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.caller_retained_struct_field_views.clear();
         self.borrow_vars.owned_array_params.clear();
         self.payload_vars.param_view_locals.clear();
+        self.drop_rc.let_view_owns_bits.clear();
         self.payload_vars.enum_box_only_array_locals.clear();
         self.payload_vars
             .caller_retained_payload_arm_bindings

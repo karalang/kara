@@ -24,6 +24,10 @@ mod exec;
 // featureless clippy flags it unused without the gate.
 #[cfg(feature = "llvm")]
 pub(crate) use exec::{compute_block_last_use, last_use_fires_at};
+
+/// B-2026-09-23-24 — see `Interpreter::let_view_tail_frames`: the frame depth,
+/// the arm-tail spans that hand a param view over, and whether one was reached.
+pub(crate) type LetViewTailFrame = (usize, HashSet<(usize, usize)>, bool);
 mod helpers;
 mod iter_eval;
 mod layout_query;
@@ -1035,6 +1039,17 @@ pub struct Interpreter<'a> {
     /// arm.
     pub(crate) own_body_only_view_bindings: std::collections::HashMap<String, String>,
     pub(crate) cond_store_param_names: std::collections::HashSet<String>,
+    /// B-2026-09-23-24 — one entry per `let` being evaluated whose branching
+    /// initializer can hand a by-value parameter's VIEW to the binding
+    /// (`let r = if c { a } else { mk() }`): the frame depth it was pushed at,
+    /// the spans of those arm tails, and whether the path taken reached one.
+    /// On that path the binding is a view like `let r = a` and registers no
+    /// slot, since the caller runs the param's body; on the others it owns
+    /// the value its arm minted.
+    pub(crate) let_view_tail_frames: Vec<LetViewTailFrame>,
+    /// B-2026-09-23-24 — the binding the frame above found a view for, taken
+    /// by the `let`'s slot registration.
+    pub(crate) let_view_tail_binding: Option<String>,
     /// B-2026-09-29-77 — this method frame adopted its owned ENUM `self`'s
     /// PAYLOAD bodies (not the shell, which the caller keeps) because the
     /// method matches on `self` on some paths only. A `match` / `if let` /
@@ -1500,6 +1515,8 @@ impl<'a> Interpreter<'a> {
             last_use_memo: FxHashMap::default(),
             own_body_only_view_bindings: std::collections::HashMap::new(),
             cond_store_param_names: std::collections::HashSet::new(),
+            let_view_tail_frames: Vec::new(),
+            let_view_tail_binding: None,
             self_match_payload_adopted: false,
             cond_store_part_aliases: std::collections::HashMap::new(),
             cond_store_view_aliases: std::collections::HashMap::new(),

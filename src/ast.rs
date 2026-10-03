@@ -1852,6 +1852,55 @@ pub fn is_branch_wrapper_expr(e: &Expr) -> bool {
     )
 }
 
+/// B-2026-09-23-24 — the bare identifiers a branching `let` initializer hands
+/// to its binding: the arm tails of an `if` / `if let` / `match` / block,
+/// followed through nested branches, as `(name, (span offset, span length))`.
+/// Empty for an initializer that is not a branch, which the rebind sites
+/// already decide statically. Shared so both backends ask the same tails.
+pub fn branch_identifier_tails(e: &Expr) -> Vec<(String, (usize, usize))> {
+    fn walk(e: &Expr, out: &mut Vec<(String, (usize, usize))>) {
+        match &e.kind {
+            ExprKind::Identifier(n) => out.push((n.clone(), (e.span.offset, e.span.length))),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(t) = &then_block.final_expr {
+                    walk(t, out);
+                }
+                if let Some(x) = else_branch {
+                    walk(x, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    walk(&arm.body, out);
+                }
+            }
+            ExprKind::Block(b) => {
+                if let Some(t) = &b.final_expr {
+                    walk(t, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if matches!(
+        &e.kind,
+        ExprKind::If { .. } | ExprKind::IfLet { .. } | ExprKind::Match { .. } | ExprKind::Block(_)
+    ) {
+        walk(e, &mut out);
+    }
+    out
+}
+
 /// B-2026-09-17-36 — whether `object`, the receiver of a field projection,
 /// produces a value nothing else owns, so its `Drop` bodies are owed when the
 /// enclosing statement ends. A free-function or method CALL, minus the accessor

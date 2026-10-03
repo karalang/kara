@@ -16017,6 +16017,184 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.disarm_escaping_tail_projection(expr);
         self.clear_cond_move_flags_for_tail_sources(expr);
+        self.clear_let_view_tail_flag(expr);
+    }
+
+    /// B-2026-09-23-24 — open a `DropRc::let_view_tail_frames` entry for
+    /// `let x = <branch>` when an arm tail is a by-value parameter view this
+    /// frame does not own per path (`let r = if c { a } else { mk() }`). On
+    /// the path through that arm `x` is the param, as `let r = a` is, and the
+    /// caller runs its body; on the others `x` owns what its arm minted. The
+    /// bit starts set here, in the block that evaluates the initializer, so it
+    /// is re-armed every time the `let` runs.
+    pub(super) fn push_let_view_tail_frame(&mut self, stmt: &Stmt) -> bool {
+        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            return false;
+        };
+        let PatternKind::Binding(dst) = &pattern.kind else {
+            return false;
+        };
+        let inherited = match &value.kind {
+            ExprKind::Identifier(src) => self
+                .drop_rc
+                .let_view_owns_bits
+                .get(src.as_str())
+                .filter(|(f, _)| Some(*f) == self.current_fn)
+                .map(|(_, p)| *p),
+            _ => None,
+        };
+        self.drop_rc.let_view_owns_bits.remove(dst.as_str());
+        if let (Some(bit), ExprKind::Identifier(src)) = (inherited, &value.kind) {
+            // `let q = r` over such a binding: `q` is what `r` was. No arm
+            // clears the bit; it is read as it stands.
+            let tails = std::collections::HashMap::from([(
+                (value.span.offset, value.span.length),
+                src.clone(),
+            )]);
+            self.drop_rc.let_view_tail_frames.push((tails, bit));
+            return true;
+        }
+        let tails: std::collections::HashMap<(usize, usize), String> =
+            crate::ast::branch_identifier_tails(value)
+                .into_iter()
+                .filter(|(n, _)| {
+                    ((self.fn_ctx.current_fn_param_names.contains(n.as_str())
+                        && !self.borrow_vars.ref_params.contains_key(n.as_str()))
+                        || self.payload_vars.param_view_locals.contains(n.as_str()))
+                        && !self.drop_rc.cond_store_flag_params.contains(n.as_str())
+                        && !self.drop_rc.cond_returned_body_params.contains(n.as_str())
+                        && !self.drop_rc.cond_returned_owned_params.contains(n.as_str())
+                        && !self
+                            .payload_vars
+                            .callee_owned_payload_bodies_params
+                            .contains(n.as_str())
+                        // A param this frame already owns the body of (a
+                        // conditional hand-back, B-2026-09-23-18) moves into the
+                        // binding through its own flag; the binding owns it.
+                        && !self.drop_rc.scope_cleanup_actions.iter().flatten().any(|a| {
+                            matches!(a, CleanupAction::UserDrop { binding_name, .. }
+                                if binding_name == n)
+                        })
+                })
+                .map(|(n, sp)| (sp, n))
+                .collect();
+        if tails.is_empty() {
+            return false;
+        }
+        let Some(entry) = self.current_fn.and_then(|f| f.get_first_basic_block()) else {
+            return false;
+        };
+        let open = self
+            .builder
+            .get_insert_block()
+            .is_some_and(|b| b.get_terminator().is_none());
+        if !open {
+            return false;
+        }
+        let b = self.context.create_builder();
+        match entry.get_terminator() {
+            Some(term) => b.position_before(&term),
+            None => b.position_at_end(entry),
+        }
+        let bool_t = self.context.bool_type();
+        let Ok(flag) = b.build_alloca(bool_t, "letview") else {
+            return false;
+        };
+        let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
+        self.drop_rc.let_view_tail_frames.push((tails, flag));
+        true
+    }
+
+    /// B-2026-09-23-24 — an arm tail of the `let` being compiled that hands
+    /// the param view over: clear the frame's bit on this path.
+    pub(super) fn clear_let_view_tail_flag(&mut self, expr: &Expr) {
+        let key = (expr.span.offset, expr.span.length);
+        let Some((tails, flag)) = self.drop_rc.let_view_tail_frames.last() else {
+            return;
+        };
+        if !tails.contains_key(&key) {
+            return;
+        }
+        let flag = *flag;
+        let open = self
+            .builder
+            .get_insert_block()
+            .is_some_and(|b| b.get_terminator().is_none());
+        if open {
+            let bool_t = self.context.bool_type();
+            let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
+        }
+    }
+
+    /// B-2026-09-23-24 — close the frame once the `let` has registered its
+    /// binding's drops, and gate them on the bit: the binding's `Drop` body
+    /// (the caller's on the view path), and the memory the view path leaves
+    /// with the param — an `Array`'s, whose param keeps its own drop. A
+    /// struct's buffers moved into the binding with the tail, so its view
+    /// path frees them through the body-less edge, as `out = p` does.
+    pub(super) fn finish_let_view_tail_frame(&mut self, stmt: &Stmt, ok: bool) {
+        let Some((tails, pending)) = self.drop_rc.let_view_tail_frames.pop() else {
+            return;
+        };
+        if let (StmtKind::Let { pattern, .. }, true) = (&stmt.kind, ok) {
+            if let PatternKind::Binding(n) = &pattern.kind {
+                if let Some(f) = self.current_fn {
+                    self.drop_rc
+                        .let_view_owns_bits
+                        .insert(n.clone(), (f, pending));
+                }
+            }
+        }
+        if !ok {
+            return;
+        }
+        let StmtKind::Let { pattern, .. } = &stmt.kind else {
+            return;
+        };
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return;
+        };
+        let open = self
+            .builder
+            .get_insert_block()
+            .is_some_and(|b| b.get_terminator().is_none());
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return;
+        };
+        if !open {
+            return;
+        }
+        let has_body = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .any(|a| {
+                matches!(a, CleanupAction::UserDrop { binding_name, binding_ptr, .. }
+                if binding_name == name && *binding_ptr == slot.ptr)
+            });
+        let array_mem = matches!(slot.ty, BasicTypeEnum::ArrayType(_))
+            && self.drop_rc.scope_cleanup_actions.iter().flatten().any(|a| {
+                matches!(a, CleanupAction::StructDrop { struct_alloca, .. } if *struct_alloca == slot.ptr)
+            });
+        if !has_body && !array_mem {
+            return;
+        }
+        let Some(flag) = self.cond_move_drop_flag_for(name) else {
+            return;
+        };
+        let bool_t = self.context.bool_type();
+        let Ok(v) = self.builder.build_load(bool_t, pending, "letview.owns") else {
+            return;
+        };
+        let _ = self.builder.build_store(flag, v);
+        if array_mem {
+            self.drop_rc.cond_move_mem_drop_flags.insert(slot.ptr, flag);
+        } else if let Some(tn) = self.var_types.var_type_names.get(name.as_str()).cloned() {
+            if let Some(src) = tails.values().next().cloned() {
+                self.register_param_view_mem_drop(name, &src, &tn, slot.ptr);
+            }
+        }
     }
 
     /// B-2026-10-02-80 — a named `let` initializer is the other owner waiting

@@ -346,7 +346,9 @@ impl<'a> super::Interpreter<'a> {
                     temps: Vec::new(),
                     shared_holders: Vec::new(),
                 });
+            let let_view_frame = self.push_let_view_tail_frame(stmt);
             let stmt_result = self.eval_stmt_cf(stmt);
+            self.pop_let_view_tail_frame(stmt, let_view_frame);
             self.end_freshtemp_reads();
             let cf_opt = match stmt_result {
                 Ok(_) => self.pending_cf.take(),
@@ -5295,7 +5297,21 @@ impl<'a> super::Interpreter<'a> {
             .last()
             .is_some_and(|caller_owns| !caller_owns)
         {
+            self.let_view_tail_binding = None;
             return false;
+        }
+        // B-2026-09-23-24 — the path just taken handed a param view to this
+        // binding through an arm tail, so it is that view, on the terms of the
+        // `let m = r` rebind below.
+        if let (Some(v), PatternKind::Binding(b)) = (&self.let_view_tail_binding, &pattern.kind) {
+            if v == b {
+                let b = b.clone();
+                self.let_view_tail_binding = None;
+                if let Some(top) = self.owned_param_names_stack.last_mut() {
+                    top.insert(b);
+                }
+                return true;
+            }
         }
         // `PatternKind::Tuple` belongs on this list for the same reason
         // `Struct` does: `let (r, n) = p;` over an owned TUPLE param binds
@@ -7749,12 +7765,64 @@ impl<'a> super::Interpreter<'a> {
             || !crate::ast::param_wrap_aliases(Some(program), f, pn).is_empty()
     }
 
+    /// B-2026-09-23-24 — open a [`Interpreter::let_view_tail_frames`] entry
+    /// for a `let x = <branch>` whose arm tails include a by-value parameter
+    /// view this frame does not own per path (an adopted param's own hand-over
+    /// machinery covers those). Returns whether one was pushed.
+    fn push_let_view_tail_frame(&mut self, stmt: &Stmt) -> bool {
+        self.let_view_tail_binding = None;
+        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            return false;
+        };
+        if !matches!(&pattern.kind, PatternKind::Binding(_)) {
+            return false;
+        }
+        let Some(views) = self.owned_param_names_stack.last() else {
+            return false;
+        };
+        let spans: std::collections::HashSet<(usize, usize)> =
+            crate::ast::branch_identifier_tails(value)
+                .into_iter()
+                .filter(|(n, _)| {
+                    views.contains(n.as_str())
+                        && !self.cond_store_param_names.contains(n.as_str())
+                        && !self.moved_out_user_drop_bindings.contains(n.as_str())
+                })
+                .map(|(_, sp)| sp)
+                .collect();
+        if spans.is_empty() {
+            return false;
+        }
+        let depth = self.owned_param_names_stack.len();
+        self.let_view_tail_frames.push((depth, spans, false));
+        true
+    }
+
+    fn pop_let_view_tail_frame(&mut self, stmt: &Stmt, pushed: bool) {
+        if !pushed {
+            return;
+        }
+        let hit = self.let_view_tail_frames.pop().is_some_and(|(_, _, h)| h);
+        if let (true, StmtKind::Let { pattern, .. }) = (hit, &stmt.kind) {
+            if let PatternKind::Binding(n) = &pattern.kind {
+                self.let_view_tail_binding = Some(n.clone());
+            }
+        }
+    }
+
     pub(crate) fn record_conditional_move_tail(&mut self, expr: &Expr, cleanup: &[CleanupAction]) {
         if !self
             .cond_move_escaping_sites
             .contains(&(expr.span.offset, expr.span.length))
         {
             return;
+        }
+        // B-2026-09-23-24 — a param view handed to the `let` being evaluated.
+        let depth = self.owned_param_names_stack.len();
+        if let Some((d, spans, hit)) = self.let_view_tail_frames.last_mut() {
+            if *d == depth && spans.contains(&(expr.span.offset, expr.span.length)) {
+                *hit = true;
+            }
         }
         // B-2026-09-27-3 — a ONE-HOP projection off a local at an escaping
         // tail (`let x = if k { p.a } else { .. }`, `let x = { t.0 }`) is a

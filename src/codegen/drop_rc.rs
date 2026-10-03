@@ -32,6 +32,13 @@ use inkwell::values::{FunctionValue, InstructionValue, PointerValue};
 use super::state::CleanupAction;
 use crate::ast::TypeExpr;
 
+/// B-2026-09-23-24 — see `DropRc::let_view_tail_frames`: the arm-tail spans
+/// that hand a param view to the `let` (with the param's name), and the bit.
+pub(crate) type LetViewTailFrame<'ctx> = (
+    std::collections::HashMap<(usize, usize), String>,
+    PointerValue<'ctx>,
+);
+
 /// Drop, clone and RC-fallback lowering state.
 pub(crate) struct DropRc<'ctx> {
     /// B-2026-08-08-25 leg 1 — sources whose inline `Option`/`Result` payload a
@@ -360,6 +367,17 @@ pub(crate) struct DropRc<'ctx> {
     /// ones this row's registration created, so no pre-existing retraction
     /// changes behaviour.
     pub(crate) cond_store_flag_params: std::collections::HashSet<String>,
+    /// B-2026-09-23-24 — one entry per `let x = <branch>` being compiled
+    /// whose arm tails can hand a by-value parameter's VIEW to `x`: the spans
+    /// of those tails, the source name of each, and the bit an arm that hands
+    /// one over clears. The interpreter's twin is
+    /// `Interpreter::let_view_tail_frames`.
+    pub(crate) let_view_tail_frames: Vec<LetViewTailFrame<'ctx>>,
+    /// B-2026-09-23-24 — a binding such a `let` made, mapped to the bit that
+    /// says whether it OWNS its value (clear: it is the param view). A whole
+    /// rebind (`let q = r`) inherits the bit, since `q` is then whatever `r`
+    /// was. Entries for a name end at its next `let`.
+    pub(crate) let_view_owns_bits: HashMap<String, (FunctionValue<'ctx>, PointerValue<'ctx>)>,
     /// B-2026-09-29-77 — this frame adopted its owned ENUM `self`'s payload
     /// bodies because the method matches on `self` on some paths only
     /// (`fn_conditionally_matches_on_bare_self`). The per-path flag is the one

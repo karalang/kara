@@ -4453,7 +4453,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 simple: crate::ast::stmt_ends_freshtemp_reads(stmt),
                 temps: Vec::new(),
             });
+        let let_view = self.push_let_view_tail_frame(stmt);
         let out = self.compile_stmt_tracking_assign_target(stmt);
+        if let_view {
+            self.finish_let_view_tail_frame(stmt, out.is_ok());
+        }
         // B-2026-09-20-16 — a plain rebind of a callee-owned payload view
         // (`let u = t;`) is the same view under a new name, so a later
         // `return u` must reach the same param walk. The two element-bodies

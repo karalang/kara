@@ -786,6 +786,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // payload handed to a `let`: this arm compiles through plain
                 // `compile_block`, so the block-tail hook never saw it.
                 self.disarm_callee_owned_payload_walk_for_let_tail(fe);
+                // B-2026-09-23-24 — likewise a param view handed to a `let`.
+                self.clear_let_view_tail_flag(fe);
                 if let ExprKind::Identifier(n) = &Self::block_tail_expr(fe).kind {
                     let n = Self::block_tail_rebind_root(then_block, n);
                     // B-2026-10-02-79 — or an enclosing construct's binding.
