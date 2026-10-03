@@ -15115,11 +15115,21 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-09-26-18 — a value-producing BRANCH or BLOCK whose
+                    // every tail builds a fresh `String` buffer (`s = if c {
+                    // f"q" } else { f"z" }`, the `match` / block spellings).
+                    // The bare f-string is caught by `staged_fstr_acc` and a
+                    // branch of CALLS by `rhs_is_fresh`, but an f-string or
+                    // string-literal tail one branch deep matched neither, so
+                    // the displaced old buffer leaked once per assignment.
+                    let rhs_is_fresh_string_branch =
+                        self.rhs_branch_tails_fresh_string(value, name.as_str());
                     let trigger_eager_free = lhs_is_tracked_vec
                         && !rhs_is_self_alias
                         && (staged_fstr_acc.is_some()
                             || rhs_is_moved_alias
                             || rhs_is_fresh
+                            || rhs_is_fresh_string_branch
                             || rhs_is_container_literal
                             || rhs_is_staged_freshtemp_field
                             || rhs_is_heap_vec_index
@@ -30778,6 +30788,78 @@ impl<'ctx> super::Codegen<'ctx> {
                 matches!(a, super::state::CleanupAction::RcDecOption { option_slot, .. }
                 if *option_slot == slot)
             })
+    }
+
+    /// B-2026-09-26-18 — is `expr` an `if` / `if let` / `match` / block whose
+    /// every tail yields a buffer other than `target`'s current one: an
+    /// f-string, a string literal (static, `cap = 0`), a fresh call, a move of
+    /// ANOTHER tracked `Vec` / `String` binding (the branch twin of
+    /// `rhs_is_moved_alias`), or a nested branch of those? Only branch and
+    /// block shapes answer `true`; a bare tail is classified by the
+    /// assignment's existing terms.
+    ///
+    /// Read by the reassignment's eager free of the DISPLACED buffer, which is
+    /// safe exactly when the stored value cannot be that buffer. A tail naming
+    /// `target` itself, or any other expression, answers `false`, so `s = if c
+    /// { f"q" } else { s }` keeps the old buffer it may be about to store
+    /// back. `LabeledBlock` is not peeled: a `break`-with-value can deliver a
+    /// value no tail names.
+    pub(super) fn rhs_branch_tails_fresh_string(&self, expr: &Expr, target: &str) -> bool {
+        let tail_fresh = |e: &Expr| {
+            self.rhs_stages_fstr_acc(e)
+                || matches!(e.kind, ExprKind::StringLit(_) | ExprKind::MultiStringLit(_))
+                || matches!(&e.kind, ExprKind::Identifier(n) if n != target
+                    && self.var_types.vec_elem_types.contains_key(n.as_str()))
+                || self.rhs_yields_fresh_ref(e)
+                || self.rhs_branch_tails_fresh_string(e, target)
+        };
+        // A block whose tail names a binding the block itself declares from a
+        // fresh value and never reassigns (`v = { let mut z = Vec.new();
+        // z.push(..); z }`): that buffer is the block's own, so it cannot be
+        // `target`'s. The fresh-initializer and no-reassignment conditions
+        // are what rule out `s = { let t = s; t }`, which hands back the very
+        // buffer being displaced.
+        let block_local_tail = |block: &Block, tail: &Expr| {
+            let ExprKind::Identifier(n) = &tail.kind else {
+                return false;
+            };
+            let declared_fresh = block.stmts.iter().any(|st| {
+                matches!(&st.kind, StmtKind::Let { pattern, value, .. }
+                    if matches!(&pattern.kind, PatternKind::Binding(b) if b == n)
+                        && tail_fresh(value))
+            });
+            let reassigned = block.stmts.iter().any(|st| {
+                matches!(&st.kind, StmtKind::Assign { target: t, .. }
+                    if matches!(&t.kind, ExprKind::Identifier(m) if m == n))
+            });
+            declared_fresh && !reassigned
+        };
+        match &expr.kind {
+            ExprKind::Block(block) | ExprKind::Unsafe(block) => block
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| tail_fresh(t) || block_local_tail(block, t)),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|t| tail_fresh(t) || block_local_tail(then_block, t))
+                    && else_branch.as_deref().is_some_and(tail_fresh)
+            }
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty() && arms.iter().all(|arm| tail_fresh(&arm.body))
+            }
+            _ => false,
+        }
     }
 
     pub(super) fn rhs_yields_fresh_ref(&self, expr: &Expr) -> bool {
