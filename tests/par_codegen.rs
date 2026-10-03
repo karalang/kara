@@ -57,8 +57,16 @@ mod par_codegen_tests {
                 .output();
             if let Ok(out) = output {
                 if out.status.success() {
-                    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                        .join("target/release/libkarac_runtime.a");
+                    // Where that `cargo rustc` put it: `CARGO_TARGET_DIR` when
+                    // set (relative to the manifest dir, which is the test's
+                    // cwd), else `<manifest>/target`. Hard-coding the latter
+                    // made every E2E test here soft-skip under a custom
+                    // target dir (B-2026-10-03-8).
+                    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                    let target = std::env::var_os("CARGO_TARGET_DIR")
+                        .map(|d| manifest.join(d))
+                        .unwrap_or_else(|| manifest.join("target"));
+                    let p = target.join("release/libkarac_runtime.a");
                     if p.exists() {
                         unsafe {
                             RUNTIME_PATH = Some(p);
@@ -67,7 +75,17 @@ mod par_codegen_tests {
                 }
             }
         });
-        unsafe { RUNTIME_PATH.clone() }
+        let found = unsafe { RUNTIME_PATH.clone() };
+        // The `?` every caller applies to this turns a missing archive into a
+        // silent pass. `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` is how a run asks for
+        // that to fail instead, as `link_or_skip` already does for the link.
+        if found.is_none() && std::env::var("KARAC_REQUIRE_RUNTIME_ARCHIVE").as_deref() == Ok("1") {
+            panic!(
+                "KARAC_REQUIRE_RUNTIME_ARCHIVE=1 but `cargo rustc -p karac-runtime --release \
+                 --crate-type staticlib` produced no archive where this suite looks for it"
+            );
+        }
+        found
     }
 
     fn ir_for(src: &str) -> String {
@@ -1843,6 +1861,23 @@ fn main() {
         let _ = std::fs::remove_file(&exe_path);
 
         Some(output)
+    }
+
+    /// `run_program_output`'s result with stdout and stderr decoded, in the
+    /// shape `tests/codegen/`'s `run_program_capturing` returns, so a test can
+    /// move between the two lanes unchanged.
+    struct CapturedRun {
+        stdout: String,
+        stderr: String,
+        status: std::process::ExitStatus,
+    }
+
+    fn run_program_capturing(src: &str) -> Option<CapturedRun> {
+        run_program_output(src).map(|o| CapturedRun {
+            stdout: String::from_utf8_lossy(&o.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&o.stderr).to_string(),
+            status: o.status,
+        })
     }
 
     // ── Auto-par indexed-write fan-out (disjoint-writes lowering) ─────
@@ -14316,6 +14351,457 @@ fn main() {
                 "stderr={:?}",
                 stderr
             );
+        }
+    }
+
+    // ── Moved from tests/codegen/ (B-2026-10-03-8) ────────────────────────
+    //
+    // Each of these is about an auto-par group, by its name or its comment,
+    // and each sat in `tests/codegen/`, whose harness compiles with
+    // `concurrency: None`. Codegen forms no statement group without the
+    // analysis (`parallel_groups_for_current_fn` returns None), so there they
+    // checked the sequential program only. Here `run_program` threads it.
+    //
+    // Moving them is not enough on its own. Measured with an `nm` probe on
+    // each compiled object at the move: only `e2e_auto_par_sleeps_run_correctly`
+    // and `test_e2e_par_group_serializes_for_iter_with_outer_mutable_write`
+    // call `karac_par_run_auto` here. The rest are kept sequential by the
+    // per-statement cost gate (or deliberately, as the interner bail, the
+    // channel consumer and the untypeable return slot are), so they still
+    // pass without exercising a group. B-2026-10-03-9 tracks that remainder.
+
+    #[test]
+    fn test_e2e_two_interners_par_group_bail() {
+        // Regression (2026-07-17, found via the Arena slice): two ANNOTATED
+        // `let t: Interner = Interner.new()` lets form an auto-par parallel
+        // group whose return-slot type IS inferable (the annotation lowers
+        // to `ptr`), so the group really parallelized — and the branch's
+        // scope-exit `FreeInternerHandle` freed the handle before the
+        // parent's `intern` locked it (futex hang on a dead Mutex, no
+        // output). The unannotated form dodged it by accident (RHS type
+        // uninferable → group bailed). Now any escaping handle-new binding
+        // bails its group to sequential (`compute_return_slots_checked`).
+        let out = run_program(
+            r#"
+fn main() {
+    let t: Interner = Interner.new();
+    let u: Interner = Interner.new();
+    let _a = t.intern("x");
+    let _b = u.intern("y");
+    println(t.len());
+    println(u.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n1");
+        }
+    }
+
+    #[test]
+    fn e2e_auto_par_sleeps_run_correctly() {
+        // A2b: two independent `sleep_ms` timer waits AUTO-parallelize (no
+        // explicit `par {}` — the conflict model exempts a standalone `sleep_ms`
+        // from the `suspends` boundary gate and lifts `(Suspends,Suspends)`).
+        // They overlap on the par thread-block path; here we pin output
+        // correctness and termination (the timing win is the bench's job).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                     sleep_ms(20);\n\
+                     sleep_ms(20);\n\
+                     println(\"done\");\n\
+                 }",
+        ) {
+            assert_eq!(out, "done\n", "auto-par sleeps complete; got:\n{out}");
+        }
+    }
+
+    #[test]
+    fn e2e_auto_par_allocating_calls_run_correctly() {
+        // A3: two independent statements that each only `allocates(Heap)` (each
+        // builds a fresh Vec) AUTO-parallelize — the conflict model no longer
+        // treats allocates+allocates as a conflict (heap is thread-safe;
+        // `allocates` is informational per design.md). They run on the par
+        // fan-out path; pin that each branch's heap allocation is independent
+        // and the combined result is correct (no cross-branch corruption).
+        if let Some(out) = run_program(
+            "fn make(n: i64) -> Vec[i64] {\n\
+                     let mut v: Vec[i64] = Vec.new();\n\
+                     v.push(n);\n\
+                     v.push(n + 1);\n\
+                     return v;\n\
+                 }\n\
+                 fn main() {\n\
+                     let a = make(10);\n\
+                     let b = make(20);\n\
+                     println(a[0] + a[1] + b[0] + b[1]);\n\
+                 }",
+        ) {
+            assert_eq!(
+                out, "62\n",
+                "auto-par allocating calls must each build their Vec correctly; got:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_auto_par_panicking_calls_run_correctly() {
+        // A3b: two independent statements that each only `panics` (each calls a
+        // dividing helper — `/` infers `panics`) AUTO-parallelize now that the
+        // conflict model treats panics+panics as non-conflicting. Neither
+        // actually divides by zero, so this is the common, beneficial case:
+        // ordinary arithmetic runs concurrently. Pin output correctness.
+        if let Some(out) = run_program(
+            "fn divmod(n: i64, d: i64) -> i64 { return n / d; }\n\
+                 fn main() {\n\
+                     let a = divmod(100, 5);\n\
+                     let b = divmod(200, 4);\n\
+                     println(a + b);\n\
+                 }",
+        ) {
+            assert_eq!(
+                out, "70\n",
+                "auto-par panicking-effect calls must compute correctly; got:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_auto_par_branch_panic_fails_fast() {
+        // A3b soundness gate: when one of two grouped panic-capable statements
+        // ACTUALLY panics inside a `__par_branch` worker (here a real divide by
+        // zero), the program must FAIL FAST — a Kāra panic lowers to `exit(1)`
+        // (a direct process exit, not a Rust unwind), so the worker terminates
+        // the whole process. We assert a non-zero exit and the panic message,
+        // and the `output_with_hang_watchdog` wrapper makes this double as a
+        // deadlock guard: a regression that hung on the worker exit (e.g. exit
+        // while another thread holds the output lock) would trip the watchdog
+        // rather than pass.
+        if let Some(c) = run_program_capturing(
+            "fn divmod(n: i64, d: i64) -> i64 { return n / d; }\n\
+                 fn main() {\n\
+                     let zero = 0;\n\
+                     let a = divmod(100, 5);\n\
+                     let b = divmod(200, zero);\n\
+                     println(a + b);\n\
+                 }",
+        ) {
+            assert_eq!(
+                c.status.code(),
+                Some(101),
+                "a branch panic must fail fast with exit 1; stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                c.stderr.contains("division by zero"),
+                "expected the div-by-zero panic message; stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_auto_par_channel_consumer_terminates() {
+        // Regression (A2b): the producer/consumer channel program must TERMINATE
+        // under default auto-par. `consume(rx)` carries a `suspends` effect (from
+        // `rx.recv()`) that is indistinguishable at the effect level from a
+        // `sleep_ms` timer wait, but a channel recv has a happens-before with its
+        // producer — lifting `consume(rx)` into a `__par_branch` worker alongside
+        // the `spawn` deadlocks (the recv loop never observes the channel close).
+        // The conservative boundary gate keeps it serial (only direct `sleep_ms`
+        // is exempt). A regression here would HANG, not just misprint, so the
+        // test doubles as the deadlock guard.
+        if let Some(out) = run_program(
+            "fn producer(tx: Sender[i64]) -> i64 {\n\
+                     tx.send(10);\n\
+                     tx.send(20);\n\
+                     0\n\
+                 }\n\
+                 fn consume(rx: Receiver[i64]) -> i64 {\n\
+                     let mut sum = 0;\n\
+                     let mut go = true;\n\
+                     while go {\n\
+                         let v = rx.recv();\n\
+                         if v == 0 { go = false; } else { sum = sum + v; }\n\
+                     }\n\
+                     sum\n\
+                 }\n\
+                 fn main() {\n\
+                     let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+                     let h: TaskHandle[i64] = spawn(|| producer(tx));\n\
+                     println(consume(rx));\n\
+                     h.join();\n\
+                 }",
+        ) {
+            assert_eq!(
+                out, "30\n",
+                "channel consumer must terminate with 30; got:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_par_group_serializes_for_iter_with_outer_mutable_write() {
+        // The concurrency analyzer's per-stmt info now collects
+        // nested-block writes (Assign / CompoundAssign) into
+        // `info.defines`. Without this, a `for v in nums.iter()`
+        // expression-stmt that writes to outer `cap` was treated as
+        // "no dependencies" against a subsequent `let f =
+        // dummy(cap)` — the analyzer grouped them and the par-branch
+        // fn's local copy of `cap` never propagated back, so the
+        // function call read the initial value of `cap`.
+        //
+        // Repro:
+        let out = run_program(
+            r#"
+fn dummy(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < n { v.push(i); i = i + 1; }
+    v
+}
+fn helper(nums: Slice[i64]) -> i64 {
+    let mut cap = 1i64;
+    for v in nums.iter() {
+        if v > cap { cap = v; }
+    }
+    let f: Vec[i64] = dummy(cap);
+    println(cap);
+    println(f.len());
+    cap
+}
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 4, 6];
+    println(helper(a));
+}
+"#,
+        );
+        if let Some(out) = out {
+            // cap finds max = 6 from [1,2,4,6]; dummy(6) yields a
+            // 6-element Vec; helper returns 6.
+            assert_eq!(out.trim(), "6\n6\n6");
+        }
+    }
+
+    #[test]
+    fn test_e2e_par_group_return_slot_preserves_vec_bool_elem_type() {
+        // Regression: when auto-par groups `let v: Vec[bool] = ...`
+        // with another stmt, the return-slot rebind in
+        // `compile_function_body` was unconditionally overwriting
+        // `vec_elem_types[v]` to i64 (the placeholder). Later
+        // `not v[i]` then loaded an i64 instead of bool, lowered
+        // through `xor i64 …, -1`, and the short-circuit phi
+        // rejected the i64 operand against an i1 result. Fix uses
+        // `entry().or_insert_with(...)` to preserve the let's
+        // annotated element type.
+        let out = run_program(
+            r#"
+fn helper(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut visited: Vec[bool] = Vec.filled(n, false);
+    let mut bucket: Map[i64, i64] = Map.new();
+    let i = 1i64;
+    if i > 0 and not visited[i - 1] {
+        return 1;
+    }
+    0
+}
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    println(helper(a));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1");
+        }
+    }
+
+    #[test]
+    fn test_e2e_auto_par_propagates_let_bindings_with_identifier_rhs() {
+        // `let n = p; let v: Vec[T] = Vec.new()` are independent
+        // statements, so the concurrency analyzer groups them as
+        // parallelizable. Before the fix, `infer_let_binding_llvm_type`
+        // returned None for `let n = p` (Identifier RHS, no type
+        // annotation), so the return-slot machinery silently dropped
+        // `n` — the tail-expression read failed with "Undefined
+        // variable 'n'". Fix: extend the inference to read the RHS
+        // identifier's type from `self.variables`.
+        let out = run_program(
+            r#"
+fn foo(p: i64) -> i64 {
+    let n = p;
+    let v: Vec[i64] = Vec.new();
+    let _ = v.len();
+    n
+}
+fn main() { println(foo(3)); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_auto_par_drops_untypeable_return_slot_groups() {
+        // `let n = nums.len()` has a MethodCall RHS that the
+        // let-binding type inference can't recover. Auto-par groups
+        // would silently drop the `n` slot before the fix — `n` then
+        // became a class-(i) branch-local with no parent propagation,
+        // surfacing later as "Undefined variable 'n'" at the read
+        // site. Fix: when any needed-outside binding has un-typeable
+        // RHS, `compute_return_slots_checked` returns None and the
+        // caller drops the par-group, falling back to sequential
+        // compilation (correct, just slower).
+        let out = run_program(
+            r#"
+fn foo(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut visited: Vec[bool] = Vec.new();
+    for _ in 0..n { visited.push(false); }
+    visited[0] = true;
+    let mut sum = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        sum = sum + nums[i];
+        i = i + 1;
+    }
+    sum
+}
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    println(foo(a));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6");
+        }
+    }
+
+    #[test]
+    fn test_e2e_defer_lifo_when_body_would_auto_parallelize() {
+        // B-2026-07-16-10: a function body that triggers auto-parallelization
+        // (here a `Vec.new()` + `push` / a Vec-building loop makes the auto-par
+        // heuristic wrap the body in `karac_par_run`) must STILL run user
+        // `defer` blocks LIFO at scope exit — design.md § *defer*. Before the
+        // fix, the par_run whole-function lowering emitted function-scope defers
+        // FIFO-inline at their declaration point (native+JIT printed
+        // "1","2","3","0" — defers before the body's "0"), diverging from the
+        // interpreter. Fixed by bailing auto-par to sequential codegen whenever
+        // the function contains a `defer`/`errdefer` (concurrency.rs
+        // `block_has_user_defer` gate); the sequential lowering drains defers
+        // correctly. Two shapes: a straight-line Vec.push body, and a
+        // Vec-building `while` loop (the collect/tabulate auto-par trigger).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut log: Vec[i64] = Vec.new();
+    defer { println("1"); }
+    defer { println("2"); }
+    defer { println("3"); }
+    log.push(99);
+    println("0");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "3", "2", "1"]);
+        }
+        let out2 = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    defer { println("100"); }
+    defer { println("200"); }
+    let mut i: i64 = 0;
+    while i < 4 {
+        v.push(i * i);
+        i = i + 1;
+    }
+    println(v.len());
+}
+"#,
+        );
+        if let Some(out2) = out2 {
+            let lines: Vec<&str> = out2.trim().lines().collect();
+            assert_eq!(lines, vec!["4", "200", "100"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_auto_par_captures_indexed_access_base() {
+        // `refs_in_expr` was missing an `ExprKind::Index` arm — so
+        // `nums[j]` inside a par-branch body didn't walk into `nums`,
+        // and `nums` was missed from the capture set. The branch fn
+        // then ran with `nums` absent from `self.variables`, panicking
+        // at `compile_slice_index`'s `get_data_ptr(name).unwrap()`.
+        // Repro shape: function with a Slice param, a Vec/Map
+        // declaration (forms an independent par-group with the
+        // length binding), and a later block that indexes the slice.
+        let out = run_program(
+            r#"
+fn min_jumps(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut visited: Vec[bool] = Vec.new();
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    for _ in 0..n { visited.push(false); }
+    visited[0] = true;
+    let mut sum = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        sum = sum + nums[i];
+        i = i + 1;
+    }
+    let _ = bucket.len();
+    sum
+}
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    println(min_jumps(a));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6");
+        }
+    }
+
+    /// B-2026-06-07-1 regression: `tg.spawn(closure)` in a function that
+    /// also declares a `Vec` (or any heap collection) — which makes the
+    /// function eligible for statement-level auto-parallelization — must
+    /// compile and run. The `g` binding escapes into auto-par's
+    /// return-slot list; `infer_let_binding_llvm_type` sizes that slot
+    /// from the `TaskGroup` type annotation via `llvm_type_for_name`,
+    /// which used to hit the `i64` fall-through default (TaskGroup isn't
+    /// in `struct_types` — baked stdlib defs aren't loaded into codegen).
+    /// The reconstructed slot was then a bare `i64`, so `tg.spawn(...)`'s
+    /// receiver load read an `IntValue` where the dispatcher does
+    /// `into_struct_value()` on the `{ i64 }` TaskGroup shape → ICE
+    /// ("Found IntValue ... but expected the StructValue variant").
+    /// Fixed by giving `TaskGroup`/`TaskHandle` an explicit `{ i64 }`
+    /// arm in `llvm_type_for_name` (mirrors the TCP/TLS baked-struct
+    /// arms). Fire-and-forget (no `.join()`) per the bug repro — the
+    /// group's scope-exit drop waits for the child.
+    #[test]
+    fn test_e2e_taskgroup_spawn_aggregate_capture_under_auto_par() {
+        let out = run_program_capturing(
+            r#"
+fn consume(v: Vec[i64]) -> i64 { v.len() }
+fn main() {
+    let data: Vec[i64] = Vec.new();
+    let mut g: TaskGroup = TaskGroup.new();
+    g.spawn(|| consume(data));
+    println("ok");
+}
+"#,
+        );
+        if let Some(c) = out {
+            assert_eq!(c.stdout.trim(), "ok");
         }
     }
 }

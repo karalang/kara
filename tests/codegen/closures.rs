@@ -4284,44 +4284,6 @@ fn test_e2e_sort_by_closure_param_keeps_its_element_type() {
 }
 
 #[test]
-fn test_e2e_auto_par_captures_indexed_access_base() {
-    // `refs_in_expr` was missing an `ExprKind::Index` arm — so
-    // `nums[j]` inside a par-branch body didn't walk into `nums`,
-    // and `nums` was missed from the capture set. The branch fn
-    // then ran with `nums` absent from `self.variables`, panicking
-    // at `compile_slice_index`'s `get_data_ptr(name).unwrap()`.
-    // Repro shape: function with a Slice param, a Vec/Map
-    // declaration (forms an independent par-group with the
-    // length binding), and a later block that indexes the slice.
-    let out = run_program(
-        r#"
-fn min_jumps(nums: Slice[i64]) -> i64 {
-    let n = nums.len();
-    let mut visited: Vec[bool] = Vec.new();
-    let mut bucket: Map[i64, Vec[i64]] = Map.new();
-    for _ in 0..n { visited.push(false); }
-    visited[0] = true;
-    let mut sum = 0i64;
-    let mut i = 0i64;
-    while i < n {
-        sum = sum + nums[i];
-        i = i + 1;
-    }
-    let _ = bucket.len();
-    sum
-}
-fn main() {
-    let a: Array[i64, 3] = [1, 2, 3];
-    println(min_jumps(a));
-}
-"#,
-    );
-    if let Some(out) = out {
-        assert_eq!(out.trim(), "6");
-    }
-}
-
-#[test]
 fn test_ir_nonpar_output_uses_lean_fwrite_not_capture_chokepoint() {
     // B-2026-06-15-2: 1a401c7b routed EVERY console write through the
     // runtime `karac_runtime_write_console` chokepoint, linking the
@@ -4946,40 +4908,6 @@ fn test_e2e_vec_retain_scalar_heap_and_capture() {
     .expect("compile + run failed");
     // scalar: [2,4,6]; heap: [\"bbb\",\"ddddd\"]; capture>6: [10,20].
     assert_eq!(output, "3\n2\n4\n6\n2\nbbb\nddddd\n2\n10\n20\n");
-}
-
-/// B-2026-06-07-1 regression: `tg.spawn(closure)` in a function that
-/// also declares a `Vec` (or any heap collection) — which makes the
-/// function eligible for statement-level auto-parallelization — must
-/// compile and run. The `g` binding escapes into auto-par's
-/// return-slot list; `infer_let_binding_llvm_type` sizes that slot
-/// from the `TaskGroup` type annotation via `llvm_type_for_name`,
-/// which used to hit the `i64` fall-through default (TaskGroup isn't
-/// in `struct_types` — baked stdlib defs aren't loaded into codegen).
-/// The reconstructed slot was then a bare `i64`, so `tg.spawn(...)`'s
-/// receiver load read an `IntValue` where the dispatcher does
-/// `into_struct_value()` on the `{ i64 }` TaskGroup shape → ICE
-/// ("Found IntValue ... but expected the StructValue variant").
-/// Fixed by giving `TaskGroup`/`TaskHandle` an explicit `{ i64 }`
-/// arm in `llvm_type_for_name` (mirrors the TCP/TLS baked-struct
-/// arms). Fire-and-forget (no `.join()`) per the bug repro — the
-/// group's scope-exit drop waits for the child.
-#[test]
-fn test_e2e_taskgroup_spawn_aggregate_capture_under_auto_par() {
-    let out = run_program_capturing(
-        r#"
-fn consume(v: Vec[i64]) -> i64 { v.len() }
-fn main() {
-    let data: Vec[i64] = Vec.new();
-    let mut g: TaskGroup = TaskGroup.new();
-    g.spawn(|| consume(data));
-    println("ok");
-}
-"#,
-    );
-    if let Some(c) = out {
-        assert_eq!(c.stdout.trim(), "ok");
-    }
 }
 
 #[test]
