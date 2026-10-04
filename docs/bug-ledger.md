@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 681 |
 | run-vs-build | 585 |
-| leak | 557 |
-| double-free | 413 |
+| leak | 558 |
+| double-free | 414 |
 | codegen-gap | 219 |
 | missing-feature | 216 |
 | other | 168 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2690 |
+| codegen | 2692 |
 | interp | 832 |
 | typecheck | 327 |
 | other | 113 |
@@ -512,7 +512,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-55 | 2026-10-04 | interp+codegen | medium | AN ASSIGNMENT THROUGH `*` OF A USER FUNCTION'S RETURNED `mut ref` IS DROPPED -- `*bump(mut x) += 5` and `*bump(mut x) = 9` over `fn bump(v: mut ref i64) -> mut ref i64 { return v; }` leave `x` at 1 under `--interp` and `karac run` alike, and `*h.slot() += 5` (a `mut ref self` method returning `mut ref i64`) fails codegen naming an LLVM pointer type; `*m.entry(c).or_insert(0) += 1` is right on both | — |
 | B-2026-10-04-56 | 2026-10-04 | codegen | medium | A STEADY SMALL `Map[char, i64]` RUNS 2.2x RUST'S `HashMap` AT EQUAL HASHING on kata 340's sliding-window bench (0.47 s vs 0.21 s), and the hash alone (2.44 G Ir) costs more than Rust's whole program (1.98 G Ir); the counting idiom `m.insert(c, m.get(c).unwrap_or(0) + 1)` hashes the same key twice, but the `entry` spelling, which hashes once, is still 1.9x | — |
 | B-2026-10-04-62 | 2026-10-04 | codegen | medium | A NAMED `Vec` LOCAL MOVED INTO A REASSIGNMENT ON ONE PATH ONLY LOSES ITS ELEMENTS' `Drop` BODIES ON THE PATH THAT DID NOT MOVE IT, ON EVERY COMPILED SURFACE -- `fn fo2(c: bool) -> Vec[R] { let mut v = Vec[mk(1)]; let w = Vec[mk(40)]; if c { v = w; } return v }` called with `false` prints `k1 dR1` compiled where `--interp` prints `dR40 k1 dR1` | — |
-| B-2026-10-04-58 | 2026-10-04 | codegen | low | A `for` LOOP OVER AN `Array` HELD IN A TUPLE ELEMENT FAILS THE BUILD -- `for p in a.0 { .. }` over `(Array[P, 2], i64)` stops `karac build` with `for-loop over this iterable is not lowered ... (source shape: a tuple element)`, while `--interp` prints `r:11`; `for x in b.0` over `(Vec[i64], i64)` and `for p in a.0.iter()` both build | — |
 | B-2026-10-04-64 | 2026-10-04 | codegen+interp | medium | A `for` LOOP OVER A FRESH `Vec` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `for item in mk() { k += item.n; }` over `fn mk() -> Vec[D]` with `impl Drop for D` prints `k 15` and never `drop 7` / `drop 8` on `--interp`, -O0 or -O2 (valgrind clean, so the memory is freed and only the bodies are skipped); over `Vec[E]` with a `match item { Many(xs) => count(xs), .. }` arm, `--interp` alone runs them (at each arm's end) and the compiled builds still run none | — |
 | B-2026-10-04-65 | 2026-10-04 | codegen | medium | DESTRUCTURING A TUPLE WHOSE ELEMENT IS AN `Option[shared]` OR A BARE `shared` HANDLE, OR NESTING ONE IN A TUPLE LITERAL, LEAKS THE HANDLE AND LOSES ITS `Drop` BODY COMPILED -- `let (a, b) = mk(1); println(f"g{a.unwrap().id} {b}")` prints `g1 1 end` and loses 16 B against `--interp`'s `g1 1 end dH1` | — |
 | B-2026-10-04-66 | 2026-10-04 | interp+codegen | medium | REASSIGNING A TUPLE LOCAL NEVER RELEASES THE DISPLACED TUPLE'S HEAP ELEMENTS -- `let mut p = mks(1); p = mks(2)` prints `y2 end dH2` with no `dH1` and loses 16 B, and the `(String, i64)` spelling loses the old string; `--interp` also prints no `dH1`, so the displaced handle's body runs on NO surface | — |
@@ -523,6 +522,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-73 | 2026-10-04 | codegen+interp | medium | REASSIGNING A TUPLE ELEMENT THAT HAS MOVED OUT NEVER RUNS THE NEW VALUE'S `Drop` BODY, ON EVERY SURFACE -- `let x = t.0; t.0 = mk(6);` prints `x5 dR5 end0` and never `dR6`; the same after a move on one path (`if c { let x = t.0; } t.0 = mk(6)` with `c` true), and a store on the moving path itself (`if c { let x = t.0; t.0 = mk(7); }`) | — |
 | B-2026-10-04-74 | 2026-10-04 | codegen+interp | medium | A NAMED LOCAL MOVED INTO A FIELD, `Vec` ELEMENT OR TUPLE ELEMENT ON ONE PATH ONLY IS LOST ON THE OTHER PATH COMPILED AND DROPPED TWICE ON THE MOVING PATH UNDER `--interp` -- `let n = mk(6); if c { w.r = n; }` (or `v[0] = n`, `t.1 = n`): compiled `c` false prints no `dR6` and leaks `n`'s 29 B String; `--interp` `c` true prints `dR5 dR6 end0 dR6` | — |
 | B-2026-10-04-75 | 2026-10-04 | codegen | medium | A USER ENUM WHOSE PAYLOAD IS AN `Option[shared]` NEVER RELEASES THE HANDLE, SO ITS `Drop` BODY RUNS ON NO COMPILED SURFACE -- `enum Hn { N(Option[Nd]), E }`, `{ let h = Hn.N(Some(Nd { v: 1 })); println("a") }` prints `a end` and loses 16 B at -O0 against `--interp`'s `a dN1 end` | — |
+| B-2026-10-04-78 | 2026-10-04 | codegen | low | MOVING A `for` BINDING OUT TWICE IN ONE ITERATION (`out.push(p); let q = p;`) LEAKS ONE COPY PER ITERATION, over a `Vec` and an `Array` alike -- 4 B in 2 blocks at -O0 for a two-element `Vec[P]` with a one-`String` `P`, where each move alone is clean | — |
 
 ### Relocated
 
@@ -3689,10 +3689,12 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-60 | parser | low | A KEYWORD USED AS A NAME CASCADES AND `karac fix` APPLIES NOTHING -- a local named `distinct` (reserved) reports 5 of its 7 uses, then `return distin… | 360f29517 |
 | B-2026-10-04-61 | typecheck | high | ANY EXPRESSION IS ACCEPTED AS AN ASSIGNMENT TARGET -- `(a, b) = (b, a)`, `a + 1 = 3`, `one() = 3`, `v.len() = 3` and `s.clone() += "y"` all pass `kar… | f39ec48c8 |
 | B-2026-10-04-57 | interp+codegen | medium | OVERWRITING A WHOLE TUPLE ELEMENT NEVER RUNS THE DISPLACED VALUE'S `Drop` BODY -- `t.0 = R { id: 6 }` over `(R, i64)` prints no `dR5` on any backend,… | 85b81ca3c |
+| B-2026-10-04-58 | codegen | low | A `for` LOOP OVER AN `Array` HELD IN A TUPLE ELEMENT FAILS THE BUILD -- `for p in a.0 { . | a2e480b43 |
 | B-2026-10-04-59 | codegen | low | A FIELD STORE THROUGH A NESTED INDEX FAILS THE BUILD -- `v[0][0].n = 9` over `Vec[Vec[P]]` stops `karac build` with `assignment to field 'n' through… | e66223d02 |
 | B-2026-10-04-63 | interp+codegen | medium | A PAYLOAD OR FIELD OF A BY-VALUE PARAM HANDED TO A METHOD ON A BORROWED RECEIVER STILL READS AS STORED INTO THAT RECEIVER, SO ITS `Drop` BODY RUNS NO… | a19190a5e |
 | B-2026-10-04-69 | codegen | medium | A PAYLOAD OF A BY-VALUE `Option`/`Result` PARAM HANDED TO A METHOD ON A LOCAL RECEIVER RUNS ITS `Drop` BODY NOWHERE COMPILED -- `fn lo(o: Option[S])… | ec60c375c |
 | B-2026-10-04-72 | codegen | high | A NAMED STRUCT, USER-ENUM OR `Option` SOURCE MOVED INTO A TUPLE ELEMENT (`t.1 = n`) IS OWNED TWICE COMPILED -- with a heap field the element and `n`… | 85b81ca3c |
+| B-2026-10-04-77 | codegen | high | A `for` BINDING OVER A FIXED `Array` IS NOT REGISTERED LIKE A `Vec` LOOP'S: a method on a `String` / `Vec` element (`for x in ss { x.len() }` over `A… | c8d492da7 |
 
 </details>
 
