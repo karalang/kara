@@ -5253,6 +5253,35 @@ impl<'ctx> super::Codegen<'ctx> {
         field.parse::<u32>().ok()
     }
 
+    /// B-2026-09-27-118 — the enum an enum-variant CONSTRUCTOR call builds:
+    /// `E.X(..)` is an `E`. Nothing else names it, because a variant is not a
+    /// declared function and so has no `fn_return_type_names` entry, which left
+    /// a chain on a constructor temp (`E.X(r).take().id`) unable to type the
+    /// receiver of `take` while the named spelling (`g.take().id`) resolved.
+    ///
+    /// Fail-closed: the head must be a declared NON-GENERIC enum that is not
+    /// shadowed by a live variable, and the tail one of its variants. A generic
+    /// enum's instantiation is not in the bare name, so it keeps declining.
+    fn enum_ctor_type_name(&self, head: &str, variant: &str) -> Option<String> {
+        if self.variables.contains_key(head) {
+            return None;
+        }
+        if !self
+            .type_decls
+            .enum_layouts
+            .get(head)?
+            .tags
+            .contains_key(variant)
+        {
+            return None;
+        }
+        let program = self.program_snapshot.as_deref()?;
+        let non_generic = program.items.iter().any(|it| {
+            matches!(it, Item::EnumDef(e) if e.name == head
+                && e.generic_params.as_ref().is_none_or(|g| g.params.is_empty()))
+        });
+        non_generic.then(|| head.to_string())
+    }
     /// Resolve the user-type name of an arbitrary expression by walking
     /// `Identifier` / `SelfValue` / `FieldAccess` chains. Returns
     /// `None` for primitive-typed expressions, calls whose return type
@@ -5960,7 +5989,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .fn_sig
                     .fn_return_type_names
                     .get(&format!("{}.{}", segments[0], segments[1]))
-                    .cloned(),
+                    .cloned()
+                    .or_else(|| self.enum_ctor_type_name(&segments[0], &segments[1])),
                 _ => None,
             },
             // A value-position BLOCK receiver — `{ let x = make(); x }.n`

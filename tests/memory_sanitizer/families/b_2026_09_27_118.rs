@@ -1,0 +1,37 @@
+//! B-2026-09-27-118 -- method chains on an enum-variant constructor temp,
+//! which failed to build before; each payload is owned once.
+
+use super::*;
+
+/// `E.X(r).take().id`, a struct-returning method's chained field, a `ref
+/// self` method and a `shared enum` constructor: no leak, no double free,
+/// every body once (the leak half is carried by the `-O0` leg).
+#[test]
+fn asan_method_chain_on_enum_ctor_temp() {
+    assert_clean_asan_run(
+        r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { r: R, n: i64 }
+enum E { X(R), Y, Z(i64, R) }
+impl E {
+    fn take(self) -> R { match self { E.X(t) => { return t; } E.Y => { return R { id: 0, tag: f"z" }; } E.Z(_, t) => { return t; } } }
+    fn wrap(self) -> W { match self { E.X(t) => W { r: t, n: 1 }, _ => W { r: R { id: 9, tag: f"w" }, n: 2 } } }
+    fn peek(ref self) -> i64 { match self { E.X(t) => t.id, _ => -1 } }
+}
+shared enum S { A(i64), B }
+impl S { fn val(self) -> R { match self { S.A(n) => R { id: n, tag: f"s" }, S.B => R { id: 0, tag: f"b" } } } }
+fn main() {
+    println(f"a{E.X(R { id: 5, tag: f"e.." }).take().id}");
+    println(f"b{E.Z(3, R { id: 6, tag: f"zz" }).take().tag}");
+    println(f"d{E.X(R { id: 7, tag: f"w" }).wrap().r.id}");
+    println(f"e{E.X(R { id: 8, tag: f"p" }).peek()}");
+    println(f"f{S.A(4).val().id}");
+    println("end");
+}
+"#,
+        &[
+            "a5", "dR5", "bzz", "dR6", "d7", "dR7", "dR8", "e8", "f4", "dR4", "end",
+        ],
+        "method_chain_enum_ctor_temp",
+    );
+}
