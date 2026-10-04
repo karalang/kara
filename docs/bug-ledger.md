@@ -92,15 +92,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 665 |
+| miscompile | 667 |
 | run-vs-build | 577 |
-| leak | 544 |
+| leak | 545 |
 | double-free | 409 |
 | codegen-gap | 216 |
-| missing-feature | 215 |
+| missing-feature | 216 |
 | other | 167 |
-| diagnostics | 139 |
-| perf | 133 |
+| diagnostics | 140 |
+| perf | 134 |
 | false-positive | 118 |
 | crash | 108 |
 | soundness | 97 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2644 |
-| interp | 810 |
-| typecheck | 323 |
+| codegen | 2646 |
+| interp | 813 |
+| typecheck | 325 |
 | other | 113 |
 | ownership | 80 |
 | cli | 73 |
@@ -506,6 +506,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-2 | 2026-10-04 | interp+codegen | low | WHEN A NESTED `match` THAT ONLY READS THE LEAF IS NOT THE OUTER ARM'S TAIL, THE INTERPRETER RUNS R'S `Drop` BODY AT THE INNER ARM AND THE COMPILED BACKENDS AT THE PLACE'S DEATH -- `if let Ok(o) = a { let k = match o { Some(i) => i.id, None => 0 }; println(k) }` over a local `Result[Option[R], E]` prints `dR7 7 end` interpreted and `7 dR7 end` at -O0 and -O2, memory clean. | — |
 | B-2026-10-04-3 | 2026-10-04 | interp+codegen | low | A NAMED `Result[Option[R], E]` LOCAL PASSED BY VALUE RUNS R'S `Drop` BODY INSIDE THE CALL COMPILED, BEFORE THE CALLER'S STATEMENT FINISHES, WHERE THE INTERPRETER RUNS IT AFTER -- `let a: Result[Option[R], i64] = Ok(Some(mk(1))); println(e(a))` over `fn e(r: Result[Option[R], i64]) -> i64 { 1 }` prints `dR1 1` at -O0 and -O2 against the interpreter's `1 dR1`; the `R` and `Option[R]` spellings print `1 dR1` everywhere. Since B-2026-10-03-34's fix the GENERIC callee does the same, so `res2`, `g5` and `g6` moved from agreeing to this order. | — |
 | B-2026-10-04-4 | 2026-10-04 | codegen | medium | A BY-VALUE `Option[Option[R]]` PARAM TAKEN APART IN TWO STEPS -- AN ENVELOPE BINDING FIRST, THEN THE LEAF OUT OF THAT BINDING -- RUNS R'S `Drop` BODY TWICE COMPILED WHEN THE LEAF IS MOVED ON, AND THE `let ... else` SPELLINGS ALSO LEAK THE BOX -- `let Some(o) = x else { return 0 }; let Some(w) = o else { return 2 }; v.push(w); return 1` prints `dR5 1 1 dR5` at -O0 and -O2 with 32 B lost, against the interpreter's `1 1 dR5`; the `match x { Some(o) => match o { Some(w) => { v.push(w); 1 } .. } .. }`, nested `if let` and let-else-then-match spellings print the same doubled output with memory clean; over `Result[Option[R], i64]` the output is right and 32 B leak, and a two-step let-else that only reads `w.id` leaks 61 B on every surface. | — |
+| B-2026-10-04-23 | 2026-10-04 | codegen | medium | PERF: a `match` arm binding over a borrowed `for` element, handed to a `ref` parameter, deep-copies the whole payload on every call -- `for item in items.iter() { match item { List(inner) => total += depth_sum(inner, depth + 1) } }` over `fn depth_sum(items: ref Vec[Nested], ..)` copies each subtree once per level it sits under, so kata 339's tree walk makes 1.08M allocations where Rust's makes 287k and runs 2.3x behind it | — |
+| B-2026-10-04-24 | 2026-10-04 | codegen | medium | `while let Some(item) = stack.pop() { .. }` LEAKS THE POPPED ENUM'S PAYLOAD BUFFER when the body does not destructure `item`, on every compiled surface -- over `Vec[Nested]` with `enum Nested { Int(i64), List(Vec[Nested]) }`, a body of `total += 1` (or a `match` whose arm is `List(_)`) loses the inner `Vec`'s 128 B buffer; with a `Vec[D]` payload whose element runs a `Drop` body the body runs and the 8 B buffer still leaks | — |
+| B-2026-10-04-25 | 2026-10-04 | interp | medium | Under `--interp`, a read-only `match` arm binding over a borrowed `for` element, passed to a `ref` parameter, runs the payload's `Drop` bodies on every call -- `for item in items.iter() { match item { Many(xs) => total += count(xs) } }` with `fn count(xs: ref Vec[D])` prints `drop 1 drop 2` before each `walk` line, where the JIT and both build modes run them once, at the end | — |
 
 ### Relocated
 
@@ -3637,6 +3640,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-52 | codegen | high | MOVING THE `Option[R]` ENVELOPE OUT OF A `Result[Option[R], E]`, WHERE `R` RUNS A USER `Drop`, FREES R'S HEAP TWICE -- `fn f(x: Result[Option[R], i64… | 8e15013f3 |
 | B-2026-10-03-53 | interp+codegen | medium | A LOCAL `Result[Option[R], E]` MATCHED `Ok(o) => 1`, OR `if let Ok(o) = c { .. | 6f9a56daf |
 | B-2026-10-03-54 | codegen | medium | AN ARM THAT BINDS THE `Option[R]` ENVELOPE OF A `Result[Option[R], E]` AND MATCHES IT AGAIN WITH AN INNER ARM THAT ONLY READS THE LEAF LEAKS R'S HEAP… | 5587a5ac9 |
+| B-2026-10-04-20 | interp | low | Under `--interp`, `is_ascii_digit` / `is_ascii_alphabetic` / `is_ascii_hexdigit` on an integer wider than a byte answer from its low byte: `let a: i6… | 6ec372386 |
+| B-2026-10-04-21 | typecheck+interp | low | `char` has no `is_ascii_digit` / `is_ascii_alphabetic` / `is_ascii_hexdigit`: `let cs: Vec[char] = text.chars().collect(); while cs[pos].is_ascii_dig… | c2e5faf64 |
+| B-2026-10-04-22 | typecheck | low | The `borrow_projection_copy` lint (W0299) is silent when a bare `for` element or a field read through a borrow is placed inside a tuple, array, `vec!… | 4eee6b21b |
 
 </details>
 
