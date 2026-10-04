@@ -70,6 +70,7 @@ pub(crate) fn binding_only_borrowed_with(
         follow_let_rebinds: false,
         follow_typed_rebinds: false,
         discards_die_in_frame: false,
+        root_method_args_stay: false,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -97,6 +98,7 @@ pub(crate) fn binding_only_borrowed_escape_with(
         follow_let_rebinds,
         follow_typed_rebinds: false,
         discards_die_in_frame: follow_let_rebinds,
+        root_method_args_stay: true,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -116,6 +118,7 @@ pub(crate) fn binding_only_borrowed_block_escape_with(
         follow_let_rebinds,
         follow_typed_rebinds: false,
         discards_die_in_frame: follow_let_rebinds,
+        root_method_args_stay: true,
     };
     !block_consumes(&c, b)
 }
@@ -150,6 +153,7 @@ pub(crate) fn binding_only_borrowed_with_callee_owns(
         follow_let_rebinds: false,
         follow_typed_rebinds: false,
         discards_die_in_frame: false,
+        root_method_args_stay: false,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -185,6 +189,7 @@ pub(crate) fn binding_only_borrowed_following_rebinds_with(
         follow_let_rebinds: true,
         follow_typed_rebinds: true,
         discards_die_in_frame: false,
+        root_method_args_stay: false,
     };
     !(value_derived_from(&c, e) || has_consuming_sink(&c, e))
 }
@@ -205,6 +210,7 @@ pub(crate) fn binding_only_borrowed_block_following_rebinds_with(
         follow_let_rebinds: true,
         follow_typed_rebinds: true,
         discards_die_in_frame: false,
+        root_method_args_stay: false,
     };
     !block_consumes(&c, b)
 }
@@ -223,6 +229,7 @@ pub(crate) fn binding_only_borrowed_block_with(
         follow_let_rebinds: false,
         follow_typed_rebinds: false,
         discards_die_in_frame: false,
+        root_method_args_stay: false,
     };
     !block_consumes(&c, b)
 }
@@ -271,6 +278,7 @@ pub(crate) fn binding_materialized(
         follow_let_rebinds: false,
         follow_typed_rebinds: false,
         discards_die_in_frame: false,
+        root_method_args_stay: false,
     };
     value_derived_from(&c, e) || has_consuming_sink(&c, e)
 }
@@ -290,6 +298,7 @@ pub(crate) fn binding_materialized_block(
         follow_let_rebinds: false,
         follow_typed_rebinds: false,
         discards_die_in_frame: false,
+        root_method_args_stay: false,
     };
     block_consumes(&c, b)
 }
@@ -334,6 +343,12 @@ struct Ctx<'a> {
     /// that cannot answer pass the `false` closure and are byte-identical to
     /// before.
     callee_owns_arg: &'a dyn Fn(&str, usize) -> bool,
+    /// B-2026-10-04-63 — let a method on a BORROWED receiver that only reads
+    /// its argument (`self.eat(r)`) keep the argument in the frame instead of
+    /// scoring it as a transfer. Set only by the escape questions; answered by
+    /// `crate::ast::root_method_arg_stays`, which is `false` unless the caller
+    /// resolved the receivers with `crate::ast::with_root_call_ctx`.
+    root_method_args_stay: bool,
     /// B-2026-09-28-48 — follow a WHOLE immutable rebind (`let z = y;`) of the
     /// tracked binding instead of scoring it as a transfer: the move is a sink
     /// only when the new name is itself consumed in the rest of its block.
@@ -375,6 +390,7 @@ impl<'a> Ctx<'a> {
             follow_let_rebinds: false,
             follow_typed_rebinds: false,
             discards_die_in_frame: false,
+            root_method_args_stay: false,
         }
     }
 }
@@ -503,9 +519,17 @@ fn has_consuming_sink(c: &Ctx<'_>, e: &Expr) -> bool {
         // Method calls: the RECEIVER is a borrow (non-consuming), but an
         // ARGUMENT is conservatively a transfer — this is what covers
         // `v.push(x)` / `m.insert(k, x)` without an allowlist of mutators.
-        ExprKind::MethodCall { object, args, .. } => {
-            args.iter().any(|a| derived(&a.value))
-                || has_consuming_sink(c, object)
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            args.iter().enumerate().any(|(j, a)| {
+                derived(&a.value)
+                    && !(c.root_method_args_stay
+                        && crate::ast::root_method_arg_stays(object, method, j))
+            }) || has_consuming_sink(c, object)
                 || args.iter().any(|a| has_consuming_sink(c, &a.value))
         }
         // A closure that references `name` captures it (by value/move under the
@@ -617,6 +641,7 @@ fn stmts_have_sink(
                 follow_let_rebinds: true,
                 follow_typed_rebinds: c.follow_typed_rebinds,
                 discards_die_in_frame: c.discards_die_in_frame,
+                root_method_args_stay: c.root_method_args_stay,
             };
             return stmts_have_sink(&wc, &stmts[i + 1..], final_expr, true);
         }

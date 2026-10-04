@@ -6834,6 +6834,24 @@ fn part_paths_from_root_mode(
     program: Option<&crate::Program>,
     cond_mode: bool,
 ) -> Vec<ParamPath> {
+    // B-2026-10-04-63 — with the program, a part handed to a method on a
+    // borrowed root asks that method what it keeps (the `MethodCall` arm of
+    // the scan); see `outliving_store::root_call_keeps_arg_at`.
+    match program {
+        Some(p) => outliving_store::with_root_calls(p, f, || {
+            part_paths_from_root_mode_walk(f, param_name, arg_index, program, cond_mode)
+        }),
+        None => part_paths_from_root_mode_walk(f, param_name, arg_index, program, cond_mode),
+    }
+}
+
+fn part_paths_from_root_mode_walk(
+    f: &Function,
+    param_name: &str,
+    arg_index: usize,
+    program: Option<&crate::Program>,
+    cond_mode: bool,
+) -> Vec<ParamPath> {
     // The roots whose storage outlives the call, as
     // `fn_moves_param_into_outliving_place` computes them; only consulted on
     // the program-aware path.
@@ -7275,7 +7293,15 @@ fn part_paths_from_root_mode(
             } => {
                 let Some(program) = cx.program else { return };
                 if outliving_store::place_root_outlives(object, cx.roots) {
-                    for a in args {
+                    for (j, a) in args.iter().enumerate() {
+                        // B-2026-10-04-63 — a method on a BARE borrowed root
+                        // that keeps nothing of this argument (`self.eat(w.r)`
+                        // over `fn eat(ref self, s: S)`) is no store: the part
+                        // dies in that frame and the caller's walk still owns
+                        // its body.
+                        if outliving_store::root_call_keeps_arg_at(object, method, j) {
+                            continue;
+                        }
                         // B-2026-09-29-10 — a PROJECTION of the param pushed
                         // under an outliving root (`xs.push(w.r)`, `xs.push(t.0)`)
                         // hands the part over exactly as `let r = w.r;
@@ -8010,6 +8036,22 @@ pub fn fn_escaping_self_field_payload_paths(
 }
 
 fn escaping_field_payload_paths_impl(
+    f: &Function,
+    root: &str,
+    root_is_self: bool,
+    rule: CallYieldRule<'_>,
+) -> Vec<ParamPath> {
+    // B-2026-10-04-63 — a payload handed to a method on a borrowed receiver
+    // that only reads it is not a store (see `outliving_store::with_root_calls`).
+    match rule {
+        CallYieldRule::ReturnsIt(p) => outliving_store::with_root_calls(p, f, || {
+            escaping_field_payload_paths_impl_walk(f, root, root_is_self, rule)
+        }),
+        CallYieldRule::Any => escaping_field_payload_paths_impl_walk(f, root, root_is_self, rule),
+    }
+}
+
+fn escaping_field_payload_paths_impl_walk(
     f: &Function,
     root: &str,
     root_is_self: bool,
@@ -9492,6 +9534,21 @@ fn pattern_variant_names(p: &Pattern) -> Vec<String> {
 }
 
 fn escaping_param_payload_variants_impl(
+    f: &Function,
+    arg_index: usize,
+    rule: CallYieldRule<'_>,
+) -> Vec<String> {
+    // B-2026-10-04-63 — a payload handed to a method on a borrowed receiver
+    // that only reads it is not a store (see `outliving_store::with_root_calls`).
+    match rule {
+        CallYieldRule::ReturnsIt(p) => outliving_store::with_root_calls(p, f, || {
+            escaping_param_payload_variants_impl_walk(f, arg_index, rule)
+        }),
+        CallYieldRule::Any => escaping_param_payload_variants_impl_walk(f, arg_index, rule),
+    }
+}
+
+fn escaping_param_payload_variants_impl_walk(
     f: &Function,
     arg_index: usize,
     rule: CallYieldRule<'_>,
@@ -11380,6 +11437,26 @@ fn payload_escapes_by_assignment_block(
 /// count as a store: a shape added to `stores` is admitted by both at once, so
 /// the pair can never drift into disagreeing about what a store IS -- only
 /// about how many paths take one.
+/// B-2026-10-04-63 — run `body` with `f`'s borrowed receivers resolvable, so
+/// [`root_method_arg_stays`] can answer for a method called on `self` or on a
+/// `ref` parameter. Codegen wraps its payload escape questions in this; without
+/// it every method-call argument stays a transfer, as before.
+pub fn with_root_call_ctx<T>(
+    program: &crate::Program,
+    f: &Function,
+    body: impl FnOnce() -> T,
+) -> T {
+    outliving_store::with_root_calls(program, f, body)
+}
+
+/// B-2026-10-04-63 — is argument `j` of `object.method(..)` one the method
+/// only reads, so handing it there keeps it in the calling frame? Resolves only
+/// a borrowed receiver (`self`, a `ref` parameter) inside
+/// [`with_root_call_ctx`]; `false` (a transfer) everywhere else.
+pub fn root_method_arg_stays(object: &Expr, method: &str, j: usize) -> bool {
+    outliving_store::root_call_keeps_arg_at(object, method, j)
+}
+
 mod outliving_store {
     use super::*;
     use crate::ast::{CallArg, TypeKind};
@@ -11470,6 +11547,15 @@ mod outliving_store {
         args: &[CallArg],
         name: &str,
     ) -> bool {
+        args.iter()
+            .position(|a| is_bare(&a.value, name))
+            .is_some_and(|j| root_call_keeps_arg_at(object, method, j))
+    }
+
+    /// B-2026-10-04-63 — [`root_call_keeps_arg_local`] for the argument at
+    /// position `j`, whatever its spelling: the part walks ask it of a
+    /// projection (`self.eat(w.r)`) and of a payload binding alike.
+    pub(super) fn root_call_keeps_arg_at(object: &Expr, method: &str, j: usize) -> bool {
         let Some((program, ty)) = ROOT_CALL_CTX.with(|c| {
             let c = c.borrow();
             let c = c.as_ref()?;
@@ -11496,9 +11582,6 @@ mod outliving_store {
         // SAFETY: the pointer was taken from a live `&Program` by
         // `with_root_calls`, whose borrow outlives this call.
         let program = unsafe { &*program };
-        let Some(j) = args.iter().position(|a| is_bare(&a.value, name)) else {
-            return false;
-        };
         let mut found: Vec<&Function> = Vec::new();
         for item in &program.items {
             if let Item::ImplBlock(imp) = item {

@@ -6975,6 +6975,24 @@ impl<'ctx> super::Codegen<'ctx> {
         param_te: &TypeExpr,
         want_variant: Option<&str>,
     ) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
+        // B-2026-10-04-63 — with `f`'s borrowed receivers resolvable, so an arm
+        // that hands its payload to a method on `self` / a `ref` param that
+        // only reads it (`Some(r) => self.eat(r)`) is not read as an escape.
+        // Both ends of a call reach this function, so they agree.
+        match self.program_snapshot.as_deref() {
+            Some(program) => crate::ast::with_root_call_ctx(program, f, || {
+                self.optres_payload_escape_map_inner(f, param_te, want_variant)
+            }),
+            None => self.optres_payload_escape_map_inner(f, param_te, want_variant),
+        }
+    }
+
+    fn optres_payload_escape_map_inner(
+        &self,
+        f: &crate::ast::Function,
+        param_te: &TypeExpr,
+        want_variant: Option<&str>,
+    ) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
         // B-2026-09-13-3 — which escape map to believe depends on whether
         // the payload can be partially moved at all.
         //
