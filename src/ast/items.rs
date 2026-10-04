@@ -11471,6 +11471,11 @@ mod outliving_store {
         program: *const crate::Program,
         self_ty: Option<String>,
         ref_param_tys: Vec<(String, String)>,
+        /// B-2026-10-04-69 — locals whose type is plain from their one binding
+        /// (`let q = Q { .. }`, `let q: Q = ..`). Used ONLY to keep a method
+        /// argument out of the consume-class escape walk; the store walk never
+        /// asks about a local receiver.
+        local_tys: Vec<(String, String)>,
     }
 
     thread_local! {
@@ -11486,6 +11491,164 @@ mod outliving_store {
             TypeKind::Ref(inner) | TypeKind::MutRef(inner) => bare_type_name(inner),
             _ => None,
         }
+    }
+
+    /// B-2026-10-04-69 — the locals of `f` whose type can be read off their
+    /// binding without inference: bound by exactly one `let` (or `let x: T;`)
+    /// in the whole body, with a bare non-generic annotation or a bare struct
+    /// literal as the value, and bound by NO other pattern anywhere — not a
+    /// param, a match arm, a `for`, an `if let`, a closure param — so a later
+    /// use cannot mean a different binding of another type. A wrong answer
+    /// here would let a storing method's argument keep its caller-side body
+    /// walk, so anything unclear leaves the name out.
+    fn plainly_typed_locals(program: &crate::Program, f: &Function) -> Vec<(String, String)> {
+        use crate::index_disjoint::{for_each_child_public, Child};
+        #[derive(Default)]
+        struct Seen {
+            typed: Vec<(String, Option<String>)>,
+            other: std::collections::HashSet<String>,
+        }
+        // Or a call whose declared return type names it: a non-generic free
+        // function (`let q = mkq()`) or an associated function of a
+        // non-generic impl (`let q = Q.new()`, `-> Self` included).
+        fn call_ty(program: &crate::Program, callee: &Expr) -> Option<String> {
+            match &callee.kind {
+                ExprKind::Identifier(g) => program.items.iter().find_map(|item| match item {
+                    Item::Function(gf) if &gf.name == g && gf.generic_params.is_none() => {
+                        gf.return_type.as_ref().and_then(bare_type_name)
+                    }
+                    _ => None,
+                }),
+                ExprKind::Path {
+                    segments,
+                    generic_args: None,
+                    ..
+                } if segments.len() == 2 => {
+                    let (t, m) = (&segments[0], &segments[1]);
+                    program.items.iter().find_map(|item| match item {
+                        Item::ImplBlock(imp)
+                            if imp.generic_params.is_none()
+                                && bare_type_name(&imp.target_type).as_ref() == Some(t) =>
+                        {
+                            imp.items.iter().find_map(|ii| match ii {
+                                ImplItem::Method(g)
+                                    if &g.name == m
+                                        && g.self_param.is_none()
+                                        && g.generic_params.is_none() =>
+                                {
+                                    let r = g.return_type.as_ref().and_then(bare_type_name)?;
+                                    Some(if r == "Self" { t.clone() } else { r })
+                                }
+                                _ => None,
+                            })
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            }
+        }
+        fn let_ty(
+            program: &crate::Program,
+            ty: Option<&TypeExpr>,
+            value: Option<&Expr>,
+        ) -> Option<String> {
+            if let Some(t) = ty {
+                return bare_type_name(t);
+            }
+            match value.map(|v| &v.kind) {
+                Some(ExprKind::StructLiteral {
+                    path,
+                    generic_args: None,
+                    ..
+                }) if path.len() == 1 => path.first().cloned(),
+                Some(ExprKind::Call { callee, .. }) => call_ty(program, callee),
+                _ => None,
+            }
+        }
+        fn block(p: &crate::Program, b: &Block, seen: &mut Seen) {
+            for st in &b.stmts {
+                match &st.kind {
+                    StmtKind::Let {
+                        pattern, ty, value, ..
+                    } => {
+                        match &pattern.kind {
+                            PatternKind::Binding(n) => seen
+                                .typed
+                                .push((n.clone(), let_ty(p, ty.as_ref(), Some(value)))),
+                            _ => seen.other.extend(pattern.binding_names()),
+                        }
+                        expr(p, value, seen);
+                    }
+                    StmtKind::LetUninit { name, ty, .. } => {
+                        seen.typed.push((name.clone(), bare_type_name(ty)));
+                    }
+                    StmtKind::LetElse {
+                        pattern,
+                        value,
+                        else_block,
+                        ..
+                    } => {
+                        seen.other.extend(pattern.binding_names());
+                        expr(p, value, seen);
+                        block(p, else_block, seen);
+                    }
+                    StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                        block(p, body, seen)
+                    }
+                    StmtKind::Expr(e) => expr(p, e, seen),
+                    StmtKind::Assign { target, value }
+                    | StmtKind::CompoundAssign { target, value, .. } => {
+                        expr(p, target, seen);
+                        expr(p, value, seen);
+                    }
+                    StmtKind::MultiAssign { targets, values } => {
+                        for x in targets.iter().chain(values) {
+                            expr(p, x, seen);
+                        }
+                    }
+                }
+            }
+            if let Some(e) = &b.final_expr {
+                expr(p, e, seen);
+            }
+        }
+        fn expr(p: &crate::Program, e: &Expr, seen: &mut Seen) {
+            match &e.kind {
+                ExprKind::Match { arms, .. } => {
+                    for a in arms {
+                        seen.other.extend(a.pattern.binding_names());
+                    }
+                }
+                ExprKind::IfLet { pattern, .. }
+                | ExprKind::WhileLet { pattern, .. }
+                | ExprKind::For { pattern, .. } => seen.other.extend(pattern.binding_names()),
+                ExprKind::Closure { params, .. } => {
+                    for p in params {
+                        seen.other.extend(p.pattern.binding_names());
+                    }
+                }
+                _ => {}
+            }
+            for_each_child_public(e, &mut |c| match c {
+                Child::Expr(x) => expr(p, x, seen),
+                Child::Block(b) => block(p, b, seen),
+            });
+        }
+        let mut seen = Seen::default();
+        for p in &f.params {
+            seen.other.extend(p.pattern.binding_names());
+        }
+        block(program, &f.body, &mut seen);
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (n, t) in &seen.typed {
+            let Some(t) = t else { continue };
+            if seen.other.contains(n) || seen.typed.iter().filter(|(m, _)| m == n).count() != 1 {
+                continue;
+            }
+            out.push((n.clone(), t.clone()));
+        }
+        out
     }
 
     /// Run `body` with `f`'s receiver and `ref`-param types visible to the
@@ -11524,6 +11687,7 @@ mod outliving_store {
             program: program as *const crate::Program,
             self_ty,
             ref_param_tys,
+            local_tys: plainly_typed_locals(program, f),
         };
         let saved = ROOT_CALL_CTX.with(|c| c.borrow_mut().replace(ctx));
         let out = body();
@@ -11571,6 +11735,7 @@ mod outliving_store {
                 ExprKind::Identifier(n) => c
                     .ref_param_tys
                     .iter()
+                    .chain(c.local_tys.iter())
                     .find(|(p, _)| p == n)
                     .map(|(_, t)| t.clone())?,
                 _ => return None,
