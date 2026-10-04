@@ -742,9 +742,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // would create a second one". The bare-array spelling of this exact
         // cell is clean today for that reason, which is what identifies the
         // model rather than the deep copy the Vec tuple uses.
+        // B-2026-10-04-40 — through nested arrays, in step with the tuple
+        // drop gate and with the caller's mirror in `call_dispatch.rs`.
         let array_heap = elems.iter().any(|e| {
             self.array_elem_and_len(e)
-                .is_some_and(|(inner, n)| n > 0 && self.type_expr_has_drop_heap(&inner))
+                .is_some_and(|(inner, n)| n > 0 && self.array_elem_te_has_drop_heap(&inner))
         });
         if !elems.iter().any(|e| self.type_expr_has_drop_heap(e)) && !array_heap {
             return false;
@@ -761,7 +763,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // went red. A bare array param has its own ownership model
             // (`make_array_param_callee_owned`, transfer not copy) and must
             // keep it.
-            Some((inner, n)) => n == 0 || self.field_copy_supported(&inner, &mut stack),
+            Some((inner, n)) => n == 0 || self.array_elem_copy_supported(&inner, &mut stack),
             None => self.field_copy_supported(e, &mut stack),
         }) {
             return false;
@@ -2192,6 +2194,20 @@ impl<'ctx> super::Codegen<'ctx> {
         p.segments
             .first()
             .is_some_and(|h| stack.iter().any(|s| s == h))
+    }
+
+    /// B-2026-10-04-40 — `field_copy_supported` asked of a fixed array's
+    /// ELEMENT, looking through nested arrays the way
+    /// `deep_copy_array_elems_in_place` copies through them.
+    pub(super) fn array_elem_copy_supported(
+        &self,
+        elem: &TypeExpr,
+        stack: &mut Vec<String>,
+    ) -> bool {
+        match self.array_elem_and_len(elem) {
+            Some((inner, n)) => n == 0 || self.array_elem_copy_supported(&inner, stack),
+            None => self.field_copy_supported(elem, stack),
+        }
     }
 
     pub(super) fn field_copy_supported(&self, fte: &TypeExpr, stack: &mut Vec<String>) -> bool {

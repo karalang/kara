@@ -12474,9 +12474,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // the binding carries its own drop, and this registrar only ever
             // claims a producer shape — so nothing here can give a named
             // argument a second owner.
+            // B-2026-10-04-40 — through nested arrays: `Array[Array[String, 2],
+            // 2]`'s element is itself an array, which the one-level test read
+            // as heapless.
             let array_heap_elem = elem_tes.iter().any(|e| {
                 self.array_elem_and_len(e)
-                    .is_some_and(|(inner, n)| n > 0 && self.type_expr_has_drop_heap(&inner))
+                    .is_some_and(|(inner, n)| n > 0 && self.array_elem_te_has_drop_heap(&inner))
             });
             // B-2026-09-24-21 — an `Option`/`Result` element too, the one
             // disjunct of `tuple_elem_needs_deep_drop` this needs: an inline
@@ -14212,16 +14215,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // registered none (an orphan); answering NO where it copies is the leak
         // above. The same "two questions have to be ONE predicate" rule
         // `make_array_param_callee_owned`'s doc states for its own pair.
+        // B-2026-10-04-40 — through nested arrays, as the callee's gate asks.
         let array_heap = resolved.iter().any(|e| {
             self.array_elem_and_len(e)
-                .is_some_and(|(inner, n)| n > 0 && self.type_expr_has_drop_heap(&inner))
+                .is_some_and(|(inner, n)| n > 0 && self.array_elem_te_has_drop_heap(&inner))
         });
         (array_heap || resolved.iter().any(|e| self.type_expr_has_drop_heap(e)))
             && resolved.iter().all(|e| match self.array_elem_and_len(e) {
                 // An array element is copyable exactly when its ELEMENT is —
                 // asked here, not inside `field_copy_supported`, for the
                 // containment reason that function's own caller records.
-                Some((inner, n)) => n == 0 || self.field_copy_supported(&inner, &mut Vec::new()),
+                Some((inner, n)) => {
+                    n == 0 || self.array_elem_copy_supported(&inner, &mut Vec::new())
+                }
                 None => self.field_copy_supported(e, &mut Vec::new()),
             })
     }

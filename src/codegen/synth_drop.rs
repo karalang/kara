@@ -11918,6 +11918,19 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-10-04-40 — does a fixed array's ELEMENT own heap, looking
+    /// through any number of nested fixed arrays? `type_expr_has_drop_heap`
+    /// answers `false` for an `Array` path, so asked of the element of
+    /// `Array[Array[String, 2], 2]` it saw no heap and the enclosing tuple got
+    /// no drop at all, leaking every inner `String`. `emit_drop_fn_for_array`
+    /// already recurses through nested arrays, so only the gate was blind.
+    pub(super) fn array_elem_te_has_drop_heap(&self, elem: &TypeExpr) -> bool {
+        match self.array_elem_and_len(elem) {
+            Some((inner, n)) => n > 0 && self.array_elem_te_has_drop_heap(&inner),
+            None => self.type_expr_has_drop_heap(elem),
+        }
+    }
+
     pub(super) fn tuple_elem_needs_deep_drop(&self, te: &TypeExpr) -> bool {
         match &te.kind {
             TypeKind::Tuple(inner) => inner.iter().any(|e| self.tuple_elem_needs_deep_drop(e)),
@@ -11931,7 +11944,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // this `Path` arm and then fell through every test in it,
                     // and the tuple's deep drop was never ARMED.
                     || self.array_elem_and_len(te).is_some_and(|(inner, n)| {
-                        n > 0 && self.type_expr_has_drop_heap(&inner)
+                        n > 0 && self.array_elem_te_has_drop_heap(&inner)
                     })
                     // B-2026-08-03-3 — an `Option[P]` / `Result[O, E]` element.
                     // `type_expr_has_drop_heap` hardcodes `Option | Result =>

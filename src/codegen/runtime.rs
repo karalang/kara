@@ -1669,17 +1669,26 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn aggregate_has_array_of_heap(&self, agg_ty: StructType<'ctx>) -> bool {
         let vec_ty = self.vec_struct_type();
         (0..agg_ty.count_fields()).any(|i| match agg_ty.get_field_type_at_index(i) {
-            Some(BasicTypeEnum::ArrayType(at)) => match at.get_element_type() {
-                BasicTypeEnum::StructType(est) => {
-                    est == vec_ty || self.aggregate_has_heap_field(est)
-                }
-                _ => false,
-            },
+            Some(BasicTypeEnum::ArrayType(at)) => self.array_type_elems_own_heap(at),
             Some(BasicTypeEnum::StructType(st)) if st != vec_ty => {
                 self.aggregate_has_array_of_heap(st)
             }
             _ => false,
         })
+    }
+
+    /// The element test of [`Self::aggregate_has_array_of_heap`], looking
+    /// through nested fixed arrays (B-2026-10-04-40): the drop gate now arms a
+    /// tuple holding `Array[Array[String, 2], 2]`, so the move-out disarm has to
+    /// see the same heap or a moved tuple frees it twice.
+    fn array_type_elems_own_heap(&self, at: inkwell::types::ArrayType<'ctx>) -> bool {
+        match at.get_element_type() {
+            BasicTypeEnum::StructType(est) => {
+                est == self.vec_struct_type() || self.aggregate_has_heap_field(est)
+            }
+            BasicTypeEnum::ArrayType(inner) => self.array_type_elems_own_heap(inner),
+            _ => false,
+        }
     }
 
     /// Name the value an RC-fallback box is about to wrap, for
