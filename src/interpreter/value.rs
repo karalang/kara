@@ -2355,6 +2355,17 @@ pub(crate) fn primitive_const_to_value(cv: &crate::prelude::ConstValue) -> Value
 }
 
 impl Value {
+    /// B-2026-10-03-21 — a bare scalar: no heap, no parts, no `Drop` body.
+    /// The per-call ownership bookkeeping has nothing to record for an
+    /// argument holding one, whatever the callee does with it, so it skips
+    /// such an argument before asking the callee-body predicates.
+    pub(crate) fn is_plain_scalar(&self) -> bool {
+        matches!(
+            self,
+            Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Char(_) | Value::Unit
+        )
+    }
+
     /// Slice 3 helper — wrap a fresh `Vec<Value>` in the shared
     /// `Arc<RwLock<>>` storage used for `Value::Array`. Every Array
     /// allocation goes through this so the rep upgrade stays uniform.

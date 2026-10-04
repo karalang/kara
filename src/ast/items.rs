@@ -3103,6 +3103,16 @@ pub fn fn_whole_param_aliases(
     program: &crate::Program,
     f: &Function,
 ) -> std::collections::HashSet<String> {
+    // B-2026-10-03-21 — memoized: the interpreter asks this on every call.
+    analysis_memo_full("fn_whole_param_aliases", f, Some(program), 0, "", || {
+        fn_whole_param_aliases_uncached(program, f)
+    })
+}
+
+fn fn_whole_param_aliases_uncached(
+    program: &crate::Program,
+    f: &Function,
+) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
     for p in &f.params {
         if matches!(
@@ -8318,6 +8328,23 @@ pub fn fn_escaping_param_payload_variants(
     f: &Function,
     arg_index: usize,
 ) -> Vec<String> {
+    // B-2026-10-03-21 — memoized: asked for every identifier argument of
+    // every interpreted call.
+    analysis_memo_full(
+        "fn_escaping_param_payload_variants",
+        f,
+        Some(program),
+        arg_index,
+        "",
+        || fn_escaping_param_payload_variants_uncached(program, f, arg_index),
+    )
+}
+
+fn fn_escaping_param_payload_variants_uncached(
+    program: &crate::Program,
+    f: &Function,
+    arg_index: usize,
+) -> Vec<String> {
     let variants =
         escaping_param_payload_variants_impl(f, arg_index, CallYieldRule::ReturnsIt(program));
     // B-2026-09-29-75 — or handed, on every path, as the receiver of an
@@ -13012,6 +13039,13 @@ pub fn param_reassigned_coll_wrap_locals(
 /// parameter, which rule 3 drops at the end of the call as well, so its
 /// binding is listed too.
 pub fn param_rebinds_dropping_at_call_end(f: &Function) -> Vec<String> {
+    // B-2026-10-03-21 — memoized: the interpreter asks this on every call.
+    analysis_memo("param_rebinds_dropping_at_call_end", f, 0, || {
+        param_rebinds_dropping_at_call_end_uncached(f)
+    })
+}
+
+fn param_rebinds_dropping_at_call_end_uncached(f: &Function) -> Vec<String> {
     fn field_of(e: &Expr, c: &str) -> bool {
         match &e.kind {
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
@@ -13206,8 +13240,19 @@ fn fn_conditionally_stores_param_legacy(
     f: &Function,
     arg_index: usize,
 ) -> bool {
-    fn_conditionally_moves_param_into_outliving_place(program, f, arg_index)
-        || fn_conditionally_moves_param_into_local_container(f, arg_index)
+    // B-2026-10-03-21 — memoized: the interpreter asks this on every call,
+    // and the two walks under it re-derive the callee's locals each time.
+    analysis_memo_full(
+        "fn_conditionally_stores_param_legacy",
+        f,
+        program,
+        arg_index,
+        "",
+        || {
+            fn_conditionally_moves_param_into_outliving_place(program, f, arg_index)
+                || fn_conditionally_moves_param_into_local_container(f, arg_index)
+        },
+    )
 }
 
 /// B-2026-09-28-67 — the BRANCHING sibling of

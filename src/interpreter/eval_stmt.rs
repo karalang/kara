@@ -9952,6 +9952,12 @@ impl<'a> super::Interpreter<'a> {
                 let ExprKind::Identifier(n) = &arg.value.kind else {
                     return None;
                 };
+                // B-2026-10-03-21 — a scalar binding has no body to disarm
+                // and no parts to mask, so none of the callee-body walks
+                // below can change what happens to it.
+                if self.env.slot_ref(n).is_some_and(Value::is_plain_scalar) {
+                    return None;
+                }
                 // B-2026-08-29-49 — the SECOND escape route for an
                 // identifier arg, and the interp twin of the third clause in
                 // `compile_call`'s gate. The walk this function exists to
@@ -10074,6 +10080,15 @@ impl<'a> super::Interpreter<'a> {
             .map(|f| {
                 args.iter()
                     .enumerate()
+                    // B-2026-10-03-21 — only a collection literal can carry a
+                    // named local, so ask the callee walks of those alone.
+                    .filter(|(_, arg)| match &arg.value.kind {
+                        ExprKind::ArrayLiteral(_) => true,
+                        ExprKind::PrefixCollectionLiteral { type_name, .. } => {
+                            type_name == "Vec" || type_name == "Array"
+                        }
+                        _ => false,
+                    })
                     .filter(|(i, _)| {
                         let i = *i;
                         crate::ast::fn_returns_param(f, i)

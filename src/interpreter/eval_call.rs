@@ -5159,6 +5159,11 @@ impl<'a> super::Interpreter<'a> {
         dyn_escapes: Vec<(usize, Vec<String>)>,
     ) {
         for (i, arg) in args.iter().enumerate().rev() {
+            // B-2026-10-03-21 — a scalar argument has no body to run and no
+            // part to mask, so the walks below have nothing to do for it.
+            if arg_vals.get(i).is_some_and(Value::is_plain_scalar) {
+                continue;
+            }
             // B-2026-07-01-7 passthrough guard + B-2026-08-26-9 escape guard,
             // both now asked through `callee_owns_arg_beyond_call` so the two
             // method-frame consumers get the SAME answer this walk acts on
