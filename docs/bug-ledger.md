@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 679 |
-| run-vs-build | 583 |
-| leak | 552 |
+| run-vs-build | 584 |
+| leak | 555 |
 | double-free | 412 |
 | codegen-gap | 218 |
 | missing-feature | 216 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2681 |
-| interp | 827 |
+| codegen | 2684 |
+| interp | 829 |
 | typecheck | 327 |
 | other | 113 |
 | ownership | 80 |
@@ -504,7 +504,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-43 | 2026-10-04 | codegen | medium | A FIELD OR INDEX READ STRAIGHT OFF A CLOSURE CALL'S STRUCT OR ARRAY RESULT DOES NOT BUILD -- `let h = |x: R| x; println(f"r{h(mk(47)).id}")` and `let f = |x: Array[R, 1]| x; let r = f([mk(92)]); println(f"r{r[0].id}")` fail with `codegen: cannot resolve field 'id' on this receiver`, while `--interp` prints `r47 dR47` and `r92 dR92` | — |
 | B-2026-10-04-44 | 2026-10-04 | interp+codegen | medium | A DISCARDED CALL THROUGH A CLOSURE THAT RETURNS A FRESH `Drop` VALUE RUNS NO BODY ON ANY SURFACE AND LEAKS IT COMPILED -- `let h = |k: i64| mk(k); h(90); println("r")` prints `r end` everywhere, where the named passthrough `id_r(mk(88));` prints `dR88 r end` | — |
 | B-2026-10-04-45 | 2026-10-04 | codegen | high | A GENERIC `shared enum G[T]` OVER `Map[..]` OWNS ITS MAP PAYLOAD NOWHERE: WITH NO MATCH THE MAP LEAKS, WITH ONE ARM BINDING THE ARM FREES IT, AND WITH TWO THE SECOND READS AND FREES A FREED TABLE (4 INVALID FREES, 15 INVALID READS) -- THE GENERIC RELEASE FN FREES ONLY BOXED PAYLOADS AND A ONE-WORD MAP HANDLE IS INLINE | — |
-| B-2026-10-04-46 | 2026-10-04 | codegen | high | AN `Option[shared]` TUPLE ELEMENT IS NEVER RELEASED BY THE TUPLE'S DROP, SO `p.0.unwrap().id` READ TWICE IS A USE-AFTER-FREE AND A TUPLE NOBODY UNWRAPS LEAKS THE HANDLE -- `let p = (Some(H { id: 11 }), 12)` then two `println(f"t{p.0.unwrap().id}")` prints `dH11 t11 t11 end` with 3 invalid accesses at -O0 against `--interp`'s `t11 t11 end dH11`, and `println(f"t{p.1}")` alone loses 16 B and the `dH11` body | — |
 | B-2026-10-04-47 | 2026-10-04 | codegen | medium | A `shared` HANDLE HELD IN A FIELD OF A NAMED STRUCT PASSED BY VALUE IS RELEASED AT THE CALLER'S SCOPE END ON EVERY COMPILED SURFACE, WHERE design.md AND `--interp` RELEASE IT AT THE END OF THE CALL -- `let w = W { o: Some(H { id: 6 }), n: 7 }; cw2(w); println("after1")` prints `w7 after1 .. end dH6` at -O0 and -O2 against `--interp`'s `w7 dH6 after1`, and the same for a by-value `self` and for a bare `shared` field | — |
 | B-2026-10-04-48 | 2026-10-04 | interp | medium | `--interp` RUNS THE `Drop` BODY OF A `shared` FIELD LATE OR NOT AT ALL WHEN ITS HOLDER IS HANDED TO A CALLEE THAT TAKES IT OVER -- a fresh `Hs { q: Q2 { id: 1 }, r: mk(2) }` pushed into the callee's own `Vec` prints `d2 in k5` on `--interp` and `d2 in dq1 k5` compiled, and the same call made inside `println(f"k{f(h)}")` prints `dq1` after `k5` on `--interp` only | — |
 | B-2026-10-04-49 | 2026-10-04 | interp+codegen | medium | B-2026-09-27-50'S REASSIGNED `let mut` REBIND OF A STRUCT HOLDING A `shared` FIELD LOSES BODIES ON EVERY SURFACE AND LEAKS COMPILED -- `fn f(a: Hs) -> i64 { let mut c = a; c = Hs { q: Q2 { id: 5 }, r: mk(9) }; println("in"); 5 }` prints `dq1 in k5` compiled (no `d2`, no `d9`, no `dq5`, valgrind 1) and `d2 d9 dq5 in k5` on `--interp` (no `dq1`) | — |
@@ -520,6 +519,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-59 | 2026-10-04 | codegen | low | A FIELD STORE THROUGH A NESTED INDEX FAILS THE BUILD -- `v[0][0].n = 9` over `Vec[Vec[P]]` stops `karac build` with `assignment to field 'n' through this place is not yet lowered`, while `--interp` prints `r:9`; the one-level store `v[0].n = 9` builds | — |
 | B-2026-10-04-63 | 2026-10-04 | interp+codegen | medium | A PAYLOAD OR FIELD OF A BY-VALUE PARAM HANDED TO A METHOD ON A BORROWED RECEIVER STILL READS AS STORED INTO THAT RECEIVER, SO ITS `Drop` BODY RUNS NOWHERE ON EVERY SURFACE -- `fn po(ref self, o: Option[S]) { match o { Some(r) => self.eat(r), None => {} } println("po") }` over `fn eat(ref self, s: S)` prints `qx po a` for `q.po(Some(mks(1))); println("a")`, never `dS1`, and `fn pw(ref self, w: W) { self.eat(w.r); .. }` likewise loses `dS2` | — |
 | B-2026-10-04-64 | 2026-10-04 | codegen+interp | medium | A `for` LOOP OVER A FRESH `Vec` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `for item in mk() { k += item.n; }` over `fn mk() -> Vec[D]` with `impl Drop for D` prints `k 15` and never `drop 7` / `drop 8` on `--interp`, -O0 or -O2 (valgrind clean, so the memory is freed and only the bodies are skipped); over `Vec[E]` with a `match item { Many(xs) => count(xs), .. }` arm, `--interp` alone runs them (at each arm's end) and the compiled builds still run none | — |
+| B-2026-10-04-65 | 2026-10-04 | codegen | medium | DESTRUCTURING A TUPLE WHOSE ELEMENT IS AN `Option[shared]` OR A BARE `shared` HANDLE, OR NESTING ONE IN A TUPLE LITERAL, LEAKS THE HANDLE AND LOSES ITS `Drop` BODY COMPILED -- `let (a, b) = mk(1); println(f"g{a.unwrap().id} {b}")` prints `g1 1 end` and loses 16 B against `--interp`'s `g1 1 end dH1` | — |
+| B-2026-10-04-66 | 2026-10-04 | interp+codegen | medium | REASSIGNING A TUPLE LOCAL NEVER RELEASES THE DISPLACED TUPLE'S HEAP ELEMENTS -- `let mut p = mks(1); p = mks(2)` prints `y2 end dH2` with no `dH1` and loses 16 B, and the `(String, i64)` spelling loses the old string; `--interp` also prints no `dH1`, so the displaced handle's body runs on NO surface | — |
+| B-2026-10-04-67 | 2026-10-04 | codegen | medium | A USER ENUM (PLAIN OR `shared`) WHOSE VARIANT HOLDS A TUPLE WITH AN `Option[shared]` ELEMENT LEAKS THE 40 B PAYLOAD BOX AND THE HANDLE, AND AN `unwrap` READ IN THE ARM RUNS THE BODY BEFORE THE READ -- `enum Et { A((Option[H], i64)), B }`, `let e = Et.A(mk(1)); println("x")` prints `x end` and loses 40 B against `--interp`'s `x end dH1` | — |
+| B-2026-10-04-68 | 2026-10-04 | interp | low | `--interp` LOSES THE `Drop` BODY OF AN `Option[shared]` HANDLE IN A TUPLE CAPTURED BY A CLOSURE, AND OF ONE DISPLACED BY A TUPLE-ELEMENT STORE -- `fn cap(i: i64) { let p = mk(i); let f = || p.1; println(f"c{f()}") }` then `cap(1)` prints `c1 end` interpreted against compiled `c1 dH1 end` | — |
 
 ### Relocated
 
@@ -3679,6 +3682,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-38 | typecheck | low | A TUPLE ANNOTATION'S ELEMENT TYPES ARE NOT THREADED INTO A NESTED TUPLE LITERAL -- `let d: ((Array[i64, 2], i64), i64) = (([1, 2], 3), 4)` is rejecte… | b1a49c6b2 |
 | B-2026-10-04-39 | codegen | low | AN INDEX STORE INTO A TUPLE-HELD CONTAINER THROUGH `mut ref self` FAILS THE BUILD -- `self.t.0[0] = s` in `fn set(mut ref self, s: String)` over `str… | 3787f7857 |
 | B-2026-10-04-40 | codegen | medium | A TUPLE HOLDING A NESTED `Array[Array[String, N], M]` LEAKS EVERY INNER STRING AT SCOPE EXIT -- `let t: (Array[Array[String, 2], 2], i64) = ([[..], [… | 64fcfec3e |
+| B-2026-10-04-46 | codegen | high | AN `Option[shared]` TUPLE ELEMENT IS NEVER RELEASED BY THE TUPLE'S DROP, SO `p.0.unwrap().id` READ TWICE IS A USE-AFTER-FREE AND A TUPLE NOBODY UNWRA… | 2f3d44b06 |
 | B-2026-10-04-54 | codegen | medium | `.clone()` ON A TUPLE ELEMENT REACHED THROUGH AN INDEX OR A `ref` PARAM FAILS `karac build` -- `v[0].0.clone()` over `Vec[(String, i64)]` and `p.0.cl… | 65a9ccee8 |
 | B-2026-10-04-60 | parser | low | A KEYWORD USED AS A NAME CASCADES AND `karac fix` APPLIES NOTHING -- a local named `distinct` (reserved) reports 5 of its 7 uses, then `return distin… | 360f29517 |
 | B-2026-10-04-61 | typecheck | high | ANY EXPRESSION IS ACCEPTED AS AN ASSIGNMENT TARGET -- `(a, b) = (b, a)`, `a + 1 = 3`, `one() = 3`, `v.len() = 3` and `s.clone() += "y"` all pass `kar… | f39ec48c8 |
