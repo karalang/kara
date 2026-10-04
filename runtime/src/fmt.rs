@@ -50,6 +50,7 @@ unsafe fn parse_spec(spec_ptr: *const u8, spec_len: i64) -> FormatSpec {
         let default = || FormatSpec {
             fill: None,
             align: None,
+            plus: false,
             zero_pad: false,
             width: None,
             precision: None,

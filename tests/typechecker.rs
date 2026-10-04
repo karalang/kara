@@ -50271,6 +50271,23 @@ fn borrow_projection_copy_reaches_a_for_element_over_a_borrowed_collection() {
     );
 }
 
+/// B-2026-10-02-42: the `+` sign flag type-checks on an integer and a float
+/// hole and is rejected on a string, as Python rejects it (Rust ignores it,
+/// which would make `{s:+}` a spec that silently does nothing).
+#[test]
+fn format_spec_plus_flag_is_numeric_only() {
+    typecheck_ok(
+        "fn main() { let d: i64 = 3; let f: f64 = 1.5; println(f\"{d:+} {d:+05x} {f:+.2}\"); }",
+    );
+    let errs = typecheck_errors("fn main() { let s = \"hi\"; println(f\"{s:+}\"); }");
+    assert!(
+        errs.iter().any(|e| e
+            .to_string()
+            .contains("sign flag (`+`) is not valid for a string")),
+        "expected the string rejection: {errs:?}"
+    );
+}
+
 /// B-2026-10-04-22 — a bare `for` element, or a field read through a borrow,
 /// placed inside a tuple, array, collection or variant literal is copied into
 /// the new value exactly as a bare `w.push(g)` copies it, and the lint used to

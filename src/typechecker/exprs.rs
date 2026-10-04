@@ -82,6 +82,11 @@ fn check_format_spec_for_type(spec_raw: &str, ty: &Type) -> Result<(), String> {
                 "format spec `{spec_raw}`: zero-pad (`0`) is not valid for a string"
             ));
         }
+        if fs.plus {
+            return Err(format!(
+                "format spec `{spec_raw}`: the sign flag (`+`) is not valid for a string"
+            ));
+        }
         return Ok(());
     }
     Err(format!(

@@ -12,7 +12,7 @@
 //! Grammar (a Rust/Python-like subset):
 //!
 //! ```text
-//! spec   := [[fill] align] ['0'] [width] ['.' precision] [type]
+//! spec   := [[fill] align] ['+'] ['0'] [width] ['.' precision] [type]
 //! align  := '<' | '>' | '^'
 //! width  := DIGIT+
 //! prec   := DIGIT+
@@ -20,7 +20,10 @@
 //! ```
 //!
 //! `fill` is any single char and requires an explicit `align` after it (so a
-//! bare `0` stays the zero-pad flag, not a fill char). Unrecognized specs are a
+//! bare `0` stays the zero-pad flag, not a fill char). `+` prints a sign on a
+//! non-negative number too, as in Rust and Python (B-2026-10-02-42); like
+//! Rust, it also signs a non-decimal radix (`{255:+x}` is `+ff`), and a NaN
+//! stays unsigned. Unrecognized specs are a
 //! hard parse error surfaced at the interpolation site rather than silently
 //! ignored — a silently-dropped specifier is the exact surprise this feature
 //! removes.
@@ -48,6 +51,8 @@ pub enum Radix {
 pub struct FormatSpec {
     pub fill: Option<char>,
     pub align: Option<Align>,
+    /// `+` flag — print `+` before a non-negative number (B-2026-10-02-42).
+    pub plus: bool,
     /// `0` flag — zero-pad numerics to `width` (right-aligned, after the sign).
     pub zero_pad: bool,
     pub width: Option<usize>,
@@ -62,6 +67,7 @@ impl FormatSpec {
         let mut spec = FormatSpec {
             fill: None,
             align: None,
+            plus: false,
             zero_pad: false,
             width: None,
             precision: None,
@@ -94,6 +100,20 @@ impl FormatSpec {
                     i = 1;
                 }
             }
+        }
+
+        // ['+'] sign flag. Rust also accepts `-` (and ignores it) and Python
+        // a space; neither is supported, and both used to be reported as an
+        // unsupported TYPE because the parser reached the `[type]` slot with
+        // them (B-2026-10-02-42), so name them as sign flags instead.
+        if i < chars.len() && chars[i] == '+' {
+            spec.plus = true;
+            i += 1;
+        } else if i < chars.len() && (chars[i] == '-' || chars[i] == ' ') {
+            return Err(format!(
+                "format spec `{raw}`: sign flag `{}` is not supported (only `+` is)",
+                chars[i]
+            ));
         }
 
         // ['0'] zero-pad flag.
@@ -173,10 +193,14 @@ impl FormatSpec {
     /// the SAME `apply_*`. The interpreter always calls `apply_*` directly, so
     /// `karac run` == `karac build` for these specifiers by construction. Every
     /// other spec stays on the faster inline `to_printf` path.
+    ///
+    /// The `+` flag goes the same way: printf has one, but it is undefined on
+    /// `%x`/`%o` and prints `+nan`, where `apply_*` follows Rust (`+ff`, `NaN`).
     pub fn needs_runtime_formatter(&self) -> bool {
         self.align == Some(Align::Center)
             || self.radix == Radix::Bin
             || (self.fill.is_some() && self.fill != Some(' '))
+            || self.plus
     }
 
     /// Pad `body` to `width` honoring `align` (default: right for the numeric
@@ -233,7 +257,13 @@ impl FormatSpec {
     /// exactly the mistake that would silently make one of them wrong.
     fn apply_magnitude(&self, neg: bool, mag: u128) -> String {
         let digits = self.render_int_magnitude(mag);
-        let sign = if neg { "-" } else { "" };
+        let sign = if neg {
+            "-"
+        } else if self.plus {
+            "+"
+        } else {
+            ""
+        };
         if self.zero_pad {
             if let Some(width) = self.width {
                 let have = sign.len() + digits.chars().count();
@@ -305,11 +335,18 @@ impl FormatSpec {
                 }
             }
         };
+        // `+` signs every non-negative value except a NaN, which Rust renders
+        // unsigned (`format!("{:+}", f64::NAN)` is `NaN`).
+        let body = if self.plus && !body.starts_with('-') && !v.is_nan() {
+            format!("+{body}")
+        } else {
+            body
+        };
         if self.zero_pad {
             if let Some(width) = self.width {
-                let neg = body.starts_with('-');
-                let (sign, rest) = if neg {
-                    ("-", &body[1..])
+                let signed = body.starts_with('-') || body.starts_with('+');
+                let (sign, rest) = if signed {
+                    body.split_at(1)
                 } else {
                     ("", body.as_str())
                 };
@@ -580,12 +617,56 @@ mod tests {
         assert!(!spec(".2").needs_runtime_formatter());
     }
 
+    /// B-2026-10-02-42 — the `+` sign flag, checked against Rust's own `{:+}`.
+    #[test]
+    fn plus_sign_flag() {
+        for v in [0i64, 5, -3, i64::MAX, i64::MIN] {
+            assert_eq!(spec("+").apply_int(v), format!("{v:+}"), "{v}");
+            assert_eq!(spec("+06").apply_int(v), format!("{v:+06}"), "{v}");
+            assert_eq!(spec("<+6").apply_int(v), format!("{v:<+6}"), "{v}");
+            assert_eq!(spec("*^+7").apply_int(v), format!("{v:*^+7}"), "{v}");
+            assert_eq!(spec("+x").apply_int(v), format!("{:+x}", v as u64), "{v}");
+        }
+        assert_eq!(spec("+").apply_uint(7), "+7");
+        assert_eq!(
+            spec("+").apply_int128(i128::MAX),
+            format!("{:+}", i128::MAX)
+        );
+        assert_eq!(
+            spec("+").apply_uint128(u128::MAX),
+            format!("{:+}", u128::MAX)
+        );
+        for v in [
+            1.5f64,
+            0.0,
+            -0.0,
+            -0.25,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ] {
+            assert_eq!(spec("+.2").apply_float(v), format!("{v:+.2}"), "{v}");
+            // Rust pads a non-finite value with spaces under `0`; this module
+            // zero-pads it, with or without `+`, so compare finite values only.
+            if v.is_finite() {
+                assert_eq!(spec("+08.2").apply_float(v), format!("{v:+08.2}"), "{v}");
+            }
+        }
+        assert!(spec("+").needs_runtime_formatter());
+        assert!(!spec("").plus);
+    }
+
     #[test]
     fn errors() {
         assert!(FormatSpec::parse("q").is_err());
         assert!(FormatSpec::parse(".").is_err());
         assert!(FormatSpec::parse(".2x").is_err());
         assert!(FormatSpec::parse("4z").is_err());
+        // B-2026-10-02-42: an unsupported sign flag is named as one.
+        for raw in ["-", "-5", " 5"] {
+            let e = FormatSpec::parse(raw).unwrap_err();
+            assert!(e.contains("sign flag"), "{raw:?}: {e}");
+        }
     }
 
     // Cross-check a couple of integer results against libc printf so the

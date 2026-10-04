@@ -23433,7 +23433,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // is bounded: at most `max(width, 72)` chars of up to 4 UTF-8 bytes
         // each (72 covers a 64-bit binary rendering plus sign/slack). A fixed
         // stack buffer avoids any heap ownership on the f-string append path.
-        let cap = (std::cmp::max(width, 72) + 2) * 4;
+        //
+        // A float is not bounded by 72: `{1e300:+.2}` is 304 chars before any
+        // width, and its precision adds digits one for one. The `+` flag routes
+        // every signed float spec here (B-2026-10-02-42), so size its buffer
+        // for f64's longest integer part (309 digits), a sign, the point and
+        // the precision, or `write_out` would cut the rendering short.
+        let float_need = match val {
+            BasicValueEnum::FloatValue(_) => 312 + fs.precision.unwrap_or(0) as u64,
+            _ => 0,
+        };
+        let cap = (std::cmp::max(std::cmp::max(width, 72), float_need) + 2) * 4;
         let buf = self.create_entry_alloca(
             fn_val,
             "fmt.n.buf",
