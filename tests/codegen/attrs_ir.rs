@@ -1498,11 +1498,15 @@ fn main() {
         "mono insert should have fast/slow path basic blocks; body:\n{}",
         body
     );
-    // The hash comes from the map's OWN stored `hash_fn` (offset 56),
-    // called indirectly — not from a symbol baked in at emission time.
+    // B-2026-10-04-56 — the hash is the body's trailing parameter, computed
+    // at the call site by `karac_map_<K>_hash`, which decides between the
+    // map's stored `hash_fn` and the default (see
+    // `families::b_2026_10_04_56`). The body itself neither loads the stored
+    // pointer nor calls a baked symbol.
     assert!(
-        body.contains("i64 56") && body.contains("hash.fn"),
-        "mono insert should load the stored hash_fn from the control block; body:\n{}",
+        ir.contains("@karac_map_i64_i64_insert_old(ptr %0, i64 %1, i64 %2, ptr %3, i64 %4)")
+            && !body.contains("hash.fn"),
+        "mono insert should take its hash as the trailing parameter; body:\n{}",
         body
     );
     assert!(
@@ -1593,9 +1597,12 @@ fn main() {
     // because both hashed "FNV-1a over 4 bytes ... identical output for
     // identical input". True of the default hasher and of nothing else, so
     // a `Map[char, V, H]` desynced exactly as the i64 family did.
+    // B-2026-10-04-56 — and neither does it load the stored pointer any
+    // more: the hash is its trailing parameter, decided at the call site.
     assert!(
-        body.contains("i64 56") && body.contains("hash.fn"),
-        "i32 mono insert should load the stored hash_fn from the control block; body:\n{}",
+        ir.contains("@karac_map_i32_i64_insert_old(ptr %0, i32 %1, i64 %2, ptr %3, i64 %4)")
+            && !body.contains("hash.fn"),
+        "i32 mono insert should take its hash as the trailing parameter; body:\n{}",
         body
     );
     assert!(
@@ -1717,9 +1724,12 @@ fn main() {
         }
     }
     let body = body_lines.join("\n");
+    // B-2026-10-04-56 — the hash is the trailing parameter, decided at the
+    // call site by `karac_map_i64_hash`.
     assert!(
-        body.contains("i64 56") && body.contains("hash.fn"),
-        "mono get should load the stored hash_fn from the control block; body:\n{}",
+        ir.contains("@karac_map_i64_i64_get(ptr %0, i64 %1, ptr %2, i64 %3)")
+            && !body.contains("hash.fn"),
+        "mono get should take its hash as the trailing parameter; body:\n{}",
         body
     );
     assert!(

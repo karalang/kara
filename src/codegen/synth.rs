@@ -679,7 +679,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // run-time-length slice walk were all pure overhead over a
                 // width known right here.
                 let hash = match self.emit_hash_int_call(raw, nbyte_count) {
-                    Some(h) => h,
+                    Some(h) => {
+                        // B-2026-10-04-56 — the default hasher over the key's
+                        // full width is a pure function of the key VALUE, which
+                        // is what lets a map built with this fn take its hash at
+                        // the call site. Fx is deliberately excluded: its
+                        // digest differs, and the call-site form is SipHash.
+                        if matches!(self.hash_hasher, crate::hasher_kind::HasherKind::SipHash13)
+                            && nbyte_count * 8 == u64::from(bit_width)
+                        {
+                            self.mapset
+                                .plain_int_hash_fns
+                                .insert(fn_name.clone(), nbyte_count);
+                        }
+                        h
+                    }
                     // A user `impl Hasher`: no integer-shaped entry point, so
                     // the key's bytes it is.
                     None => {

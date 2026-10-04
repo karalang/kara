@@ -119,7 +119,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let hash_fn_ptr = hash_fn.as_global_value().as_pointer_value();
         let eq_fn_ptr = eq_fn.as_global_value().as_pointer_value();
 
-        self.builder
+        let call = self
+            .builder
             .build_call(
                 self.runtime_fns.karac_map_new_fn,
                 &[
@@ -130,8 +131,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 ],
                 if is_set { "set.new" } else { "map.new" },
             )
-            .unwrap()
-            .try_as_basic_value()
+            .unwrap();
+        self.note_map_new_hash_fn(call, key_ty, hash_fn);
+        call.try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value()
     }
@@ -223,20 +225,22 @@ impl<'ctx> super::Codegen<'ctx> {
         self.hash_hasher = saved_hasher;
         let hash_fn_ptr = hash_fn.as_global_value().as_pointer_value();
         let eq_fn_ptr = eq_fn.as_global_value().as_pointer_value();
+        let call = self
+            .builder
+            .build_call(
+                self.runtime_fns.karac_map_new_fn,
+                &[
+                    key_size.into(),
+                    val_size.into(),
+                    hash_fn_ptr.into(),
+                    eq_fn_ptr.into(),
+                ],
+                if is_set { "set.new.te" } else { "map.new.te" },
+            )
+            .unwrap();
+        self.note_map_new_hash_fn(call, key_ty, hash_fn);
         Some(
-            self.builder
-                .build_call(
-                    self.runtime_fns.karac_map_new_fn,
-                    &[
-                        key_size.into(),
-                        val_size.into(),
-                        hash_fn_ptr.into(),
-                        eq_fn_ptr.into(),
-                    ],
-                    if is_set { "set.new.te" } else { "map.new.te" },
-                )
-                .unwrap()
-                .try_as_basic_value()
+            call.try_as_basic_value()
                 .unwrap_basic()
                 .into_pointer_value(),
         )
@@ -2125,6 +2129,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         && val_val_matches
                     {
                         let mono = self.get_or_emit_map_mono_methods(key_ty, val_ty);
+                        let hash = self.emit_map_key_hash(map_handle, key_val.into_int_value());
                         self.builder
                             .build_call(
                                 mono.insert_old_fn,
@@ -2133,6 +2138,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     key_val.into(),
                                     val_val.into(),
                                     old_slot.into(),
+                                    hash.into(),
                                 ],
                                 "map.insert.existed",
                             )
@@ -2365,10 +2371,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         .into_int_value()
                 } else if self.should_use_mono_map_for(key_ty, val_ty) && key_val_matches {
                     let mono = self.get_or_emit_map_mono_methods(key_ty, val_ty);
+                    let hash = self.emit_map_key_hash(map_handle, key_val.into_int_value());
                     self.builder
                         .build_call(
                             mono.get_fn,
-                            &[map_handle.into(), key_val.into(), val_slot.into()],
+                            &[
+                                map_handle.into(),
+                                key_val.into(),
+                                val_slot.into(),
+                                hash.into(),
+                            ],
                             "map.get.found",
                         )
                         .unwrap()
@@ -2550,10 +2562,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 let key_val_matches = key_val.get_type() == key_ty;
                 let found = if self.should_use_mono_map_for(key_ty, val_ty) && key_val_matches {
                     let mono = self.get_or_emit_map_mono_methods(key_ty, val_ty);
+                    let hash = self.emit_map_key_hash(map_handle, key_val.into_int_value());
                     self.builder
                         .build_call(
                             mono.get_fn,
-                            &[map_handle.into(), key_val.into(), val_slot.into()],
+                            &[
+                                map_handle.into(),
+                                key_val.into(),
+                                val_slot.into(),
+                                hash.into(),
+                            ],
                             "map.getor.found",
                         )
                         .unwrap()

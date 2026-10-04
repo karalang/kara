@@ -670,7 +670,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let hash_fn = self.emit_hash_fn_for_type_expr(&elem_te);
                 let eq_fn = self.emit_eq_fn_for_type_expr(&elem_te);
 
-                let new_handle = self
+                let new_set_call = self
                     .builder
                     .build_call(
                         self.runtime_fns.karac_map_new_fn,
@@ -682,7 +682,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         ],
                         "set.op.new",
                     )
-                    .unwrap()
+                    .unwrap();
+                self.note_map_new_hash_fn(new_set_call, elem_ty, hash_fn);
+                let new_handle = new_set_call
                     .try_as_basic_value()
                     .unwrap_basic()
                     .into_pointer_value();

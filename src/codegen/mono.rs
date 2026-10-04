@@ -8679,8 +8679,15 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(f) => f,
             None => {
                 let bool_t = self.context.bool_type();
+                // The trailing `i64` is the key's hash (B-2026-10-04-56).
                 let insert_ty = bool_t.fn_type(
-                    &[ptr_ty.into(), key_ty.into(), val_ty.into(), ptr_ty.into()],
+                    &[
+                        ptr_ty.into(),
+                        key_ty.into(),
+                        val_ty.into(),
+                        ptr_ty.into(),
+                        i64_t.into(),
+                    ],
                     false,
                 );
                 let f =
@@ -8703,7 +8710,11 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(f) => f,
             None => {
                 let bool_t = self.context.bool_type();
-                let get_ty = bool_t.fn_type(&[ptr_ty.into(), key_ty.into(), ptr_ty.into()], false);
+                // The trailing `i64` is the key's hash (B-2026-10-04-56).
+                let get_ty = bool_t.fn_type(
+                    &[ptr_ty.into(), key_ty.into(), ptr_ty.into(), i64_t.into()],
+                    false,
+                );
                 let f = self
                     .module
                     .add_function(&get_name, get_ty, Some(Linkage::LinkOnceODR));
@@ -8723,6 +8734,261 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.mapset.map_mono_methods.insert(cache_key, methods);
         methods
+    }
+
+    /// Record one `karac_map_new` call and the hash fn it stores
+    /// (B-2026-10-04-56). Every construction site calls this, because the
+    /// call-site hash in [`Self::finalize_map_key_hash_fns`] is only right
+    /// for a key width whose EVERY map stored the default integer hash.
+    ///
+    /// `key_ty` is the construction's own key type. A key that does not
+    /// lower to `i32` / `i64` can never reach a mono `Map[K, V]` call, so it
+    /// only has to be noted, not judged.
+    pub(super) fn note_map_new_hash_fn(
+        &mut self,
+        call: inkwell::values::CallSiteValue<'ctx>,
+        key_ty: BasicTypeEnum<'ctx>,
+        hash_fn: FunctionValue<'ctx>,
+    ) {
+        use inkwell::values::AsValueRef;
+        self.mapset
+            .noted_map_new_calls
+            .insert(call.as_value_ref() as usize);
+        let BasicTypeEnum::IntType(int_ty) = key_ty else {
+            return;
+        };
+        let width = u64::from(int_ty.get_bit_width());
+        if width != 32 && width != 64 {
+            return;
+        }
+        let name = hash_fn.get_name().to_string_lossy().into_owned();
+        let plain = self.mapset.plain_int_hash_fns.get(&name) == Some(&(width / 8));
+        if !plain {
+            let mangle = self.llvm_type_to_mangle_str(key_ty);
+            self.mapset.map_key_hash_impure.insert(mangle);
+        }
+    }
+
+    /// Emit `call @karac_map_<K>_hash(map, key)`: the hash a mono `Map[K, V]`
+    /// operation probes with, computed HERE at the call site rather than
+    /// inside the probe body (B-2026-10-04-56).
+    ///
+    /// The point is the counting idiom, `m.insert(k, m.get(k).unwrap_or(0) +
+    /// 1)`. With the hash inside each body that is two hashes of one key, and
+    /// the hash is half of everything such a loop executes (kata:340: 26.5M
+    /// hashes at 92 instructions each). Computed at the call site from the
+    /// key VALUE, the two calls are identical and LLVM keeps one.
+    ///
+    /// The callee's body is not known yet; [`Self::finalize_map_key_hash_fns`]
+    /// writes it once every map construction in the module has been seen.
+    pub(super) fn emit_map_key_hash(
+        &mut self,
+        map: inkwell::values::PointerValue<'ctx>,
+        key: IntValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        let key_ty: BasicTypeEnum<'ctx> = key.get_type().into();
+        let mangle = self.llvm_type_to_mangle_str(key_ty);
+        let f = match self.mapset.map_key_hash_fns.get(&mangle) {
+            Some(f) => *f,
+            None => {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let fn_ty = self
+                    .context
+                    .i64_type()
+                    .fn_type(&[ptr_ty.into(), key_ty.into()], false);
+                let f = self.module.add_function(
+                    &format!("karac_map_{mangle}_hash"),
+                    fn_ty,
+                    Some(Linkage::Internal),
+                );
+                self.mapset.map_key_hash_fns.insert(mangle, f);
+                f
+            }
+        };
+        self.builder
+            .build_call(f, &[map.into(), key.into()], "map.key.hash")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value()
+    }
+
+    /// Give each `karac_map_<K>_hash` its body (B-2026-10-04-56). Must run
+    /// after every function body is compiled, so that every `karac_map_new`
+    /// call in the module has been noted.
+    ///
+    /// Two bodies, chosen per key width:
+    ///
+    /// * **The call-site hash** — `karac_hash_int(zext(key), width)`, the
+    ///   digest every default-hasher integer key map stores, marked
+    ///   `memory(none)` so that LLVM can share it between a `get` and the
+    ///   `insert` that follows. Taken only when every map built in this module
+    ///   with that key width stored such a fn, and every `karac_map_new` call
+    ///   was noted.
+    /// * **The stored pointer** — load the map's `hash_fn` and call it, exactly
+    ///   what the probe bodies did before. Anything else: an `FxBuildHasher`,
+    ///   a user hasher or `impl Hash`, a REPL cell (whose maps may have been
+    ///   built by an earlier cell's module), a hot-swap build.
+    ///
+    /// WHY `memory(none)` IS TRUE OF `karac_hash_int`. Its digest is a pure
+    /// function of its arguments for the life of the process: the seed is
+    /// fixed on first use and never changes (`karac-hash`'s `seed`; nothing
+    /// re-pins it). Its one write is that first use's idempotent seed
+    /// initialization, in runtime statics no IR can name. So two calls with
+    /// equal arguments return equal values wherever they are, which is all
+    /// sharing one needs.
+    ///
+    /// WHY THIS DOES NOT REPEAT B-2026-08-22-27. That bug baked the default
+    /// hash into the probe bodies while maps under another hasher had filed
+    /// their keys with their own; the stored pointer was the fix. This keeps
+    /// the stored pointer as the answer and computes the same value another
+    /// way only when the module proves that every stored pointer for the key
+    /// width IS the default integer hash.
+    pub(super) fn finalize_map_key_hash_fns(&mut self) {
+        if self.mapset.map_key_hash_fns.is_empty() {
+            return;
+        }
+        let all_noted = self.all_map_new_calls_noted();
+        let module_closed = self.main_symbol_override.is_none() && !self.conc.hot_swap_enabled;
+        let saved_bb = self.builder.get_insert_block();
+        let fns: Vec<(String, FunctionValue<'ctx>)> = self
+            .mapset
+            .map_key_hash_fns
+            .iter()
+            .map(|(k, f)| (k.clone(), *f))
+            .collect();
+        for (mangle, f) in fns {
+            if f.get_first_basic_block().is_some() {
+                continue;
+            }
+            let entry = self.context.append_basic_block(f, "entry");
+            self.builder.position_at_end(entry);
+            let map = f.get_nth_param(0).unwrap().into_pointer_value();
+            let key = f.get_nth_param(1).unwrap().into_int_value();
+            let i64_t = self.context.i64_type();
+            let width = u64::from(key.get_type().get_bit_width());
+            let call_site_hash = all_noted
+                && module_closed
+                && (width == 32 || width == 64)
+                && !self.mapset.map_key_hash_impure.contains(&mangle);
+            let hash = if call_site_hash {
+                let wide = if width < 64 {
+                    self.builder
+                        .build_int_z_extend(key, i64_t, "key.zext")
+                        .unwrap()
+                } else {
+                    key
+                };
+                let (callee, args): (FunctionValue<'ctx>, Vec<BasicMetadataValueEnum<'ctx>>) =
+                    if width == 64 {
+                        (
+                            self.module.get_function("karac_hash_word").unwrap(),
+                            vec![wide.into()],
+                        )
+                    } else {
+                        (
+                            self.module.get_function("karac_hash_int").unwrap(),
+                            vec![wide.into(), i64_t.const_int(width / 8, false).into()],
+                        )
+                    };
+                let call = self.builder.build_call(callee, &args, "hash").unwrap();
+                Self::mark_pure_call_site(self.context, call);
+                Self::mark_pure_fn(self.context, f);
+                call.try_as_basic_value().unwrap_basic().into_int_value()
+            } else {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let i8_t = self.context.i8_type();
+                let hash_fn_pp = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(
+                            i8_t,
+                            map,
+                            &[i64_t.const_int(Self::KARAC_MAP_HASH_FN_OFFSET, false)],
+                            "hash.fn.pp",
+                        )
+                        .unwrap()
+                };
+                let hash_fn_ptr = self
+                    .builder
+                    .build_load(ptr_ty, hash_fn_pp, "hash.fn")
+                    .unwrap()
+                    .into_pointer_value();
+                let slot = self
+                    .builder
+                    .build_alloca(key.get_type(), "hash.key.slot")
+                    .unwrap();
+                self.builder.build_store(slot, key).unwrap();
+                self.builder
+                    .build_indirect_call(
+                        i64_t.fn_type(&[ptr_ty.into()], false),
+                        hash_fn_ptr,
+                        &[slot.into()],
+                        "hash",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value()
+            };
+            self.builder.build_return(Some(&hash)).unwrap();
+        }
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+    }
+
+    /// Is every `karac_map_new` call in the module one that
+    /// [`Self::note_map_new_hash_fn`] saw? A construction nobody noted could
+    /// have stored any hash, so its key width cannot be judged.
+    fn all_map_new_calls_noted(&self) -> bool {
+        use inkwell::values::AsValueRef;
+        let f = self.runtime_fns.karac_map_new_fn;
+        let mut next =
+            inkwell::values::BasicValue::get_first_use(&f.as_global_value().as_pointer_value());
+        while let Some(u) = next {
+            // The user of a call returning `ptr` is that call itself, as a
+            // pointer value, so compare the raw value rather than asking for
+            // an instruction.
+            let user = u.get_user().as_value_ref() as usize;
+            if !self.mapset.noted_map_new_calls.contains(&user) {
+                return false;
+            }
+            next = u.get_next_use();
+        }
+        true
+    }
+
+    /// `memory(none) nounwind willreturn` on a call to `karac_hash_int` /
+    /// `karac_hash_word`. See [`Self::finalize_map_key_hash_fns`] for why it is
+    /// true of them.
+    fn mark_pure_call_site(
+        context: &'ctx inkwell::context::Context,
+        call: inkwell::values::CallSiteValue<'ctx>,
+    ) {
+        use inkwell::attributes::{Attribute, AttributeLoc};
+        for (name, val) in [("memory", 0), ("nounwind", 0), ("willreturn", 0)] {
+            call.add_attribute(
+                AttributeLoc::Function,
+                context.create_enum_attribute(Attribute::get_named_enum_kind_id(name), val),
+            );
+        }
+    }
+
+    /// The same three attributes on a `karac_map_<K>_hash` whose body is the
+    /// call-site hash, so a caller sees it as pure without inlining it first.
+    fn mark_pure_fn(context: &'ctx inkwell::context::Context, f: FunctionValue<'ctx>) {
+        use inkwell::attributes::{Attribute, AttributeLoc};
+        for (name, val) in [
+            ("memory", 0),
+            ("nounwind", 0),
+            ("willreturn", 0),
+            ("mustprogress", 0),
+        ] {
+            f.add_attribute(
+                AttributeLoc::Function,
+                context.create_enum_attribute(Attribute::get_named_enum_kind_id(name), val),
+            );
+        }
     }
 
     /// Emit the fast-path-inlined body of the monomorphized
@@ -8927,35 +9193,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // stalled capacity (196609 at N=200000, 393217 at 400000, 786433 at
         // 800000). `len` counts them, `contains_key` cannot find them.
         //
-        // The hash is now the only indirect call in the probe; the eq and the
-        // bucket walk stay inlined, which is where this family's win actually
-        // comes from (the erased path pays an FFI boundary per operation).
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
-        let hash_fn_pp = unsafe {
-            self.builder
-                .build_in_bounds_gep(
-                    i8_t,
-                    map_arg,
-                    &[i64_t.const_int(Self::KARAC_MAP_HASH_FN_OFFSET, false)],
-                    "hash.fn.pp",
-                )
-                .unwrap()
-        };
-        let hash_fn_ptr = self
-            .builder
-            .build_load(ptr_ty, hash_fn_pp, "hash.fn")
-            .unwrap()
-            .into_pointer_value();
-        let hash_key_slot = self.builder.build_alloca(key_ty, "hash.key.slot").unwrap();
-        self.builder.build_store(hash_key_slot, key_arg).unwrap();
-        let hash = self
-            .builder
-            .build_indirect_call(hash_fn_ty, hash_fn_ptr, &[hash_key_slot.into()], "hash")
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_int_value();
+        // B-2026-10-04-56 — the hash arrives as a parameter, computed at the
+        // call site by `emit_map_key_hash`; see `finalize_map_key_hash_fns`
+        // for when that is the stored `hash_fn` and when it is the default.
+        let hash = f.get_nth_param(4).unwrap().into_int_value();
         let mask = self
             .builder
             .build_int_sub(cap, i64_t.const_int(1, false), "mask")
@@ -9218,39 +9459,13 @@ impl<'ctx> super::Codegen<'ctx> {
         key_arg: IntValue<'ctx>,
         out_val_arg: inkwell::values::PointerValue<'ctx>,
     ) {
-        let i8_t = self.context.i8_type();
-        let i64_t = self.context.i64_type();
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let entry_bb = self.context.append_basic_block(f, "entry");
         self.builder.position_at_end(entry_bb);
 
-        // The map's own hash of this key — same load-and-call the byte-walk
-        // body does, kept here so the stored `hash_fn` stays authoritative.
-        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
-        let hash_fn_pp = unsafe {
-            self.builder
-                .build_in_bounds_gep(
-                    i8_t,
-                    map_arg,
-                    &[i64_t.const_int(Self::KARAC_MAP_HASH_FN_OFFSET, false)],
-                    "hash.fn.pp",
-                )
-                .unwrap()
-        };
-        let hash_fn_ptr = self
-            .builder
-            .build_load(ptr_ty, hash_fn_pp, "hash.fn")
-            .unwrap()
-            .into_pointer_value();
-        let key_slot = self.builder.build_alloca(i64_t, "hash.key.slot").unwrap();
-        self.builder.build_store(key_slot, key_arg).unwrap();
-        let hash = self
-            .builder
-            .build_indirect_call(hash_fn_ty, hash_fn_ptr, &[key_slot.into()], "hash")
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_int_value();
+        // B-2026-10-04-56 — the hash arrives as a parameter, computed at the
+        // call site by `emit_map_key_hash`; see `finalize_map_key_hash_fns`
+        // for when that is the stored `hash_fn` and when it is the default.
+        let hash = f.get_nth_param(3).unwrap().into_int_value();
 
         let probe_fn = self
             .module
@@ -9319,33 +9534,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let found_bb = self.context.append_basic_block(f, "match.found");
         let not_found_bb = self.context.append_basic_block(f, "not.found");
 
-        // ── entry: hash through the map's STORED hash_fn, then the fields ──
+        // ── entry: the hash (a parameter), then the fields ──
         self.builder.position_at_end(entry_bb);
-        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
-        let hash_fn_pp = unsafe {
-            self.builder
-                .build_in_bounds_gep(
-                    i8_t,
-                    map_arg,
-                    &[i64_t.const_int(Self::KARAC_MAP_HASH_FN_OFFSET, false)],
-                    "hash.fn.pp",
-                )
-                .unwrap()
-        };
-        let hash_fn_ptr = self
-            .builder
-            .build_load(ptr_ty, hash_fn_pp, "hash.fn")
-            .unwrap()
-            .into_pointer_value();
-        let key_slot = self.builder.build_alloca(i64_t, "hash.key.slot").unwrap();
-        self.builder.build_store(key_slot, key_arg).unwrap();
-        let hash = self
-            .builder
-            .build_indirect_call(hash_fn_ty, hash_fn_ptr, &[key_slot.into()], "hash")
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_int_value();
+        // B-2026-10-04-56 — the hash arrives as a parameter, computed at the
+        // call site by `emit_map_key_hash`; see `finalize_map_key_hash_fns`
+        // for when that is the stored `hash_fn` and when it is the default.
+        let hash = f.get_nth_param(3).unwrap().into_int_value();
 
         let load_field = |cg: &Self, off: u64, name: &str| {
             let p = unsafe {
@@ -9894,36 +10088,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(self.context.ptr_type(AddressSpace::default()), kv_pp, "kv")
             .unwrap()
             .into_pointer_value();
-        // B-2026-08-22-27 — the read-side twin of the insert body's stored-hash
-        // load. A `get` that probed with a different hash than `insert` filed
-        // under would miss every key; both now read the one pointer the map was
-        // constructed with.
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
-        let hash_fn_pp = unsafe {
-            self.builder
-                .build_in_bounds_gep(
-                    i8_t,
-                    map_arg,
-                    &[i64_t.const_int(Self::KARAC_MAP_HASH_FN_OFFSET, false)],
-                    "hash.fn.pp",
-                )
-                .unwrap()
-        };
-        let hash_fn_ptr = self
-            .builder
-            .build_load(ptr_ty, hash_fn_pp, "hash.fn")
-            .unwrap()
-            .into_pointer_value();
-        let hash_key_slot = self.builder.build_alloca(key_ty, "hash.key.slot").unwrap();
-        self.builder.build_store(hash_key_slot, key_arg).unwrap();
-        let hash = self
-            .builder
-            .build_indirect_call(hash_fn_ty, hash_fn_ptr, &[hash_key_slot.into()], "hash")
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_int_value();
+        // B-2026-08-22-27 — a `get` that probed with a different hash than
+        // `insert` filed under would miss every key; both take the one hash
+        // `emit_map_key_hash` computes, from the pointer the map was
+        // constructed with or from a proof that the pointer is the default.
+        // B-2026-10-04-56 — the hash arrives as a parameter, computed at the
+        // call site by `emit_map_key_hash`; see `finalize_map_key_hash_fns`
+        // for when that is the stored `hash_fn` and when it is the default.
+        let hash = f.get_nth_param(3).unwrap().into_int_value();
         let mask = self
             .builder
             .build_int_sub(cap, i64_t.const_int(1, false), "mask")

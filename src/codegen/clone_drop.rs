@@ -873,7 +873,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let val_size = val_ty
             .size_of()
             .unwrap_or_else(|| i64_t.const_int(8, false));
-        let new_handle = self
+        let new_map_call = self
             .builder
             .build_call(
                 self.runtime_fns.karac_map_new_fn,
@@ -885,7 +885,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 ],
                 "new.map",
             )
-            .unwrap()
+            .unwrap();
+        self.note_map_new_hash_fn(new_map_call, key_ty, hash_fn);
+        let new_handle = new_map_call
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();

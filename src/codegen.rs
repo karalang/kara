@@ -6989,6 +6989,10 @@ impl<'ctx> Codegen<'ctx> {
                 set_elem_type_names: HashMap::new(),
                 set_elem_type_exprs: HashMap::new(),
                 map_mono_methods: HashMap::new(),
+                plain_int_hash_fns: HashMap::new(),
+                map_key_hash_impure: std::collections::HashSet::new(),
+                noted_map_new_calls: std::collections::HashSet::new(),
+                map_key_hash_fns: HashMap::new(),
             },
             last_fstr_acc: None,
             block_tail_shared_transfer: false,
@@ -9324,6 +9328,9 @@ impl<'ctx> Codegen<'ctx> {
         self.finalize_write_console_wrapper();
         // Strictly after the above — it calls that wrapper (B-2026-07-30-9).
         self.finalize_write_console_line_wrapper();
+        // B-2026-10-04-56 — after every body, so every map construction in the
+        // module has been noted before a key width's hash is decided.
+        self.finalize_map_key_hash_fns();
 
         // Slice 4 structural self-check: every user + stdlib function is now
         // compiled, so the recorder holds codegen's full emitted-drop set.

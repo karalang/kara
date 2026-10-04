@@ -153,4 +153,26 @@ pub(crate) struct MapSet<'ctx> {
     /// for every other K/V tuple, leaving them on the erased fallback
     /// per § 3.6.
     pub(crate) map_mono_methods: HashMap<String, MapMonoMethods<'ctx>>,
+    /// B-2026-10-04-56 — the per-key-type hash fns synthesized by the
+    /// DEFAULT hasher's integer arm, by name, with the key width in bytes.
+    /// Such a fn is exactly `karac_hash_int(zext(key), width)`, so a map
+    /// that stored it can have its hash computed at the call site from the
+    /// key VALUE, where LLVM can share one hash between a `get` and the
+    /// `insert` that follows it. See `finalize_map_key_hash_fns`.
+    pub(crate) plain_int_hash_fns: HashMap<String, u64>,
+    /// Key mangles (`"i32"` / `"i64"`) of which at least one map in this
+    /// module was built with a hash fn NOT in `plain_int_hash_fns` — an
+    /// `FxBuildHasher`, a user `impl Hasher`, or a user `impl Hash`. Such a
+    /// key width keeps the stored-pointer hash.
+    pub(crate) map_key_hash_impure: HashSet<String>,
+    /// Every `karac_map_new` call codegen emitted through
+    /// `note_map_new_hash_fn`, by instruction address. The finalizer refuses
+    /// the call-site hash unless every `karac_map_new` call in the module is
+    /// in here, so a construction site added later without the note falls
+    /// back to the stored pointer instead of silently misfiling keys.
+    pub(crate) noted_map_new_calls: HashSet<usize>,
+    /// The per-key `karac_map_<K>_hash(map, key)` fns, declared on first use
+    /// and given a body by `finalize_map_key_hash_fns` once every map
+    /// construction in the module has been seen.
+    pub(crate) map_key_hash_fns: HashMap<String, inkwell::values::FunctionValue<'ctx>>,
 }
