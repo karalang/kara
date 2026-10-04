@@ -96,11 +96,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 585 |
 | leak | 558 |
 | double-free | 414 |
-| codegen-gap | 219 |
+| codegen-gap | 220 |
 | missing-feature | 216 |
 | other | 168 |
 | diagnostics | 141 |
-| perf | 135 |
+| perf | 136 |
 | false-positive | 119 |
 | crash | 110 |
 | soundness | 98 |
@@ -110,14 +110,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2692 |
+| codegen | 2694 |
 | interp | 832 |
 | typecheck | 327 |
 | other | 113 |
 | ownership | 80 |
 | cli | 73 |
 | autopar | 58 |
-| runtime | 53 |
+| runtime | 54 |
 | parser | 52 |
 | effect | 30 |
 | resolver | 29 |
@@ -510,7 +510,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-52 | 2026-10-04 | codegen | medium | REMAINDER OF B-2026-10-04-24: A FRESH `Option` OF A USER ENUM WHOSE ARM ONLY READS THE BINDING STILL LEAKS THE PAYLOAD'S HEAP COMPILED -- `if let Some(item) = mk() { if item.is_list() { total += 1; } }` over `fn mk() -> Option[Nested]` (`enum Nested { Int(i64), List(Vec[Nested]) }`) prints `1` everywhere and loses the inner `Vec`'s 128 B; the same for `look(item)` with a `ref` param, a `match` arm, and an inner `if let Nested.Int(n) = item`. | — |
 | B-2026-10-04-53 | 2026-10-04 | codegen | medium | A DISCARDED FRESH `Option` OF A USER ENUM LEAKS BOTH THE BOX AND THE PAYLOAD'S HEAP COMPILED -- `let _ = mk();`, the bare statement `mk();` and `if mk().is_some() { .. }` over `fn mk() -> Option[Nested]` lose 160 B (32 B box + 128 B inner `Vec`), and over `enum E { A(i64), B(Vec[i64]) }` 64 B; output right everywhere. | — |
 | B-2026-10-04-55 | 2026-10-04 | interp+codegen | medium | AN ASSIGNMENT THROUGH `*` OF A USER FUNCTION'S RETURNED `mut ref` IS DROPPED -- `*bump(mut x) += 5` and `*bump(mut x) = 9` over `fn bump(v: mut ref i64) -> mut ref i64 { return v; }` leave `x` at 1 under `--interp` and `karac run` alike, and `*h.slot() += 5` (a `mut ref self` method returning `mut ref i64`) fails codegen naming an LLVM pointer type; `*m.entry(c).or_insert(0) += 1` is right on both | — |
-| B-2026-10-04-56 | 2026-10-04 | codegen | medium | A STEADY SMALL `Map[char, i64]` RUNS 2.2x RUST'S `HashMap` AT EQUAL HASHING on kata 340's sliding-window bench (0.47 s vs 0.21 s), and the hash alone (2.44 G Ir) costs more than Rust's whole program (1.98 G Ir); the counting idiom `m.insert(c, m.get(c).unwrap_or(0) + 1)` hashes the same key twice, but the `entry` spelling, which hashes once, is still 1.9x | — |
 | B-2026-10-04-62 | 2026-10-04 | codegen | medium | A NAMED `Vec` LOCAL MOVED INTO A REASSIGNMENT ON ONE PATH ONLY LOSES ITS ELEMENTS' `Drop` BODIES ON THE PATH THAT DID NOT MOVE IT, ON EVERY COMPILED SURFACE -- `fn fo2(c: bool) -> Vec[R] { let mut v = Vec[mk(1)]; let w = Vec[mk(40)]; if c { v = w; } return v }` called with `false` prints `k1 dR1` compiled where `--interp` prints `dR40 k1 dR1` | — |
 | B-2026-10-04-64 | 2026-10-04 | codegen+interp | medium | A `for` LOOP OVER A FRESH `Vec` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `for item in mk() { k += item.n; }` over `fn mk() -> Vec[D]` with `impl Drop for D` prints `k 15` and never `drop 7` / `drop 8` on `--interp`, -O0 or -O2 (valgrind clean, so the memory is freed and only the bodies are skipped); over `Vec[E]` with a `match item { Many(xs) => count(xs), .. }` arm, `--interp` alone runs them (at each arm's end) and the compiled builds still run none | — |
 | B-2026-10-04-65 | 2026-10-04 | codegen | medium | DESTRUCTURING A TUPLE WHOSE ELEMENT IS AN `Option[shared]` OR A BARE `shared` HANDLE, OR NESTING ONE IN A TUPLE LITERAL, LEAKS THE HANDLE AND LOSES ITS `Drop` BODY COMPILED -- `let (a, b) = mk(1); println(f"g{a.unwrap().id} {b}")` prints `g1 1 end` and loses 16 B against `--interp`'s `g1 1 end dH1` | — |
@@ -518,10 +517,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-67 | 2026-10-04 | codegen | medium | A USER ENUM (PLAIN OR `shared`) WHOSE VARIANT HOLDS A TUPLE WITH AN `Option[shared]` ELEMENT LEAKS THE 40 B PAYLOAD BOX AND THE HANDLE, AND AN `unwrap` READ IN THE ARM RUNS THE BODY BEFORE THE READ -- `enum Et { A((Option[H], i64)), B }`, `let e = Et.A(mk(1)); println("x")` prints `x end` and loses 40 B against `--interp`'s `x end dH1` | — |
 | B-2026-10-04-68 | 2026-10-04 | interp | low | `--interp` LOSES THE `Drop` BODY OF AN `Option[shared]` HANDLE IN A TUPLE CAPTURED BY A CLOSURE, AND OF ONE DISPLACED BY A TUPLE-ELEMENT STORE -- `fn cap(i: i64) { let p = mk(i); let f = || p.1; println(f"c{f()}") }` then `cap(1)` prints `c1 end` interpreted against compiled `c1 dH1 end` | — |
 | B-2026-10-04-70 | 2026-10-04 | codegen | low | A FIELD STORE THROUGH A `Map` VALUE, A `Map` HELD IN A `Vec`, OR A CONTAINER HELD IN AN INDEXED TUPLE STILL FAILS THE BUILD -- `m[1].n = 9` over `Map[i64, P]` stops `karac build` with `assignment to field 'n' through this place is not yet lowered` while `--interp` prints `r:9` | — |
-| B-2026-10-04-71 | 2026-10-04 | interp | medium | `--interp` EVALUATES A NESTED INDEX STORE'S SUBSCRIPTS MORE THAN ONCE -- `w[idx(0)][idx(0)] = 5` calls `idx` four times and `u[idx(0)][idx(0)].n = 5` five times, where every compiled build calls it twice; a single index (`v[idx(0)].n = 77`) calls it once on both | — |
 | B-2026-10-04-74 | 2026-10-04 | codegen+interp | medium | A NAMED LOCAL MOVED INTO A FIELD, `Vec` ELEMENT OR TUPLE ELEMENT ON ONE PATH ONLY IS LOST ON THE OTHER PATH COMPILED AND DROPPED TWICE ON THE MOVING PATH UNDER `--interp` -- `let n = mk(6); if c { w.r = n; }` (or `v[0] = n`, `t.1 = n`): compiled `c` false prints no `dR6` and leaks `n`'s 29 B String; `--interp` `c` true prints `dR5 dR6 end0 dR6` | — |
 | B-2026-10-04-75 | 2026-10-04 | codegen | medium | A USER ENUM WHOSE PAYLOAD IS AN `Option[shared]` NEVER RELEASES THE HANDLE, SO ITS `Drop` BODY RUNS ON NO COMPILED SURFACE -- `enum Hn { N(Option[Nd]), E }`, `{ let h = Hn.N(Some(Nd { v: 1 })); println("a") }` prints `a end` and loses 16 B at -O0 against `--interp`'s `a dN1 end` | — |
 | B-2026-10-04-78 | 2026-10-04 | codegen | low | MOVING A `for` BINDING OUT TWICE IN ONE ITERATION (`out.push(p); let q = p;`) LEAKS ONE COPY PER ITERATION, over a `Vec` and an `Array` alike -- 4 B in 2 blocks at -O0 for a two-element `Vec[P]` with a one-`String` `P`, where each move alone is clean | — |
+| B-2026-10-04-79 | 2026-10-04 | codegen+runtime | medium | AFTER B-2026-10-04-56 KATA 340'S `Map[char, i64]` BENCH STILL RUNS 1.85x RUST AT EQUAL HASHING (399 ms vs 216): each hash costs 92 instructions against Rust's ~74, the erased `remove` path hashes a key the `get` before it already hashed, and the mono insert costs ~70 instructions a call beyond its hash | — |
+| B-2026-10-04-80 | 2026-10-04 | codegen | low | `hs[idx(0)].t.1[0] = 4` -- AN INDEX STORE THROUGH A TUPLE FIELD OF AN ELEMENT WHOSE SUBSCRIPT IS A CALL -- FAILS TO COMPILE with `Index assignment target must be a variable`; the same store with an identifier subscript (`hs[i].t.1[0] = 4`) compiles and prints 4, and `--interp` accepts both | — |
 
 ### Relocated
 
@@ -3685,6 +3685,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-40 | codegen | medium | A TUPLE HOLDING A NESTED `Array[Array[String, N], M]` LEAKS EVERY INNER STRING AT SCOPE EXIT -- `let t: (Array[Array[String, 2], 2], i64) = ([[..], [… | 64fcfec3e |
 | B-2026-10-04-46 | codegen | high | AN `Option[shared]` TUPLE ELEMENT IS NEVER RELEASED BY THE TUPLE'S DROP, SO `p.0.unwrap().id` READ TWICE IS A USE-AFTER-FREE AND A TUPLE NOBODY UNWRA… | 2f3d44b06 |
 | B-2026-10-04-54 | codegen | medium | `.clone()` ON A TUPLE ELEMENT REACHED THROUGH AN INDEX OR A `ref` PARAM FAILS `karac build` -- `v[0].0.clone()` over `Vec[(String, i64)]` and `p.0.cl… | 65a9ccee8 |
+| B-2026-10-04-56 | codegen | medium | A STEADY SMALL `Map[char, i64]` RUNS 2.2x RUST'S `HashMap` AT EQUAL HASHING on kata 340's sliding-window bench (0.47 s vs 0.21 s), and the hash alone… | 4944add14 |
 | B-2026-10-04-60 | parser | low | A KEYWORD USED AS A NAME CASCADES AND `karac fix` APPLIES NOTHING -- a local named `distinct` (reserved) reports 5 of its 7 uses, then `return distin… | 360f29517 |
 | B-2026-10-04-61 | typecheck | high | ANY EXPRESSION IS ACCEPTED AS AN ASSIGNMENT TARGET -- `(a, b) = (b, a)`, `a + 1 = 3`, `one() = 3`, `v.len() = 3` and `s.clone() += "y"` all pass `kar… | f39ec48c8 |
 | B-2026-10-04-57 | interp+codegen | medium | OVERWRITING A WHOLE TUPLE ELEMENT NEVER RUNS THE DISPLACED VALUE'S `Drop` BODY -- `t.0 = R { id: 6 }` over `(R, i64)` prints no `dR5` on any backend,… | 85b81ca3c |
@@ -3692,6 +3693,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-59 | codegen | low | A FIELD STORE THROUGH A NESTED INDEX FAILS THE BUILD -- `v[0][0].n = 9` over `Vec[Vec[P]]` stops `karac build` with `assignment to field 'n' through… | e66223d02 |
 | B-2026-10-04-63 | interp+codegen | medium | A PAYLOAD OR FIELD OF A BY-VALUE PARAM HANDED TO A METHOD ON A BORROWED RECEIVER STILL READS AS STORED INTO THAT RECEIVER, SO ITS `Drop` BODY RUNS NO… | a19190a5e |
 | B-2026-10-04-69 | codegen | medium | A PAYLOAD OF A BY-VALUE `Option`/`Result` PARAM HANDED TO A METHOD ON A LOCAL RECEIVER RUNS ITS `Drop` BODY NOWHERE COMPILED -- `fn lo(o: Option[S])… | ec60c375c |
+| B-2026-10-04-71 | interp | medium | `--interp` EVALUATES A NESTED INDEX STORE'S SUBSCRIPTS MORE THAN ONCE -- `w[idx(0)][idx(0)] = 5` calls `idx` four times and `u[idx(0)][idx(0)].n = 5`… | 9cef17320 |
 | B-2026-10-04-72 | codegen | high | A NAMED STRUCT, USER-ENUM OR `Option` SOURCE MOVED INTO A TUPLE ELEMENT (`t.1 = n`) IS OWNED TWICE COMPILED -- with a heap field the element and `n`… | 85b81ca3c |
 | B-2026-10-04-73 | codegen+interp | medium | REASSIGNING A TUPLE ELEMENT THAT HAS MOVED OUT NEVER RUNS THE NEW VALUE'S `Drop` BODY, ON EVERY SURFACE -- `let x = t.0; t.0 = mk(6);` prints `x5 dR5… | 23e26459d |
 | B-2026-10-04-77 | codegen | high | A `for` BINDING OVER A FIXED `Array` IS NOT REGISTERED LIKE A `Vec` LOOP'S: a method on a `String` / `Vec` element (`for x in ss { x.len() }` over `A… | c8d492da7 |
