@@ -1200,7 +1200,16 @@ fn is_container_store(m: &str) -> bool {
 fn is_consuming_method(m: &str) -> bool {
     matches!(
         m,
-        "into_iter" | "unwrap" | "expect" | "unwrap_or" | "take" | "into" | "into_inner"
+        "into_iter"
+            | "unwrap"
+            | "expect"
+            // B-2026-09-29-16 — the `Err` side moves its payload out the same way.
+            | "unwrap_err"
+            | "expect_err"
+            | "unwrap_or"
+            | "take"
+            | "into"
+            | "into_inner"
     )
 }
 

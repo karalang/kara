@@ -8262,7 +8262,54 @@ pub fn fn_escaping_param_payload_variants(
     if variants.is_empty() && fn_param_payload_taken_by_owned_self_method(program, f, arg_index) {
         return vec!["*".to_string()];
     }
+    // B-2026-09-29-16 — or unwrapped on every path, where its result is read.
+    if variants.is_empty() && fn_unwraps_param_whole(f, arg_index) {
+        return vec!["*".to_string()];
+    }
     variants
+}
+
+/// B-2026-09-29-16 — is by-value `Option` / `Result` parameter `arg_index`
+/// unwrapped (`unwrap` / `expect` / `unwrap_err` / `expect_err`) on EVERY path,
+/// and mentioned nowhere else?
+///
+/// The unwrap moves the payload into a value of the callee's frame, which runs
+/// its body where it dies (as the `match` B-2026-09-29-12 lowers a `let`-bound
+/// unwrap to does). So the payload leaves the caller exactly as an arm that
+/// hands it out does, and answering here is what stands the caller's walk
+/// down. B-2026-09-29-12's lowering reaches only a `let` value, a `return`
+/// operand and the tail; `println(f"u{t.unwrap().id}")` kept the caller's walk
+/// armed and ran the body in both frames, and the compiled caller freed the
+/// boxed `Option` the callee had already freed.
+///
+/// Under-approximate in the direction [`param_payload_taken_by_owned_self_method`]
+/// keeps, through the same walk: a parameter unwrapped on some paths only (`if
+/// c { t.unwrap() }`) answers false, since standing the caller down there
+/// would lose the body on the path that skips the unwrap; so does an unwrap
+/// whose result feeds a position [`param_taken_once_unconditionally`] declines.
+/// A generic payload is admitted: the method's meaning does not depend on it.
+pub fn fn_unwraps_param_whole(f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    let PatternKind::Binding(name) = &param.pattern.kind else {
+        return false;
+    };
+    let crate::ast::TypeKind::Path(tp) = &param.ty.kind else {
+        return false;
+    };
+    if !tp
+        .segments
+        .last()
+        .is_some_and(|seg| seg == "Option" || seg == "Result")
+    {
+        return false;
+    }
+    let takes = |site: &PayloadTakeSite<'_>| {
+        matches!(site, PayloadTakeSite::Method(m)
+            if matches!(*m, "unwrap" | "expect" | "unwrap_err" | "expect_err"))
+    };
+    param_taken_once_unconditionally(f, name, &takes, true)
 }
 
 /// B-2026-09-29-75 — is by-value user-enum parameter `arg_index` handed, on
@@ -8366,11 +8413,39 @@ fn param_payload_taken_by_owned_self_method(
                 && param_payload_taken_by_owned_self_method(program, g, *j, depth + 1))
         }),
     };
+    param_taken_once_unconditionally(f, name, &takes_payload, false)
+}
+
+/// The walk [`param_payload_taken_by_owned_self_method`] and
+/// [`fn_unwraps_param_whole`] share: is parameter `name` mentioned in
+/// exactly one top-level statement (or the tail), and there only at a call
+/// `hit` accepts, evaluated whenever that statement is? `through_projection`
+/// also descends through a named-field read OFF the taking call
+/// (`t.unwrap().id`), which is evaluated whenever the read is, and then
+/// accepts the taking call ONLY there, as a `let` value, a `return` operand or
+/// the tail. The value it yields is a temporary whose other consumers are not
+/// all sound yet: a method receiver (`t.unwrap().get()`), a call argument
+/// (`eat(t.unwrap())`), a tuple-index read (`t.unwrap().1`) and a discarded
+/// statement (`t.unwrap();`) each lose the payload's `Drop` body for a LOCAL
+/// receiver too (B-2026-10-04-27), so handing a param's payload to one would
+/// trade the caller's correct body for that loss.
+fn param_taken_once_unconditionally(
+    f: &Function,
+    name: &str,
+    takes_payload: &dyn Fn(&PayloadTakeSite<'_>) -> bool,
+    through_projection: bool,
+) -> bool {
     let mentions = |e: &Expr| crate::deque_head::expr_mentions_name_deep(e, name);
     // Is the taking call evaluated whenever `e` is? Descends only through
     // positions that are always evaluated, and requires the parameter nowhere
     // else.
-    fn reaches(e: &Expr, name: &str, hit: &dyn Fn(&PayloadTakeSite<'_>) -> bool) -> bool {
+    fn reaches(
+        e: &Expr,
+        name: &str,
+        hit: &dyn Fn(&PayloadTakeSite<'_>) -> bool,
+        proj: bool,
+        site_ok: bool,
+    ) -> bool {
         let m = |x: &Expr| crate::deque_head::expr_mentions_name_deep(x, name);
         let bare = |x: &Expr| matches!(&x.kind, ExprKind::Identifier(n) if n == name);
         match &e.kind {
@@ -8380,7 +8455,9 @@ fn param_payload_taken_by_owned_self_method(
                 args,
                 ..
             } if bare(object) => {
-                hit(&PayloadTakeSite::Method(method)) && !args.iter().any(|a| m(&a.value))
+                (!proj || site_ok)
+                    && hit(&PayloadTakeSite::Method(method))
+                    && !args.iter().any(|a| m(&a.value))
             }
             ExprKind::Call { callee, args }
                 if matches!(&callee.kind, ExprKind::Identifier(_))
@@ -8398,26 +8475,32 @@ fn param_payload_taken_by_owned_self_method(
             ExprKind::MethodCall { object, args, .. } => {
                 let mut parts =
                     std::iter::once(object.as_ref()).chain(args.iter().map(|a| &a.value));
-                one_reaches(&mut parts, name, hit)
+                one_reaches(&mut parts, name, hit, proj)
             }
             ExprKind::Call { callee, args } => {
                 let mut parts =
                     std::iter::once(callee.as_ref()).chain(args.iter().map(|a| &a.value));
-                one_reaches(&mut parts, name, hit)
+                one_reaches(&mut parts, name, hit, proj)
             }
             ExprKind::Binary { op, left, right }
                 if !matches!(op, crate::ast::BinOp::And | crate::ast::BinOp::Or) =>
             {
-                one_reaches(&mut [left.as_ref(), right.as_ref()].into_iter(), name, hit)
+                one_reaches(
+                    &mut [left.as_ref(), right.as_ref()].into_iter(),
+                    name,
+                    hit,
+                    proj,
+                )
             }
-            ExprKind::Unary { operand, .. } => reaches(operand, name, hit),
-            ExprKind::Return(Some(inner)) => reaches(inner, name, hit),
+            ExprKind::Unary { operand, .. } => reaches(operand, name, hit, proj, false),
+            ExprKind::FieldAccess { object, .. } if proj => reaches(object, name, hit, proj, true),
+            ExprKind::Return(Some(inner)) => reaches(inner, name, hit, proj, site_ok),
             ExprKind::InterpolatedStringLit(parts) => {
                 let mut holes = parts.iter().filter_map(|p| match p {
                     crate::ast::ParsedInterpolationPart::Expr(x, _) => Some(x.as_ref()),
                     crate::ast::ParsedInterpolationPart::Text(_) => None,
                 });
-                one_reaches(&mut holes, name, hit)
+                one_reaches(&mut holes, name, hit, proj)
             }
             _ => false,
         }
@@ -8427,11 +8510,12 @@ fn param_payload_taken_by_owned_self_method(
         parts: &mut dyn Iterator<Item = &'e Expr>,
         name: &str,
         hit: &dyn Fn(&PayloadTakeSite<'_>) -> bool,
+        proj: bool,
     ) -> bool {
         let mut found = false;
         for p in parts {
             if crate::deque_head::expr_mentions_name_deep(p, name) {
-                if found || !reaches(p, name, hit) {
+                if found || !reaches(p, name, hit, proj, false) {
                     return false;
                 }
                 found = true;
@@ -8441,7 +8525,7 @@ fn param_payload_taken_by_owned_self_method(
     }
     let stmt_mentions = |st: &crate::ast::Stmt| {
         let mut cands = std::collections::HashSet::new();
-        cands.insert(name.clone());
+        cands.insert(name.to_string());
         let mut bad = std::collections::HashSet::new();
         crate::deque_head::names_mentioned_in_stmt(st, &cands, &mut bad);
         !bad.is_empty()
@@ -8457,9 +8541,11 @@ fn param_payload_taken_by_owned_self_method(
         first = Some(match &st.kind {
             StmtKind::Let { pattern, value, .. } => {
                 !matches!(&pattern.kind, PatternKind::Binding(n) if n == name)
-                    && reaches(value, name, &takes_payload)
+                    && reaches(value, name, takes_payload, through_projection, true)
             }
-            StmtKind::Expr(e) => reaches(e, name, &takes_payload),
+            // A bare `t.unwrap();` DISCARDS the payload, and that temporary runs no
+            // body for a local receiver either (B-2026-10-04-27).
+            StmtKind::Expr(e) => reaches(e, name, takes_payload, through_projection, false),
             _ => false,
         });
     }
@@ -8468,7 +8554,7 @@ fn param_payload_taken_by_owned_self_method(
             if first.is_some() {
                 return false;
             }
-            first = Some(reaches(fe, name, &takes_payload));
+            first = Some(reaches(fe, name, takes_payload, through_projection, true));
         }
     }
     first == Some(true)

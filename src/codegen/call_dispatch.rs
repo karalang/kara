@@ -4477,6 +4477,11 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> bool {
         if crate::ast::fn_stores_param_whole_into_container(f, ast_i)
             || crate::ast::fn_reassigns_param_rebind(f, ast_i)
+            // B-2026-09-29-16 — or unwraps it on every path: the unwrap frees
+            // the box in the callee (`enumbox.uw.free`) and the value it yields
+            // owns the interior, so the caller keeping the box too freed it
+            // twice.
+            || crate::ast::fn_unwraps_param_whole(f, ast_i)
         {
             return true;
         }
