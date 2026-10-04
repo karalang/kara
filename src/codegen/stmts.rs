@@ -16943,7 +16943,86 @@ impl<'ctx> super::Codegen<'ctx> {
                     // heap in place (cap-guarded), and store. A receiver shape
                     // the chain can't resolve loud-bails instead of silently
                     // dropping the write.
+                    // B-2026-10-04-57 — the displaced element's `Drop` bodies,
+                    // before the store frees its memory.
+                    self.emit_displaced_tuple_elem_bodies(object, *index, value);
                     self.compile_tuple_index_store(object, *index, val)?;
+                    // B-2026-10-04-72 — a named STRUCT source moved into the
+                    // element (`t.1 = n`). The suppression below covers only
+                    // Vec/String/Map/Set elements, so `n` kept its memory
+                    // cleanup and its `Drop` body: the element and `n` both
+                    // freed the struct's heap (`free(): double free`), and an
+                    // all-scalar `R` ran `n`'s body at the store and again with
+                    // the tuple. Same pair as the index-store peer above.
+                    if let ExprKind::Identifier(src) = &value.kind {
+                        if !self.borrow_vars.ref_params.contains_key(src) {
+                            let elem_struct = self
+                                .tuple_index_elem_type_expr(object, *index)
+                                .and_then(|te| match &te.kind {
+                                    TypeKind::Path(p) if p.generic_args.is_none() => {
+                                        p.segments.last().cloned()
+                                    }
+                                    _ => None,
+                                })
+                                .filter(|n| {
+                                    self.type_decls.struct_types.contains_key(n.as_str())
+                                        && !self.type_decls.shared_types.contains_key(n.as_str())
+                                        && self
+                                            .type_decls
+                                            .struct_generic_params
+                                            .get(n.as_str())
+                                            .is_none_or(|ps| ps.is_empty())
+                                });
+                            if let Some(sname) = elem_struct {
+                                if let Some(src_slot) = self.variables.get(src).copied() {
+                                    let vp = self.move_suppression_value_ptr(src, src_slot.ptr);
+                                    self.zero_struct_move_caps_mono(vp, &sname, None);
+                                }
+                                self.suppress_user_drop_for_var(src);
+                            } else if self.tuple_index_elem_type_expr(object, *index).is_some_and(
+                                |te| match &te.kind {
+                                    TypeKind::Path(p) => p.segments.last().is_some_and(|n| {
+                                        matches!(n.as_str(), "Option" | "Result")
+                                            || (self
+                                                .type_decls
+                                                .enum_layouts
+                                                .contains_key(n.as_str())
+                                                && !self
+                                                    .type_decls
+                                                    .shared_types
+                                                    .contains_key(n.as_str()))
+                                    }),
+                                    _ => false,
+                                },
+                            ) {
+                                // The ENUM / `Option` / `Result` spelling of the
+                                // same move (`t.1 = e`, `u.0 = o`): the whole-
+                                // assign `x = n` path's suppressors, which are
+                                // each self-gated on the source's registration.
+                                self.suppress_boxed_enum_payload_cleanup_for_moved_arg(value);
+                                self.suppress_inline_option_result_binding_move(value);
+                                self.suppress_nested_boxed_payload_move(value);
+                                // An inline user enum's `EnumDrop` is a queued
+                                // action on the source's slot, retracted the way
+                                // `move_declined_copy_enum_arg` retracts it for a
+                                // by-value call argument.
+                                if let Some(src_ptr) = self.variables.get(src).map(|s| s.ptr) {
+                                    for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+                                        frame.retain(|action| {
+                                            !matches!(
+                                                action,
+                                                super::state::CleanupAction::EnumDrop {
+                                                    enum_alloca,
+                                                    ..
+                                                } if *enum_alloca == src_ptr
+                                            )
+                                        });
+                                    }
+                                }
+                                self.suppress_user_drop_for_var(src);
+                            }
+                        }
+                    }
                     // B-2026-08-04-16 — the TUPLE sibling of B-2026-07-15-25's
                     // field-assign move-suppression, which the arm above never
                     // got. `compile_tuple_index_store` drops the OLD element and
@@ -27046,6 +27125,114 @@ impl<'ctx> super::Codegen<'ctx> {
     /// or removed it (B-2026-07-29-39's disarm — firing would read
     /// cap-zeroed bits), and a param-view base had it retracted
     /// (B-2026-08-01-19 — the caller fires instead).
+    /// B-2026-10-04-57 — `t.0 = <new>` displaces the old element, whose
+    /// `Drop` bodies ran nowhere: `compile_tuple_index_store` frees its memory
+    /// through the memory-only drop, while the local (`x = ..`) and field
+    /// (`w.r = ..`) spellings run the displaced body at the store. Depth 1,
+    /// over an owned tuple local or a `mut ref` tuple param, for a non-generic
+    /// struct, user enum, or `Option`/`Result` element.
+    ///
+    /// Declines, as the field twin does, when the RHS mentions the base (the
+    /// old value may be read into the new one) and when the element has
+    /// already moved out (`let x = t.0;` — `x` owns the old value). A move on
+    /// A move on SOME paths (`if c { let x = t.0; }`) leaves the mask unset
+    /// and mints a `#<index>` runtime flag instead
+    /// (`conditional_tuple_elem_move_takes_runtime_flag`), which is true
+    /// exactly on the paths that did not move the element; the bodies run
+    /// under that guard, as the field twin's do.
+    fn emit_displaced_tuple_elem_bodies(&mut self, object: &Expr, index: u64, rhs: &Expr) {
+        let ExprKind::Identifier(base) = &object.kind else {
+            return;
+        };
+        if crate::deque_head::expr_mentions_name_deep(rhs, base) {
+            return;
+        }
+        if self
+            .tuple_moved_elem_bodies
+            .get(base.as_str())
+            .is_some_and(|s| s.contains(&(index as u32)))
+        {
+            return;
+        }
+        if !self.variables.contains_key(base.as_str()) {
+            return;
+        }
+        let Some(te) = self.tuple_index_elem_type_expr(object, index) else {
+            return;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        let Some(name) = p.segments.last().cloned() else {
+            return;
+        };
+        let optres = matches!(name.as_str(), "Option" | "Result");
+        if !optres && p.generic_args.is_some() {
+            return;
+        }
+        let is_struct = self.type_decls.struct_types.contains_key(name.as_str());
+        let is_enum =
+            !is_struct && !optres && self.type_decls.enum_layouts.contains_key(name.as_str());
+        if (!optres && !is_struct && !is_enum)
+            || self.type_decls.shared_types.contains_key(name.as_str())
+            || (is_struct
+                && self
+                    .type_decls
+                    .struct_generic_params
+                    .get(name.as_str())
+                    .is_some_and(|ps| !ps.is_empty()))
+            || (!optres && !self.type_runs_user_drop(&name, &mut Vec::new()))
+        {
+            return;
+        }
+        let base_ptr = self.place_chain_ptr_through_borrow(object);
+        let tuple_ty = self.place_chain_aggregate_llvm_type_through_borrow(object);
+        let (Some(base_ptr), Some(tuple_ty)) = (base_ptr, tuple_ty) else {
+            return;
+        };
+        let Ok(elem_ptr) =
+            self.builder
+                .build_struct_gep(tuple_ty, base_ptr, index as u32, "disptup.old.p")
+        else {
+            return;
+        };
+        let guard = match self
+            .drop_rc
+            .field_view_flags
+            .get(base.as_str())
+            .and_then(|m| m.get(&format!("#{index}")))
+            .copied()
+        {
+            Some(flag) => self.open_guard_on_flag(flag),
+            None => None,
+        };
+        if optres {
+            if let Some(w) = self.emit_optres_payload_user_drop_bodies_fn(&te) {
+                self.builder.build_call(w, &[elem_ptr.into()], "").unwrap();
+            }
+            self.close_cond_move_guard(guard);
+            return;
+        }
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(name.as_str()));
+        if owns_body {
+            if let Some(f) = self.module.get_function(&format!("{name}.drop")) {
+                self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+            }
+        }
+        let walker = if is_struct {
+            self.emit_user_drop_field_bodies_fn(&name, &std::collections::HashMap::new())
+        } else {
+            self.emit_enum_payload_user_drop_bodies_fn(&name)
+        };
+        if let Some(w) = walker {
+            self.builder.build_call(w, &[elem_ptr.into()], "").unwrap();
+        }
+        self.close_cond_move_guard(guard);
+    }
+
     fn emit_displaced_field_bodies(&mut self, object: &Expr, field: &str, rhs: &Expr) {
         // B-2026-08-01-30 leg A — accept a DEEP chain base (`o.h.r = <new>`):
         // flatten the target's object into (root identifier, middle fields),

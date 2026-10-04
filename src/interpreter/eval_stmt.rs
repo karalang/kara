@@ -12633,6 +12633,46 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                 }
+                // B-2026-10-04-57 — TUPLE-ELEMENT sibling: `t.0 = <new>`
+                // displaces the old element, whose bodies ran nowhere, while
+                // `x = ..` and `w.r = ..` run them at the store. Depth 1, with
+                // the field arm's gates: the element must not have moved out
+                // (`let x = t.0` — `x` owns it now), the base must still own
+                // its value, and the RHS must not mention the base. Codegen's
+                // twin is `emit_displaced_tuple_elem_bodies`.
+                if let ExprKind::TupleIndex { object, index } = &target.kind {
+                    let base = match &object.kind {
+                        ExprKind::Identifier(n) => Some(n.clone()),
+                        _ => None,
+                    };
+                    if let Some(base) = base {
+                        let idx = *index as usize;
+                        if !self
+                            .moved_out_tuple_elem_bodies
+                            .contains(&(base.clone(), idx))
+                            && !self.moved_out_user_drop_bindings.contains(base.as_str())
+                            && !self.moved_out_drop_field_bindings.contains(base.as_str())
+                            && !crate::deque_head::expr_mentions_name_deep(value, &base)
+                        {
+                            let old = match self.env.get(&base) {
+                                Some(Value::Tuple(items)) => items.get(idx).cloned(),
+                                _ => None,
+                            };
+                            match old {
+                                Some(v @ Value::EnumVariant { .. })
+                                    if matches!(&v, Value::EnumVariant { enum_name, .. }
+                                        if enum_name == "Option" || enum_name == "Result") =>
+                                {
+                                    self.run_discarded_value_user_drops(v);
+                                }
+                                Some(v @ (Value::Struct { .. } | Value::EnumVariant { .. })) => {
+                                    self.fire_displaced_index_elem(v);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
                 // B-2026-08-01-21 — INDEX-target sibling: `v[i] = <new>`
                 // displaces the old element, whose Drop bodies were silent
                 // (the memory side is codegen-only — interp values are
