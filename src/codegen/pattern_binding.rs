@@ -228,6 +228,21 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.pattern_bind_depth += 1;
         let r = self.bind_pattern_values_impl(pattern, scrut);
         self.drop_rc.pattern_bind_depth -= 1;
+        // B-2026-10-04-46 — see `PayloadVars::user_enum_payload_slots`.
+        if let PatternKind::Binding(name) = &pattern.kind {
+            if !self
+                .pattern_state
+                .pattern_binding_scrutinee_is_option_result
+                && self
+                    .pattern_state
+                    .current_variant_payload_bindings
+                    .contains(name.as_str())
+            {
+                if let Some(slot) = self.variables.get(name.as_str()) {
+                    self.payload_vars.user_enum_payload_slots.insert(slot.ptr);
+                }
+            }
+        }
         r
     }
 

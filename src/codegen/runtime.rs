@@ -9419,6 +9419,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // B-2026-10-04-46 — an `Option[shared T]` element: the copy is one
+        // more ref on the handle, since the tuple's drop releases its own.
+        if let Some((_, info)) = self.option_inner_shared_type_for_type_expr(&ete) {
+            self.emit_option_inner_rc_inc_for_loaded(val, info.heap_type);
+            self.span_tables
+                .uam_copied_sites
+                .insert((expr.span.offset, expr.span.length));
+            return Some(val);
+        }
         // A direct `{ptr,len,cap}` element — `String`, `Vec[T]`, `VecDeque[T]`.
         if val.get_type() != self.vec_struct_type().into() {
             return None;

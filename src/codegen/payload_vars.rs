@@ -452,6 +452,13 @@ pub(crate) struct PayloadVars<'ctx> {
     /// Cleared per function with its siblings; a later `let` of the same name
     /// that is not such a rebind removes it.
     pub(crate) caller_retained_array_views: std::collections::HashSet<String>,
+    /// B-2026-10-04-46 — the slots of USER-enum variant payload bindings
+    /// (`Et.A(t) => ..`). Such a tuple's `Option[shared]` element is released
+    /// by nothing (the enum's drop does not reach it), so an `unwrap()` field
+    /// read through `t.0` must keep releasing the ref it borrows rather than
+    /// take one back the way a local or param tuple does. Keyed by slot, so a
+    /// later binding of the same name is never mistaken for one.
+    pub(crate) user_enum_payload_slots: HashSet<inkwell::values::PointerValue<'ctx>>,
     /// B-2026-09-19-60 — a CONSUMING arm's binding over a seeded fresh-temp
     /// scrutinee (`match Option.Some(a) { Some(v) => { let u = v; .. } }`),
     /// mapped to the NAMED local the constructor was handed. The box withholds

@@ -3074,6 +3074,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // pre-existing on the conventional ABI).
                     self.share_option_shared_ref_for_arg(&a.value);
                     self.share_option_shared_field_ref_for_arg(&a.value, val);
+                    self.share_option_shared_tuple_elem_ref_for_arg(&a.value, val);
                     // B-2026-09-07-16 — the DECLINED-COPY retraction, which
                     // this arm never called at all. `Type.f(a)` was the third
                     // dispatch leg here exactly as it was for the registrar

@@ -1,0 +1,93 @@
+//! B-2026-10-04-46 — the ASAN twin of the codegen fixtures: a tuple's
+//! `Option[shared]` element is released exactly once, wherever it is read,
+//! moved or borrowed from.
+
+use super::*;
+
+/// B-2026-10-04-46 — the codegen fixture's first program under ASAN.
+#[test]
+fn asan_tuple_option_shared_element_is_released_once() {
+    assert_clean_asan_run_min_allocs(
+        r#"shared struct H { id: i64 }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+struct W { t: (Option[H], i64) }
+struct Wo { o: Option[H] }
+fn ct(t: (Option[H], i64)) { println(f"t{t.0.unwrap().id} {t.1}") }
+fn ct2(t: (Option[H], i64)) { println(f"t{t.1}") }
+fn cr(t: ref (Option[H], i64)) { println(f"r{t.0.unwrap().id}") }
+fn mk(i: i64) -> (Option[H], i64) { (Some(H { id: i }), i) }
+fn give(t: (Option[H], i64)) -> Option[H] { t.0 }
+fn cx(t: (Option[H], i64)) -> i64 { let x = t.0; x.unwrap().id }
+fn tko(o: Option[H]) { println(f"k{o.unwrap().id}") }
+fn mkh() -> Option[H] { let p = mk(1); p.0 }
+enum Et { A((Option[H], i64)), B }
+fn main() {
+    { let p = mk(1); println(f"a{p.1}"); }
+    { let p = (Some(H { id: 2 }), 2); println(f"b{p.0.unwrap().id}"); println(f"b{p.0.unwrap().id}"); }
+    { let p = mk(3); ct(p); println("c"); }
+    { let p = mk(4); let x = p.0; let y = p.0; println(f"d{x.unwrap().id} {y.unwrap().id}"); }
+    { let p = mk(5); println(f"e{cx(p)}"); }
+    { let x = { let p = mk(6); p.0 }; println(f"f{x.unwrap().id}"); }
+    { let x = mkh(); println(f"g{x.unwrap().id}"); }
+    { let p = mk(8); let q = p; println(f"h{q.1}"); }
+    { let p = mk(9); match p.0 { Some(h) => println(f"i{h.id}"), None => {} } }
+    { let p = mk(10); if let Some(h) = p.0 { println(f"j{h.id}") } }
+    { let mut v: Vec[(Option[H], i64)] = Vec.new(); v.push(mk(11)); println(f"k{v.len()}"); }
+    { let p = mk(12); let o = give(p); println(f"l{o.unwrap().id}"); }
+    { let h = H { id: 13 }; let p = (Some(h), 2); println(f"m{h.id} {p.1}"); }
+    { let p = mk(14); let z = p.0.unwrap(); println(f"n{z.id}"); }
+    { let p = mk(15); tko(p.0); println("o"); }
+    { let p = mk(16); let w = Wo { o: p.0 }; println(f"p{w.o.unwrap().id}"); }
+    { let p = mk(17); let t2 = (p.0, 5); println(f"q{t2.1}"); }
+    { let p = mk(18); let mut x: Option[H] = None; x = p.0; println(f"r{x.unwrap().id}"); }
+    { let v = [mk(19), mk(20)]; for t in v { println(f"s{t.0.unwrap().id}") } }
+    { let o = Some(mk(21)); match o { Some(t) => println(f"t{t.0.unwrap().id}"), None => {} } }
+    { let p = mk(22); cr(p); cr(p); println(f"u{p.1}"); }
+    println("end")
+}"#,
+        &[
+            "a1", "dH1", "b2", "b2", "dH2", "t3 3", "c", "dH3", "d4 4", "dH4", "e5", "dH5", "f6",
+            "dH6", "g1", "dH1", "h8", "dH8", "i9", "dH9", "j10", "dH10", "k1", "dH11", "l12",
+            "dH12", "m13 2", "dH13", "n14", "dH14", "k15", "o", "dH15", "p16", "dH16", "q5",
+            "dH17", "r18", "dH18", "s19", "s20", "dH19", "dH20", "t21", "dH21", "r22", "r22",
+            "u22", "dH22", "end",
+        ],
+        "asan_tuple_option_shared_element_is_released_once",
+        22,
+    );
+}
+
+/// B-2026-10-04-46 — the codegen fixture's compiled-only program under ASAN.
+#[test]
+fn asan_tuple_option_shared_element_is_released_once_compiled_only() {
+    assert_clean_asan_run_min_allocs(
+        r#"shared struct H { id: i64 }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+struct W { t: (Option[H], i64) }
+struct Wo { o: Option[H] }
+fn ct(t: (Option[H], i64)) { println(f"t{t.0.unwrap().id} {t.1}") }
+fn ct2(t: (Option[H], i64)) { println(f"t{t.1}") }
+fn cr(t: ref (Option[H], i64)) { println(f"r{t.0.unwrap().id}") }
+fn mk(i: i64) -> (Option[H], i64) { (Some(H { id: i }), i) }
+fn give(t: (Option[H], i64)) -> Option[H] { t.0 }
+fn cx(t: (Option[H], i64)) -> i64 { let x = t.0; x.unwrap().id }
+fn tko(o: Option[H]) { println(f"k{o.unwrap().id}") }
+fn mkh() -> Option[H] { let p = mk(1); p.0 }
+enum Et { A((Option[H], i64)), B }
+fn main() {
+    { ct((Some(H { id: 1 }), 2)); println("a"); }
+    { ct2((Some(H { id: 2 }), 2)); println("b"); }
+    { mk(3); println("c"); }
+    { let p = mk(4); let f = || p.1; println(f"d{f()}"); }
+    { let mut p = mk(5); p.0 = Some(H { id: 6 }); println(f"e{p.1}"); }
+    { let w = W { t: mk(7) }; println(f"f{w.t.0.unwrap().id}"); println(f"f{w.t.1}"); }
+    println("end")
+}"#,
+        &[
+            "t1 2", "dH1", "a", "t2", "dH2", "b", "dH3", "c", "d4", "dH4", "dH5", "e5", "dH6",
+            "f7", "f7", "dH7", "end",
+        ],
+        "asan_tuple_option_shared_element_is_released_once_compiled_only",
+        7,
+    );
+}

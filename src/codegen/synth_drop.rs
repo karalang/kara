@@ -6764,6 +6764,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if let Some(f) = self.vec_elem_agg_drop_for_type_expr(te) {
                                     self.builder.build_call(f, &[field_ptr.into()], "").unwrap();
                                 }
+                            } else if let Some(f) = self.tuple_elem_option_shared_drop(te) {
+                                // B-2026-10-04-46 — an `Option[shared T]`
+                                // element: the `Option` twin of the bare
+                                // shared arm below (B-2026-09-04-31). No rc
+                                // machinery reaches a tuple slot, so this walk
+                                // is the element's one release; the drop fn is
+                                // the tag-guarded, null-guarded rc-dec a
+                                // `Vec[Option[shared T]]` element gets. Its
+                                // move-out dual is the `None` tag store in
+                                // `zero_tuple_elem_cap_at`.
+                                self.builder.build_call(f, &[field_ptr.into()], "").unwrap();
                             }
                         }
                         _ => {
@@ -6964,7 +6975,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // arms. Must stay in lockstep with the drop arm or a moved
                     // tuple double-frees its consumer's payload.
                     "Option" | "Result" => {
-                        if self.tuple_elem_optres_drop_ok(te) {
+                        // B-2026-10-04-46 — an `Option[shared T]` element is
+                        // released by the tuple's drop now, so a move out of
+                        // it leaves `None` behind, exactly as an admitted
+                        // `Option` does.
+                        if name == "Option" && self.tuple_elem_is_option_shared(te) {
+                            self.zero_option_field_tag_at(field_ptr);
+                        } else if self.tuple_elem_optres_drop_ok(te) {
                             if name == "Option" {
                                 self.zero_option_field_tag_at(field_ptr);
                             } else if let Some(layout) = self.type_decls.enum_layouts.get("Result")
@@ -11975,6 +11992,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // A `Vec[shared]` element has had this answer for a long
                     // time; this is the tuple asking the same question.
                     || self.shared_heap_type_for_type_expr(te).is_some()
+                    // B-2026-10-04-46 — and an `Option[shared T]` element,
+                    // which the `tuple_elem_optres_drop_ok` disjunct above
+                    // declines on purpose.
+                    || self.tuple_elem_is_option_shared(te)
                     // B-2026-09-12-10 — the same question asked of the table
                     // that is POPULATED when an enum payload is classified.
                     // The disjunct above resolves through `shared_types`, which
@@ -12139,6 +12160,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// a move-out neutralizer in that same dual (Option → tag to `None`, Result →
     /// payload area zeroed), so admitting one here can never leave a moved-out
     /// tuple double-freeing its consumer's payload.
+    /// B-2026-10-04-46 — is this tuple element an `Option[shared T]`? The
+    /// one shape [`Self::tuple_elem_optres_drop_ok`] declines that the tuple
+    /// walk must still release: nothing else ever reaches a tuple slot.
+    pub(super) fn tuple_elem_is_option_shared(&self, te: &TypeExpr) -> bool {
+        self.option_inner_shared_type_for_type_expr(te).is_some()
+    }
+
+    /// The drop fn for an `Option[shared T]` tuple element, when `te` is one.
+    pub(super) fn tuple_elem_option_shared_drop(
+        &mut self,
+        te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        if !self.tuple_elem_is_option_shared(te) {
+            return None;
+        }
+        self.option_shared_payload_element_drop(te)
+    }
+
     pub(super) fn tuple_elem_optres_drop_ok(&self, te: &TypeExpr) -> bool {
         let TypeKind::Path(p) = &te.kind else {
             return false;

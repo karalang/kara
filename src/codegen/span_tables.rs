@@ -328,6 +328,12 @@ pub(crate) struct SpanTables {
     /// widening the copy to more types can never get out of step with the
     /// disarm.
     pub(crate) uam_copied_sites: std::collections::HashSet<(usize, usize)>,
+    /// B-2026-10-04-46 — block expressions whose tail read an
+    /// `Option[shared T]` element of a tuple declared IN that block
+    /// (`{ let p = mk(1); p.0 }`). The tuple dies at the block's end and
+    /// releases its own ref, so the tail took one of its own, and the block's
+    /// value is an owned +1 that the binding receiving it must release.
+    pub(crate) owned_option_shared_block_tails: std::collections::HashSet<(usize, usize)>,
     /// B-2026-09-19-59 — `Option`/`Result` constructor sites whose inline
     /// `Array` payload source must NOT be disarmed at the constructor, because
     /// the constructor is the direct argument of a free-function call or a

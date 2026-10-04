@@ -729,11 +729,54 @@ impl<'ctx> super::Codegen<'ctx> {
             let mark = self.pending_enum_field_zeros.len();
             self.arm_conditional_store_flag_for_tail(expr);
             let val = self.compile_tail_final_expr(expr, tail_inner)?;
+            self.share_block_local_tuple_elem_option_tail(block, expr, val);
             self.flush_pending_enum_field_zeros_from(mark);
             Ok(Some(val))
         } else {
             Ok(None)
         }
+    }
+
+    /// B-2026-10-04-46 — a block whose tail reads an `Option[shared T]`
+    /// element of a tuple bound by a `let` in that same block
+    /// (`{ let p = mk(1); p.0 }`). The tuple's drop releases its ref when the
+    /// block ends, so the value leaving the block takes one of its own; the
+    /// block's span is recorded so the `let` receiving it registers the
+    /// release. A tuple from an enclosing scope outlives the block and is
+    /// left alone, as is a function body's tail, whose param tuples are the
+    /// return-share's.
+    fn share_block_local_tuple_elem_option_tail(
+        &mut self,
+        block: &Block,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let ExprKind::TupleIndex { object, index } = &tail.kind else {
+            return;
+        };
+        let ExprKind::Identifier(root) = &object.kind else {
+            return;
+        };
+        let declared_here = block.stmts.iter().any(|s| {
+            matches!(&s.kind, StmtKind::Let { pattern, .. }
+                if matches!(&pattern.kind, PatternKind::Binding(n) if n == root))
+        });
+        if !declared_here {
+            return;
+        }
+        let Some(te) = self
+            .place_chain_tuple_tes(object)
+            .and_then(|tes| tes.get(*index as usize).cloned())
+        else {
+            return;
+        };
+        let Some((_, info)) = self.option_inner_shared_type_for_type_expr(&te) else {
+            return;
+        };
+        self.emit_option_inner_rc_inc_for_loaded(val, info.heap_type);
+        self.span_tables
+            .owned_option_shared_block_tails
+            .insert((block.span.offset, block.span.length));
     }
 
     /// Bind an ASCII-constant `let` to the alloca it just created, so the
@@ -2411,6 +2454,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // compiles as a statement and was already disarmed.
             self.arm_conditional_store_flag_for_tail(expr);
             let val = self.compile_tail_final_expr(expr, auto_par_tail)?;
+            self.share_block_local_tuple_elem_option_tail(body, expr, val);
             self.flush_pending_enum_field_zeros_from(mark);
             Ok(Some(val))
         } else {
@@ -7216,6 +7260,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if self.expr_is_weak_field_read(value) {
                                     option_alias_needs_inner_inc = true;
                                 }
+                                // B-2026-10-04-46 — a tuple element read
+                                // (`let x: Option[T] = p.0`) is an alias too.
+                                if matches!(value.kind, ExprKind::TupleIndex { .. })
+                                    && Self::place_root_ident(value).is_some()
+                                {
+                                    option_alias_needs_inner_inc = true;
+                                }
                             }
                         }
                         // (b) Untyped let with a call-shaped RHS whose
@@ -7400,6 +7451,53 @@ impl<'ctx> super::Codegen<'ctx> {
                                                     option_alias_needs_inner_inc = true;
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // (c2) B-2026-10-04-46 — untyped let whose RHS is a
+                        //     tuple element of type `Option[shared T]`:
+                        //     `let x = p.0`. The element is ALIASED, not moved,
+                        //     exactly as a bare `shared` element is (B-2026-09-04-31):
+                        //     the tuple's drop releases its own ref, so the
+                        //     binding takes one of its own and releases it.
+                        if shared_option_info.is_none() {
+                            if let ExprKind::TupleIndex { object, index } = &value.kind {
+                                if let Some(te) = self
+                                    .place_chain_tuple_tes(object)
+                                    .and_then(|tes| tes.get(*index as usize).cloned())
+                                {
+                                    if let Some((_, info)) =
+                                        self.option_inner_shared_type_for_type_expr(&te)
+                                    {
+                                        shared_option_info = Some((var_name.clone(), info));
+                                        option_alias_needs_inner_inc = true;
+                                    }
+                                }
+                            }
+                        }
+                        // (c3) B-2026-10-04-46 — a block whose tail took its
+                        //     own ref on a dying local tuple's `Option[shared]`
+                        //     element: the binding owns that +1.
+                        if shared_option_info.is_none() {
+                            if let ExprKind::Block(b) = &value.kind {
+                                if let Some(ExprKind::TupleIndex { object, index }) =
+                                    b.final_expr.as_deref().map(|e| &e.kind)
+                                {
+                                    if self
+                                        .span_tables
+                                        .owned_option_shared_block_tails
+                                        .contains(&(b.span.offset, b.span.length))
+                                    {
+                                        if let Some((_, info)) = self
+                                            .place_chain_tuple_tes(object)
+                                            .and_then(|tes| tes.get(*index as usize).cloned())
+                                            .and_then(|te| {
+                                                self.option_inner_shared_type_for_type_expr(&te)
+                                            })
+                                        {
+                                            shared_option_info = Some((var_name.clone(), info));
                                         }
                                     }
                                 }

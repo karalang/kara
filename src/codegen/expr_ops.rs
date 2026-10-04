@@ -642,7 +642,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// rooted at one)? Such a call returns that place's own payload pointer,
     /// and the place keeps its own release, so the result is a view rather
     /// than a temporary the caller owns.
-    fn unwrap_of_named_place(object: &Expr) -> bool {
+    fn unwrap_of_named_place(&self, object: &Expr) -> bool {
         match &object.kind {
             ExprKind::MethodCall {
                 object: recv,
@@ -652,16 +652,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !matches!(method.as_str(), "unwrap" | "expect") {
                     return false;
                 }
-                // Field chains only. A tuple element is excluded because the
-                // tuple's drop never releases an `Option[shared]` element, so
-                // there the call's release is the element's ONLY one and must
-                // stay; an index place is a container's element, with its
-                // own lowering.
+                // Field and tuple-element chains. A tuple element joined only
+                // once the tuple's drop released an `Option[shared]` element
+                // (B-2026-10-04-46); until then the call's release was the
+                // element's only one. That is still true of a USER-enum
+                // payload binding (`Et.A(t) => t.0.unwrap()`): the enum's drop
+                // does not reach the element, and taking the ref there lost
+                // the `Drop` body. An index place is a container's element,
+                // with its own lowering.
+                let mut through_tuple = false;
                 let mut cur: &Expr = recv;
                 loop {
                     match &cur.kind {
-                        ExprKind::Identifier(_) | ExprKind::SelfValue => return true,
+                        ExprKind::Identifier(name) => {
+                            return !through_tuple
+                                || !self.variables.get(name.as_str()).is_some_and(|slot| {
+                                    self.payload_vars
+                                        .user_enum_payload_slots
+                                        .contains(&slot.ptr)
+                                });
+                        }
+                        ExprKind::SelfValue => return !through_tuple,
                         ExprKind::FieldAccess { object, .. } => cur = object,
+                        ExprKind::TupleIndex { object, .. } => {
+                            through_tuple = true;
+                            cur = object;
+                        }
                         _ => return false,
                     }
                 }
@@ -1337,7 +1353,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // accesses), and ran the `Drop` body before the read
                         // was printed. Take the ref the release below gives
                         // back, so the binding stays the payload's owner.
-                        if Self::unwrap_of_named_place(object) {
+                        if self.unwrap_of_named_place(object) {
                             self.emit_refcount_inc_by_type(info.heap_type, ptr);
                         }
                         return Ok(

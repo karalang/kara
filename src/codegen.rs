@@ -6541,6 +6541,7 @@ impl<'ctx> Codegen<'ctx> {
                 boxed_passthrough_owner_alias: std::collections::HashMap::new(),
                 boxed_passthrough_chain_alias: std::collections::HashMap::new(),
                 inline_option_payload_vars: std::collections::HashSet::new(),
+                user_enum_payload_slots: std::collections::HashSet::new(),
                 inline_result_payload_vars: std::collections::HashSet::new(),
                 inline_optres_var_tes: std::collections::HashMap::new(),
                 inline_option_map_payload_vars: std::collections::HashSet::new(),
@@ -7175,6 +7176,7 @@ impl<'ctx> Codegen<'ctx> {
                 vec_index_cloned_sites: FxHashSet::default(),
                 uam_consume_sites: std::collections::HashSet::new(),
                 uam_copied_sites: std::collections::HashSet::new(),
+                owned_option_shared_block_tails: std::collections::HashSet::new(),
                 inline_array_ctor_disarm_declined: std::collections::HashSet::new(),
                 tuple_elem_array_tes: std::collections::HashMap::new(),
                 tuple_array_handover_declined: std::collections::HashSet::new(),
@@ -10358,6 +10360,9 @@ impl<'ctx> Codegen<'ctx> {
         // compilers, like the one above.
         let mut t_tuple_elem_array_tes = std::collections::HashMap::new();
         let mut t_tuple_array_handover_declined = std::collections::HashSet::new();
+        // B-2026-10-04-46 — written by `compile_block` for a block-local
+        // tuple element tail and read by the `let` that binds the block.
+        let mut t_owned_option_shared_block_tails = std::collections::HashSet::new();
         let mut t_vec_index_cloned_sites = FxHashSet::default();
         macro_rules! swap_all {
             () => {{
@@ -10384,6 +10389,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.span_tables.tuple_array_handover_declined,
                     &mut t_tuple_array_handover_declined,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.owned_option_shared_block_tails,
+                    &mut t_owned_option_shared_block_tails,
                 );
                 std::mem::swap(
                     &mut self.span_tables.vec_index_cloned_sites,

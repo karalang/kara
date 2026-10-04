@@ -14033,7 +14033,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // The whole-tuple move sites (`let p = w.p`, a by-value tuple
         // argument) still null through `zero_tuple_elem_caps`; those hand
         // the tuple's OWN ref over and do not inc.
-        if self.shared_heap_type_for_type_expr(&te).is_none() {
+        // B-2026-10-04-46 — an `Option[shared T]` element is aliased the same
+        // way: its destinations take their own ref, the tuple keeps its own.
+        if self.shared_heap_type_for_type_expr(&te).is_none()
+            && !self.tuple_elem_is_option_shared(&te)
+        {
             self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, *index as u32, &te);
         }
         // B-2026-08-03-3 — the BODIES half of the same move-out. Cap-zeroing

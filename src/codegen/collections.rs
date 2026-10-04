@@ -1503,6 +1503,7 @@ impl<'ctx> super::Codegen<'ctx> {
         for e in elems {
             let v = (|| -> Result<BasicValueEnum<'ctx>, String> {
                 let v = self.compile_expr(e)?;
+                self.share_option_shared_tuple_elem_ref_for_arg(e, v);
                 // B-2026-08-31-34 — an aggregate-literal ELEMENT that READS A HEAP
                 // FIELD OFF A FRESH TEMP (`[mkp(1).a]`) is a MOVE, exactly as
                 // `let a = mkp(1).a;` is. The let / assign / return / fn-tail sites
@@ -1684,6 +1685,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.var_types.pending_let_elem_type = ty;
             }
             let v = v?;
+            self.share_option_shared_tuple_elem_ref_for_arg(e, v);
             // B-2026-08-31-34 — an aggregate-literal ELEMENT that READS A HEAP
             // FIELD OFF A FRESH TEMP (`[mkp(1).a]`) is a MOVE, exactly as
             // `let a = mkp(1).a;` is. The let / assign / return / fn-tail sites

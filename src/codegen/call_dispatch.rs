@@ -2183,6 +2183,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // container still owns (B-2026-07-11-29). Inc the loaded inner.
             if !borrow_skip {
                 self.share_option_shared_index_ref_for_arg(&a.value, val);
+                self.share_option_shared_tuple_elem_ref_for_arg(&a.value, val);
             }
             // B-2026-07-28-17: an `Option[<heap>]` field of a shared-enum
             // payload VIEW must be copied, not aliased — the node keeps its
@@ -12492,9 +12493,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // (`e2e_bare_shared_enum_tuple_elem_stays_silent`), and make the
             // compiled side alone run it.
             if array_heap_elem
-                || elem_tes
-                    .iter()
-                    .any(|e| self.type_expr_has_drop_heap(e) || self.tuple_elem_optres_drop_ok(e))
+                || elem_tes.iter().any(|e| {
+                    self.type_expr_has_drop_heap(e)
+                            || self.tuple_elem_optres_drop_ok(e)
+                            // B-2026-10-04-46 — an `Option[shared T]` element:
+                            // the callee's tuple param is caller-retains, so
+                            // this temp is the element's only owner.
+                            || self.tuple_elem_is_option_shared(e)
+                })
             {
                 let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                 self.builder.build_store(slot, val).unwrap();
@@ -21897,6 +21903,12 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let te = self.subst_monomorph_type_params(&te);
+        // B-2026-10-04-46 — an `Option[shared T]` element is the same alias
+        // one wrapper over, now that the tuple's drop releases it.
+        if let Some((_, info)) = self.option_inner_shared_type_for_type_expr(&te) {
+            self.emit_option_inner_rc_inc_for_loaded(val, info.heap_type);
+            return;
+        }
         let Some(heap_type) = self.shared_heap_type_for_type_expr(&te) else {
             return;
         };
@@ -21910,6 +21922,34 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         self.emit_refcount_inc(&type_name, heap_type, ptr);
+    }
+
+    /// B-2026-10-04-46 — tuple-element companion to
+    /// `share_option_shared_ref_for_arg` and its field and index siblings: an
+    /// argument (or container element) that reads an `Option[shared T]` tuple
+    /// element `p.0` is an ALIAS of the element, which the tuple's own drop
+    /// still releases, so the consumer needs a ref of its own. Inc the
+    /// already-loaded value's inner under the Some-tag and null guards.
+    pub(super) fn share_option_shared_tuple_elem_ref_for_arg(
+        &self,
+        arg_expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let ExprKind::TupleIndex { object, index } = &arg_expr.kind else {
+            return;
+        };
+        if Self::place_root_ident(arg_expr).is_none() {
+            return;
+        }
+        let Some(te) = self
+            .place_chain_tuple_tes(object)
+            .and_then(|tes| tes.get(*index as usize).cloned())
+        else {
+            return;
+        };
+        if let Some((_, info)) = self.option_inner_shared_type_for_type_expr(&te) {
+            self.emit_option_inner_rc_inc_for_loaded(val, info.heap_type);
+        }
     }
 
     /// Index companion to `share_option_shared_ref_for_arg` /

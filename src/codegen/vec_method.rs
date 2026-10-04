@@ -3567,6 +3567,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `option_shared_payload_element_drop`. Retain-alone leaks the
                 // drain path; the inner-drop-alone double-frees the residual path.
                 self.share_option_shared_field_ref_for_arg(&args[0].value, elem_val);
+                // B-2026-10-04-46 — and a tuple element `v.push(p.0)`.
+                self.share_option_shared_tuple_elem_ref_for_arg(&args[0].value, elem_val);
                 // Bare `shared struct` sibling (B-2026-07-21-13): pushing an
                 // ALIASING indexed element / field of a bare shared struct
                 // (`node.neighbors.push(nodes[j])`) co-owns the node, so retain
