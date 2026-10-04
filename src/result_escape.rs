@@ -180,11 +180,26 @@ struct Acc<'a> {
     /// `let` takes through a branch (`let r = if c { a } else { None }`): the
     /// binding is a maybe-alias of the param, so those tails are not uses.
     alias_tail_spans: HashSet<(usize, usize)>,
+    /// B-2026-10-03-27 — a branch `let` whose tails name TWO OR MORE seeded
+    /// params (`let r = if c { a } else { b }`) is a maybe-alias of each:
+    /// `aliases` holds the first, this the rest, and every later use of the
+    /// binding counts against all of them.
+    alias_extra: HashMap<&'a str, Vec<&'a str>>,
 }
 
 /// B-2026-09-24-20 — the param a use of `name` counts against.
 fn root<'a>(acc: &Acc<'a>, name: &'a str) -> &'a str {
     acc.aliases.get(name).copied().unwrap_or(name)
+}
+
+/// B-2026-10-03-27 — every param a use of `name` counts against: its
+/// [`root`], then any further roots a multi-param branch `let` gave it.
+fn roots<'a>(acc: &Acc<'a>, name: &'a str) -> Vec<&'a str> {
+    let mut out = vec![root(acc, name)];
+    if let Some(extra) = acc.alias_extra.get(name) {
+        out.extend(extra.iter().copied());
+    }
+    out
 }
 
 thread_local! {
@@ -1402,11 +1417,12 @@ fn record_use<'a>(acc: &mut Acc<'a>, name: &'a str, scrutinee: bool) {
     if acc.shadowed.get(name).is_some_and(|n| *n > 0) {
         return;
     }
-    let name = root(acc, name);
-    let e = acc.counts.entry(name).or_insert((0, 0, 0));
-    e.0 += 1;
-    if scrutinee {
-        e.1 += 1;
+    for name in roots(acc, name) {
+        let e = acc.counts.entry(name).or_insert((0, 0, 0));
+        e.0 += 1;
+        if scrutinee {
+            e.1 += 1;
+        }
     }
 }
 
@@ -1420,10 +1436,11 @@ fn record_read_only_use<'a>(acc: &mut Acc<'a>, name: &'a str) {
     if acc.shadowed.get(name).is_some_and(|n| *n > 0) {
         return;
     }
-    let name = root(acc, name);
-    let e = acc.counts.entry(name).or_insert((0, 0, 0));
-    e.0 += 1;
-    e.2 += 1;
+    for name in roots(acc, name) {
+        let e = acc.counts.entry(name).or_insert((0, 0, 0));
+        e.0 += 1;
+        e.2 += 1;
+    }
 }
 
 /// Walk a pattern-matching CONSTRUCT's scrutinee (`match` / `if let` / `while
@@ -1480,11 +1497,15 @@ fn walk_block<'a>(b: &'a Block, acc: &mut Acc<'a>) {
     }
 }
 
-/// B-2026-10-03-26 — the one seeded param `e`'s branch tails name, and those
-/// tails' spans: an `if`/`if let`/`match`/block whose value is, on some path,
-/// that param's whole envelope. `None` for a non-branch, a tail naming no
-/// seeded param, or tails naming two.
-fn branch_param_tails<'a>(acc: &Acc<'a>, e: &'a Expr) -> Option<(&'a str, Vec<(usize, usize)>)> {
+/// [`branch_param_tails`]' answer: the params, then the tails' spans.
+type BranchTails<'a> = (Vec<&'a str>, Vec<(usize, usize)>);
+
+/// B-2026-10-03-26 — the seeded params `e`'s branch tails name, in first-seen
+/// order, and those tails' spans: an `if`/`if let`/`match`/block whose value
+/// is, on some path, a param's whole envelope. `None` for a non-branch or a
+/// tail naming no seeded param. B-2026-10-03-27 — tails naming two params
+/// (`if c { a } else { b }`) give both.
+fn branch_param_tails<'a>(acc: &Acc<'a>, e: &'a Expr) -> Option<BranchTails<'a>> {
     fn walk<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
         match &e.kind {
             ExprKind::Identifier(_) => out.push(e),
@@ -1531,7 +1552,7 @@ fn branch_param_tails<'a>(acc: &Acc<'a>, e: &'a Expr) -> Option<(&'a str, Vec<(u
     }
     let mut tails = Vec::new();
     walk(e, &mut tails);
-    let mut found: Option<&'a str> = None;
+    let mut found: Vec<&'a str> = Vec::new();
     let mut spans = Vec::new();
     for t in tails {
         let ExprKind::Identifier(n) = &t.kind else {
@@ -1540,17 +1561,18 @@ fn branch_param_tails<'a>(acc: &Acc<'a>, e: &'a Expr) -> Option<(&'a str, Vec<(u
         if acc.shadowed.get(n.as_str()).is_some_and(|c| *c > 0) {
             continue;
         }
-        let r = root(acc, n.as_str());
-        if !acc.alias_roots.contains(r) {
+        let rs = roots(acc, n.as_str());
+        if !rs.iter().all(|r| acc.alias_roots.contains(r)) {
             continue;
         }
-        if found.is_some_and(|f| f != r) {
-            return None;
+        for r in rs {
+            if !found.contains(&r) {
+                found.push(r);
+            }
         }
-        found = Some(r);
         spans.push((t.span.offset, t.span.length));
     }
-    found.map(|r| (r, spans))
+    (!found.is_empty()).then_some((found, spans))
 }
 
 fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
@@ -1575,17 +1597,26 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                         && acc.alias_roots.contains(r)
                     {
                         acc.aliases.insert(name.as_str(), r);
+                        // B-2026-10-03-27 — a rebind of a multi-param branch
+                        // binding keeps every root it had.
+                        if let Some(extra) = acc.alias_extra.get(src).cloned() {
+                            acc.alias_extra.insert(name.as_str(), extra);
+                        }
                         return;
                     }
                 }
                 // B-2026-10-03-26 — `let r = if c { a } else { None }` over a
                 // seeded param: on the path that takes `a`, `r` is `a`, as
                 // `let r = a;` is, so `r`'s later uses count against `a` and
-                // the tail itself is no use. One param per binding; a tail
-                // naming two keeps the old answer.
+                // the tail itself is no use. B-2026-10-03-27 — tails naming
+                // several params make `r` a maybe-alias of each, so its uses
+                // count against all of them.
                 if (!*is_mut || acc.demoted.contains(name.as_str())) && !acc.in_closure {
-                    if let Some((r, spans)) = branch_param_tails(acc, value) {
-                        acc.aliases.insert(name.as_str(), r);
+                    if let Some((rs, spans)) = branch_param_tails(acc, value) {
+                        acc.aliases.insert(name.as_str(), rs[0]);
+                        if rs.len() > 1 {
+                            acc.alias_extra.insert(name.as_str(), rs[1..].to_vec());
+                        }
                         acc.alias_tail_spans.extend(spans);
                         walk_expr(value, acc);
                         return;
@@ -1623,40 +1654,47 @@ fn walk_stmt<'a>(s: &'a Stmt, acc: &mut Acc<'a>) {
                 // `retract_boxed_tuple_inner_drop_for_block` states by passing
                 // `None` for its block.
                 if let Some(n) = param_ident(acc, value) {
-                    let root_n = root(acc, n);
-                    if let Some(v) =
-                        variant_arm_takes_payload_block(pattern, rest.as_ref(), acc.take_copy_read)
-                    {
-                        acc.payload_consumers.entry(root_n).or_default().insert(v);
-                        if whole_payload_bind(pattern) {
-                            acc.whole_payload_consumers
+                    for root_n in roots(acc, n) {
+                        if let Some(v) = variant_arm_takes_payload_block(
+                            pattern,
+                            rest.as_ref(),
+                            acc.take_copy_read,
+                        ) {
+                            acc.payload_consumers.entry(root_n).or_default().insert(v);
+                            if whole_payload_bind(pattern) {
+                                acc.whole_payload_consumers
+                                    .entry(root_n)
+                                    .or_default()
+                                    .insert(v);
+                            }
+                        }
+                        if let Some(v) = variant_arm_payload_escapes_block(pattern, rest.as_ref()) {
+                            acc.payload_escapers.entry(root_n).or_default().insert(v);
+                        }
+                        let cr: &dyn Fn(&Expr) -> bool =
+                            acc.copy_read.unwrap_or(&projection_is_read);
+                        let fr = acc.follow_rebinds;
+                        if let Some(v) =
+                            variant_arm_payload_escapes_proj_block(pattern, rest.as_ref(), cr, fr)
+                        {
+                            acc.payload_escapers_proj
                                 .entry(root_n)
                                 .or_default()
                                 .insert(v);
-                        }
-                    }
-                    if let Some(v) = variant_arm_payload_escapes_block(pattern, rest.as_ref()) {
-                        acc.payload_escapers.entry(root_n).or_default().insert(v);
-                    }
-                    let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
-                    let fr = acc.follow_rebinds;
-                    if let Some(v) =
-                        variant_arm_payload_escapes_proj_block(pattern, rest.as_ref(), cr, fr)
-                    {
-                        acc.payload_escapers_proj
-                            .entry(root_n)
-                            .or_default()
-                            .insert(v);
-                        // B-2026-09-14-18 — see the `Match` site.
-                        if let Some((pv, parts)) =
-                            variant_arm_payload_escaping_parts_block(pattern, rest.as_ref(), cr, fr)
-                        {
-                            acc.payload_escaper_parts
-                                .entry(root_n)
-                                .or_default()
-                                .entry(pv)
-                                .or_default()
-                                .extend(parts);
+                            // B-2026-09-14-18 — see the `Match` site.
+                            if let Some((pv, parts)) = variant_arm_payload_escaping_parts_block(
+                                pattern,
+                                rest.as_ref(),
+                                cr,
+                                fr,
+                            ) {
+                                acc.payload_escaper_parts
+                                    .entry(root_n)
+                                    .or_default()
+                                    .entry(pv)
+                                    .or_default()
+                                    .extend(parts);
+                            }
                         }
                     }
                 }
@@ -1716,55 +1754,56 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         ExprKind::Match { scrutinee, arms } => {
             walk_scrutinee(acc, scrutinee);
             if let Some(n) = param_ident(acc, scrutinee) {
-                let root_n = root(acc, n);
-                let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
-                let fr = acc.follow_rebinds;
-                for a in arms {
-                    if let Some(v) = variant_arm_takes_payload(
-                        &a.pattern,
-                        a.guard.as_ref(),
-                        &a.body,
-                        acc.take_copy_read,
-                    ) {
-                        acc.payload_consumers.entry(root_n).or_default().insert(v);
-                        if whole_payload_bind(&a.pattern) {
-                            acc.whole_payload_consumers
-                                .entry(root_n)
-                                .or_default()
-                                .insert(v);
+                for root_n in roots(acc, n) {
+                    let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
+                    let fr = acc.follow_rebinds;
+                    for a in arms {
+                        if let Some(v) = variant_arm_takes_payload(
+                            &a.pattern,
+                            a.guard.as_ref(),
+                            &a.body,
+                            acc.take_copy_read,
+                        ) {
+                            acc.payload_consumers.entry(root_n).or_default().insert(v);
+                            if whole_payload_bind(&a.pattern) {
+                                acc.whole_payload_consumers
+                                    .entry(root_n)
+                                    .or_default()
+                                    .insert(v);
+                            }
                         }
-                    }
-                    if let Some(v) =
-                        variant_arm_payload_escapes(&a.pattern, a.guard.as_ref(), &a.body)
-                    {
-                        acc.payload_escapers.entry(root_n).or_default().insert(v);
-                    }
-                    if let Some(v) = variant_arm_payload_escapes_proj(
-                        &a.pattern,
-                        a.guard.as_ref(),
-                        &a.body,
-                        cr,
-                        fr,
-                    ) {
-                        acc.payload_escapers_proj
-                            .entry(root_n)
-                            .or_default()
-                            .insert(v);
-                        // B-2026-09-14-18 — recorded only alongside the map it
-                        // narrows, so a part set can never contradict it.
-                        if let Some((pv, parts)) = variant_arm_payload_escaping_parts(
+                        if let Some(v) =
+                            variant_arm_payload_escapes(&a.pattern, a.guard.as_ref(), &a.body)
+                        {
+                            acc.payload_escapers.entry(root_n).or_default().insert(v);
+                        }
+                        if let Some(v) = variant_arm_payload_escapes_proj(
                             &a.pattern,
                             a.guard.as_ref(),
                             &a.body,
                             cr,
                             fr,
                         ) {
-                            acc.payload_escaper_parts
+                            acc.payload_escapers_proj
                                 .entry(root_n)
                                 .or_default()
-                                .entry(pv)
-                                .or_default()
-                                .extend(parts);
+                                .insert(v);
+                            // B-2026-09-14-18 — recorded only alongside the map it
+                            // narrows, so a part set can never contradict it.
+                            if let Some((pv, parts)) = variant_arm_payload_escaping_parts(
+                                &a.pattern,
+                                a.guard.as_ref(),
+                                &a.body,
+                                cr,
+                                fr,
+                            ) {
+                                acc.payload_escaper_parts
+                                    .entry(root_n)
+                                    .or_default()
+                                    .entry(pv)
+                                    .or_default()
+                                    .extend(parts);
+                            }
                         }
                     }
                 }
@@ -1916,40 +1955,46 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
             // `if let Pat = <scrutinee>` is match-sugar — consume-in-place.
             walk_scrutinee(acc, value);
             if let Some(n) = param_ident(acc, value) {
-                let root_n = root(acc, n);
-                if let Some(v) =
-                    variant_arm_takes_payload_block(pattern, Some(then_block), acc.take_copy_read)
-                {
-                    acc.payload_consumers.entry(root_n).or_default().insert(v);
-                    if whole_payload_bind(pattern) {
-                        acc.whole_payload_consumers
+                for root_n in roots(acc, n) {
+                    if let Some(v) = variant_arm_takes_payload_block(
+                        pattern,
+                        Some(then_block),
+                        acc.take_copy_read,
+                    ) {
+                        acc.payload_consumers.entry(root_n).or_default().insert(v);
+                        if whole_payload_bind(pattern) {
+                            acc.whole_payload_consumers
+                                .entry(root_n)
+                                .or_default()
+                                .insert(v);
+                        }
+                    }
+                    if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(then_block)) {
+                        acc.payload_escapers.entry(root_n).or_default().insert(v);
+                    }
+                    let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
+                    let fr = acc.follow_rebinds;
+                    if let Some(v) =
+                        variant_arm_payload_escapes_proj_block(pattern, Some(then_block), cr, fr)
+                    {
+                        acc.payload_escapers_proj
                             .entry(root_n)
                             .or_default()
                             .insert(v);
-                    }
-                }
-                if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(then_block)) {
-                    acc.payload_escapers.entry(root_n).or_default().insert(v);
-                }
-                let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
-                let fr = acc.follow_rebinds;
-                if let Some(v) =
-                    variant_arm_payload_escapes_proj_block(pattern, Some(then_block), cr, fr)
-                {
-                    acc.payload_escapers_proj
-                        .entry(root_n)
-                        .or_default()
-                        .insert(v);
-                    // B-2026-09-14-18 — see the `Match` site.
-                    if let Some((pv, parts)) =
-                        variant_arm_payload_escaping_parts_block(pattern, Some(then_block), cr, fr)
-                    {
-                        acc.payload_escaper_parts
-                            .entry(root_n)
-                            .or_default()
-                            .entry(pv)
-                            .or_default()
-                            .extend(parts);
+                        // B-2026-09-14-18 — see the `Match` site.
+                        if let Some((pv, parts)) = variant_arm_payload_escaping_parts_block(
+                            pattern,
+                            Some(then_block),
+                            cr,
+                            fr,
+                        ) {
+                            acc.payload_escaper_parts
+                                .entry(root_n)
+                                .or_default()
+                                .entry(pv)
+                                .or_default()
+                                .extend(parts);
+                        }
                     }
                 }
             }
@@ -1973,39 +2018,41 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
             // `while let Pat = <scrutinee>` is match-sugar — consume-in-place.
             walk_scrutinee(acc, value);
             if let Some(n) = param_ident(acc, value) {
-                let root_n = root(acc, n);
-                if let Some(v) =
-                    variant_arm_takes_payload_block(pattern, Some(body), acc.take_copy_read)
-                {
-                    acc.payload_consumers.entry(root_n).or_default().insert(v);
-                    if whole_payload_bind(pattern) {
-                        acc.whole_payload_consumers
+                for root_n in roots(acc, n) {
+                    if let Some(v) =
+                        variant_arm_takes_payload_block(pattern, Some(body), acc.take_copy_read)
+                    {
+                        acc.payload_consumers.entry(root_n).or_default().insert(v);
+                        if whole_payload_bind(pattern) {
+                            acc.whole_payload_consumers
+                                .entry(root_n)
+                                .or_default()
+                                .insert(v);
+                        }
+                    }
+                    if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(body)) {
+                        acc.payload_escapers.entry(root_n).or_default().insert(v);
+                    }
+                    let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
+                    let fr = acc.follow_rebinds;
+                    if let Some(v) =
+                        variant_arm_payload_escapes_proj_block(pattern, Some(body), cr, fr)
+                    {
+                        acc.payload_escapers_proj
                             .entry(root_n)
                             .or_default()
                             .insert(v);
-                    }
-                }
-                if let Some(v) = variant_arm_payload_escapes_block(pattern, Some(body)) {
-                    acc.payload_escapers.entry(root_n).or_default().insert(v);
-                }
-                let cr: &dyn Fn(&Expr) -> bool = acc.copy_read.unwrap_or(&projection_is_read);
-                let fr = acc.follow_rebinds;
-                if let Some(v) = variant_arm_payload_escapes_proj_block(pattern, Some(body), cr, fr)
-                {
-                    acc.payload_escapers_proj
-                        .entry(root_n)
-                        .or_default()
-                        .insert(v);
-                    // B-2026-09-14-18 — see the `Match` site.
-                    if let Some((pv, parts)) =
-                        variant_arm_payload_escaping_parts_block(pattern, Some(body), cr, fr)
-                    {
-                        acc.payload_escaper_parts
-                            .entry(root_n)
-                            .or_default()
-                            .entry(pv)
-                            .or_default()
-                            .extend(parts);
+                        // B-2026-09-14-18 — see the `Match` site.
+                        if let Some((pv, parts)) =
+                            variant_arm_payload_escaping_parts_block(pattern, Some(body), cr, fr)
+                        {
+                            acc.payload_escaper_parts
+                                .entry(root_n)
+                                .or_default()
+                                .entry(pv)
+                                .or_default()
+                                .extend(parts);
+                        }
                     }
                 }
             }
@@ -2363,9 +2410,17 @@ mod tests {
         let two = by_value_nonescaping_params(
             "fn f(a: Option[R], b: Option[R], c: bool) -> i64 { let r = if c { a } else { b }; match r { _ => 0 } }",
         );
+        // B-2026-10-03-27 — a view of either param, only read, keeps both.
         assert!(
-            !two.contains("a") && !two.contains("b"),
-            "tails naming two params keep the old answer"
+            two.contains("a") && two.contains("b"),
+            "a branch view of two params, only read, escapes neither"
+        );
+        let two_ret = by_value_nonescaping_params(
+            "fn f(a: Option[R], b: Option[R], c: bool) -> Option[R] { let r = if c { a } else { b }; let q = r; q }",
+        );
+        assert!(
+            !two_ret.contains("a") && !two_ret.contains("b"),
+            "a returned view of two params (through a rebind) escapes both"
         );
     }
 }
