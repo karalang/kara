@@ -4089,7 +4089,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-08-02-5: a tuple-element link (`t.0.f = v` /
             // `o.t.0.f = v`) — the chain walker's TupleIndex arm GEPs the
             // element in place (owned roots; ref-param roots bail there).
-            ExprKind::TupleIndex { .. } => self.field_chain_place_ptr(expr),
+            // B-2026-09-30-89 — and through a `ref` / `mut ref` root, where
+            // the chain walker bails: `a.0.n = 8` over `a: mut ref (P, i64)`.
+            ExprKind::TupleIndex { .. } => self.place_chain_ptr_through_borrow(expr),
             ExprKind::FieldAccess { object, field } => {
                 let base_ptr = self.nested_store_place_ptr(object)?;
                 let obj_ty = self.place_chain_type_name(object)?;
@@ -4256,7 +4258,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 object: inner,
                 index: hop,
             } => {
-                let st = self.place_chain_aggregate_llvm_type(inner)?;
+                let st = self.place_chain_aggregate_llvm_type_through_borrow(inner)?;
                 let fty = st.get_field_type_at_index(*hop as u32)?;
                 if !matches!(fty, BasicTypeEnum::ArrayType(_)) {
                     return None;
@@ -4396,16 +4398,18 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // B-2026-09-30-84 — a `Vec` held in a TUPLE element (`t.0[i]`),
             // placed the same way: the element's own storage, then the synth
-            // container below indexes it.
+            // container below indexes it. B-2026-09-30-89 — through a borrowed
+            // root too (`a.0[0].n = 9` over `a: mut ref (Vec[P], i64)`), as the
+            // FieldAccess arm above already is via `lower_field_access_ptr`.
             ExprKind::TupleIndex {
                 object: inner,
                 index: hop,
             } => {
                 let ll_ty = self
-                    .place_chain_aggregate_llvm_type(inner)?
+                    .place_chain_aggregate_llvm_type_through_borrow(inner)?
                     .get_field_type_at_index(*hop as u32)?;
                 let te = self.tuple_index_elem_type_expr(inner, *hop)?;
-                let p = self.field_chain_place_ptr(object)?;
+                let p = self.place_chain_ptr_through_borrow(object)?;
                 (p, ll_ty, te)
             }
             _ => return None,
@@ -4504,8 +4508,10 @@ impl<'ctx> super::Codegen<'ctx> {
         index: u64,
         new_val: BasicValueEnum<'ctx>,
     ) -> Result<(), String> {
-        let base_ptr = self.field_chain_place_ptr(object);
-        let tuple_ty = self.place_chain_aggregate_llvm_type(object);
+        // B-2026-09-30-89 — through a `mut ref` root too (`a.1 = 9` over
+        // `a: mut ref (P, i64)`): the store lands in the caller's tuple.
+        let base_ptr = self.place_chain_ptr_through_borrow(object);
+        let tuple_ty = self.place_chain_aggregate_llvm_type_through_borrow(object);
         let (Some(base_ptr), Some(tuple_ty)) = (base_ptr, tuple_ty) else {
             return Err(
                 "codegen: tuple-element assignment through this receiver shape is not yet \
@@ -13104,11 +13110,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// of the result and writes nothing, so the ownership hazard behind
     /// `field_chain_place_ptr`'s borrowed-root bail cannot arise.
     ///
-    /// Field hops only. An `Index` hop (`b.items[0].xs`) would have to
-    /// re-evaluate the subscript to recompute the element pointer, the same
-    /// purity question `field_chain_place_ptr`'s own `Index` arm gates on, and
-    /// no measurement backs answering it here.
-    fn borrowed_place_chain_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
+    /// Field and tuple-index hops only. An `Index` hop (`b.items[0].xs`) would
+    /// have to re-evaluate the subscript to recompute the element pointer, the
+    /// same purity question `field_chain_place_ptr`'s own `Index` arm gates
+    /// on, and no measurement backs answering it here.
+    ///
+    /// B-2026-09-30-89 — also the borrow half of
+    /// [`Self::place_chain_ptr_through_borrow`], whose callers LOWER stores as
+    /// well as reads through the place (`a.1 = 9`, `a.0[0] = s` over
+    /// `a: mut ref (..)`). Writing there is the point of a `mut ref`, and a
+    /// store through a `ref` is refused upstream, so the hazard above concerns
+    /// only the suppression callers, which still use `field_chain_place_ptr`.
+    pub(super) fn borrowed_place_chain_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
         match &expr.kind {
             ExprKind::Identifier(_) | ExprKind::SelfValue => {
                 let root = match &expr.kind {
@@ -13146,6 +13159,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 let base = self.borrowed_place_chain_ptr(object)?;
                 self.builder
                     .build_struct_gep(st, base, idx as u32, &format!("{field}.place"))
+                    .ok()
+            }
+            ExprKind::TupleIndex { object, index } => {
+                let tuple_ty = self.place_chain_aggregate_llvm_type_through_borrow(object)?;
+                let base = self.borrowed_place_chain_ptr(object)?;
+                self.builder
+                    .build_struct_gep(tuple_ty, base, *index as u32, "borrow.chain.tupidx.p")
                     .ok()
             }
             _ => None,

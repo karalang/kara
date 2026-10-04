@@ -435,8 +435,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .filter(|te| super::helpers::array_inner_type_expr(te).is_some()),
             };
             let hoisted = container_te.and_then(|vec_te| {
-                let elem_ptr = self.field_chain_place_ptr(inner)?;
-                let tuple_ty = self.place_chain_aggregate_llvm_type(tup)?;
+                let elem_ptr = self.place_chain_ptr_through_borrow(inner)?;
+                let tuple_ty = self.place_chain_aggregate_llvm_type_through_borrow(tup)?;
                 let elem_ll_ty = tuple_ty.get_field_type_at_index(*tidx as u32)?;
                 let synth = format!("__tup_container_{}", self.indexed_elem_counter);
                 self.indexed_elem_counter += 1;
@@ -2422,8 +2422,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(None);
                 };
                 let (Some(ptr), Some(tuple_ty)) = (
-                    self.field_chain_place_ptr(place),
-                    self.place_chain_aggregate_llvm_type(tup),
+                    self.place_chain_ptr_through_borrow(place),
+                    self.place_chain_aggregate_llvm_type_through_borrow(tup),
                 ) else {
                     return Ok(None);
                 };

@@ -26374,12 +26374,21 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 root = o;
             }
-            let ExprKind::Identifier(root) = &root.kind else {
-                return;
+            // B-2026-09-30-89 — a `mut ref self` root too (`self.t.0[0] = s`),
+            // with the FieldAccess arm's `self` stand-in for the alias guard:
+            // that guard's mention walk has no `SelfValue` arm, so any `self`
+            // in the RHS declines rather than disarming it.
+            let rhs_may_alias_container = match &root.kind {
+                ExprKind::Identifier(root) => {
+                    !self.expr_cannot_carry_container_heap(rhs, root, clone_log_mark)
+                }
+                ExprKind::SelfValue => {
+                    expr_contains_self_value(rhs)
+                        || !self.expr_cannot_carry_container_heap(rhs, "self", clone_log_mark)
+                }
+                _ => return,
             };
-            if !rhs_index_deep_cloned
-                && !self.expr_cannot_carry_container_heap(rhs, root, clone_log_mark)
-            {
+            if !rhs_index_deep_cloned && rhs_may_alias_container {
                 return;
             }
             let Some(elem_te) = self
@@ -26390,8 +26399,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 return;
             };
             let (Some(elem_ptr), Some(tuple_ty)) = (
-                self.field_chain_place_ptr(object),
-                self.place_chain_aggregate_llvm_type(tup),
+                self.place_chain_ptr_through_borrow(object),
+                self.place_chain_aggregate_llvm_type_through_borrow(tup),
             ) else {
                 return;
             };

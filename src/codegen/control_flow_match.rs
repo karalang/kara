@@ -13681,19 +13681,77 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-30-89 — [`Self::field_chain_place_ptr`] for the callers that
+    /// LOWER a read or a store through the place (index reads and stores into a
+    /// tuple element, tuple-element and nested field stores), which may follow
+    /// a `ref` / `mut ref` root where that function deliberately bails.
+    ///
+    /// The owned answer is tried first and is returned unchanged, so every
+    /// shape that resolved before resolves to the same pointer; only a chain
+    /// rooted at a borrow, which answered `None` before, gains a pointer. That
+    /// pointer is the caller's own storage, one load in, which is the place a
+    /// `mut ref` store must land in (a `ref` store is refused upstream). The
+    /// suppression callers keep the bail: they must not mutate storage the
+    /// callee does not own.
+    pub(super) fn place_chain_ptr_through_borrow(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<PointerValue<'ctx>> {
+        if let Some(p) = self.field_chain_place_ptr(expr) {
+            return Some(p);
+        }
+        // The borrow-rooted walk `coerce_to_slice` already uses for a Vec
+        // field behind a borrow (`head(b.xs)`), with a tuple-index hop added.
+        self.borrowed_place_chain_ptr(expr)
+    }
+
     /// LLVM aggregate (struct/tuple) type of a place expression — used by the
     /// tuple-index arm of [`Self::field_chain_place_ptr`] to GEP a tuple element.
     /// `&self` — pure type lookup, no IR.
     pub(super) fn place_chain_aggregate_llvm_type(&self, expr: &Expr) -> Option<StructType<'ctx>> {
+        self.place_chain_aggregate_llvm_type_ex(expr, false)
+    }
+
+    /// [`Self::place_chain_aggregate_llvm_type`] that also answers at a `ref` /
+    /// `mut ref` root, whose slot holds a POINTER rather than the aggregate:
+    /// the pointee's type, as recorded in `ref_params` (B-2026-09-30-89). Pair
+    /// it only with [`Self::place_chain_ptr_through_borrow`], never with the
+    /// raw variable slot.
+    pub(super) fn place_chain_aggregate_llvm_type_through_borrow(
+        &self,
+        expr: &Expr,
+    ) -> Option<StructType<'ctx>> {
+        self.place_chain_aggregate_llvm_type_ex(expr, true)
+    }
+
+    fn place_chain_aggregate_llvm_type_ex(
+        &self,
+        expr: &Expr,
+        through_borrow: bool,
+    ) -> Option<StructType<'ctx>> {
+        let borrowed_root = |name: &str| match self.borrow_vars.ref_params.get(name) {
+            Some(BasicTypeEnum::StructType(t)) if through_borrow => Some(*t),
+            _ => None,
+        };
         match &expr.kind {
-            ExprKind::Identifier(n) => match self.variables.get(n.as_str())?.ty {
-                BasicTypeEnum::StructType(t) => Some(t),
-                _ => None,
-            },
-            ExprKind::SelfValue => match self.variables.get("self")?.ty {
-                BasicTypeEnum::StructType(t) => Some(t),
-                _ => None,
-            },
+            ExprKind::Identifier(n) => {
+                if let Some(t) = borrowed_root(n.as_str()) {
+                    return Some(t);
+                }
+                match self.variables.get(n.as_str())?.ty {
+                    BasicTypeEnum::StructType(t) => Some(t),
+                    _ => None,
+                }
+            }
+            ExprKind::SelfValue => {
+                if let Some(t) = borrowed_root("self") {
+                    return Some(t);
+                }
+                match self.variables.get("self")?.ty {
+                    BasicTypeEnum::StructType(t) => Some(t),
+                    _ => None,
+                }
+            }
             ExprKind::FieldAccess { object, field } => {
                 let obj_ty = self.place_chain_type_name(object)?;
                 let idx = self
@@ -13720,7 +13778,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // receiver the recursion cannot resolve (a call result, a
                 // temporary) -- unchanged behaviour there.
                 let st = self
-                    .place_chain_aggregate_llvm_type(object)
+                    .place_chain_aggregate_llvm_type_ex(object, through_borrow)
                     .or_else(|| self.type_decls.struct_types.get(obj_ty.as_str()).copied())?;
                 match st.get_field_type_at_index(idx)? {
                     BasicTypeEnum::StructType(t) => Some(t),
@@ -13728,7 +13786,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             ExprKind::TupleIndex { object, index } => {
-                let outer = self.place_chain_aggregate_llvm_type(object)?;
+                let outer = self.place_chain_aggregate_llvm_type_ex(object, through_borrow)?;
                 match outer.get_field_type_at_index(*index as u32)? {
                     BasicTypeEnum::StructType(t) => Some(t),
                     _ => None,

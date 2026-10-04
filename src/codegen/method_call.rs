@@ -10447,10 +10447,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     },
                     _ => true,
                 });
+            // B-2026-09-30-89 — through a `ref` / `mut ref` root as well
+            // (`a.0.push(x)` over `a: mut ref (Vec[i64], i64)`): the synth then
+            // sits on the caller's element, which is where a `mut ref`
+            // method's write belongs.
             if let (Some(te), Some(elem_ptr), Some(tuple_ty)) = (
                 elem_te,
-                self.field_chain_place_ptr(object),
-                self.place_chain_aggregate_llvm_type(tup_obj),
+                self.place_chain_ptr_through_borrow(object),
+                self.place_chain_aggregate_llvm_type_through_borrow(tup_obj),
             ) {
                 if let Some(elem_ll) = tuple_ty.get_field_type_at_index(*index as u32) {
                     let synth = format!("__field_elem_{}", self.indexed_elem_counter);

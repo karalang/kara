@@ -2598,6 +2598,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // frees the same shared buffer. Mirrors the named-aggregate
                 // entry-copy above; copy-unsupported leaves (Map/shared) bail to
                 // caller-retains.
+                // B-2026-09-30-89 — a `ref` / `mut ref` TUPLE param registers
+                // its declared element `TypeExpr`s too (and nothing else: it
+                // owns nothing, so none of the by-value arm's entry copy
+                // applies). Without them `place_chain_tuple_tes` had no answer
+                // for `a.0` behind the borrow, so an index store into an
+                // `Array` element (`a.0[1] = s`) and a method on a `Vec`
+                // element (`a.0.push(x)`) both refused, while `--interp` ran
+                // them. Declared types are full-fidelity, as for the by-value
+                // param below.
+                if let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &param.ty.kind {
+                    if let TypeKind::Tuple(elems) = &inner.kind {
+                        self.var_types
+                            .tuple_var_elem_type_exprs
+                            .insert(param_name.clone(), elems.clone());
+                    }
+                }
                 if let TypeKind::Tuple(elems) = &param.ty.kind {
                     // Record per-element type names so a `match p.0` on the param
                     // resolves the element's enum (the tuple-var arm of

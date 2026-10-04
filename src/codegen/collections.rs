@@ -2888,8 +2888,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the dispatch read a `cap` word that is not there. Resolved
                 // just below, once `tuple_ty` is in hand.
                 if let (Some(elem_ptr), Some(tuple_ty)) = (
-                    self.field_chain_place_ptr(object),
-                    self.place_chain_aggregate_llvm_type(tup),
+                    self.place_chain_ptr_through_borrow(object),
+                    self.place_chain_aggregate_llvm_type_through_borrow(tup),
                 ) {
                     if let Some(elem_ll_ty) = tuple_ty.get_field_type_at_index(*tidx as u32) {
                         let container_te = if elem_ll_ty == self.slice_struct_type().into() {
@@ -7812,8 +7812,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // which bounds-checks, releases a displaced `Vec`-typed element
             // and coerces exactly as it does for a named array.
             if let (Some(elem_ptr), Some(tuple_ty)) = (
-                self.field_chain_place_ptr(object),
-                self.place_chain_aggregate_llvm_type(tup),
+                self.place_chain_ptr_through_borrow(object),
+                self.place_chain_aggregate_llvm_type_through_borrow(tup),
             ) {
                 let arr_ll_ty = tuple_ty
                     .get_field_type_at_index(*tidx as u32)
@@ -7855,8 +7855,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the dispatch read a `cap` word that is not there. Resolved
                 // just below, once `tuple_ty` is in hand.
                 if let (Some(elem_ptr), Some(tuple_ty)) = (
-                    self.field_chain_place_ptr(object),
-                    self.place_chain_aggregate_llvm_type(tup),
+                    self.place_chain_ptr_through_borrow(object),
+                    self.place_chain_aggregate_llvm_type_through_borrow(tup),
                 ) {
                     if let Some(elem_ll_ty) = tuple_ty.get_field_type_at_index(*tidx as u32) {
                         let container_te = if elem_ll_ty == self.slice_struct_type().into() {
