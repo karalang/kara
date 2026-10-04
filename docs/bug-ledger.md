@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 668 |
+| miscompile | 669 |
 | run-vs-build | 577 |
 | leak | 546 |
 | double-free | 411 |
@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 140 |
 | perf | 134 |
 | false-positive | 118 |
-| crash | 108 |
+| crash | 110 |
 | soundness | 97 |
 | use-after-free | 81 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2651 |
+| codegen | 2654 |
 | interp | 817 |
 | typecheck | 325 |
 | other | 113 |
@@ -511,6 +511,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-28 | 2026-10-04 | interp+codegen | high | REMAINDER OF B-2026-09-29-16: `t.unwrap()` ON A BY-VALUE BOXED `Option` PARAM ON ONLY SOME PATHS STILL RUNS THE BODY TWICE UNDER `--interp` AND CRASHES COMPILED -- `fn cc(t: Option[S], c: bool) { if c { println(f"c{t.unwrap().id}") } else { println("cno") } }` prints `c2 dS2 dS2 cno dS3` under `--interp` and segfaults at -O0 and -O2; so do an unwrap guarded by `t.is_some()` and one on the right of `and` | — |
 | B-2026-10-04-29 | 2026-10-04 | codegen | high | REMAINDER OF B-2026-09-29-16: `t.unwrap()` ON A BY-VALUE BOXED `Option` PARAM WHOSE RESULT IS A METHOD RECEIVER, A BY-VALUE ARGUMENT OR A DISCARDED STATEMENT STILL CRASHES COMPILED -- `fn cm(t: Option[S]) { println(f"m{t.unwrap().get()}") }` segfaults at -O0 and double-frees at -O2 where `--interp` prints the right `m30 dS3`; `eat(t.unwrap())` and `t.unwrap();` the same. Blocked on B-2026-10-04-27 | — |
 | B-2026-10-04-30 | 2026-10-04 | interp+codegen | high | `t.unwrap().id` ON A BY-VALUE `Option` PARAM WHOSE PAYLOAD IS A `shared` STRUCT WITH A `Drop` BODY RELEASES THE PAYLOAD BEFORE READING IT COMPILED AND LOSES THE BODY UNDER `--interp` FOR A TEMPORARY ARGUMENT -- `fn ch(t: Option[H]) { println(f"h{t.unwrap().id}") }` over `shared struct H { id: i64 }` prints `dH41 h41 end` at -O0 with 2 valgrind invalid accesses, and `h41 end` (no `dH41`) under `--interp` | — |
+| B-2026-10-04-31 | 2026-10-04 | codegen | high | AN ARM BINDING THAT TAKES A `Map`/`Set` PAYLOAD OUT OF A `shared enum` STILL TAKES IT: THE BOX IS LEFT WITH A ZEROED HANDLE, SO A SECOND MATCH ON THE SAME VALUE SEGFAULTS (CONCRETE ENUM) OR READS FREED MEMORY (GENERIC `G[Map[..]]`) -- B-2026-09-28-59'S COPY COVERS `String`/`Vec` ONLY | — |
+| B-2026-10-04-32 | 2026-10-04 | codegen | medium | AN ARM BINDING OVER A `shared enum` WHOSE PAYLOAD IS A `Vec` OF STRUCTS CARRYING BOTH A SHARED FIELD AND A `String` STILL TAKES THE VEC, SO A SECOND HANDLE'S MATCH SEES IT EMPTY AND PANICS -- B-2026-09-28-59'S STRUCT-ELEMENT COPY REFUSES THIS ELEMENT SHAPE | — |
+| B-2026-10-04-33 | 2026-10-04 | codegen | high | `let g = h;` OVER A NON-SHARED ENUM LOCAL WHOSE PAYLOAD IS AN `Option[String]`, WITH `h` READ AGAIN AFTERWARDS, SEGFAULTS COMPILED (NULL READ) WHERE `--interp` PRINTS THE VALUE -- B-2026-10-02-93'S COPY DOES NOT COVER A BOXED `Option`/`Result` PAYLOAD, SO THE SOURCE'S BOX POINTER IS STILL ZEROED | — |
 
 ### Relocated
 
