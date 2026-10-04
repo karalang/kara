@@ -508,7 +508,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-39 | 2026-10-03 | codegen | medium | A NESTED PATTERN THROUGH A `shared enum`'S VALUE-ENUM PAYLOAD LEAKS 32 B -- over `shared enum H4 { Z(E), N }` and `enum E { A(Vec[String]), B }`, `match H4.Z(E.A(mkv(..))) { H4.Z(E.A(x)) => x.len(), _ => 0 }` prints the right `2` and loses 32 B definitely | — |
 | B-2026-10-03-49 | 2026-10-03 | interp | medium | UNDER `--interp`, A `let Some(Some(w)) = x else { ... }` OVER A BY-VALUE `Option[Option[R]]` PARAM, WHERE `R` RUNS A USER `Drop`, RUNS THE BODY TWICE WHEN THE LEAF IS MOVED ON -- `let Some(Some(w)) = x else { return 0 }; v.push(w); return 1` prints `dR4 1 1 dR4` on the interpreter. The body runs once at the end of the call, although `w` now lives in `v`, and again when `v` drops. Compiled prints `1 1 dR4` (correct) since the B-2026-10-03-28 follow-up; before it, compiled agreed with the interpreter. | — |
 | B-2026-10-03-27 | 2026-10-03 | codegen | medium | A `let` THAT TAKES ONE OF TWO by-value `Option[R]` PARAMS THROUGH A BRANCH (`let r = if c { a } else { b }`), WHERE `R` RUNS A `Drop` BODY AND `r` DIES IN THE CALLEE, RUNS NEITHER PARAM'S BODY compiled -- `mtrue mtrue` against `--interp`'s `mtrue d2 d1 mtrue d4 d3`; before B-2026-10-03-26 the same cell segfaulted at `-O0` | — |
-| B-2026-10-03-53 | 2026-10-03 | interp+codegen | medium | A LOCAL `Result[Option[R], E]` MATCHED `Ok(o) => 1`, OR `if let Ok(o) = c { ... }` THAT ONLY READS `o`, NEVER RUNS R'S `Drop` BODY ON ANY SURFACE -- `let a: Result[Option[R], i64] = Ok(Some(mk(1))); let k = match a { Ok(o) => 1, Err(e) => e };` prints no `dR1` anywhere; the by-value PARAM spelling prints it. All surfaces agree, so only an expected-output oracle sees it. | — |
 | B-2026-10-03-54 | 2026-10-03 | codegen | medium | AN ARM THAT BINDS THE `Option[R]` ENVELOPE OF A `Result[Option[R], E]` AND MATCHES IT AGAIN WITH AN INNER ARM THAT ONLY READS THE LEAF LEAKS R'S HEAP -- `match x { Ok(o) => match o { Some(i) => i.id, None => 0 }, Err(e) => e }` over a by-value param prints `dR7 7 end` everywhere and loses 29 B (R's String); the local spelling also loses the `Drop` body on the compiled backends (interp `dR7 7 end`, -O0/-O2 `7 end`). | — |
 
 ### Relocated
@@ -3633,6 +3632,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-26 | codegen | high | A `let` THAT TAKES A BY-VALUE `Option`/`Result` PARAM THROUGH A BRANCH (`let r = if c { a } else { None }`), WHERE THE PAYLOAD RUNS A `Drop` BODY AND… | 353363263 |
 | B-2026-10-03-51 | codegen | medium | A NESTED `Result[Option[R], E]` BOX, WHERE `R` RUNS A USER `Drop`, IS FREED WITHOUT R'S FIELDS WHENEVER NOTHING BINDS THE LEAF, AND A `let .. | c702060f9 |
 | B-2026-10-03-52 | codegen | high | MOVING THE `Option[R]` ENVELOPE OUT OF A `Result[Option[R], E]`, WHERE `R` RUNS A USER `Drop`, FREES R'S HEAP TWICE -- `fn f(x: Result[Option[R], i64… | 8e15013f3 |
+| B-2026-10-03-53 | interp+codegen | medium | A LOCAL `Result[Option[R], E]` MATCHED `Ok(o) => 1`, OR `if let Ok(o) = c { .. | 6f9a56daf |
 
 </details>
 
