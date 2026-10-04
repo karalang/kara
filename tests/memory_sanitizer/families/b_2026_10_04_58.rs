@@ -1,0 +1,45 @@
+//! B-2026-10-04-58 -- a `for` loop over an `Array` held in a tuple element
+//! borrows the elements: the tuple still frees each of them once.
+
+use super::*;
+
+/// No element freed by the loop, every element freed once by its owner.
+#[test]
+fn asan_for_over_array_held_in_tuple_element() {
+    assert_clean_asan_run(
+        r#"struct P { n: i64, s: String }
+struct H { t: (Array[P, 2], i64) }
+impl H {
+    fn sum(ref self) -> String { let mut o = ""; for p in self.t.0 { o = f"{o}{p.n}{p.s} "; } return o }
+}
+fn rd(a: ref (Array[P, 2], i64)) -> String { let mut o = ""; for p in a.0 { o = f"{o}{p.s}{p.n},"; } return o }
+fn bump(a: mut ref (Array[i64, 3], i64)) -> i64 { let mut s = 0; for x in a.0 { s += x; } a.1 = s; return s }
+fn main() {
+    let a: (Array[P, 2], i64) = ([P { n: 5, s: f"x{1}" }, P { n: 6, s: f"y{2}" }], 7);
+    let mut out = "";
+    for p in a.0 { out = f"{out}{p.s}:{p.n} "; }
+    println(f"a:{out}| {a.0[1].s} {a.1}");
+    println(f"b:{rd(a)}");
+    let h = H { t: ([P { n: 1, s: f"m{1}" }, P { n: 2, s: f"k{2}" }], 3) };
+    println(f"c:{h.sum()}");
+    let mut w: (Array[i64, 3], i64) = ([1, 2, 3], 0);
+    let s = bump(mut w);
+    println(f"d:{s} {w.1}");
+    let ss: (i64, Array[String, 2]) = (1, [f"q{1}", f"r{2}"]);
+    let mut k = 0;
+    for x in ss.1 { if x == "q1" { continue; } println(f"e:{x}"); }
+    let nested: ((Array[P, 1], i64), i64) = (([P { n: 9, s: f"z{9}" }], 1), 2);
+    for p in nested.0.0 { println(f"f:{p.n}{p.s} {k}"); }
+}
+"#,
+        &[
+            "a:x1:5 y2:6 | y2 7",
+            "b:x15,y26,",
+            "c:1m1 2k2 ",
+            "d:6 6",
+            "e:r2",
+            "f:9z9 0",
+        ],
+        "for_over_array_held_in_tuple_element",
+    );
+}

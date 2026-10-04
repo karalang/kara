@@ -984,6 +984,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-10-04-58 — an `Array` held in a tuple element
+                // (`for p in a.0`), iterated in place.
+                if matches!(iterable.kind, ExprKind::TupleIndex { .. }) {
+                    if let Some(result) =
+                        self.try_compile_for_tuple_index_array(label, pattern, iterable, body)?
+                    {
+                        return Ok(result);
+                    }
+                }
                 // B-2026-10-02-70 — a `Vec` literal of plain scalar values
                 // iterates from a stack array instead of a heap buffer.
                 if let Some(result) =
@@ -1771,6 +1780,52 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.var_type_names.remove(&synth);
         self.var_types.string_vars.remove(&synth);
 
+        result.map(Some)
+    }
+
+    /// B-2026-10-04-58 — `for p in a.0` over an `Array` held in a tuple
+    /// element. The typechecker records no `temp_recv_elem_types` entry for an
+    /// array element (it does for `Vec` / `VecDeque` / slice), so the arm above
+    /// had nothing to type the loop with and the build failed. Iterate the
+    /// element IN PLACE, exactly as a named array binding and an array field
+    /// are: a bare `for` borrows its collection (the typechecker refuses a move
+    /// out of it), so the element stays owned by the tuple. Through a `ref` /
+    /// `mut ref` tuple root too, where the element lives in the caller.
+    fn try_compile_for_tuple_index_array(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        tuple_index: &Expr,
+        body: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let ExprKind::TupleIndex { object, index } = &tuple_index.kind else {
+            return Ok(None);
+        };
+        let Some(te) = self.tuple_index_elem_type_expr(object, *index) else {
+            return Ok(None);
+        };
+        let te = self.subst_monomorph_type_params(&te);
+        let Some((elem_te, _len)) = self.array_elem_and_len(&te) else {
+            return Ok(None);
+        };
+        let Some(BasicTypeEnum::ArrayType(at)) = self
+            .place_chain_aggregate_llvm_type_through_borrow(object)
+            .and_then(|st| st.get_field_type_at_index(*index as u32))
+        else {
+            return Ok(None);
+        };
+        let Some(arr_ptr) = self.place_chain_ptr_through_borrow(tuple_index) else {
+            return Ok(None);
+        };
+        // A name for the element type only, so the loop binding's field reads
+        // resolve (`name_for_array_loop_binding`); no storage is registered.
+        let synth = format!("__for_tuple_arr_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.var_types
+            .array_elem_type_exprs
+            .insert(synth.clone(), elem_te);
+        let result = self.compile_for_array_var(label, pattern, arr_ptr, at, body, Some(&synth));
+        self.var_types.array_elem_type_exprs.remove(&synth);
         result.map(Some)
     }
 
