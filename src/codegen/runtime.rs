@@ -8589,6 +8589,66 @@ impl<'ctx> super::Codegen<'ctx> {
                 .insert((expr.span.offset, expr.span.length));
             return cloned;
         }
+        // B-2026-10-02-93 — USER ENUM (non-shared, non-generic). Without this
+        // arm the site was not recorded as copied, so the source disarm
+        // (`suppress_source_vec_cleanup_for_arg_ex`) zeroed the source's
+        // payload words and the later read of `h` in `let g = h; .. gr(h)`
+        // saw an empty payload: `c4 0` where `--interp` prints `c4 4`.
+        // Copied with the same in-place payload duplication a by-value enum
+        // param's entry copy uses, and gated on the same refusals: a payload
+        // the copy cannot duplicate (`enum_param_owned_by_transfer`, a boxed
+        // array whose element runs a user `Drop`) or any user `Drop` body
+        // anywhere in the type falls through to today's disarm, so this
+        // never turns a wrong read into a double free or a duplicated body.
+        if let Some(enum_name) = self.var_types.var_type_names.get(name).cloned() {
+            if let Some(layout) = self
+                .type_decls
+                .enum_layouts
+                .get(enum_name.as_str())
+                .cloned()
+            {
+                if !layout.is_shared
+                    && !matches!(enum_name.as_str(), "Option" | "Result")
+                    && !self
+                        .type_decls
+                        .shared_types
+                        .contains_key(enum_name.as_str())
+                    && !self.type_decls.enum_inst_var_types.contains_key(name)
+                    && val.get_type() == BasicTypeEnum::from(layout.llvm_type)
+                    && self.enum_needs_scope_exit_owner(&enum_name)
+                    && !self.enum_boxed_array_payload_runs_user_drop(&enum_name)
+                    && !self.enum_param_owned_by_transfer(&enum_name)
+                    && !self.type_runs_user_drop(&enum_name, &mut Vec::new())
+                {
+                    let fn_val = self.current_fn.unwrap();
+                    let slot = self.create_entry_alloca(fn_val, "uam.enum.src", val.get_type());
+                    self.builder.build_store(slot, val).unwrap();
+                    // Clone-on-extract: the copy gets its own cleanup at the
+                    // `let` destination, so a bare `shared` field inside a
+                    // payload struct must be rc-INC'd (the user-struct arm
+                    // below and the enum param entry copy raise it for the
+                    // same reason).
+                    let saved_rc_inc = self.drop_rc.deep_copy_rc_inc_bare_shared;
+                    self.drop_rc.deep_copy_rc_inc_bare_shared = true;
+                    // The copy reports privatized boxed variants through a
+                    // scratch list only a param prologue reads; keep this
+                    // site's entries out of it.
+                    let saved_scratch =
+                        std::mem::take(&mut self.payload_vars.privatized_box_variants_scratch);
+                    self.deep_copy_enum_heap_payload_in_place(&enum_name, slot, &layout);
+                    self.payload_vars.privatized_box_variants_scratch = saved_scratch;
+                    self.drop_rc.deep_copy_rc_inc_bare_shared = saved_rc_inc;
+                    let cloned = self
+                        .builder
+                        .build_load(val.get_type(), slot, "uam.enum.clone")
+                        .unwrap();
+                    self.span_tables
+                        .uam_copied_sites
+                        .insert((expr.span.offset, expr.span.length));
+                    return cloned;
+                }
+            }
+        }
         // USER STRUCT (non-shared). The struct's own words are bit-copied
         // already; what aliases is the heap its FIELDS point at, so recurse
         // into them in place — the same duplication a by-value struct param's
