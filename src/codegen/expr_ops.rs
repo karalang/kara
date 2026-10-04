@@ -637,6 +637,39 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-10-04-30 — is `object` an `unwrap()` / `expect(..)` whose
+    /// receiver is a named place (a local, a param, `self`, or a field chain
+    /// rooted at one)? Such a call returns that place's own payload pointer,
+    /// and the place keeps its own release, so the result is a view rather
+    /// than a temporary the caller owns.
+    fn unwrap_of_named_place(object: &Expr) -> bool {
+        match &object.kind {
+            ExprKind::MethodCall {
+                object: recv,
+                method,
+                ..
+            } => {
+                if !matches!(method.as_str(), "unwrap" | "expect") {
+                    return false;
+                }
+                // Field chains only. A tuple element is excluded because the
+                // tuple's drop never releases an `Option[shared]` element, so
+                // there the call's release is the element's ONLY one and must
+                // stay; an index place is a container's element, with its
+                // own lowering.
+                let mut cur: &Expr = recv;
+                loop {
+                    match &cur.kind {
+                        ExprKind::Identifier(_) | ExprKind::SelfValue => return true,
+                        ExprKind::FieldAccess { object, .. } => cur = object,
+                        _ => return false,
+                    }
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Load `field` (declaration index `idx`) out of a shared-struct
     /// TEMPORARY that the caller owns exactly one ref to, then RELEASE that
     /// ref — the field value is in a register by then and no longer depends
@@ -1295,6 +1328,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(names) = self.type_decls.struct_field_names.get(&type_name).cloned() {
                     if let Some(idx) = names.iter().position(|n| n == field) {
                         let ptr = self.compile_expr(object)?.into_pointer_value();
+                        // B-2026-10-04-30 — `t.unwrap().id` over a NAMED
+                        // `Option[shared]` place is not a fresh temporary:
+                        // `unwrap` hands back the binding's own pointer with
+                        // no `+1` and leaves the binding's scope-exit release
+                        // armed. Releasing it here as well was one ref
+                        // released twice, a use-after-free (2 invalid
+                        // accesses), and ran the `Drop` body before the read
+                        // was printed. Take the ref the release below gives
+                        // back, so the binding stays the payload's owner.
+                        if Self::unwrap_of_named_place(object) {
+                            self.emit_refcount_inc_by_type(info.heap_type, ptr);
+                        }
                         return Ok(
                             self.load_owned_shared_temp_field(ptr, &type_name, &info, idx, field)
                         );
