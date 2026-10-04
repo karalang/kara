@@ -248,6 +248,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // owns its inner heap). Registers in the enclosing frame, so the box
         // frees on both the match and miss edges.
         let freshtemp_boxed_slot = if freshtemp_enum.is_none() {
+            self.stage_freshtemp_unmentioned_payload_binds(pattern, then_block);
             self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val, &[])
         } else {
             None
@@ -1348,6 +1349,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // box), so no miss-edge box free is needed; a `Result`-terminating
         // boxed `Err` miss is deferred (spike §1, rare shape).
         let freshtemp_boxed_slot = if freshtemp_enum.is_none() {
+            self.stage_freshtemp_unmentioned_payload_binds(pattern, body);
             self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val, &[])
         } else {
             None
@@ -2748,6 +2750,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     _ => true,
                 })
+    }
+
+    /// B-2026-10-04-24 — see `PayloadVars::freshtemp_unmentioned_payload_binds`.
+    fn stage_freshtemp_unmentioned_payload_binds(&mut self, pattern: &Pattern, block: &Block) {
+        self.payload_vars.freshtemp_unmentioned_payload_binds =
+            crate::cfg::pattern_bindings(pattern)
+                .into_iter()
+                .filter(|n| crate::binding_use::binding_unmentioned_block(n, block))
+                .collect();
     }
 
     pub(super) fn compile_let_else(

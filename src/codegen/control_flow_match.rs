@@ -26739,6 +26739,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // free.
         arm_bodies: &[&Expr],
     ) -> Option<PointerValue<'ctx>> {
+        // B-2026-10-04-24 — taken before any return, so a stale set never
+        // reaches the next construct.
+        let unmentioned_binds =
+            std::mem::take(&mut self.payload_vars.freshtemp_unmentioned_payload_binds);
         // B-2026-09-12-28 — the box this would free lives on the stack, so
         // there is nothing to free and `free()` on an alloca would abort
         // (macOS libmalloc: `mfm_free` on a non-heap address). Consumed here,
@@ -27163,6 +27167,35 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-10-04-24 — a non-generic USER ENUM payload too:
+            // `track_boxed_enum_var_inst` already resolves an enum name to its
+            // memory-only `emit_enum_drop_switch`, and this filter was the one
+            // place that kept it from being asked, so `if let Some(_) = st.pop()`
+            // over `Vec[E]` freed the box over an unwalked interior. The
+            // payload's TYPE must be the bare name: the drop switch is keyed by
+            // name, so a generic enum's instantiation cannot be told apart.
+            let payload_te = self.optres_scrutinee_payload_te_for(scrutinee, &variant);
+            // A BOUND enum payload only when the binding is never mentioned:
+            // one destructured further (`match item { L(xs) => .. }`) hands the
+            // interior to the inner bindings, and walking it here as well freed
+            // it twice. Unknown (no block, no arm body) declines.
+            let unmentioned_binding = match &payload.kind {
+                PatternKind::Binding(b) => {
+                    unmentioned_binds.contains(b)
+                        || arm_bodies
+                            .get(arm_idx)
+                            .is_some_and(|body| crate::binding_use::binding_unmentioned(b, body))
+                }
+                _ => true,
+            };
+            let plain_user_enum_payload = |this: &Self, n: &String| {
+                unmentioned_binding
+                    && !matches!(n.as_str(), "Option" | "Result")
+                    && this.type_decls.enum_layouts.contains_key(n.as_str())
+                    && matches!(&payload_te, Some(te) if matches!(&te.kind,
+                        TypeKind::Path(p) if p.generic_args.is_none()
+                            && p.segments.last() == Some(n)))
+            };
             let inner_struct_name: Option<String> = match &payload.kind {
                 PatternKind::Binding(_) if !scrutinee_is_borrow => {
                     let pkey = (payload.span.offset, payload.span.length);
@@ -27171,7 +27204,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .get(&pkey)
                         .cloned()
                         .filter(|n| {
-                            self.type_decls.struct_types.contains_key(n)
+                            (self.type_decls.struct_types.contains_key(n)
+                                || plain_user_enum_payload(self, n))
                                 && !self.type_decls.shared_types.contains_key(n)
                         })
                 }
@@ -27197,7 +27231,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 PatternKind::Wildcard if !scrutinee_is_borrow => self
                     .optres_scrutinee_payload_struct_name_for(scrutinee, &variant)
                     .filter(|n| {
-                        self.type_decls.struct_types.contains_key(n)
+                        (self.type_decls.struct_types.contains_key(n)
+                            || plain_user_enum_payload(self, n))
                             && !self.type_decls.shared_types.contains_key(n)
                     }),
                 // B-2026-08-04-6 — a struct DESTRUCTURE binds SOME fields and

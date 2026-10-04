@@ -325,6 +325,22 @@ pub(crate) fn optres_arm_moved_tuple_paths(
     pruned
 }
 
+/// B-2026-10-04-24 — `name` does not occur in `b` at all, captured or not.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn binding_unmentioned_block(name: &str, b: &Block) -> bool {
+    let mut t = Tally::default();
+    walk_block(Target::Bare(name), b, &mut t);
+    !t.captured && t.mentions == 0
+}
+
+/// Expression sibling of [`binding_unmentioned_block`].
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn binding_unmentioned(name: &str, e: &Expr) -> bool {
+    let mut t = Tally::default();
+    walk_expr(Target::Bare(name), e, &mut t);
+    !t.captured && t.mentions == 0
+}
+
 /// B-2026-09-20-19 — how many times `name` appears in `body` as a bare VALUE
 /// rather than as the base of a read (`name.f`, `name.0`, `name.m()`).
 /// A capture counts as unbounded: it takes the binding however it is spelled.

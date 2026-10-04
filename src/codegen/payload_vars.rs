@@ -462,6 +462,12 @@ pub(crate) struct PayloadVars<'ctx> {
     /// destination and `a` both freed the element buffers: `free(): double free
     /// detected in tcache 2` at `-O0`. Cleared per function with its siblings.
     pub(crate) arm_array_payload_seed_source: HashMap<String, crate::ast::Expr>,
+    /// B-2026-10-04-24 — payload bindings of the `if let` / `while let`
+    /// pattern being compiled that its block never mentions, staged by the
+    /// caller for `track_freshtemp_boxed_enum_scrutinee` (which sees no block)
+    /// and taken there. Such a binding owns nothing, so the fresh temp's box
+    /// walks a user-enum payload's interior itself.
+    pub(crate) freshtemp_unmentioned_payload_binds: std::collections::HashSet<String>,
     /// B-2026-09-17-5 — `match` arm bindings that name the WHOLE payload of a
     /// by-value `Option`/`Result` param in `callee_owned_payload_bodies_params`,
     /// and locals rebound from one. The place keeps its payload walk armed for
