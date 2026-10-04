@@ -1329,7 +1329,81 @@ impl<'ctx> super::Codegen<'ctx> {
                 .array_elem_type_exprs
                 .get(src.as_str())
                 .cloned(),
+            // B-2026-10-02-55 / B-2026-10-01-15 — a BRANCHING initializer
+            // (`let k = match x { Some(t) => t, None => z() }`,
+            // `let z = if c { fr(60) } else { fr(61) }`, `let a = { .. fr(1) }`).
+            // Every arm above answers a single value shape, so a branch declined
+            // and the binding recorded no element type: `k[1].id` then failed
+            // the build with "cannot resolve field" while `--interp` answered
+            // and the ANNOTATED spelling (`let k: Array[R, 2] = match ..`)
+            // compiled and ran correctly, drops included.
+            //
+            // The branch's type is its arms' type, so ask each arm's value leaf
+            // through this same resolver. An arm-bound name (`t` above) is out
+            // of scope by the time the `let` registers, so a leaf that is a
+            // name answers only while it is still a live variable; a diverging
+            // arm (`return`, `panic`) answers nothing and is skipped. Every leaf
+            // that answers must agree, and at least one must, or this declines
+            // and the shape stays as loud as before. When it answers, the entry
+            // is the one the annotation would have written, so the unannotated
+            // binding is registered exactly as the annotated one is.
+            ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Block(_) => {
+                let mut leaves = Vec::new();
+                Self::branch_value_leaves(expr, &mut leaves);
+                let mut found: Option<TypeExpr> = None;
+                for leaf in leaves {
+                    if let ExprKind::Identifier(n) = &leaf.kind {
+                        if !self.variables.contains_key(n.as_str()) {
+                            continue;
+                        }
+                    }
+                    let Some(te) = self.array_elem_type_expr_from_rhs(leaf) else {
+                        continue;
+                    };
+                    match &found {
+                        None => found = Some(te),
+                        Some(prev) => {
+                            if Self::mangled_type_name(prev) != Self::mangled_type_name(&te) {
+                                return None;
+                            }
+                        }
+                    }
+                }
+                found
+            }
             _ => None,
+        }
+    }
+
+    /// The value leaves of a branching expression: a block's tail, both arms
+    /// of an `if`, every arm of a `match`, recursively. Statements inside a
+    /// block are not leaves (a `return` there leaves the function, it does not
+    /// produce the value), and a block with no tail contributes nothing.
+    fn branch_value_leaves<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+        match &e.kind {
+            ExprKind::Block(b) => {
+                if let Some(fe) = &b.final_expr {
+                    Self::branch_value_leaves(fe, out);
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(fe) = &then_block.final_expr {
+                    Self::branch_value_leaves(fe, out);
+                }
+                if let Some(eb) = else_branch {
+                    Self::branch_value_leaves(eb, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    Self::branch_value_leaves(&arm.body, out);
+                }
+            }
+            _ => out.push(e),
         }
     }
 

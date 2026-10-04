@@ -5694,7 +5694,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 ExprKind::TupleIndex { .. } => {
                     match self.vec_index_elem_type_expr(object).map(|te| te.kind) {
                         Some(TypeKind::Path(p)) => p.segments.last().cloned(),
-                        _ => None,
+                        _ => self
+                            .span_tables
+                            .expr_struct_type_names
+                            .get(&(expr.span.offset, expr.span.length))
+                            .filter(|n| {
+                                self.type_decls.struct_field_names.contains_key(n.as_str())
+                                    && self
+                                        .type_decls
+                                        .struct_generic_params
+                                        .get(n.as_str())
+                                        .is_none_or(|ps| ps.is_empty())
+                            })
+                            .cloned(),
                     }
                 }
                 _ => None,

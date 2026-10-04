@@ -751,14 +751,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(slot) = self.variables.get(name.as_str()).copied() {
                     // Owned array
                     if let BasicTypeEnum::ArrayType(at) = slot.ty {
-                        return self.compile_for_array_var(label, pattern, slot.ptr, at, body);
+                        return self.compile_for_array_var(
+                            label,
+                            pattern,
+                            slot.ptr,
+                            at,
+                            body,
+                            Some(name.as_str()),
+                        );
                     }
                     // Ref array
                     if let Some(&BasicTypeEnum::ArrayType(at)) =
                         self.borrow_vars.ref_params.get(name.as_str())
                     {
                         let arr_ptr = self.get_data_ptr(name).unwrap();
-                        return self.compile_for_array_var(label, pattern, arr_ptr, at, body);
+                        return self.compile_for_array_var(
+                            label,
+                            pattern,
+                            arr_ptr,
+                            at,
+                            body,
+                            Some(name.as_str()),
+                        );
                     }
                 }
                 // Container dispatch — a LOCAL *or* a MODULE-LEVEL binding
@@ -904,13 +918,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 // "self", so its slot carries both the pointer and the type.
                 if let Some(slot) = self.variables.get("self").copied() {
                     if let BasicTypeEnum::ArrayType(at) = slot.ty {
-                        return self.compile_for_array_var(label, pattern, slot.ptr, at, body);
+                        return self.compile_for_array_var(
+                            label,
+                            pattern,
+                            slot.ptr,
+                            at,
+                            body,
+                            Some("self"),
+                        );
                     }
                 }
                 if let Some(&BasicTypeEnum::ArrayType(at)) = self.borrow_vars.ref_params.get("self")
                 {
                     if let Some(arr_ptr) = self.get_data_ptr("self") {
-                        return self.compile_for_array_var(label, pattern, arr_ptr, at, body);
+                        return self.compile_for_array_var(
+                            label,
+                            pattern,
+                            arr_ptr,
+                            at,
+                            body,
+                            Some("self"),
+                        );
                     }
                 }
                 Err(Self::unlowered_for_source_error(iterable))
@@ -1297,7 +1325,7 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             self.builder.build_store(p, *v).unwrap();
         }
-        self.compile_for_array_var(label, pattern, slot, arr_ty, body)
+        self.compile_for_array_var(label, pattern, slot, arr_ty, body, None)
             .map(Some)
     }
 
@@ -4955,7 +4983,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let slot = self.create_entry_alloca(fn_val, "for.arr.tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
-        self.compile_for_array_var(label, pattern, slot, at, body)
+        self.compile_for_array_var(label, pattern, slot, at, body, None)
             .map(Some)
     }
 
@@ -4966,6 +4994,7 @@ impl<'ctx> super::Codegen<'ctx> {
         arr_ptr: PointerValue<'ctx>,
         arr_ty: inkwell::types::ArrayType<'ctx>,
         body: &Block,
+        source_var: Option<&str>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let fn_val = self.current_fn.unwrap();
         let i64_t = self.context.i64_type();
@@ -5032,6 +5061,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(elem_ty, elem_ptr, "for.elem")
             .unwrap();
         self.bind_pattern(pattern, elem_val)?;
+        self.name_for_array_loop_binding(pattern, source_var);
         self.bind_enumerate_index(cur)?;
         self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
@@ -5057,6 +5087,41 @@ impl<'ctx> super::Codegen<'ctx> {
         self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// B-2026-10-01-15 — name the struct type of a `for` binding over a NAMED
+    /// fixed array, so `for q in l { q.id }` can resolve its field read. The
+    /// `Vec` loop gets this from `register_for_loop_bindings`, which reads the
+    /// Vec-only `var_elem_type_exprs`; an array keeps its element type in
+    /// `array_elem_type_exprs` instead, so `q` was left unnamed and the read
+    /// failed the build with "cannot resolve field" while `--interp` ran it,
+    /// with or without an annotation on the array.
+    ///
+    /// Pure resolution: it records the NAME only and registers no storage,
+    /// drop or borrow, so it cannot change what the loop owns. A bare `for`
+    /// borrows the collection (the typechecker refuses a move out of it), and
+    /// that stays exactly as it was. Limited to a non-shared user struct,
+    /// the one element shape whose field reads this was failing.
+    fn name_for_array_loop_binding(&mut self, pattern: &Pattern, source_var: Option<&str>) {
+        let (Some(src), PatternKind::Binding(name)) = (source_var, &pattern.kind) else {
+            return;
+        };
+        let Some(TypeKind::Path(p)) = self
+            .var_types
+            .array_elem_type_exprs
+            .get(src)
+            .map(|te| te.kind.clone())
+        else {
+            return;
+        };
+        let Some(seg) = p.segments.last() else {
+            return;
+        };
+        if self.type_decls.struct_types.contains_key(seg.as_str())
+            && !self.type_decls.shared_types.contains_key(seg.as_str())
+        {
+            self.record_var_type_name(name.clone(), seg.clone());
+        }
     }
 
     /// B-2026-07-24-2 — does `expr` name a MAP place whose `for` iteration the
