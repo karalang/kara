@@ -21377,9 +21377,27 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
         only_read: &dyn Fn(&str) -> bool,
     ) {
-        let ExprKind::Identifier(name) = &scrutinee.kind else {
+        let ExprKind::Identifier(scrut_name) = &scrutinee.kind else {
             return;
         };
+        // B-2026-10-04-4 — the two-step spelling: `Some(o)` first binds a
+        // view of the param's payload (`param_payload_arm_view_owner`), and a
+        // taking pattern over `o` (`let Some(w) = o else ..; v.push(w)`) moves
+        // the same leaf on. One level of variant over the view is the second
+        // level of the chain over the param.
+        let view_owner = if self
+            .payload_vars
+            .param_payload_arm_views
+            .contains(scrut_name)
+        {
+            self.payload_vars
+                .param_payload_arm_view_owner
+                .get(scrut_name)
+                .cloned()
+        } else {
+            None
+        };
+        let name = view_owner.as_ref().unwrap_or(scrut_name);
         if !self
             .payload_vars
             .callee_owned_payload_bodies_params
@@ -21387,7 +21405,12 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        let Some(names) = crate::result_escape::nested_optres_chain_names(pattern) else {
+        let names = if view_owner.is_some() {
+            crate::result_escape::optres_variant_chain_names(pattern)
+        } else {
+            crate::result_escape::nested_optres_chain_names(pattern)
+        };
+        let Some(names) = names else {
             return;
         };
         // A read THROUGH the leaf (`w.id`, even as the arm's value) leaves it

@@ -1371,6 +1371,36 @@ pub(crate) fn nested_optres_chain_names(pattern: &crate::ast::Pattern) -> Option
     chain(sub).map(|leaf| leaf.into_iter().collect())
 }
 
+/// B-2026-10-04-4 — [`nested_optres_chain_names`] without the nesting
+/// requirement: the leaf names of `Some(w)` / `Ok(Some(w))` / `Some(_)`, for a
+/// pattern applied to a binding that is itself a view one level down.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn optres_variant_chain_names(pattern: &crate::ast::Pattern) -> Option<Vec<&str>> {
+    let crate::ast::PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+        return None;
+    };
+    if !matches!(path.last().map(|s| s.as_str()), Some("Some" | "Ok" | "Err")) {
+        return None;
+    }
+    let [sub] = patterns.as_slice() else {
+        return None;
+    };
+    let mut p = sub;
+    loop {
+        match &p.kind {
+            crate::ast::PatternKind::Binding(n) => return Some(vec![n.as_str()]),
+            crate::ast::PatternKind::Wildcard => return Some(Vec::new()),
+            crate::ast::PatternKind::TupleVariant { path, patterns }
+                if matches!(path.last().map(|s| s.as_str()), Some("Some" | "Ok" | "Err"))
+                    && patterns.len() == 1 =>
+            {
+                p = &patterns[0];
+            }
+            _ => return None,
+        }
+    }
+}
+
 fn variant_payload_binds(pattern: &crate::ast::Pattern) -> Option<(&str, Option<Vec<&str>>)> {
     let crate::ast::PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
         return None;

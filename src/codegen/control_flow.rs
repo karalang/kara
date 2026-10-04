@@ -2722,6 +2722,34 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Mirrors `compile_if_let`'s scrutinee+condition machinery, but the
     /// bindings escape the construct and there is no merge block — the match
     /// edge continues straight into the block and the else edge diverges.
+    /// B-2026-10-04-4 — is `name`, in `rest`, the bare value of at least one
+    /// `let <variant pattern> = name else { .. }` statement and otherwise only
+    /// read through? Such a binding hands its payload to the inner pattern
+    /// rather than moving itself anywhere.
+    fn binding_only_let_else_destructured(name: &str, rest: &Block) -> bool {
+        let is_destructure = |st: &crate::ast::Stmt| {
+            matches!(&st.kind, StmtKind::LetElse { pattern, value, .. }
+                if matches!(&value.kind, ExprKind::Identifier(v) if v == name)
+                    && matches!(pattern.kind, crate::ast::PatternKind::TupleVariant { .. }))
+        };
+        if !rest.stmts.iter().any(is_destructure) {
+            return false;
+        }
+        let mut others = rest.clone();
+        others.stmts.retain(|st| !is_destructure(st));
+        crate::binding_use::binding_only_read_through_block(name, &others)
+            && rest
+                .stmts
+                .iter()
+                .filter(|st| is_destructure(st))
+                .all(|st| match &st.kind {
+                    StmtKind::LetElse { else_block, .. } => {
+                        crate::binding_use::binding_only_read_through_block(name, else_block)
+                    }
+                    _ => true,
+                })
+    }
+
     pub(super) fn compile_let_else(
         &mut self,
         pattern: &Pattern,
@@ -3109,7 +3137,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 })
             });
             self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
-            if let Some(rest) = param_rest {
+            // B-2026-10-04-4 — or a view of such a param's payload bound one
+            // step earlier (`let Some(o) = x else ..; let Some(w) = o else ..`).
+            let view_rest = let_else_rest.as_ref().filter(|_| {
+                matches!(&value.kind, ExprKind::Identifier(n)
+                    if self.payload_vars.param_payload_arm_views.contains(n))
+            });
+            if let Some(rest) = param_rest.or(view_rest) {
                 self.disarm_callee_owned_bodies_for_nested_leaf_move_block(value, pattern, rest);
             }
             if takes {
@@ -3120,16 +3154,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // leaf-drop retraction. The bindings escape into the enclosing block,
         // so they count as taking the value unless this is an owned param
         // whose rest of block only reads them.
+        // B-2026-10-04-4 — a binding the rest of the block only destructures
+        // again with a `let ... else` (`let Some(o) = x else ..; let Some(w) =
+        // o else ..`) is the let-else spelling of a nested match scrutinee: it
+        // carries no box out, and its inner pattern takes what lies below.
         self.retract_boxed_leaf_drop_for_consuming_pattern(
             value,
             pattern,
             |n| {
-                param_rest
-                    .is_none_or(|rest| !crate::consume_class::binding_only_borrowed_block(n, rest))
+                param_rest.is_none_or(|rest| {
+                    !crate::consume_class::binding_only_borrowed_block(n, rest)
+                        && !Self::binding_only_let_else_destructured(n, rest)
+                })
             },
             |n| {
                 param_rest.is_none_or(|rest| {
                     crate::binding_use::binding_is_nested_match_scrutinee_block(n, rest)
+                        || Self::binding_only_let_else_destructured(n, rest)
                 })
             },
         );
