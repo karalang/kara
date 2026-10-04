@@ -9510,12 +9510,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.pattern_state.escape_walk_relaxes_primitive_operators
                         && super::consume_class::is_lowered_primitive_operator(callee);
                 let callee_is_closure_literal = matches!(&callee.kind, ExprKind::Closure { .. });
+                // B-2026-10-04-23 — a bare `name` handed to a top-level fn whose
+                // parameter at that index is declared `ref T` is LENT, not
+                // moved: the callee cannot keep it. Counting it as an escape
+                // made a read-only tree walk (`List(inner) => walk(inner)` over
+                // a `for` element) deep-copy the whole payload on every call.
+                // `mut ref` is left out (it can write through), as is a local
+                // binding that shadows the fn's name.
+                let lent_to_ref_param = |s: &Self, i: usize| -> bool {
+                    let ExprKind::Identifier(f) = &callee.kind else {
+                        return false;
+                    };
+                    if s.variables.contains_key(f.as_str()) {
+                        return false;
+                    }
+                    let Some(program) = s.program_snapshot.as_deref() else {
+                        return false;
+                    };
+                    super::declarations::find_function_ast(program, f).is_some_and(|fd| {
+                        fd.self_param.is_none()
+                            && fd
+                                .params
+                                .get(i)
+                                .is_some_and(|p| matches!(p.ty.kind, crate::ast::TypeKind::Ref(_)))
+                    })
+                };
                 // The callee walk still runs for a literal: it is how a closure
                 // that CAPTURES `name` (rather than receiving it) is caught.
                 self.borrow_binding_escapes(callee, name)
                     || args.iter().enumerate().any(|(i, a)| {
                         if is_print || callee_is_primitive_operator {
                             borrow_pos(self, &a.value)
+                        } else if bare(&a.value) && lent_to_ref_param(self, i) {
+                            false
                         } else if callee_is_closure_literal && bare(&a.value) {
                             closure_arg_escapes(self, i)
                         } else {
