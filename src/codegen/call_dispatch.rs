@@ -5028,6 +5028,69 @@ impl<'ctx> super::Codegen<'ctx> {
             .any(|(i, _)| self.call_arg_flows_into_return(callee_name, i))
     }
 
+    /// B-2026-10-04-81 — does this call hand back, as its result, an
+    /// `Option`/`Result` argument that was a FRESH variant constructor
+    /// (`keep(Some([mk(1), mk(2)]))`) or a call that builds its own box, so
+    /// the result binding is the only owner of the box's interior?
+    ///
+    /// The other half of [`Self::call_builds_its_own_optres_box`], which
+    /// answers "no" whenever any argument may flow into the return, because a
+    /// NAMED argument keeps its own registration and the result must not be a
+    /// second owner (B-2026-08-06-21). A fresh constructor has no binding: a
+    /// non-generic callee's prologue takes its box and interior over (the
+    /// boxed non-struct payload arm in `functions.rs`), and `return x` hands
+    /// both on with no action left behind. So the result's box drop is the
+    /// interior's only owner, and registering it box-only leaked every
+    /// element's heap (`fn keep(x: Option[Array[R, 2]]) -> .. { return x }`).
+    ///
+    /// Non-generic callees only: a monomorph's caller keeps the argument's box
+    /// (`track_boxed_optres_arg_temp`), so there the interior is still owned.
+    /// A constructor wrapping a payload the caller keeps
+    /// (`seeded_array_payload_stays_with_caller`) is declined, as at the
+    /// direct-constructor let site.
+    pub(super) fn call_hands_back_fresh_optres_ctor_arg(&self, value: &Expr) -> bool {
+        let ExprKind::Call { callee, args, .. } = &value.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(callee_name) = &callee.kind else {
+            return false;
+        };
+        if Self::seeded_variant_ctor_name(value).is_some() {
+            return false;
+        }
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        let Some(f) = super::declarations::find_function_ast(program, callee_name) else {
+            return false;
+        };
+        if f.generic_params.is_some() || f.self_param.is_some() {
+            return false;
+        }
+        let mut any = false;
+        for (i, a) in args.iter().enumerate() {
+            if !self.call_arg_flows_into_return(callee_name, i) {
+                continue;
+            }
+            // A call that builds its own box (`keep(mko(19))`) is as fresh as
+            // a constructor: its temp has no binding either.
+            let fresh = (Self::seeded_variant_ctor_name(&a.value).is_some()
+                && match &a.value.kind {
+                    ExprKind::Call { args: inner, .. } => match inner.as_slice() {
+                        [only] => !self.seeded_array_payload_stays_with_caller(&only.value),
+                        _ => false,
+                    },
+                    _ => false,
+                })
+                || self.call_builds_its_own_optres_box(&a.value);
+            if !fresh {
+                return false;
+            }
+            any = true;
+        }
+        any
+    }
+
     /// Does this METHOD CALL hand back an `Option[V]` the container has MOVED
     /// OUT of its own storage, making the caller's result binding the sole
     /// owner of the interior? B-2026-09-13-2.

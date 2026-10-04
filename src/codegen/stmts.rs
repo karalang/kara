@@ -9055,6 +9055,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                                 || self.map_handback_moves_value_out(value)
                                                 || self.vec_handback_moves_value_out(value)
                                                 || self.optres_value_clone_te(value).is_some()
+                                                // B-2026-10-04-81 — a fresh
+                                                // constructor argument the
+                                                // callee hands back whole.
+                                                || self.call_hands_back_fresh_optres_ctor_arg(value)
                                                 || matches!(&value.kind, ExprKind::Identifier(src)
                                                     if src != var_name
                                                         && self.boxed_enum_drop_owns_interior(src)))
