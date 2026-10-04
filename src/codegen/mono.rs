@@ -1150,9 +1150,45 @@ impl<'ctx> super::Codegen<'ctx> {
         match &elem.kind {
             TypeKind::Path(p) if p.segments.len() == 1 && p.generic_args.is_none() => {
                 Self::is_scalar_type_name(&p.segments[0])
+                    || self.struct_is_plain_data(&p.segments[0], 8)
             }
             _ => self.array_type_arg_is_scalar(&elem),
         }
+    }
+
+    /// B-2026-10-02-87 — a user struct with nothing to drop: not `shared`, not
+    /// generic, no `Drop` impl, and every field a scalar or (recursively) such
+    /// a struct. An array of one is plain data exactly as an array of `i64`
+    /// is, so B-2026-10-02-77's scalar-only gate admits it: the heap-element
+    /// ownership defect that gate guards against (B-2026-10-02-78) has no heap
+    /// to act on here. `Array[S, 2]` over `struct S { id: i64 }` then sizes the
+    /// monomorph's `T` instead of failing module verification on `ret i64`.
+    /// `fuel` bounds the recursion; running out answers "not plain".
+    fn struct_is_plain_data(&self, name: &str, fuel: u32) -> bool {
+        if fuel == 0
+            || self.type_decls.shared_types.contains_key(name)
+            || self
+                .type_decls
+                .struct_generic_params
+                .get(name)
+                .is_some_and(|ps| !ps.is_empty())
+            || self
+                .program_snapshot
+                .as_deref()
+                .is_none_or(|p| p.drop_method_keys.contains_key(name))
+        {
+            return false;
+        }
+        let Some(ftes) = self.type_decls.struct_field_type_exprs.get(name) else {
+            return false;
+        };
+        ftes.iter().all(|fte| match &fte.kind {
+            TypeKind::Path(p) if p.segments.len() == 1 && p.generic_args.is_none() => {
+                Self::is_scalar_type_name(&p.segments[0])
+                    || self.struct_is_plain_data(&p.segments[0], fuel - 1)
+            }
+            _ => false,
+        })
     }
 
     /// Element-aware mangle token for a generic param whose concrete binding is a
