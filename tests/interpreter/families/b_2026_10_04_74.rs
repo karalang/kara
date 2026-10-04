@@ -1,0 +1,32 @@
+//! B-2026-10-04-74: a named local moved into a field, Vec element or tuple element on one path runs its Drop body once in the interpreter
+
+use super::*;
+
+/// The interpreter half of B-2026-10-04-74: the source's slot lives in the
+/// enclosing block's cleanup, so the retraction at the store found nothing and
+/// the body ran at `n`'s death and again with the place. Same program as the
+/// memory-sanitizer fixture, so the two backends are pinned to one answer.
+#[test]
+fn interp_named_local_moved_into_place_on_one_path_owned_once() {
+    let out = run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
+struct W { r: R, k: i64 }
+fn field(c: bool) { let mut w = W { r: mk(1), k: 0 }; let n = mk(2); if c { w.r = n; } println(f"a{w.k}") }
+fn elem(c: bool) { let mut v: Vec[R] = Vec.new(); v.push(mk(3)); let n = mk(4); if c { v[0] = n; } println(f"b{v.len()}") }
+fn tup(c: bool) { let mut t: (R, i64) = (mk(5), 0); let n = mk(6); if c { t.0 = n; } println(f"c{t.1}") }
+fn ifelse(c: bool) { let mut w = W { r: mk(7), k: 0 }; let n = mk(8); if c { w.r = n; } else { println("no") } println(f"d{w.k}") }
+fn arm(k: i64) { let mut v: Vec[R] = Vec.new(); v.push(mk(9)); let n = mk(10); match k { 1 => { v[0] = n; } _ => { println("m") } } println(f"e{v.len()}") }
+fn nest(c: bool, d: bool) { let mut w = W { r: mk(11), k: 0 }; let n = mk(12); if c { if d { w.r = n; } } println(f"f{w.r.id}") }
+fn inloop() { let mut w = W { r: mk(13), k: 0 }; for i in 0..3 { let n = mk(20 + i); if i == 1 { w.r = n; } } println(f"g{w.r.id}") }
+fn bare() { let mut t: (R, i64) = (mk(14), 0); let n = mk(15); { t.0 = n; } println(f"h{t.0.id}") }
+fn main() {
+    field(true); field(false); elem(true); elem(false); tup(true); tup(false);
+    ifelse(true); ifelse(false); arm(1); arm(2);
+    nest(true, true); nest(true, false); nest(false, true);
+    inloop(); bare();
+    println("end");
+}
+"#);
+    assert_eq!(out, "dR1\na0\ndR2\ndR2\na0\ndR1\ndR3\nb1\ndR4\ndR4\nb1\ndR3\ndR5\nc0\ndR6\ndR6\nc0\ndR5\ndR7\nd0\ndR8\nno\ndR8\nd0\ndR7\ndR9\ne1\ndR10\nm\ndR10\ne1\ndR9\ndR11\nf12\ndR12\ndR12\nf11\ndR11\ndR12\nf11\ndR11\ndR20\ndR13\ndR22\ng21\ndR21\ndR14\nh15\ndR15\nend\n");
+}

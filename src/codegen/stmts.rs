@@ -16592,7 +16592,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // only reached above for a heap field).
                                 let src = src.clone();
                                 self.suppress_source_vec_cleanup_for_arg(value);
-                                self.suppress_user_drop_for_var(&src);
+                                // B-2026-10-04-74 — per path when the store is
+                                // nested (`if c { w.r = n; }`): a static retraction
+                                // took `n`'s body and free from the path that
+                                // never stored.
+                                if !self.guard_user_drop_for_nested_return(&src) {
+                                    self.suppress_user_drop_for_var(&src);
+                                }
                             } else if self.field_te_is_value_enum(&field_te)
                                 && !((self.fn_ctx.current_fn_param_names.contains(src.as_str())
                                     && !self.borrow_vars.ref_params.contains_key(src.as_str()))
@@ -16991,7 +16997,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if uam_copied {
                                     self.suppress_user_drop_body_keeping_memory(src);
                                     self.suppress_struct_field_bodies_for_var(src);
-                                } else {
+                                } else if !self.guard_user_drop_for_nested_return(src) {
+                                    // B-2026-10-04-74 — per path when nested.
                                     self.suppress_user_drop_for_var(src);
                                 }
                             }
@@ -17059,7 +17066,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                     let vp = self.move_suppression_value_ptr(src, src_slot.ptr);
                                     self.zero_struct_move_caps_mono(vp, &sname, None);
                                 }
-                                self.suppress_user_drop_for_var(src);
+                                // B-2026-10-04-74 — per path when nested.
+                                if !self.guard_user_drop_for_nested_return(src) {
+                                    self.suppress_user_drop_for_var(src);
+                                }
                             } else if self.tuple_index_elem_type_expr(object, *index).is_some_and(
                                 |te| match &te.kind {
                                     TypeKind::Path(p) => p.segments.last().is_some_and(|n| {
@@ -17100,7 +17110,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                         });
                                     }
                                 }
-                                self.suppress_user_drop_for_var(src);
+                                // B-2026-10-04-74 — per path when nested.
+                                if !self.guard_user_drop_for_nested_return(src) {
+                                    self.suppress_user_drop_for_var(src);
+                                }
                             }
                         }
                     }

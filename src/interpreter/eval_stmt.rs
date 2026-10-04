@@ -8423,10 +8423,22 @@ impl<'a> super::Interpreter<'a> {
         if !self.program.drop_method_keys.contains_key(&type_name) {
             return;
         }
+        let before = cleanup.len();
         cleanup.retain(|action| match action {
             CleanupAction::Drop { name } => name != source_name,
             _ => true,
         });
+        // B-2026-10-04-74 — the slot lives in an ENCLOSING block's cleanup
+        // when the move is nested (`let n = mk(6); if c { w.r = n; }`), so
+        // the retain above found nothing and `n`'s body ran at its own death
+        // AND with the place. Reaching this statement is itself the proof
+        // that this path moved the value, so record it as moved here, the
+        // runtime bit `record_conditional_move_tail` uses for a branch tail.
+        // Codegen's twin guards the source's drop on its per-path flag.
+        if cleanup.len() == before && self.env.get_in_current_scope(source_name).is_none() {
+            self.moved_out_user_drop_bindings
+                .insert(source_name.to_string());
+        }
     }
 
     /// B-2026-09-03-30 — the RE-ARM counterpart of the param-view retraction in
