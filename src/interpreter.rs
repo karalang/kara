@@ -184,6 +184,13 @@ pub struct Interpreter<'a> {
     /// else, so a nested block whose tail is `Err(...)` must NOT fire the
     /// enclosing function's errdefer (B-2026-08-23-9).
     pub(crate) next_block_is_fn_body: bool,
+    /// B-2026-09-27-95 — the callee's `let mut` rebinds of a by-value param
+    /// that it mutates in place and that still hold the value at exit
+    /// ([`crate::ast::param_rebinds_dropping_at_call_end`]). Seeded right
+    /// before a call's body and taken by that body's block, which keeps them
+    /// out of its NLL last-use map: rule 3 drops the value at the end of the
+    /// call, not at the local's last use.
+    pub(crate) pending_fn_body_late_drops: Vec<String>,
     /// Runtime effect tracking: records effects performed during execution
     pub tracked_effects: Vec<String>,
     /// Tracks variables that have been moved (ownership simulation)
@@ -1518,6 +1525,7 @@ impl<'a> Interpreter<'a> {
             pending_arm_unbound_struct: None,
             pending_param_drop_bindings: Vec::new(),
             last_use_memo: FxHashMap::default(),
+            pending_fn_body_late_drops: Vec::new(),
             own_body_only_view_bindings: std::collections::HashMap::new(),
             cond_store_param_names: std::collections::HashSet::new(),
             let_view_tail_frames: Vec::new(),

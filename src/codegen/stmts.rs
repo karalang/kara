@@ -652,7 +652,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let user_drop_last_use = if self.program_has_no_user_drop() {
             None
         } else {
-            Some(crate::interpreter::compute_block_last_use(block))
+            Some(self.fn_body_last_use(block))
         };
         for (i, stmt) in block.stmts.iter().enumerate() {
             // Statement-end firing for fresh Drop-temps (B-2026-08-01-4):
@@ -1811,7 +1811,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let auto_par_user_drop_last_use = if self.program_has_no_user_drop() {
             None
         } else {
-            Some(crate::interpreter::compute_block_last_use(body))
+            Some(self.fn_body_last_use(body))
         };
 
         // Auto-par reduction diagnostic (slice 3a / 3b, 2026-05-19). When

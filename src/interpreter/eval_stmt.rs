@@ -142,6 +142,11 @@ impl<'a> super::Interpreter<'a> {
         // function/closure/method body, and consuming it here means every
         // block nested inside that body sees `false`. See the field's doc.
         let is_fn_body = std::mem::take(&mut self.next_block_is_fn_body);
+        let late_drops = if is_fn_body {
+            std::mem::take(&mut self.pending_fn_body_late_drops)
+        } else {
+            Vec::new()
+        };
         self.env.push_scope();
         // Unified drop+defer cleanup stack — entries pushed in program-order
         // as control flow reaches each binding/defer statement, drained LIFO
@@ -195,6 +200,16 @@ impl<'a> super::Interpreter<'a> {
                 self.last_use_memo.insert(key, computed.clone());
                 computed
             }
+        };
+        // B-2026-09-27-95 — see `pending_fn_body_late_drops`.
+        let last_use = if late_drops.iter().any(|n| last_use.contains_key(n)) {
+            let mut m = (*last_use).clone();
+            for n in &late_drops {
+                m.remove(n);
+            }
+            std::rc::Rc::new(m)
+        } else {
+            last_use
         };
 
         for (stmt_idx, stmt) in block.stmts.iter().enumerate() {

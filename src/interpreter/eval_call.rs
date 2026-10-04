@@ -3777,17 +3777,21 @@ impl<'a> super::Interpreter<'a> {
         // to zero. Measured: with instance methods admitted, the method cell
         // loses its body; with them dropped, method and associated spellings
         // both print exactly one.
+        // B-2026-09-27-95 — less a param whose `let mut` rebind this frame
+        // mutates in place (`crate::ast::param_mutated_rebind_local`): the
+        // caller stands down for it, so that rebind is an owner, not a view.
         self.callee_fn_for_param_ownership_of(fn_name, assoc_owner)
             .map(|f| {
                 f.params
                     .iter()
-                    .filter(|p| {
+                    .enumerate()
+                    .filter(|(i, p)| {
                         !matches!(
                             p.ty.kind,
                             crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
-                        )
+                        ) && crate::ast::param_mutated_rebind_local(f, *i).is_none()
                     })
-                    .filter_map(|p| p.name().map(str::to_string))
+                    .filter_map(|(_, p)| p.name().map(str::to_string))
                     .collect()
             })
             .unwrap_or_default()
@@ -4868,6 +4872,14 @@ impl<'a> super::Interpreter<'a> {
         let result = if skip_body {
             Ok(Value::Unit)
         } else {
+            // B-2026-09-27-95 — see `pending_fn_body_late_drops`.
+            self.pending_fn_body_late_drops = if is_closure {
+                Vec::new()
+            } else {
+                self.callee_fn_for_param_ownership_of(fn_name, assoc_owner)
+                    .map(crate::ast::param_rebinds_dropping_at_call_end)
+                    .unwrap_or_default()
+            };
             self.eval_body_growing(body)
         };
         (

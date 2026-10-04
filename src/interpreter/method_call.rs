@@ -1115,6 +1115,11 @@ impl<'a> super::Interpreter<'a> {
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
+                    // B-2026-09-27-95 — see `pending_fn_body_late_drops`.
+                    self.pending_fn_body_late_drops = self
+                        .impl_method_ast(&type_name, method)
+                        .map(crate::ast::param_rebinds_dropping_at_call_end)
+                        .unwrap_or_default();
                     self.eval_body_growing(&body)
                 };
                 (

@@ -10479,7 +10479,13 @@ fn stored_via_call(e: &Expr, name: &str, program: &crate::Program) -> bool {
                     .is_some_and(|gf| {
                         args.iter().enumerate().any(|(j, a)| {
                             matches!(&a.value.kind, ExprKind::Identifier(n) if n == name)
-                                && fn_moves_param_into_outliving_place(gf, j)
+                                && (fn_moves_param_into_outliving_place(gf, j)
+                                    // B-2026-09-27-95 — or keeps it in a
+                                    // container or `let mut` rebind of its
+                                    // own, where it dies: that frame runs the
+                                    // body, so the frame that forwarded it
+                                    // there must not leave it to ITS caller.
+                                    || fn_moves_param_into_local_container(gf, j))
                         })
                     }),
                 _ => false,
@@ -12047,7 +12053,7 @@ pub fn param_whole_rebind_aliases<'a>(f: &'a Function, param_name: &str) -> Vec<
 /// `?`-propagate before the push is reached. Anything else answers `false`,
 /// which keeps the pre-existing behaviour for that shape.
 pub fn fn_moves_param_into_local_container(f: &Function, arg_index: usize) -> bool {
-    param_whole_container_store(f, arg_index, false) || fn_reassigns_param_rebind(f, arg_index)
+    param_whole_container_store(f, arg_index, false) || fn_takes_over_param_rebind(f, arg_index)
 }
 
 /// B-2026-09-27-53 — does `f` store by-value parameter `arg_index` WHOLE into
@@ -12317,6 +12323,13 @@ pub fn fn_reassigns_param_rebind(f: &Function, arg_index: usize) -> bool {
     param_reassigned_rebind_local(f, arg_index).is_some()
 }
 
+/// B-2026-09-27-95 — [`fn_reassigns_param_rebind`], or the in-place mutation
+/// sibling: does a `let mut` rebind take the parameter over for good
+/// ([`param_taken_over_rebind_local`])?
+pub fn fn_takes_over_param_rebind(f: &Function, arg_index: usize) -> bool {
+    param_taken_over_rebind_local(f, arg_index).is_some()
+}
+
 /// B-2026-10-01-21 — is the local `name` assigned WHOLE anywhere in `f`
 /// (`name = ..`, or one target of a multi-assign)? Read off the same rebind
 /// walk the hand-back predicates use, so the two agree on what an assignment
@@ -12395,6 +12408,287 @@ pub fn param_reassigned_rebind_local(f: &Function, arg_index: usize) -> Option<&
         }
     }
     None
+}
+
+/// B-2026-09-27-95 — the local a by-value parameter's `let mut` rebind hands
+/// it to for good: the reassigned one ([`param_reassigned_rebind_local`]) or
+/// the one mutated in place ([`param_mutated_rebind_local`]). Either way the
+/// value that dies is the local's, so the callee owns it and the caller
+/// stands down.
+pub fn param_taken_over_rebind_local(f: &Function, arg_index: usize) -> Option<&str> {
+    param_reassigned_rebind_local(f, arg_index).or_else(|| param_mutated_rebind_local(f, arg_index))
+}
+
+/// B-2026-09-27-95 — does `f` rebind by-value parameter `arg_index` whole into
+/// a `let mut` local that it then MUTATES IN PLACE (`c.id = ..`, `c.push(..)`,
+/// `f(mut c)`) and never lets go of?
+///
+/// `fn rb(a: R) -> i64 { let mut c = a; c.id = 11; 5 }`: the callee mutates
+/// its own copy of the parameter, so the caller's walk over the argument ran
+/// the body over the value as it was BEFORE the mutation (`d1` where `d11` is
+/// due), lost what the callee added to it (`c.push(R { id: 99 })` never ran
+/// `d99`), and ran a second body over what the callee took out of it (`let r =
+/// c.pop()` ran `d12` twice). Only the callee holds the value that dies, so the
+/// local owns it, exactly as the reassigned rebind does, and this is consulted
+/// wherever that one is ([`fn_takes_over_param_rebind`]).
+///
+/// Narrow on purpose. The `let` is a top-level statement, the local is bound
+/// exactly once, the parameter is not mentioned after it, and every mention of
+/// the local is a mutation of it or a read through it: an assignment target
+/// rooted at it (a WHOLE reassignment only as a top-level statement), the root
+/// of a field / element projection, a `mut c` argument, or the receiver of a
+/// `Vec` method that neither consumes nor exposes it. A
+/// bare `c` anywhere else (returned, passed on, matched on, iterated) could
+/// carry the value out, and that keeps today's arrangement; so does a mention
+/// inside a closure or a `defer`. Only a user type named bare or a `Vec`
+/// qualifies, and not in a generic callee: `Option` / `Result` boxes have their
+/// own let-site protocol, and the other library types were not measured.
+pub fn param_mutated_rebind_local(f: &Function, arg_index: usize) -> Option<&str> {
+    if f.generic_params.is_some() {
+        return None;
+    }
+    let param = f.params.get(arg_index)?;
+    let crate::ast::TypeKind::Path(path) = &param.ty.kind else {
+        return None;
+    };
+    let [head] = path.segments.as_slice() else {
+        return None;
+    };
+    let is_vec = head == "Vec";
+    // A user type named bare, or a `Vec`. The other library types each lower
+    // their own way and were not measured (`Map` / `Array` index stores lost
+    // the element bodies compiled).
+    if !is_vec
+        && (path.generic_args.is_some() || MUTATED_REBIND_LIBRARY_TYPES.contains(&head.as_str()))
+    {
+        return None;
+    }
+    let PatternKind::Binding(name) = &param.pattern.kind else {
+        return None;
+    };
+    let walk = rebind_walk_raw(f);
+    if walk.bound.get(name.as_str()) != Some(&1) {
+        return None;
+    }
+    let (k, c) = f
+        .body
+        .stmts
+        .iter()
+        .enumerate()
+        .find_map(|(i, st)| match &st.kind {
+            StmtKind::Let {
+                is_mut: true,
+                pattern,
+                value,
+                ..
+            } => match (&pattern.kind, &value.kind) {
+                (PatternKind::Binding(c), ExprKind::Identifier(src)) if src == name => {
+                    Some((i, c.as_str()))
+                }
+                _ => None,
+            },
+            _ => None,
+        })?;
+    if walk.bound.get(c) != Some(&1) || demoted_param_rebind_names(f).contains(&c) {
+        return None;
+    }
+    let rest = &f.body.stmts[k + 1..];
+    let tail = f.body.final_expr.as_deref();
+    let mentions = |e: &Expr, n: &str| crate::deque_head::expr_mentions_name_deep(e, n);
+    let mut param_later = tail.is_some_and(|e| mentions(e, name));
+    for st in rest {
+        crate::rc_elide::walk_stmt_children_pub(st, &mut |e| {
+            param_later |= mentions(e, name);
+        });
+    }
+    if param_later {
+        return None;
+    }
+    let mut ok = true;
+    for st in rest {
+        mutated_rebind_stmt_ok(st, c, is_vec, &mut ok);
+    }
+
+    if let Some(e) = tail {
+        mutated_rebind_expr_ok(e, c, is_vec, &mut ok);
+    }
+    ok.then_some(c)
+}
+
+/// B-2026-09-27-95 — the [`param_mutated_rebind_local`] locals of `f` that
+/// still hold the parameter's value when `f` exits (none is ever reassigned
+/// whole). Design rule 3 drops that value at the END OF THE CALL, not at the
+/// local's last use, so both backends keep these out of the body block's NLL
+/// last-use map and drain them at its scope exit.
+///
+/// A field moved out of one at the top level (`let x = c.r`) is a part of the
+/// parameter, which rule 3 drops at the end of the call as well, so its
+/// binding is listed too.
+pub fn param_rebinds_dropping_at_call_end(f: &Function) -> Vec<String> {
+    fn field_of(e: &Expr, c: &str) -> bool {
+        match &e.kind {
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                matches!(&object.kind, ExprKind::Identifier(n) if n == c) || field_of(object, c)
+            }
+            _ => false,
+        }
+    }
+    let mut out = Vec::new();
+    for c in (0..f.params.len())
+        .filter_map(|i| param_mutated_rebind_local(f, i))
+        .filter(|c| !fn_assigns_local_whole(f, c))
+    {
+        out.push(c.to_string());
+        for st in &f.body.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &st.kind {
+                if let PatternKind::Binding(x) = &pattern.kind {
+                    if field_of(value, c) {
+                        out.push(x.clone());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Library types [`param_mutated_rebind_local`] leaves alone.
+const MUTATED_REBIND_LIBRARY_TYPES: &[&str] = &[
+    "Option",
+    "Result",
+    "Slice",
+    "Array",
+    "Map",
+    "Set",
+    "SortedMap",
+    "SortedSet",
+    "VecDeque",
+    "Deque",
+    "String",
+    "Box",
+    "Rc",
+    "Arc",
+    "Weak",
+    "Cell",
+    "RefCell",
+    "Mutex",
+    "Channel",
+    "Column",
+];
+
+/// The `Vec` methods a mutated rebind may be the receiver of: each one mutates
+/// or reads it in place and hands back no borrow of it.
+const MUTATED_REBIND_VEC_METHODS: &[&str] = &[
+    "push", "pop", "len", "is_empty", "insert", "remove", "clear", "truncate", "swap", "reverse",
+];
+
+fn mutated_rebind_stmt_ok(st: &super::Stmt, c: &str, is_vec: bool, ok: &mut bool) {
+    if !*ok {
+        return;
+    }
+    match &st.kind {
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            mutated_rebind_place_ok(target, c, is_vec, ok);
+            mutated_rebind_expr_ok(value, c, is_vec, ok);
+        }
+        StmtKind::MultiAssign { targets, values } => {
+            for t in targets {
+                mutated_rebind_place_ok(t, c, is_vec, ok);
+            }
+            for v in values {
+                mutated_rebind_expr_ok(v, c, is_vec, ok);
+            }
+        }
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            let mut names = Vec::new();
+            collect_block_names_for_rebind(body, &mut names);
+            if names.iter().any(|n| n == c) {
+                *ok = false;
+            }
+        }
+        _ => crate::rc_elide::walk_stmt_children_pub(st, &mut |e| {
+            mutated_rebind_expr_ok(e, c, is_vec, ok)
+        }),
+    }
+}
+
+/// An assignment target: `c` itself (a whole reassignment displaces the value
+/// in this frame), or a place rooted at it, whose index expressions are reads.
+fn mutated_rebind_place_ok(t: &Expr, c: &str, is_vec: bool, ok: &mut bool) {
+    match &t.kind {
+        ExprKind::Identifier(_) => {}
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            mutated_rebind_place_ok(object, c, is_vec, ok)
+        }
+        ExprKind::Index { object, index } => {
+            mutated_rebind_place_ok(object, c, is_vec, ok);
+            mutated_rebind_expr_ok(index, c, is_vec, ok);
+        }
+        _ => mutated_rebind_expr_ok(t, c, is_vec, ok),
+    }
+}
+
+fn mutated_rebind_expr_ok(e: &Expr, c: &str, is_vec: bool, ok: &mut bool) {
+    if !*ok {
+        return;
+    }
+    let is_c = |x: &Expr| matches!(&x.kind, ExprKind::Identifier(n) if n == c);
+    match &e.kind {
+        ExprKind::Identifier(n) if n == c => *ok = false,
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. }
+            if is_c(object) => {}
+        ExprKind::Index { object, index } if is_c(object) => {
+            mutated_rebind_expr_ok(index, c, is_vec, ok)
+        }
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } if is_c(object) => {
+            if !(is_vec && MUTATED_REBIND_VEC_METHODS.contains(&method.as_str())) {
+                *ok = false;
+                return;
+            }
+            for a in args {
+                mutated_rebind_expr_ok(&a.value, c, is_vec, ok);
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            mutated_rebind_expr_ok(callee, c, is_vec, ok);
+            for a in args {
+                if !(a.mut_marker && is_c(&a.value)) {
+                    mutated_rebind_expr_ok(&a.value, c, is_vec, ok);
+                }
+            }
+        }
+        ExprKind::Closure { .. } => {
+            if crate::deque_head::expr_mentions_name_deep(e, c) {
+                *ok = false;
+            }
+        }
+        kind => crate::rc_elide::walk_children_pub(kind, &mut |sub| {
+            mutated_rebind_expr_ok(sub, c, is_vec, ok)
+        }),
+    }
+}
+
+fn collect_block_names_for_rebind(b: &Block, out: &mut Vec<String>) {
+    let mut push = |e: &Expr| {
+        fn go(e: &Expr, out: &mut Vec<String>) {
+            if let ExprKind::Identifier(n) = &e.kind {
+                out.push(n.clone());
+            }
+            crate::rc_elide::walk_children_pub(&e.kind, &mut |s| go(s, out));
+        }
+        go(e, out)
+    };
+    for st in &b.stmts {
+        crate::rc_elide::walk_stmt_children_pub(st, &mut push);
+    }
+    if let Some(e) = &b.final_expr {
+        push(e);
+    }
 }
 
 /// B-2026-09-25-10 — either conditional store: into a place the caller holds,

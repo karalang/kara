@@ -306,7 +306,11 @@ fn param_fate_depth_uncached(
             whole_only: false,
         });
     }
-    let whole_only = !w.moved;
+    // B-2026-09-27-95 — a `let mut` rebind that is mutated in place keeps the
+    // value in this frame, but the value that dies is the local's, with the
+    // mutation in it: the callee owns it (the legacy local-container
+    // handover), which no whole-value answer expresses.
+    let whole_only = !w.moved && crate::ast::param_mutated_rebind_local(f, idx).is_none();
     let mut exits = w.exits;
     if exits.is_empty() {
         // Every path diverges (panic / infinite loop): nothing leaves.

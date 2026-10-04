@@ -10612,22 +10612,27 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The caller stands down for that parameter (the predicate is part of
     /// `fn_moves_param_into_local_container`), so `c` is an OWNER here, not a
     /// view: the reassignment runs the displaced value's body in this frame.
+    /// B-2026-09-27-95 — and likewise the rebind it MUTATES in place
+    /// ([`crate::ast::param_taken_over_rebind_local`]): the value that dies is
+    /// this local's, with the mutation in it.
     pub(super) fn let_is_reassigned_param_rebind(&self, var_name: &str, value: &Expr) -> bool {
         let ExprKind::Identifier(src) = &value.kind else {
             return false;
         };
-        // A param the prologue did not copy (`caller_retained_aggregate_memory`:
-        // a struct owning a `shared` field) is a view onto the caller's
-        // buffers, which `c` must not free.
         if !self.fn_ctx.current_fn_param_names.contains(src.as_str())
             || self.borrow_vars.ref_params.contains_key(src.as_str())
-            || self
-                .drop_rc
-                .caller_retained_aggregate_memory
-                .contains(src.as_str())
         {
             return false;
         }
+        // A param the prologue did not copy (`caller_retained_aggregate_memory`:
+        // a struct owning a `shared` field) is a view onto the caller's
+        // buffers, which a REASSIGNED `c` must not free. A MUTATED one holds
+        // those very buffers until the call ends, and the caller has stood
+        // down for them, so it owns them.
+        let caller_retained = self
+            .drop_rc
+            .caller_retained_aggregate_memory
+            .contains(src.as_str());
         let Some(p) = self.program_snapshot.as_deref() else {
             return false;
         };
@@ -10637,8 +10642,38 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         f.params.iter().enumerate().any(|(i, prm)| {
             matches!(&prm.pattern.kind, crate::ast::PatternKind::Binding(n) if n == src)
-                && crate::ast::param_reassigned_rebind_local(f, i) == Some(var_name)
+                && if caller_retained {
+                    crate::ast::param_reassigned_rebind_local(f, i).is_none()
+                        && crate::ast::param_mutated_rebind_local(f, i) == Some(var_name)
+                } else {
+                    crate::ast::param_taken_over_rebind_local(f, i) == Some(var_name)
+                }
         })
+    }
+
+    /// The NLL last-use map of `block` (`compute_block_last_use`), less, when
+    /// `block` is the body of the function being compiled, the `let mut`
+    /// rebinds of a by-value param that it mutates in place
+    /// ([`crate::ast::param_rebinds_dropping_at_call_end`], B-2026-09-27-95):
+    /// rule 3 drops that value at the end of the call, so they drain at the
+    /// body's scope exit, exactly as the interpreter's body block does.
+    pub(super) fn fn_body_last_use(
+        &self,
+        block: &crate::ast::Block,
+    ) -> std::collections::HashMap<String, Vec<usize>> {
+        let mut m = crate::interpreter::compute_block_last_use(block);
+        if let Some(f) = self
+            .program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, &self.fn_ctx.current_fn_name))
+        {
+            if f.body.span == block.span {
+                for n in crate::ast::param_rebinds_dropping_at_call_end(f) {
+                    m.remove(&n);
+                }
+            }
+        }
+        m
     }
 
     /// B-2026-10-01-21 — does the function being compiled assign the local
