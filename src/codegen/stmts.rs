@@ -12309,7 +12309,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             // retraction below because a param source has no
                             // action of its own to retract; the double body comes
                             // from the caller's fire plus this walk.
-                            if self.container_literal_elems_are_all_param_views(value) {
+                            // B-2026-10-01-45 — unless this local OWNS the
+                            // param: the caller stood down for it, so the
+                            // elements are this frame's to run.
+                            if self.container_literal_elems_are_all_param_views(value)
+                                && !(*is_mut && self.current_fn_owns_reassigned_coll_wrap(var_name))
+                            {
                                 // B-2026-10-01-21 — a `let mut` the function
                                 // reassigns whole keeps its walk behind a bit
                                 // cleared here, which the reassignment then

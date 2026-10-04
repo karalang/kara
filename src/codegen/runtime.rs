@@ -10688,6 +10688,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|f| crate::ast::fn_assigns_local_whole(f, name))
     }
 
+    /// B-2026-10-01-45 — is `name` a `let mut` collection local of the
+    /// function being compiled that OWNS the param it wraps
+    /// ([`crate::ast::param_reassigned_coll_wrap_locals`]), so its elements
+    /// are not param views at its `let`?
+    pub(super) fn current_fn_owns_reassigned_coll_wrap(&self, name: &str) -> bool {
+        let Some(p) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        super::declarations::find_function_ast(p, &self.fn_ctx.current_fn_name).is_some_and(|f| {
+            crate::ast::param_reassigned_coll_wrap_locals(Some(p), f)
+                .iter()
+                .any(|(x, _)| x == name)
+        })
+    }
+
     pub(super) fn ident_is_whole_param_alias(&self, src: &str) -> bool {
         if self.borrow_vars.ref_params.contains_key(src) {
             return false;

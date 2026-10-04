@@ -2544,6 +2544,11 @@ struct RebindWalk {
     /// predicates read them, and only for a local never reassigned whole
     /// ([`Self::assigned`]); see `param_wrap_aliases_impl`.
     mut_wraps: Vec<(String, String, ParamPath)>,
+    /// B-2026-10-01-45 — the locals of [`Self::mut_wraps`] whose `let mut`
+    /// value is an ARRAY or COLLECTION literal (`let mut v = Vec[y]`). Only
+    /// these are admitted when the local is also reassigned whole; see
+    /// `param_wrap_aliases_impl`.
+    mut_coll_locals: std::collections::HashSet<String>,
     /// B-2026-10-01-9 — the `let MUT` twin of [`Self::ctor_wraps`]
     /// (`let mut o = Some(y)`), on the same terms as [`Self::mut_wraps`].
     mut_ctor_wraps: Vec<(String, String, Expr, ParamPath)>,
@@ -2689,6 +2694,8 @@ impl RebindWalk {
                         let w = self.wraps.split_off(marks.0);
                         let c = self.coll_wraps.split_off(marks.1);
                         let k = self.ctor_wraps.split_off(marks.2);
+                        self.mut_coll_locals
+                            .extend(c.iter().map(|(x, _, _)| x.clone()));
                         self.mut_wraps.extend(w.into_iter().chain(c));
                         self.mut_ctor_wraps.extend(k);
                     }
@@ -2985,6 +2992,7 @@ fn rebind_walk_raw_uncached(f: &Function) -> RebindWalk {
         ctor_wraps: Vec::new(),
         coll_wraps: Vec::new(),
         mut_wraps: Vec::new(),
+        mut_coll_locals: std::collections::HashSet::new(),
         mut_ctor_wraps: Vec::new(),
         assigned: std::collections::HashSet::new(),
         proj_rebinds: Vec::new(),
@@ -3363,10 +3371,21 @@ fn param_wrap_aliases_impl_uncached(
         // release of the displaced value already disagrees between the two
         // backends with no caller involved (B-2026-10-01-9's close names the
         // row), so standing the caller down there would make a lost body of it.
+        // B-2026-10-01-45 — except a COLLECTION literal's local, once
+        // B-2026-10-01-21 settled that release: `fn f8(x: R, c: bool) ->
+        // Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; } return v }`
+        // ran `x`'s body in the caller AND over the result when `c` was false.
+        // The caller stands down on every path, and the local then OWNS the
+        // elements (`param_reassigned_coll_wrap_locals`), so the reassignment
+        // that displaces `x` runs its body there instead.
         .chain(
             w.mut_wraps
                 .iter()
-                .filter(|(x, _, _)| with_ctor && user_variants && !w.assigned.contains(x))
+                .filter(|(x, _, _)| {
+                    with_ctor
+                        && user_variants
+                        && (!w.assigned.contains(x) || w.mut_coll_locals.contains(x))
+                })
                 .cloned(),
         )
         .chain(
@@ -3563,6 +3582,7 @@ pub fn expr_rebind_aliases(body: &Expr, seed: &str) -> Vec<String> {
         ctor_wraps: Vec::new(),
         coll_wraps: Vec::new(),
         mut_wraps: Vec::new(),
+        mut_coll_locals: std::collections::HashSet::new(),
         mut_ctor_wraps: Vec::new(),
         assigned: std::collections::HashSet::new(),
         proj_rebinds: Vec::new(),
@@ -3633,6 +3653,7 @@ fn arm_local_part_yield(body: &Expr, roots: &[String], tail: bool) -> Vec<ParamP
         ctor_wraps: Vec::new(),
         coll_wraps: Vec::new(),
         mut_wraps: Vec::new(),
+        mut_coll_locals: std::collections::HashSet::new(),
         mut_ctor_wraps: Vec::new(),
         assigned: std::collections::HashSet::new(),
         proj_rebinds: Vec::new(),
@@ -10485,7 +10506,12 @@ fn stored_via_call(e: &Expr, name: &str, program: &crate::Program) -> bool {
                                     // own, where it dies: that frame runs the
                                     // body, so the frame that forwarded it
                                     // there must not leave it to ITS caller.
-                                    || fn_moves_param_into_local_container(gf, j))
+                                    || fn_moves_param_into_local_container(gf, j)
+                                    // B-2026-10-01-45 — or into a reassigned
+                                    // `let mut` collection local it owns.
+                                    || param_reassigned_coll_wrap_locals(Some(program), gf)
+                                        .iter()
+                                        .any(|(_, i)| *i == j))
                         })
                     }),
                 _ => false,
@@ -12513,6 +12539,50 @@ pub fn param_mutated_rebind_local(f: &Function, arg_index: usize) -> Option<&str
         mutated_rebind_expr_ok(e, c, is_vec, &mut ok);
     }
     ok.then_some(c)
+}
+
+/// B-2026-10-01-45 — the `let mut` COLLECTION-literal locals of `f` that wrap
+/// a by-value param the caller stands down for (the param is always handed
+/// back, through them) AND that `f` reassigns whole. Such a local owns the
+/// param's body rather than viewing the caller's: on the path that keeps it
+/// the returned value carries the body out, and on the path that reassigns it
+/// the displaced value runs the body where it dies. Both backends read this at
+/// the local's `let` instead of treating its elements as param views.
+///
+/// Each local comes with the index of the param it owns.
+pub fn param_reassigned_coll_wrap_locals(
+    program: Option<&crate::Program>,
+    f: &Function,
+) -> Vec<(String, usize)> {
+    if f.generic_params.is_some() {
+        return Vec::new();
+    }
+    let w = rebind_walk(f);
+    if w.mut_coll_locals.iter().all(|x| !w.assigned.contains(x)) {
+        return Vec::new();
+    }
+    let mut out: Vec<(String, usize)> = Vec::new();
+    for (i, param) in f.params.iter().enumerate() {
+        let PatternKind::Binding(name) = &param.pattern.kind else {
+            continue;
+        };
+        if matches!(
+            param.ty.kind,
+            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+        ) || !fn_always_returns_param(program, f, i)
+        {
+            continue;
+        }
+        for (x, _) in param_wrap_aliases_ex(program, f, name, true) {
+            if w.assigned.contains(&x)
+                && w.mut_coll_locals.contains(&x)
+                && !out.iter().any(|(y, _)| *y == x)
+            {
+                out.push((x, i));
+            }
+        }
+    }
+    out
 }
 
 /// B-2026-09-27-95 — the [`param_mutated_rebind_local`] locals of `f` that

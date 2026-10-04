@@ -3780,8 +3780,16 @@ impl<'a> super::Interpreter<'a> {
         // B-2026-09-27-95 — less a param whose `let mut` rebind this frame
         // mutates in place (`crate::ast::param_mutated_rebind_local`): the
         // caller stands down for it, so that rebind is an owner, not a view.
+        // B-2026-10-01-45 — and less a param a reassigned `let mut` collection
+        // local owns (`crate::ast::param_reassigned_coll_wrap_locals`), for
+        // the same reason.
         self.callee_fn_for_param_ownership_of(fn_name, assoc_owner)
             .map(|f| {
+                let coll_owned: Vec<usize> =
+                    crate::ast::param_reassigned_coll_wrap_locals(Some(self.program), f)
+                        .into_iter()
+                        .map(|(_, i)| i)
+                        .collect();
                 f.params
                     .iter()
                     .enumerate()
@@ -3790,6 +3798,7 @@ impl<'a> super::Interpreter<'a> {
                             p.ty.kind,
                             crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
                         ) && crate::ast::param_mutated_rebind_local(f, *i).is_none()
+                            && !coll_owned.contains(i)
                     })
                     .filter_map(|(_, p)| p.name().map(str::to_string))
                     .collect()
