@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 676 |
-| run-vs-build | 581 |
+| miscompile | 677 |
+| run-vs-build | 583 |
 | leak | 552 |
 | double-free | 412 |
 | codegen-gap | 218 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2676 |
-| interp | 824 |
+| codegen | 2679 |
+| interp | 825 |
 | typecheck | 327 |
 | other | 113 |
 | ownership | 80 |
@@ -413,7 +413,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-96 | 2026-09-30 | interp+codegen | medium | A BY-VALUE PARAM WRAPPED INTO A LOCAL STRUCT OR TUPLE THAT IS THEN STORED IN A CALLER-HELD CONTAINER RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, EVEN UNCONDITIONALLY -- `fn w4(a: R, xs: mut ref Vec[P]) { let x = P { r: a, n: 1 }; xs.push(x); }` prints `dR7` when the call returns and `dR7` again when `xs` dies; pushing the literal directly (`xs.push(P { r: a, n: 1 })`) runs it once | — |
 | B-2026-09-30-97 | 2026-09-30 | codegen+interp | high | A BY-VALUE PARAM MOVED INTO A LITERAL IS OWNED TWICE OR NOT AT ALL, the param half of B-2026-09-30-59 -- a discarded tuple or struct literal (`fn f(w: W1) { let _ = (w, 1); println("in") }`) runs `w`'s `Drop` body TWICE on all four surfaces (`dW1_7 in dW1_7`); the `[w]` / `Array[w]` spelling runs it twice under `--interp` and once compiled but leaks 1 block; and `return take([w])` leaks 1 block compiled with the right output | — |
 | B-2026-09-30-107 | 2026-09-30 | interp | medium | UNDER `--interp`, A METHOD THAT HANDS BACK A LITERAL HOLDING A PAYLOAD BINDING RUNS THE BODY TWICE -- `Some(x) => { let z = k.pass([x]); println(f"z:{z[0].v}") }` over `fn pass(ref self, x: Array[W1, 1]) -> Array[W1, 1] { return x }` prints `z:2 dW1_2 dW1_2 end` under `--interp`; compiled prints `z:2 dW1_2 end`, valgrind clean | — |
-| B-2026-09-30-89 | 2026-09-30 | codegen | medium | A `ref` OR `mut ref` TUPLE PARAMETER'S CONTAINER ELEMENT DOES NOT LOWER -- `fn f(a: ref (Array[P, 1], i64)) -> i64 { return a.0[0].n }` fails `karac build` with `cannot resolve field 'n' on this receiver`, and the `mut ref` store `a.0[0].n = 9` (and a plain `a.1 = 9`) is refused, while `--interp` answers both; B-2026-09-20-25 fixed the OWNED tuple local | — |
 | B-2026-09-30-90 | 2026-09-30 | typecheck | low | AN ARRAY LITERAL NESTED INSIDE A TUPLE THAT IS ITSELF INSIDE A TUPLE OR AN `Option` IS TYPED `Vec` UNDER AN ANNOTATED `let` -- `let a: (i64, (Array[P, 1], i64)) = (1, ([P { n: 5 }], 7))` and `let a: Option[(Array[i64, 2], i64)] = Some(([4, 5], 7))` fail `expected '..Array..', found '..Vec..'`, while one tuple level (`let a: (Array[P, 1], i64) = ([P { n: 5 }], 7)`) is accepted; a neighbour of B-2026-09-25-8 | — |
 | B-2026-09-30-99 | 2026-09-30 | codegen | medium | THE ARM BINDING OF A NESTED `Array[Array[R, 1], 2]` ENUM PAYLOAD READS ITS ELEMENTS AS ZEROES AT -O0 AND -O2 -- `match e { En.A(v) => { let k = v; .. } }` prints `dR0 dR0` from `k`'s walk, then the scrutinee's `dR1 dR2`, where `--interp` prints `dR1 dR2` once; a read-only arm is correct, and memory is clean under valgrind at -O0 | — |
 | B-2026-09-30-100 | 2026-09-30 | interp | medium | `--interp` RUNS NO ELEMENT `Drop` BODY FOR A USER ENUM'S `Array` PAYLOAD WHOSE ELEMENT IS A TUPLE OR AN `Option` -- `let f = Ec.A([Some(R { id: 1 }), Some(R { id: 2 })])` over `enum Ec { A(Array[Option[R], 2]), B }` prints nothing where -O0 prints `dR1 dR2`, matched or not | — |
@@ -504,7 +503,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-32 | 2026-10-04 | codegen | medium | AN ARM BINDING OVER A `shared enum` WHOSE PAYLOAD IS A `Vec` OF STRUCTS CARRYING BOTH A SHARED FIELD AND A `String` STILL TAKES THE VEC, SO A SECOND HANDLE'S MATCH SEES IT EMPTY AND PANICS -- B-2026-09-28-59'S STRUCT-ELEMENT COPY REFUSES THIS ELEMENT SHAPE | — |
 | B-2026-10-04-33 | 2026-10-04 | codegen | high | `let g = h;` OVER A NON-SHARED ENUM LOCAL WHOSE PAYLOAD IS AN `Option[String]`, WITH `h` READ AGAIN AFTERWARDS, SEGFAULTS COMPILED (NULL READ) WHERE `--interp` PRINTS THE VALUE -- B-2026-10-02-93'S COPY DOES NOT COVER A BOXED `Option`/`Result` PAYLOAD, SO THE SOURCE'S BOX POINTER IS STILL ZEROED | — |
 | B-2026-10-04-34 | 2026-10-04 | interp+codegen | medium | AN ELEMENT DISPLACED THROUGH A TUPLE-ELEMENT CONTAINER NEVER RUNS ITS `Drop` BODY -- `t.0[0] = R { id: 9 }` over `(Array[R, 2], i64)` or `(Vec[R], i64)` prints no `dR` for the overwritten element under `--interp`, and compiled builds now match that deliberately; the named-array and struct-field spellings (`a[0] = ..`, `w.a[0] = ..`) run it on both backends | — |
-| B-2026-10-04-39 | 2026-10-04 | codegen | low | AN INDEX STORE INTO A TUPLE-HELD CONTAINER THROUGH `mut ref self` FAILS THE BUILD -- `self.t.0[0] = s` in `fn set(mut ref self, s: String)` over `struct H { t: (Array[String, 2], i64) }` stops `karac build` with `Index assignment target must be a variable`; the same store on a local `h.t.0[0] = s` builds since B-2026-09-30-88, and `--interp` runs both | — |
 | B-2026-10-04-40 | 2026-10-04 | codegen | medium | A TUPLE HOLDING A NESTED `Array[Array[String, N], M]` LEAKS EVERY INNER STRING AT SCOPE EXIT -- `let t: (Array[Array[String, 2], 2], i64) = ([[..], [..]], 3)` loses 8 B in 4 blocks at -O0 on every compiled build, even when nothing but `t.1` is read; the same nested array as a plain local, a tuple of `Array[String, 2]`, of `Array[Vec[String], 2]` and of `Vec[Vec[String]]` are all clean | — |
 | B-2026-10-04-41 | 2026-10-04 | codegen | medium | REMAINDER OF B-2026-10-01-14, AND A DIVERGENCE SINCE ITS FIX: A CLOSURE THAT HANDS BACK A BY-VALUE `Vec[R]` PARAM STILL RUNS EVERY ELEMENT'S `Drop` BODY TWICE COMPILED, WHILE `--interp` NOW RUNS IT ONCE -- `let s = |x: Vec[R]| x; let r6 = s([w6]); println(f"r{r6[0].id}")` prints `dR76 r76 dR76` on the JIT, -O0 and -O2 and `r76 dR76` under `--interp` | — |
 | B-2026-10-04-42 | 2026-10-04 | codegen | high | REMAINDER OF B-2026-10-01-14: A CLOSURE THAT HANDS BACK ITS BY-VALUE STRUCT PARAM ON ONLY SOME PATHS DOUBLE-FREES IT COMPILED, AND A DISCARDED CALL LOSES THE FRESH ARM'S BODY -- `let h = |x: R, k: bool| if k { x } else { mk(0) }; let r = h(mk(95), true)` aborts `free(): double free` on the JIT, -O0 and -O2 (`--interp` `r95 dR95`), and `h(mk(96), false);` prints `dR96 r` compiled against `--interp`'s `dR96 dR0 r` | — |
@@ -523,6 +521,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-55 | 2026-10-04 | interp+codegen | medium | AN ASSIGNMENT THROUGH `*` OF A USER FUNCTION'S RETURNED `mut ref` IS DROPPED -- `*bump(mut x) += 5` and `*bump(mut x) = 9` over `fn bump(v: mut ref i64) -> mut ref i64 { return v; }` leave `x` at 1 under `--interp` and `karac run` alike, and `*h.slot() += 5` (a `mut ref self` method returning `mut ref i64`) fails codegen naming an LLVM pointer type; `*m.entry(c).or_insert(0) += 1` is right on both | — |
 | B-2026-10-04-56 | 2026-10-04 | codegen | medium | A STEADY SMALL `Map[char, i64]` RUNS 2.2x RUST'S `HashMap` AT EQUAL HASHING on kata 340's sliding-window bench (0.47 s vs 0.21 s), and the hash alone (2.44 G Ir) costs more than Rust's whole program (1.98 G Ir); the counting idiom `m.insert(c, m.get(c).unwrap_or(0) + 1)` hashes the same key twice, but the `entry` spelling, which hashes once, is still 1.9x | — |
 | B-2026-10-04-62 | 2026-10-04 | codegen | medium | A NAMED `Vec` LOCAL MOVED INTO A REASSIGNMENT ON ONE PATH ONLY LOSES ITS ELEMENTS' `Drop` BODIES ON THE PATH THAT DID NOT MOVE IT, ON EVERY COMPILED SURFACE -- `fn fo2(c: bool) -> Vec[R] { let mut v = Vec[mk(1)]; let w = Vec[mk(40)]; if c { v = w; } return v }` called with `false` prints `k1 dR1` compiled where `--interp` prints `dR40 k1 dR1` | — |
+| B-2026-10-04-57 | 2026-10-04 | interp+codegen | medium | OVERWRITING A WHOLE TUPLE ELEMENT NEVER RUNS THE DISPLACED VALUE'S `Drop` BODY -- `t.0 = R { id: 6 }` over `(R, i64)` prints no `dR5` on any backend, owned or through `mut ref`, while the local (`x = ..`) and struct-field (`w.r = ..`) spellings run it at the store | — |
+| B-2026-10-04-58 | 2026-10-04 | codegen | low | A `for` LOOP OVER AN `Array` HELD IN A TUPLE ELEMENT FAILS THE BUILD -- `for p in a.0 { .. }` over `(Array[P, 2], i64)` stops `karac build` with `for-loop over this iterable is not lowered ... (source shape: a tuple element)`, while `--interp` prints `r:11`; `for x in b.0` over `(Vec[i64], i64)` and `for p in a.0.iter()` both build | — |
+| B-2026-10-04-59 | 2026-10-04 | codegen | low | A FIELD STORE THROUGH A NESTED INDEX FAILS THE BUILD -- `v[0][0].n = 9` over `Vec[Vec[P]]` stops `karac build` with `assignment to field 'n' through this place is not yet lowered`, while `--interp` prints `r:9`; the one-level store `v[0].n = 9` builds | — |
 
 ### Relocated
 
@@ -3570,6 +3571,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-83 | codegen | high | A FIELD STORE THROUGH AN `Array[T, N]` ELEMENT IS SILENTLY DROPPED ON EVERY COMPILED SURFACE -- `let mut a: Array[P, 1] = [P { n: 5 }]; a[0].n = 9` r… | 3643daa |
 | B-2026-09-30-84 | codegen | high | A CONTAINER ELEMENT HANDED TO A `ref` OR `mut ref` PARAMETER IS SHALLOW-COPIED AND FREED AS A CALL TEMP UNLESS THE CONTAINER IS A `Vec` LOCAL -- `rd(… | 7ffd2c2 |
 | B-2026-09-30-88 | codegen | low | AN INDEX-ASSIGN INTO AN `Array` HELD IN A TUPLE ELEMENT FAILS `karac build` -- `a.0[0] = P { n: 9 }` and `a.0[0] = 9` over `(Array[_, 1], i64)` pass… | 32944799d |
+| B-2026-09-30-89 | codegen | medium | A `ref` OR `mut ref` TUPLE PARAMETER'S CONTAINER ELEMENT DOES NOT LOWER -- `fn f(a: ref (Array[P, 1], i64)) -> i64 { return a.0[0].n }` fails `karac… | 3787f7857 |
 | B-2026-09-30-103 | codegen+interp | medium | A destructure of an `Option`/`Result` STRUCT payload that takes only SOME of two `Drop`-bearing fields disagrees between backends -- over `struct H2… | 796891ea3 |
 | B-2026-09-30-104 | codegen | high | A GENERIC struct with two heap fields in an `Option`/`Result` payload (`G2[R]` over `struct G2[T] { v: T, r: R }`) double-frees on every compiled sur… | d3477587e |
 | B-2026-10-01-7 | codegen | high | A BY-VALUE BOXED `Option[R]` PARAM RETURNED DIRECTLY INSIDE A COLLECTION LITERAL SEGFAULTS ON EVERY COMPILED SURFACE, BOUND OR DISCARDED -- `fn ov(x:… | 9457e9075 |
@@ -3675,6 +3677,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-36 | codegen | low | A METHOD ON AN ELEMENT OF AN `Array` HELD IN A TUPLE ELEMENT FAILS THE BUILD -- `f.0[1].len()` over `(Array[Vec[i64], 2], i64)` or `(Array[String, 2]… | bcfde280c |
 | B-2026-10-04-37 | codegen | low | AN UNANNOTATED `let` OF AN `Array` TUPLE ELEMENT LOSES ITS ELEMENT TYPE -- `let ff = f.0` over `(Array[Vec[i64], 2], i64)` then `ff[1].len()` fails `… | 6bf1182d0 |
 | B-2026-10-04-38 | typecheck | low | A TUPLE ANNOTATION'S ELEMENT TYPES ARE NOT THREADED INTO A NESTED TUPLE LITERAL -- `let d: ((Array[i64, 2], i64), i64) = (([1, 2], 3), 4)` is rejecte… | b1a49c6b2 |
+| B-2026-10-04-39 | codegen | low | AN INDEX STORE INTO A TUPLE-HELD CONTAINER THROUGH `mut ref self` FAILS THE BUILD -- `self.t.0[0] = s` in `fn set(mut ref self, s: String)` over `str… | 3787f7857 |
 | B-2026-10-04-60 | parser | low | A KEYWORD USED AS A NAME CASCADES AND `karac fix` APPLIES NOTHING -- a local named `distinct` (reserved) reports 5 of its 7 uses, then `return distin… | 360f29517 |
 | B-2026-10-04-61 | typecheck | high | ANY EXPRESSION IS ACCEPTED AS AN ASSIGNMENT TARGET -- `(a, b) = (b, a)`, `a + 1 = 3`, `one() = 3`, `v.len() = 3` and `s.clone() += "y"` all pass `kar… | f39ec48c8 |
 
