@@ -26155,7 +26155,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Drop every table entry a displaced-element synth name was given.
-    fn forget_displaced_synth(&mut self, synth: &str) {
+    pub(super) fn forget_displaced_synth(&mut self, synth: &str) {
         self.variables.remove(synth);
         self.var_types.vec_elem_types.remove(synth);
         self.var_types.slice_elem_types.remove(synth);

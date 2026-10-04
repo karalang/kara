@@ -3206,6 +3206,9 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(value) = self.try_compile_clone(object)? {
                 return Ok(value);
             }
+            if let Some(value) = self.try_compile_tuple_element_clone(object)? {
+                return Ok(value);
+            }
             // Scalar `Copy` primitive — clone is identity.
             if recv_is_scalar_primitive {
                 return self.compile_expr(object);

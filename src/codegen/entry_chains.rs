@@ -140,6 +140,141 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(te))
     }
 
+    /// B-2026-10-04-54 — `<tuple place>.N.clone()` where the tuple is not a
+    /// named owned local: an element of a `Vec` of tuples (`v[1].0.clone()`) or
+    /// a tuple behind a `ref` / `mut ref` root (`p.0.clone()`). Bind a synth to
+    /// the element IN PLACE and hand it to [`Self::try_compile_clone`], the
+    /// same dance the tuple-element method dispatch does for a local tuple.
+    ///
+    /// Without it a `String` element reached the receiver-materialization
+    /// fallback, which dispatches into `compile_vec_method` where `clone` has
+    /// no arm, and a `Vec` element reached the tuple-element arm, which had no
+    /// element type for an indexed tuple. `Ok(None)` for anything this cannot
+    /// place (an impure index, an unrecorded element type), so the caller keeps
+    /// its existing path.
+    pub(super) fn try_compile_tuple_element_clone(
+        &mut self,
+        object: &Expr,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let ExprKind::TupleIndex { object: tup, index } = &object.kind else {
+            return Ok(None);
+        };
+        let elem_tes = match self.place_chain_tuple_tes(tup) {
+            Some(tes) => Some(tes),
+            None => self.indexed_tuple_elem_tes(tup),
+        };
+        let Some(elem_te) = elem_tes
+            .and_then(|tes| tes.get(*index as usize).cloned())
+            .map(|te| self.subst_monomorph_type_params(&te))
+            .filter(|te| match &te.kind {
+                // The names registry's empty-path rendering, or an erased
+                // container name: not a usable synth source.
+                TypeKind::Path(p) => match p.segments.as_slice() {
+                    [] => false,
+                    [only] => {
+                        !(matches!(
+                            only.as_str(),
+                            "Vec" | "Map" | "Set" | "VecDeque" | "SortedMap" | "SortedSet"
+                        ) && p.generic_args.as_ref().is_none_or(|g| g.is_empty()))
+                    }
+                    _ => true,
+                },
+                _ => true,
+            })
+        else {
+            return Ok(None);
+        };
+        let (elem_ptr, elem_ll) = match (
+            self.place_chain_aggregate_llvm_type_through_borrow(tup),
+            self.place_chain_ptr_through_borrow(object),
+        ) {
+            (Some(tuple_ty), Some(elem_ptr)) => {
+                let Some(elem_ll) = tuple_ty.get_field_type_at_index(*index as u32) else {
+                    return Ok(None);
+                };
+                (elem_ptr, elem_ll)
+            }
+            // An element of an `Array` of tuples (`arr[1].0`): the place
+            // walkers decline an array slot, so place the tuple with the
+            // bounds-checked array element GEP the field store uses. The index
+            // is compiled once, here; nothing above compiled the receiver.
+            _ => {
+                let ExprKind::Index {
+                    object: arr,
+                    index: aidx,
+                } = &tup.kind
+                else {
+                    return Ok(None);
+                };
+                let Some(tes) = self.indexed_tuple_elem_tes(tup) else {
+                    return Ok(None);
+                };
+                let tuple_te = TypeExpr {
+                    kind: TypeKind::Tuple(tes),
+                    span: tup.span,
+                };
+                let BasicTypeEnum::StructType(tuple_ty) = self.llvm_type_for_type_expr(&tuple_te)
+                else {
+                    return Ok(None);
+                };
+                let Some(elem_ll) = tuple_ty.get_field_type_at_index(*index as u32) else {
+                    return Ok(None);
+                };
+                let Some(tup_ptr) = self.array_place_elem_ptr(arr, aidx) else {
+                    return Ok(None);
+                };
+                let Ok(elem_ptr) = self.builder.build_struct_gep(
+                    tuple_ty,
+                    tup_ptr,
+                    *index as u32,
+                    "tup.clone.arr.p",
+                ) else {
+                    return Ok(None);
+                };
+                (elem_ptr, elem_ll)
+            }
+        };
+        let synth = format!("__tup_clone_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            VarSlot {
+                ptr: elem_ptr,
+                ty: elem_ll,
+            },
+        );
+        self.register_var_from_type_expr(&synth, &elem_te);
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: object.span,
+        };
+        let out = self.try_compile_clone(&synth_expr);
+        self.forget_displaced_synth(&synth);
+        self.var_types.string_vars.remove(&synth);
+        out
+    }
+
+    /// The element `TypeExpr`s of an INDEXED tuple, `v[i]` over a named
+    /// `Vec` / slice / `Array` of tuples, for [`Self::try_compile_tuple_element_clone`].
+    /// Pure lookup; `None` for any other shape.
+    fn indexed_tuple_elem_tes(&self, expr: &Expr) -> Option<Vec<TypeExpr>> {
+        let ExprKind::Index { object, .. } = &expr.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(v) = &object.kind else {
+            return None;
+        };
+        let elem = self
+            .var_types
+            .var_elem_type_exprs
+            .get(v.as_str())
+            .or_else(|| self.var_types.array_elem_type_exprs.get(v.as_str()))?;
+        match &elem.kind {
+            TypeKind::Tuple(elems) => Some(elems.clone()),
+            _ => None,
+        }
+    }
+
     /// Lower `<receiver>.clone()` for an identifier-bound collection
     /// receiver (Vec[T], String, Map[K, V], Set[T]). Returns `Some(value)`
     /// when the receiver is recognised; `None` otherwise (caller falls
