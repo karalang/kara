@@ -200,6 +200,12 @@ pub(super) struct SavedVarSideTables<'ctx> {
         HashMap<inkwell::values::PointerValue<'ctx>, inkwell::values::PointerValue<'ctx>>,
     entry_private_payload_variants: HashMap<String, std::collections::HashSet<String>>,
     private_deboxed_slots: std::collections::HashSet<inkwell::values::PointerValue<'ctx>>,
+    // B-2026-10-03-34 — the nested-box tables a monomorph's prologue now
+    // writes for its own params; name-keyed, so the caller's must not leak in
+    // or out.
+    nested_boxed_payload_vars: std::collections::HashSet<String>,
+    boxed_leaf_owning_depth: HashMap<String, usize>,
+    callee_owned_payload_bodies_params: std::collections::HashSet<String>,
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -1815,6 +1821,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 &mut self.payload_vars.entry_private_payload_variants,
             ),
             private_deboxed_slots: std::mem::take(&mut self.payload_vars.private_deboxed_slots),
+            nested_boxed_payload_vars: std::mem::take(
+                &mut self.payload_vars.nested_boxed_payload_vars,
+            ),
+            boxed_leaf_owning_depth: std::mem::take(&mut self.payload_vars.boxed_leaf_owning_depth),
+            callee_owned_payload_bodies_params: std::mem::take(
+                &mut self.payload_vars.callee_owned_payload_bodies_params,
+            ),
         }
     }
 
@@ -1867,6 +1880,45 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.deboxed_payload_box_ptrs = saved.deboxed_payload_box_ptrs;
         self.payload_vars.entry_private_payload_variants = saved.entry_private_payload_variants;
         self.payload_vars.private_deboxed_slots = saved.private_deboxed_slots;
+        self.payload_vars.nested_boxed_payload_vars = saved.nested_boxed_payload_vars;
+        self.payload_vars.boxed_leaf_owning_depth = saved.boxed_leaf_owning_depth;
+        self.payload_vars.callee_owned_payload_bodies_params =
+            saved.callee_owned_payload_bodies_params;
+    }
+
+    /// The params whose boxes a monomorph's prologue takes over: the ones
+    /// that never escape (used only as a `match` scrutinee, or unused), plus
+    /// B-2026-09-20-38's forwards to a generic callee that takes the box --
+    /// returned second, since that is the set `compile_generic_call` retracts
+    /// the caller's drop for (`by_value_boxed_param_taken_names`) and this
+    /// frame owns only until the forward zeroes the slot. Only the names the
+    /// forward ADDS over the caller's older set, so every param that set
+    /// already decided keeps its registration unchanged.
+    ///
+    /// B-2026-10-03-34 — a function so the caller can ask it too: a nested
+    /// box the prologue takes has to be retracted at the call by the same
+    /// answer.
+    pub(super) fn mono_owned_param_names(
+        &self,
+        func: &crate::ast::Function,
+    ) -> (
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    ) {
+        let mut nonescaping_params = crate::result_escape::nonescaping_param_names(func);
+        let mut forward_taken_params: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        if let Some(prog) = self.program_snapshot.as_deref() {
+            let loose = crate::result_escape::by_value_nonescaping_param_names(func);
+            let added: Vec<String> =
+                crate::result_escape::by_value_boxed_param_taken_names(prog, func)
+                    .into_iter()
+                    .filter(|n| !loose.contains(n) && !nonescaping_params.contains(n))
+                    .collect();
+            forward_taken_params.extend(added.iter().cloned());
+            nonescaping_params.extend(added);
+        }
+        (nonescaping_params, forward_taken_params)
     }
 
     /// B-2026-09-25-7 — the typechecker's concrete `Vec`/`VecDeque` binding
@@ -2684,6 +2736,40 @@ impl<'ctx> super::Codegen<'ctx> {
             if param_box_taken_by_callee || boxed_binding_stored_whole {
                 self.suppress_inline_option_result_binding_move(&a.value);
             }
+            // B-2026-10-03-34 — the caller's half of the monomorph prologue's
+            // nested-box hand-off, on the prologue's own answer
+            // (`mono_owned_param_names`, the same instantiated type). A named
+            // argument retracts its let site's `NestedBoxedEnumDrop` and the
+            // payload-bodies walk beside it, as `compile_call` does for the
+            // non-generic callee; a fresh temp has nothing to retract, and its
+            // bodies walk stands down below.
+            let param_nested_box_taken_by_callee = generic_fn.params.get(i).is_some_and(|p| {
+                if matches!(p.ty.kind, TypeKind::Ref { .. } | TypeKind::MutRef { .. }) {
+                    return false;
+                }
+                let PatternKind::Binding(pname) = &p.pattern.kind else {
+                    return false;
+                };
+                if pname == "self" || !self.mono_owned_param_names(&generic_fn).0.contains(pname) {
+                    return false;
+                }
+                let inst = self.callee_param_te_for_call_propagated(&p.ty, call_span);
+                !self.nested_boxed_enum_payload_variants(&inst).is_empty()
+            });
+            if param_nested_box_taken_by_callee {
+                if let Some(src) = self.nested_boxed_owner_source_of(&a.value) {
+                    if !self
+                        .payload_vars
+                        .struct_field_boxed_payload_vars
+                        .contains(src.as_str())
+                    {
+                        self.suppress_nested_boxed_drop_for_var(&src);
+                        if self.container_bodies_owned_by_let_slot(&src) {
+                            self.suppress_container_elem_bodies_for_receiver(&src);
+                        }
+                    }
+                }
+            }
             // B-2026-09-24-19 — the caller's half of the monomorph's
             // `Option`/`Result` entry copy (`mono_optres_param_entry_copied`,
             // asked of the same function and instantiated type). A named
@@ -3423,7 +3509,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         if matches!(&inst.kind, TypeKind::Path(pp)
                             if pp.segments.last().is_some_and(|h| h == "Option" || h == "Result"))
                         {
-                            self.track_optres_arg_temp_bodies_owning(val, &inst, &skip_parts, true);
+                            self.track_optres_arg_temp_bodies_owning(
+                                val,
+                                &inst,
+                                &skip_parts,
+                                !param_nested_box_taken_by_callee,
+                            );
                         }
                     }
                 }
@@ -6038,25 +6129,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Params of THIS mono body that never escape (used only as a `match`
         // scrutinee, or unused) — gates the owned boxed-enum param drop below.
-        let mut nonescaping_params = crate::result_escape::nonescaping_param_names(func);
-        let mut forward_taken_params: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        // B-2026-09-20-38 — plus a param whose only escape is a forward to a
-        // generic callee that takes the box: `compile_generic_call` retracts
-        // the caller's drop for it (`by_value_boxed_param_taken_names`), so
-        // this frame owns it until that forward zeroes the slot. Only the
-        // names the forward ADDS over the caller's older set, so every param
-        // that set already decided keeps its registration unchanged.
-        if let Some(prog) = self.program_snapshot.as_deref() {
-            let loose = crate::result_escape::by_value_nonescaping_param_names(func);
-            let added: Vec<String> =
-                crate::result_escape::by_value_boxed_param_taken_names(prog, func)
-                    .into_iter()
-                    .filter(|n| !loose.contains(n) && !nonescaping_params.contains(n))
-                    .collect();
-            forward_taken_params.extend(added.iter().cloned());
-            nonescaping_params.extend(added);
-        }
+        let (nonescaping_params, forward_taken_params) = self.mono_owned_param_names(func);
 
         for (i, param) in func.params.iter().enumerate() {
             let param_name = self.param_name(param);
@@ -6307,6 +6380,51 @@ impl<'ctx> super::Codegen<'ctx> {
                         bodies,
                         crate::codegen::state::UserDropKind::ContainerElemBodies,
                     );
+                }
+                // B-2026-10-03-34 — a box one level DOWN
+                // (`Result[Option[T], E]` at `T = R`), the monomorph twin of
+                // `functions.rs`'s B-2026-08-07-2 / B-2026-10-03-51 /
+                // B-2026-10-03-28 arms. Until this, the caller kept that box
+                // (its let site's `NestedBoxedEnumDrop`, or nothing for a fresh
+                // temp) while the body here ran the leaf binding's own drop
+                // (`Ok(Some(w))`), which no caller-side action can retract: a
+                // named argument freed R's heap twice and a temp leaked the
+                // box. The callee owns it now, exactly as the non-generic
+                // path does, and `compile_generic_call` retracts the caller's
+                // half on the same answer (`mono_owned_param_names`).
+                let nested_boxed = self.nested_boxed_enum_payload_variants(&mono_ty);
+                let nested_box_owned = !nested_boxed.is_empty();
+                for (outer_enum, outer_variant, inner_enum, inner_variant, deeper) in nested_boxed {
+                    self.track_nested_boxed_enum_var_at_field(
+                        &param_name,
+                        alloca,
+                        outer_enum,
+                        outer_variant,
+                        1,
+                        inner_enum,
+                        inner_variant,
+                        deeper,
+                        Self::path_generic_arg(&mono_ty, 0).cloned(),
+                    );
+                }
+                if nested_box_owned
+                    && !self
+                        .payload_vars
+                        .callee_owned_payload_bodies_params
+                        .contains(&param_name)
+                {
+                    if let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(&mono_ty) {
+                        self.track_user_drop_var_with_fn(
+                            "",
+                            &param_name,
+                            alloca,
+                            bodies,
+                            crate::codegen::state::UserDropKind::ContainerElemBodies,
+                        );
+                        self.payload_vars
+                            .callee_owned_payload_bodies_params
+                            .insert(param_name.clone());
+                    }
                 }
             }
             // Track declared type name for struct/enum field resolution.
