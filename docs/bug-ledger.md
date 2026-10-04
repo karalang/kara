@@ -93,10 +93,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 680 |
-| run-vs-build | 584 |
+| run-vs-build | 585 |
 | leak | 555 |
 | double-free | 412 |
-| codegen-gap | 218 |
+| codegen-gap | 219 |
 | missing-feature | 216 |
 | other | 168 |
 | diagnostics | 141 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2685 |
-| interp | 829 |
+| codegen | 2686 |
+| interp | 830 |
 | typecheck | 327 |
 | other | 113 |
 | ownership | 80 |
@@ -516,13 +516,14 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-62 | 2026-10-04 | codegen | medium | A NAMED `Vec` LOCAL MOVED INTO A REASSIGNMENT ON ONE PATH ONLY LOSES ITS ELEMENTS' `Drop` BODIES ON THE PATH THAT DID NOT MOVE IT, ON EVERY COMPILED SURFACE -- `fn fo2(c: bool) -> Vec[R] { let mut v = Vec[mk(1)]; let w = Vec[mk(40)]; if c { v = w; } return v }` called with `false` prints `k1 dR1` compiled where `--interp` prints `dR40 k1 dR1` | — |
 | B-2026-10-04-57 | 2026-10-04 | interp+codegen | medium | OVERWRITING A WHOLE TUPLE ELEMENT NEVER RUNS THE DISPLACED VALUE'S `Drop` BODY -- `t.0 = R { id: 6 }` over `(R, i64)` prints no `dR5` on any backend, owned or through `mut ref`, while the local (`x = ..`) and struct-field (`w.r = ..`) spellings run it at the store | — |
 | B-2026-10-04-58 | 2026-10-04 | codegen | low | A `for` LOOP OVER AN `Array` HELD IN A TUPLE ELEMENT FAILS THE BUILD -- `for p in a.0 { .. }` over `(Array[P, 2], i64)` stops `karac build` with `for-loop over this iterable is not lowered ... (source shape: a tuple element)`, while `--interp` prints `r:11`; `for x in b.0` over `(Vec[i64], i64)` and `for p in a.0.iter()` both build | — |
-| B-2026-10-04-59 | 2026-10-04 | codegen | low | A FIELD STORE THROUGH A NESTED INDEX FAILS THE BUILD -- `v[0][0].n = 9` over `Vec[Vec[P]]` stops `karac build` with `assignment to field 'n' through this place is not yet lowered`, while `--interp` prints `r:9`; the one-level store `v[0].n = 9` builds | — |
 | B-2026-10-04-64 | 2026-10-04 | codegen+interp | medium | A `for` LOOP OVER A FRESH `Vec` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `for item in mk() { k += item.n; }` over `fn mk() -> Vec[D]` with `impl Drop for D` prints `k 15` and never `drop 7` / `drop 8` on `--interp`, -O0 or -O2 (valgrind clean, so the memory is freed and only the bodies are skipped); over `Vec[E]` with a `match item { Many(xs) => count(xs), .. }` arm, `--interp` alone runs them (at each arm's end) and the compiled builds still run none | — |
 | B-2026-10-04-65 | 2026-10-04 | codegen | medium | DESTRUCTURING A TUPLE WHOSE ELEMENT IS AN `Option[shared]` OR A BARE `shared` HANDLE, OR NESTING ONE IN A TUPLE LITERAL, LEAKS THE HANDLE AND LOSES ITS `Drop` BODY COMPILED -- `let (a, b) = mk(1); println(f"g{a.unwrap().id} {b}")` prints `g1 1 end` and loses 16 B against `--interp`'s `g1 1 end dH1` | — |
 | B-2026-10-04-66 | 2026-10-04 | interp+codegen | medium | REASSIGNING A TUPLE LOCAL NEVER RELEASES THE DISPLACED TUPLE'S HEAP ELEMENTS -- `let mut p = mks(1); p = mks(2)` prints `y2 end dH2` with no `dH1` and loses 16 B, and the `(String, i64)` spelling loses the old string; `--interp` also prints no `dH1`, so the displaced handle's body runs on NO surface | — |
 | B-2026-10-04-67 | 2026-10-04 | codegen | medium | A USER ENUM (PLAIN OR `shared`) WHOSE VARIANT HOLDS A TUPLE WITH AN `Option[shared]` ELEMENT LEAKS THE 40 B PAYLOAD BOX AND THE HANDLE, AND AN `unwrap` READ IN THE ARM RUNS THE BODY BEFORE THE READ -- `enum Et { A((Option[H], i64)), B }`, `let e = Et.A(mk(1)); println("x")` prints `x end` and loses 40 B against `--interp`'s `x end dH1` | — |
 | B-2026-10-04-68 | 2026-10-04 | interp | low | `--interp` LOSES THE `Drop` BODY OF AN `Option[shared]` HANDLE IN A TUPLE CAPTURED BY A CLOSURE, AND OF ONE DISPLACED BY A TUPLE-ELEMENT STORE -- `fn cap(i: i64) { let p = mk(i); let f = || p.1; println(f"c{f()}") }` then `cap(1)` prints `c1 end` interpreted against compiled `c1 dH1 end` | — |
 | B-2026-10-04-69 | 2026-10-04 | codegen | medium | A PAYLOAD OF A BY-VALUE `Option`/`Result` PARAM HANDED TO A METHOD ON A LOCAL RECEIVER RUNS ITS `Drop` BODY NOWHERE COMPILED -- `fn lo(o: Option[S]) { let q2 = Q { z: 1 }; match o { Some(r) => q2.eat(r), None => {} } }` over `fn eat(ref self, s: S)` prints `qx lo` where `--interp` prints `qx lo dS1`; the same with `if let` and a `Result` arm; a field (`q2.eat(w.r)`) and the whole param (`q2.eat(s)`) are right | — |
+| B-2026-10-04-70 | 2026-10-04 | codegen | low | A FIELD STORE THROUGH A `Map` VALUE, A `Map` HELD IN A `Vec`, OR A CONTAINER HELD IN AN INDEXED TUPLE STILL FAILS THE BUILD -- `m[1].n = 9` over `Map[i64, P]` stops `karac build` with `assignment to field 'n' through this place is not yet lowered` while `--interp` prints `r:9` | — |
+| B-2026-10-04-71 | 2026-10-04 | interp | medium | `--interp` EVALUATES A NESTED INDEX STORE'S SUBSCRIPTS MORE THAN ONCE -- `w[idx(0)][idx(0)] = 5` calls `idx` four times and `u[idx(0)][idx(0)].n = 5` five times, where every compiled build calls it twice; a single index (`v[idx(0)].n = 77`) calls it once on both | — |
 
 ### Relocated
 
@@ -3686,6 +3687,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-54 | codegen | medium | `.clone()` ON A TUPLE ELEMENT REACHED THROUGH AN INDEX OR A `ref` PARAM FAILS `karac build` -- `v[0].0.clone()` over `Vec[(String, i64)]` and `p.0.cl… | 65a9ccee8 |
 | B-2026-10-04-60 | parser | low | A KEYWORD USED AS A NAME CASCADES AND `karac fix` APPLIES NOTHING -- a local named `distinct` (reserved) reports 5 of its 7 uses, then `return distin… | 360f29517 |
 | B-2026-10-04-61 | typecheck | high | ANY EXPRESSION IS ACCEPTED AS AN ASSIGNMENT TARGET -- `(a, b) = (b, a)`, `a + 1 = 3`, `one() = 3`, `v.len() = 3` and `s.clone() += "y"` all pass `kar… | f39ec48c8 |
+| B-2026-10-04-59 | codegen | low | A FIELD STORE THROUGH A NESTED INDEX FAILS THE BUILD -- `v[0][0].n = 9` over `Vec[Vec[P]]` stops `karac build` with `assignment to field 'n' through… | e66223d02 |
 | B-2026-10-04-63 | interp+codegen | medium | A PAYLOAD OR FIELD OF A BY-VALUE PARAM HANDED TO A METHOD ON A BORROWED RECEIVER STILL READS AS STORED INTO THAT RECEIVER, SO ITS `Drop` BODY RUNS NO… | a19190a5e |
 
 </details>
