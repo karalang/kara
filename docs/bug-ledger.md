@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 664 |
-| run-vs-build | 575 |
-| leak | 543 |
+| run-vs-build | 577 |
+| leak | 544 |
 | double-free | 409 |
 | codegen-gap | 216 |
 | missing-feature | 215 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2640 |
-| interp | 808 |
+| codegen | 2643 |
+| interp | 810 |
 | typecheck | 323 |
 | other | 113 |
 | ownership | 80 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-04). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -508,7 +508,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-39 | 2026-10-03 | codegen | medium | A NESTED PATTERN THROUGH A `shared enum`'S VALUE-ENUM PAYLOAD LEAKS 32 B -- over `shared enum H4 { Z(E), N }` and `enum E { A(Vec[String]), B }`, `match H4.Z(E.A(mkv(..))) { H4.Z(E.A(x)) => x.len(), _ => 0 }` prints the right `2` and loses 32 B definitely | — |
 | B-2026-10-03-49 | 2026-10-03 | interp | medium | UNDER `--interp`, A `let Some(Some(w)) = x else { ... }` OVER A BY-VALUE `Option[Option[R]]` PARAM, WHERE `R` RUNS A USER `Drop`, RUNS THE BODY TWICE WHEN THE LEAF IS MOVED ON -- `let Some(Some(w)) = x else { return 0 }; v.push(w); return 1` prints `dR4 1 1 dR4` on the interpreter. The body runs once at the end of the call, although `w` now lives in `v`, and again when `v` drops. Compiled prints `1 1 dR4` (correct) since the B-2026-10-03-28 follow-up; before it, compiled agreed with the interpreter. | — |
 | B-2026-10-03-27 | 2026-10-03 | codegen | medium | A `let` THAT TAKES ONE OF TWO by-value `Option[R]` PARAMS THROUGH A BRANCH (`let r = if c { a } else { b }`), WHERE `R` RUNS A `Drop` BODY AND `r` DIES IN THE CALLEE, RUNS NEITHER PARAM'S BODY compiled -- `mtrue mtrue` against `--interp`'s `mtrue d2 d1 mtrue d4 d3`; before B-2026-10-03-26 the same cell segfaulted at `-O0` | — |
-| B-2026-10-03-54 | 2026-10-03 | codegen | medium | AN ARM THAT BINDS THE `Option[R]` ENVELOPE OF A `Result[Option[R], E]` AND MATCHES IT AGAIN WITH AN INNER ARM THAT ONLY READS THE LEAF LEAKS R'S HEAP -- `match x { Ok(o) => match o { Some(i) => i.id, None => 0 }, Err(e) => e }` over a by-value param prints `dR7 7 end` everywhere and loses 29 B (R's String); the local spelling also loses the `Drop` body on the compiled backends (interp `dR7 7 end`, -O0/-O2 `7 end`). | — |
+| B-2026-10-04-1 | 2026-10-04 | codegen | medium | AN INNER ARM THAT HANDS THE LEAF OF A `Result[Option[R], E]` ENVELOPE BINDING TO A BY-VALUE FREE FUNCTION LEAKS R'S HEAP COMPILED, AND A LOCAL ALSO LOSES R'S `Drop` BODY -- `Ok(o) => match o { Some(i) => eat(i), None => 0 }` with `fn eat(r: R) -> i64 { r.id }`: by-value param `dR1 1 end` everywhere with 29 B lost; local interp `dR2 2 end`, -O0/-O2 `2 end` with 29 B lost. | — |
+| B-2026-10-04-2 | 2026-10-04 | interp+codegen | low | WHEN A NESTED `match` THAT ONLY READS THE LEAF IS NOT THE OUTER ARM'S TAIL, THE INTERPRETER RUNS R'S `Drop` BODY AT THE INNER ARM AND THE COMPILED BACKENDS AT THE PLACE'S DEATH -- `if let Ok(o) = a { let k = match o { Some(i) => i.id, None => 0 }; println(k) }` over a local `Result[Option[R], E]` prints `dR7 7 end` interpreted and `7 dR7 end` at -O0 and -O2, memory clean. | — |
+| B-2026-10-04-3 | 2026-10-04 | interp+codegen | low | A NAMED `Result[Option[R], E]` LOCAL PASSED BY VALUE RUNS R'S `Drop` BODY INSIDE THE CALL COMPILED, BEFORE THE CALLER'S STATEMENT FINISHES, WHERE THE INTERPRETER RUNS IT AFTER -- `let a: Result[Option[R], i64] = Ok(Some(mk(1))); println(e(a))` over `fn e(r: Result[Option[R], i64]) -> i64 { 1 }` prints `dR1 1` at -O0 and -O2 against the interpreter's `1 dR1`; the `R` and `Option[R]` spellings print `1 dR1` everywhere. Since B-2026-10-03-34's fix the GENERIC callee does the same, so `res2`, `g5` and `g6` moved from agreeing to this order. | — |
 
 ### Relocated
 
@@ -3633,6 +3635,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-51 | codegen | medium | A NESTED `Result[Option[R], E]` BOX, WHERE `R` RUNS A USER `Drop`, IS FREED WITHOUT R'S FIELDS WHENEVER NOTHING BINDS THE LEAF, AND A `let .. | c702060f9 |
 | B-2026-10-03-52 | codegen | high | MOVING THE `Option[R]` ENVELOPE OUT OF A `Result[Option[R], E]`, WHERE `R` RUNS A USER `Drop`, FREES R'S HEAP TWICE -- `fn f(x: Result[Option[R], i64… | 8e15013f3 |
 | B-2026-10-03-53 | interp+codegen | medium | A LOCAL `Result[Option[R], E]` MATCHED `Ok(o) => 1`, OR `if let Ok(o) = c { .. | 6f9a56daf |
+| B-2026-10-03-54 | codegen | medium | AN ARM THAT BINDS THE `Option[R]` ENVELOPE OF A `Result[Option[R], E]` AND MATCHES IT AGAIN WITH AN INNER ARM THAT ONLY READS THE LEAF LEAKS R'S HEAP… | 5587a5ac9 |
 
 </details>
 
