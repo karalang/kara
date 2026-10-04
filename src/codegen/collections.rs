@@ -7801,6 +7801,51 @@ impl<'ctx> super::Codegen<'ctx> {
             index: tidx,
         } = &object.kind
         {
+            // B-2026-09-30-88 — an `Array[T, N]` element (`a.0[0] = v` over
+            // `(Array[P, 1], i64)`). The typechecker records only `Vec` /
+            // `VecDeque` / slice elements in `temp_recv_elem_types`, so this
+            // fell to the "must be a variable" gate below while the read
+            // `a.0[0]` and the field store `a.0[0].n = v` both built. Bind a
+            // synth to the element's inline storage with the ARRAY slot type
+            // and its full `Array[T, N]` TypeExpr, from the chain resolver the
+            // read side uses, and recurse into the identifier Array store,
+            // which bounds-checks, releases a displaced `Vec`-typed element
+            // and coerces exactly as it does for a named array.
+            if let (Some(elem_ptr), Some(tuple_ty)) = (
+                self.field_chain_place_ptr(object),
+                self.place_chain_aggregate_llvm_type(tup),
+            ) {
+                let arr_ll_ty = tuple_ty
+                    .get_field_type_at_index(*tidx as u32)
+                    .filter(|t| t.is_array_type());
+                let arr_te = self
+                    .place_chain_tuple_tes(tup)
+                    .and_then(|tes| tes.get(*tidx as usize).cloned())
+                    .map(|te| self.subst_monomorph_type_params(&te))
+                    .filter(|te| super::helpers::array_inner_type_expr(te).is_some());
+                if let (Some(arr_ll_ty), Some(arr_te)) = (arr_ll_ty, arr_te) {
+                    let synth = format!("__tup_elem_{}", self.indexed_elem_counter);
+                    self.indexed_elem_counter += 1;
+                    self.variables.insert(
+                        synth.clone(),
+                        super::state::VarSlot {
+                            ptr: elem_ptr,
+                            ty: arr_ll_ty,
+                        },
+                    );
+                    self.register_var_from_type_expr(&synth, &arr_te);
+                    let synth_expr = Expr {
+                        kind: ExprKind::Identifier(synth.clone()),
+                        span: object.span,
+                    };
+                    let result =
+                        self.compile_index_store(&synth_expr, index, val, rhs_is_fresh, rhs_src);
+                    self.variables.remove(&synth);
+                    self.var_types.array_elem_type_exprs.remove(&synth);
+                    self.var_types.var_type_names.remove(&synth);
+                    return result;
+                }
+            }
             let key = (object.span.offset, object.span.length);
             if let Some(elem_te) = self.span_tables.temp_recv_elem_types.get(&key).cloned() {
                 // B-2026-08-10-5 — pick the CONTAINER shape from the tuple's

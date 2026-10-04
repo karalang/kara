@@ -16518,8 +16518,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // would be a backend split.
                     let clone_only_clearance = {
                         let mut root: &Expr = object;
+                        // B-2026-09-30-88: a tuple-element container
+                        // (`t.0[i] = ..`) reaches the same displaced drop.
                         while let ExprKind::FieldAccess { object: o, .. }
-                        | ExprKind::Index { object: o, .. } = &root.kind
+                        | ExprKind::Index { object: o, .. }
+                        | ExprKind::TupleIndex { object: o, .. } = &root.kind
                         {
                             root = o;
                         }
@@ -26333,6 +26336,82 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mapset.set_elem_types.remove(&synth);
             self.mapset.set_elem_type_names.remove(&synth);
             self.mapset.set_elem_type_exprs.remove(&synth);
+            return;
+        }
+        // B-2026-09-30-88 — a container held in a TUPLE element
+        // (`t.0[i] = <new>`). `compile_index_store` lowers that store since
+        // this row, and an `Array[Q, N]` element with a heap field then
+        // orphaned the displaced element's buffer (2 B at `-O0` for one store
+        // over `Q { s: String, k: i64 }`), where the named-array spelling is
+        // clean through the Identifier path below. Mirror the FieldAccess arm
+        // above: resolve the element's storage through the place-chain
+        // resolver the store uses, mint a synth registered from the element's
+        // own TypeExpr, and recurse. Named roots only, with the alias guard
+        // against that root; anything else declines, which is a leak.
+        //
+        // MEMORY ONLY: bodies stay off here (`run_bodies: false`). The
+        // interpreter runs no `Drop` body for an element displaced through a
+        // tuple-element container, `Vec` or `Array` alike, so running them on
+        // this side alone would split the backends; both skip the body until
+        // the interpreter's half lands (B-2026-10-04-34).
+        if let ExprKind::TupleIndex {
+            object: tup,
+            index: tidx,
+        } = &object.kind
+        {
+            let mut root: &Expr = tup;
+            while let ExprKind::FieldAccess { object: o, .. }
+            | ExprKind::TupleIndex { object: o, .. } = &root.kind
+            {
+                root = o;
+            }
+            let ExprKind::Identifier(root) = &root.kind else {
+                return;
+            };
+            if !rhs_index_deep_cloned
+                && !self.expr_cannot_carry_container_heap(rhs, root, clone_log_mark)
+            {
+                return;
+            }
+            let Some(elem_te) = self
+                .place_chain_tuple_tes(tup)
+                .and_then(|tes| tes.get(*tidx as usize).cloned())
+                .map(|te| self.subst_monomorph_type_params(&te))
+            else {
+                return;
+            };
+            let (Some(elem_ptr), Some(tuple_ty)) = (
+                self.field_chain_place_ptr(object),
+                self.place_chain_aggregate_llvm_type(tup),
+            ) else {
+                return;
+            };
+            let Some(elem_ll_ty) = tuple_ty.get_field_type_at_index(*tidx as u32) else {
+                return;
+            };
+            let synth = format!("__tup_elem_{}", self.indexed_elem_counter);
+            self.indexed_elem_counter += 1;
+            self.variables.insert(
+                synth.clone(),
+                super::state::VarSlot {
+                    ptr: elem_ptr,
+                    ty: elem_ll_ty,
+                },
+            );
+            self.register_var_from_type_expr(&synth, &elem_te);
+            let synth_expr = Expr {
+                kind: ExprKind::Identifier(synth.clone()),
+                span: object.span,
+            };
+            self.emit_displaced_index_elem_drop(
+                &synth_expr,
+                index,
+                rhs,
+                rhs_index_deep_cloned,
+                clone_log_mark,
+                false,
+            );
+            self.forget_displaced_synth(&synth);
             return;
         }
         // B-2026-09-16-3 — NESTED container (`d[i][j] = <new>`): the object is
