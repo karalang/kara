@@ -11437,6 +11437,19 @@ mod outliving_store {
                     || stores(value, name, roots)
             }
             StmtKind::Let { value, .. } => stores(value, name, roots),
+            // B-2026-10-03-49 — the `let ... else` spelling of
+            // `stores_via_destructure`: `let Some(w) = x else { .. };
+            // v.push(w)` stores `w`, and through it the param, in the
+            // statements that follow. Asked of the whole block, which is
+            // conservative-true in the direction this predicate already takes.
+            StmtKind::LetElse { pattern, value, .. } => {
+                stores(value, name, roots)
+                    || (is_bare(value, name)
+                        && pattern
+                            .binding_names()
+                            .iter()
+                            .any(|bn| bn != name && walk_block(b, bn, roots)))
+            }
             _ => false,
         }) || b
             .final_expr

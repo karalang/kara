@@ -72,9 +72,8 @@ fn main() {
 /// The first fix stood the callee's bodies walk down on the `match` arm path
 /// only, so `if let Ok(Some(w)) = x { v.push(w) }` still ran the body inside
 /// the callee and again when `v` dropped, and a read-only `if let` over the
-/// `Result` spelling lost its body. A `let ... else` push is asserted on AOT
-/// alone: the interpreter runs that body twice (B-2026-10-03-49).
-/// PREDICTS B-2026-10-03-49: once it closes, widen that cell to interp == AOT.
+/// `Result` spelling lost its body. The `let ... else` push cell is asserted
+/// on both backends since B-2026-10-03-49 (the interpreter ran its body twice).
 #[test]
 fn e2e_nested_envelope_param_block_forms_run_leaf_body_once() {
     let src = r#"struct R { id: i64, s: String }
@@ -126,6 +125,9 @@ fn main() {
     println("end");
 }
 "#;
+    let (le_out, le_errs, _, _) = karac::run_program_full_checked(le);
+    assert!(le_errs.is_empty(), "interp errored: {le_errs:?}");
+    assert_eq!(le_out.join(""), "1\n1\ndR5\nend\n", "interpreter let-else");
     assert_eq!(
         run_program(le).as_deref(),
         Some("1\n1\ndR5\nend\n"),
