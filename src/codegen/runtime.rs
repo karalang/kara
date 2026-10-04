@@ -10862,6 +10862,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 for n in crate::ast::param_rebinds_dropping_at_call_end(f) {
                     m.remove(&n);
                 }
+                // B-2026-09-27-84 — a whole rebind (`let h = x;`, chains
+                // included) of a param whose payload BODIES this frame runs
+                // (`callee_owned_payload_bodies_params`). The rebind carries
+                // the param's walk, and design rule 3 runs it at the end of
+                // the call, which is where `--interp` prints it; at `h`'s
+                // last use it printed ahead of the rest of the body.
+                let mut carriers: Vec<&str> = Vec::new();
+                for st in &block.stmts {
+                    if let crate::ast::StmtKind::Let { pattern, value, .. } = &st.kind {
+                        if let (crate::ast::PatternKind::Binding(x), ExprKind::Identifier(src)) =
+                            (&pattern.kind, &value.kind)
+                        {
+                            if self
+                                .payload_vars
+                                .callee_owned_payload_bodies_params
+                                .contains(src.as_str())
+                                || carriers.contains(&src.as_str())
+                            {
+                                carriers.push(x.as_str());
+                                m.remove(x.as_str());
+                            }
+                        }
+                    }
+                }
             }
         }
         m

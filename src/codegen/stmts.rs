@@ -9042,10 +9042,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                             // payload is deep-copied through
                                             // the array's clone fn, so the
                                             // interior is this binding's alone.
+                                            // B-2026-09-27-84 — and a whole
+                                            // REBIND of a binding whose own box
+                                            // action still frees the interior
+                                            // (`let h = x;` over a by-value
+                                            // `Option[Array[R, 2]]` param, or a
+                                            // local). The move disarms the
+                                            // source below, so without this the
+                                            // interior had no owner: the element
+                                            // heap leaked, 2 blocks per rebind.
                                             (self.call_builds_its_own_optres_box(value)
                                                 || self.map_handback_moves_value_out(value)
                                                 || self.vec_handback_moves_value_out(value)
-                                                || self.optres_value_clone_te(value).is_some())
+                                                || self.optres_value_clone_te(value).is_some()
+                                                || matches!(&value.kind, ExprKind::Identifier(src)
+                                                    if src != var_name
+                                                        && self.boxed_enum_drop_owns_interior(src)))
                                             .then_some(())
                                         })
                                         .and_then(|()| Self::seeded_variant_payload_te(te, variant))
@@ -10218,7 +10230,24 @@ impl<'ctx> super::Codegen<'ctx> {
                             // BODIES half below, which has to skip exactly the
                             // same fields the box-only twin skips.
                             let box_only_mask = box_only.and(caller_keeps.clone());
-                            if let (Some(f), Some(m)) = (box_only, caller_keeps) {
+                            // B-2026-09-27-84 — a whole rebind of a by-value
+                            // param whose boxed `Array` payload runs a user
+                            // `Drop` body. That class is CALLER-SEQUENCED
+                            // (`enum_boxed_array_payload_runs_user_drop`): the
+                            // param prologue registers nothing and the caller
+                            // frees the box and runs the bodies after the
+                            // call. Registering `h`'s memory here made the
+                            // callee a second owner of the caller's box, so
+                            // `fn g(e: EArr) { let h = e; }` freed it twice on
+                            // every compiled surface. The binding is a view,
+                            // which is what the bodies arm below already
+                            // decides through the same `expr_is_param_view`.
+                            let caller_sequenced_view = self.expr_is_param_view(value)
+                                && self.enum_boxed_array_payload_runs_user_drop(&name)
+                                && !self.let_is_reassigned_param_rebind(var_name, value);
+                            if caller_sequenced_view {
+                                // nothing to register: see above.
+                            } else if let (Some(f), Some(m)) = (box_only, caller_keeps) {
                                 self.payload_vars
                                     .enum_box_only_array_locals
                                     .insert(var_name.clone(), m);
@@ -11810,7 +11839,43 @@ impl<'ctx> super::Codegen<'ctx> {
                         // B-2026-09-27-50 — not the `let mut c = a;` this
                         // function reassigns: the caller stands down for it.
                         let optres_is_param_view = optres_is_param_view
-                            && !self.let_is_reassigned_param_rebind(var_name, value);
+                            && !self.let_is_reassigned_param_rebind(var_name, value)
+                            // B-2026-09-27-84 — nor a rebind of a param whose
+                            // payload BODIES this frame runs (B-2026-09-10-9:
+                            // its box boxes into one the callee frees, so the
+                            // caller stands down). The move retracts the
+                            // param's walk, and a view mark left `h` without
+                            // one: `fn go(x: Option[Array[R, 2]]) { let h = x; }`
+                            // ran neither body on any compiled surface.
+                            && !matches!(&value.kind, ExprKind::Identifier(n)
+                                if self
+                                    .payload_vars
+                                    .callee_owned_payload_bodies_params
+                                    .contains(n.as_str()));
+                        // The rebind CARRIES that walk, so it joins the set the
+                        // param is in: a chain (`let h2 = h;`) is then no view
+                        // either, and a `match h` treats the walk as the bodies'
+                        // owner exactly as `match x` does. A fresh binding under
+                        // a local name starts clean.
+                        let carries_param_walk = matches!(&value.kind, ExprKind::Identifier(n)
+                            if n != var_name
+                                && self
+                                    .payload_vars
+                                    .callee_owned_payload_bodies_params
+                                    .contains(n.as_str()));
+                        if carries_param_walk {
+                            self.payload_vars
+                                .callee_owned_payload_bodies_params
+                                .insert(var_name.clone());
+                        } else if !self
+                            .fn_ctx
+                            .current_fn_param_names
+                            .contains(var_name.as_str())
+                        {
+                            self.payload_vars
+                                .callee_owned_payload_bodies_params
+                                .remove(var_name.as_str());
+                        }
                         if optres_is_param_view {
                             self.payload_vars.param_view_locals.insert(var_name.clone());
                         }
