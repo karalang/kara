@@ -2163,12 +2163,21 @@ impl<'a> super::Interpreter<'a> {
             // B-2026-09-29-44 — nor is a BORROWED (`ref` / `mut ref`) param:
             // the caller owns the value outright, so an arm binding out of it
             // is a view and runs no body (`names_borrowed_param`).
+            // B-2026-10-04-25 — nor is a `for` element the loop BORROWS
+            // (`for item in items.iter()`): the collection outlives the loop and
+            // its own walk runs every element's body, so an arm binding out of
+            // the element is a view. Without this an arm that passed the
+            // binding on (`Many(xs) => count(xs)`) failed the read-through
+            // test, fell through to here, and ran the payload's bodies at the
+            // arm's end on every iteration, where codegen runs them once with
+            // the collection.
             ExprKind::Identifier(n) => {
                 !(self
                     .owned_param_names_stack
                     .last()
                     .is_some_and(|params| params.contains(n.as_str()))
-                    || self.names_borrowed_param(n))
+                    || self.names_borrowed_param(n)
+                    || self.names_loop_borrowed_elem(n))
             }
             // B-2026-09-28-13 — except an identity hand-back of an owned param
             // (`id(a)`), which is that param's envelope and consumes nothing,
