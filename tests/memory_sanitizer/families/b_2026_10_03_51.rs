@@ -39,9 +39,8 @@ fn main() {
 /// the leaf drop, and a `let ... else` that moves the leaf into a `Vec`
 /// freed it twice.
 ///
-/// `dR1` and `dR3` are missing on every surface: an envelope binding `o` of a
-/// local runs no `Drop` body for its leaf. PREDICTS B-2026-10-03-53, whose fix
-/// adds them.
+/// `dR1` and `dR3` were missing on every surface until B-2026-10-03-53: an
+/// envelope binding `o` of a local ran no `Drop` body for its leaf.
 #[test]
 fn asan_nested_envelope_local_leaf_owned_once() {
     assert_clean_asan_run(
@@ -64,7 +63,7 @@ fn main() {
     println("end");
 }
 "#,
-        &["1", "2", "dR2", "3", "1", "dR4", "end"],
+        &["dR1", "1", "2", "dR2", "3", "dR3", "1", "dR4", "end"],
         "nested_envelope_local_leaf",
     );
 }

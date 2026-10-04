@@ -21097,6 +21097,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// and reaches none of them. Read from `enum_inst_var_types`, the same
     /// record the box registration and the `let`-site bodies walker consult, so
     /// this cannot disagree with them about which monomorph the place is.
+    /// B-2026-10-03-53 — does `name`'s `Option`/`Result` carry another
+    /// `Option`/`Result` as a payload? The envelope sibling of
+    /// [`Self::optres_scrutinee_payload_is_tuple`].
+    fn optres_scrutinee_payload_is_envelope(&self, name: &str) -> bool {
+        let Some(inst) = self.type_decls.enum_inst_var_types.get(name) else {
+            return false;
+        };
+        let TypeKind::Path(p) = &inst.kind else {
+            return false;
+        };
+        let is_optres = |p: &crate::ast::PathExpr| {
+            matches!(
+                p.segments.last().map(String::as_str),
+                Some("Option" | "Result")
+            )
+        };
+        is_optres(p)
+            && p.generic_args.as_ref().is_some_and(|args| {
+                args.iter().any(|g| {
+                    matches!(g, GenericArg::Type(te)
+                        if matches!(&te.kind, TypeKind::Path(q) if is_optres(q)))
+                })
+            })
+    }
+
     fn optres_scrutinee_payload_is_tuple(&self, name: &str) -> bool {
         let Some(inst) = self.type_decls.enum_inst_var_types.get(name) else {
             return false;
@@ -21367,7 +21392,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // binding, rebinds it, or otherwise materializes it has given the
         // bodies to whoever took them, and leaving the place armed ran them
         // twice (measured `dR1 dR2 dR1 dR2` on the `return t` cell).
-        if !takes_payload && self.optres_scrutinee_payload_is_tuple(&name) {
+        // B-2026-10-03-53 — the same unfunded premise for a whole-value
+        // binding of a nested ENVELOPE payload (`Ok(o)` over
+        // `Result[Option[R], E]`, `Some(o)` over `Option[Option[R]]`): an
+        // `Option`/`Result`-typed binding registers no body of its own, so an
+        // arm that only reads it (or never mentions it) handed the walk to
+        // nobody and `R`'s body ran on no surface, memory balanced.
+        if !takes_payload
+            && (self.optres_scrutinee_payload_is_tuple(&name)
+                || self.optres_scrutinee_payload_is_envelope(&name))
+        {
             return;
         }
         // B-2026-09-25-38 — a whole-value binding of a struct payload the bind

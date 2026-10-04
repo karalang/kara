@@ -1047,8 +1047,20 @@ impl<'a> super::Interpreter<'a> {
             crate::interpreter::value::EnumData::Tuple(vals)
                 if matches!(vals.first(), Some(Value::Tuple(_)))
         );
+        // B-2026-10-03-53 — a nested ENVELOPE payload (`Ok(o)` over
+        // `Result[Option[R], E]`) is the same unfunded premise: an
+        // `Option`/`Result`-typed binding registers no slot of its own
+        // (`pattern_binding_owes_drop_body` excludes them), so a read-only arm
+        // handed the walk to nobody. Same clause in codegen's
+        // `suppress_optres_payload_bodies_for_match_scoped`.
+        let payload_is_envelope = matches!(
+            data,
+            crate::interpreter::value::EnumData::Tuple(vals)
+                if matches!(vals.first(), Some(Value::EnumVariant { enum_name: inner, .. })
+                    if inner == "Option" || inner == "Result")
+        );
         if matches!(enum_name.as_str(), "Option" | "Result")
-            && payload_is_tuple
+            && (payload_is_tuple || payload_is_envelope)
             && arms.iter().all(|arm| {
                 !crate::binding_use::optres_arm_takes_whole_payload(
                     &arm.pattern,
@@ -1680,8 +1692,16 @@ impl<'a> super::Interpreter<'a> {
             crate::interpreter::value::EnumData::Tuple(vals)
                 if matches!(vals.first(), Some(Value::Tuple(_)))
         );
+        // B-2026-10-03-53 — the nested-envelope payload, as in the `match`
+        // form above.
+        let payload_is_envelope = matches!(
+            data,
+            crate::interpreter::value::EnumData::Tuple(vals)
+                if matches!(vals.first(), Some(Value::EnumVariant { enum_name: inner, .. })
+                    if inner == "Option" || inner == "Result")
+        );
         if matches!(enum_name.as_str(), "Option" | "Result")
-            && payload_is_tuple
+            && (payload_is_tuple || payload_is_envelope)
             && scope
                 .is_some_and(|b| !crate::binding_use::optres_block_takes_whole_payload(pattern, b))
         {
