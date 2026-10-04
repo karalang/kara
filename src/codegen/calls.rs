@@ -1650,7 +1650,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // depth rather than a fourth hand-written base shape. Falls through to
         // the original diagnostic when the chain cannot be resolved, so a shape
         // that genuinely has no lowering still refuses rather than misbuilding.
-        if matches!(inner_object.kind, ExprKind::Index { .. }) {
+        // B-2026-10-04-35 — a container held in a TUPLE element
+        // (`t.0[i][j]`) resolves through the same normalisation; nothing
+        // below this point could name it.
+        if matches!(
+            inner_object.kind,
+            ExprKind::Index { .. } | ExprKind::TupleIndex { .. }
+        ) {
             let mut scratch = Vec::new();
             let resolved = self.container_place_name(inner_object, &mut scratch);
             let out = match resolved {
@@ -2399,6 +2405,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.bind_place_synth(elem_ptr, elem_ll_ty, &elem_te, scratch),
                 ))
             }
+            // B-2026-10-04-35 — a container held in a TUPLE element
+            // (`t.0[i][j]`): GEP to the element's inline storage and bind it
+            // with the element's own TypeExpr from the chain resolver the
+            // tuple-element read uses. Its base is resolved by that resolver
+            // too, so it is a place chain rather than another link here.
+            ExprKind::TupleIndex {
+                object: tup,
+                index: tidx,
+            } => {
+                let Some(te) = self
+                    .place_chain_tuple_tes(tup)
+                    .and_then(|tes| tes.get(*tidx as usize).cloned())
+                    .map(|te| self.subst_monomorph_type_params(&te))
+                else {
+                    return Ok(None);
+                };
+                let (Some(ptr), Some(tuple_ty)) = (
+                    self.field_chain_place_ptr(place),
+                    self.place_chain_aggregate_llvm_type(tup),
+                ) else {
+                    return Ok(None);
+                };
+                let Some(ll_ty) = tuple_ty.get_field_type_at_index(*tidx as u32) else {
+                    return Ok(None);
+                };
+                Ok(Some(self.bind_place_synth(ptr, ll_ty, &te, scratch)))
+            }
             _ => Ok(None),
         }
     }
@@ -2427,6 +2460,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn release_place_synths(&mut self, scratch: Vec<String>) {
         for synth in scratch.into_iter().rev() {
             self.variables.remove(&synth);
+            self.var_types.array_elem_type_exprs.remove(&synth);
             self.var_types.vec_elem_types.remove(&synth);
             self.var_types.slice_elem_types.remove(&synth);
             self.var_types.var_elem_type_exprs.remove(&synth);
