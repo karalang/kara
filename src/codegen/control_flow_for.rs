@@ -5152,21 +5152,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// failed the build with "cannot resolve field" while `--interp` ran it,
     /// with or without an annotation on the array.
     ///
-    /// Pure resolution: it records the NAME only and registers no storage,
-    /// drop or borrow, so it cannot change what the loop owns. A bare `for`
-    /// borrows the collection (the typechecker refuses a move out of it), and
-    /// that stays exactly as it was. Limited to a non-shared user struct,
-    /// the one element shape whose field reads this was failing.
+    /// It registers no storage or drop, so it cannot make the binding an
+    /// owner: a bare `for` borrows the collection. B-2026-10-04-77 widened it
+    /// from a name to the `Vec` loop's registration (a loop-borrow mark, and
+    /// the container tables for a `String` / `Vec` element), because a move
+    /// out of the binding is an implicit COPY (W0299 `borrow_projection_copy`)
+    /// and without the mark it was a second owner of the array's buffers.
     fn name_for_array_loop_binding(&mut self, pattern: &Pattern, source_var: Option<&str>) {
         let (Some(src), PatternKind::Binding(name)) = (source_var, &pattern.kind) else {
             return;
         };
-        let Some(TypeKind::Path(p)) = self
-            .var_types
-            .array_elem_type_exprs
-            .get(src)
-            .map(|te| te.kind.clone())
-        else {
+        let Some(elem_te) = self.var_types.array_elem_type_exprs.get(src).cloned() else {
+            return;
+        };
+        let TypeKind::Path(p) = &elem_te.kind else {
             return;
         };
         let Some(seg) = p.segments.last() else {
@@ -5176,6 +5175,21 @@ impl<'ctx> super::Codegen<'ctx> {
             && !self.type_decls.shared_types.contains_key(seg.as_str())
         {
             self.record_var_type_name(name.clone(), seg.clone());
+            // B-2026-10-04-77 — and a loop BORROW, as the `Vec` loop's binding
+            // is (`register_for_loop_bindings`): the binding is a bit-copy of
+            // the array's slot, so `out.push(p)` / `let q = p` must deep-copy a
+            // heap-owning element instead of handing the array's buffers to a
+            // second owner (a double free at -O0 and -O2 alike).
+            self.mark_for_loop_borrow_if_heap(name, &elem_te);
+            return;
+        }
+        // B-2026-10-04-77 — a `String` or `Vec` element: register the binding
+        // as the `Vec` loop does, so a method on it (`x.len()`,
+        // `x.starts_with(..)`) finds its dispatcher instead of failing the
+        // build, and mark it a loop borrow for the same reason as above.
+        if matches!(seg.as_str(), "String" | "Vec") {
+            self.register_var_from_type_expr(name, &elem_te);
+            self.mark_for_loop_borrow_if_heap(name, &elem_te);
         }
     }
 
