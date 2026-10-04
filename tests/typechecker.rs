@@ -50271,6 +50271,17 @@ fn borrow_projection_copy_reaches_a_for_element_over_a_borrowed_collection() {
     );
 }
 
+/// B-2026-10-04-38: the expectation that now reaches a nested tuple literal
+/// still reports a genuine mismatch inside it -- a three-element array
+/// literal against an `Array[i64, 2]` slot two levels down.
+#[test]
+fn nested_tuple_annotation_still_reports_a_wrong_array_length() {
+    let errs = typecheck_errors(
+        "fn main() { let d: ((Array[i64, 2], i64), i64) = (([1, 2, 3], 3), 4); println(f\"{d.1}\"); }",
+    );
+    assert!(!errs.is_empty());
+}
+
 /// B-2026-10-02-42: the `+` sign flag type-checks on an integer and a float
 /// hole and is rejected on a string, as Python rejects it (Rust ignores it,
 /// which would make `{s:+}` a spec that silently does nothing).

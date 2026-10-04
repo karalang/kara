@@ -881,8 +881,20 @@ impl<'a> super::TypeChecker<'a> {
                 // PrefixCollectionLiteral spelling `Array[f"a", f"b"]` already
                 // synthesises `Type::Array` and is untouched — it was the only
                 // way to write this before, and it stays accepted.
-                let elem_needs_expected = |e: &Expr, slot: &Type| -> bool {
-                    elem_is_inferred_ctor(e)
+                //
+                // B-2026-10-04-38 — and a NESTED tuple literal whose own
+                // elements need their slot. `(([1, 2], 3), 4)` against
+                // `((Array[i64, 2], i64), i64)` synthesised the inner tuple as
+                // `(Vec[i64], i64)` because only the OUTER elements were asked;
+                // checking the inner tuple against its slot re-enters this arm
+                // one level down, so the question recurses to any depth while
+                // staying gated on the same two leaf shapes.
+                fn elem_needs_expected(
+                    e: &Expr,
+                    slot: &Type,
+                    is_ctor: &dyn Fn(&Expr) -> bool,
+                ) -> bool {
+                    is_ctor(e)
                         || matches!(
                             (&e.kind, slot),
                             (
@@ -890,7 +902,18 @@ impl<'a> super::TypeChecker<'a> {
                                 Type::Array { .. }
                             )
                         )
-                };
+                        || matches!(
+                            (&e.kind, slot),
+                            (ExprKind::Tuple(inner), Type::Tuple(inner_slots))
+                                if inner.len() == inner_slots.len()
+                                    && inner
+                                        .iter()
+                                        .zip(inner_slots.iter())
+                                        .any(|(ie, is)| elem_needs_expected(ie, is, is_ctor))
+                        )
+                }
+                let elem_needs_expected =
+                    |e: &Expr, slot: &Type| elem_needs_expected(e, slot, &elem_is_inferred_ctor);
                 if elems
                     .iter()
                     .zip(exp_elems.iter())
