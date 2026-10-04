@@ -1582,6 +1582,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         );
                     }
                 }
+                self.suppress_value_enum_nested_shared_move_out(scrut, &arm.pattern);
                 self.register_freshtemp_shared_genum_array_alias(scrutinee, scrut, &arm.pattern);
             }
             if let Some((slot, (_, walker))) = freshtemp_optres_arm {
@@ -3226,7 +3227,12 @@ impl<'ctx> super::Codegen<'ctx> {
         scrut: BasicValueEnum<'ctx>,
         pattern: &Pattern,
     ) {
-        if self.pattern_state.pattern_binding_is_borrow || !scrut.is_pointer_value() {
+        if self.pattern_state.pattern_binding_is_borrow {
+            return;
+        }
+        // B-2026-10-03-38 — a value outer over a shared inner (`V.Z(M.My(x))`).
+        self.suppress_value_enum_nested_shared_move_out(scrut, pattern);
+        if !scrut.is_pointer_value() {
             return;
         }
         let Some(en) = self.variant_pattern_enum_name(pattern) else {
@@ -18008,6 +18014,115 @@ impl<'ctx> super::Codegen<'ctx> {
             ) {
                 let _ = self.builder.build_store(word_ptr, zero);
             }
+        }
+    }
+
+    /// B-2026-10-03-38 — the VALUE-outer twin of the nested recursion in
+    /// [`Self::suppress_shared_enum_payload_move_out`]. A value enum's payload
+    /// field that holds a `shared enum` handle, matched by a nested variant
+    /// pattern (`V.Z(M.My(x))`), hands the inner box's payload to the leaf
+    /// binding exactly as a top-level `M.My(x)` would. The value-enum
+    /// suppressors never reach into that box, so `x` and the box's release
+    /// both freed the `Vec`. The handle itself stays with `V`.
+    pub(super) fn suppress_value_enum_nested_shared_move_out(
+        &mut self,
+        scrut: BasicValueEnum<'ctx>,
+        pattern: &Pattern,
+    ) {
+        if self.pattern_state.pattern_binding_is_borrow {
+            return;
+        }
+        let BasicValueEnum::StructValue(sv) = scrut else {
+            return;
+        };
+        let Some(enum_name) = self.variant_pattern_enum_name(pattern) else {
+            return;
+        };
+        let layout = match self.type_decls.enum_layouts.get(&enum_name) {
+            Some(l) if !l.is_shared => l.clone(),
+            _ => return,
+        };
+        let variant_name = match &pattern.kind {
+            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                match path.last() {
+                    Some(n) => n.clone(),
+                    None => return,
+                }
+            }
+            _ => return,
+        };
+        let (Some(drop_kinds), Some(offsets)) = (
+            layout.field_drop_kinds.get(&variant_name),
+            layout.field_word_offsets.get(&variant_name),
+        ) else {
+            return;
+        };
+        let subs_by_pos: Vec<Option<&Pattern>> = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns.iter().map(Some).collect(),
+            PatternKind::Struct { fields, .. } => self
+                .enum_variant_struct_field_names(&enum_name, &variant_name)
+                .unwrap_or_default()
+                .iter()
+                .map(|n| {
+                    fields
+                        .iter()
+                        .find(|f| &f.name == n)
+                        .and_then(|f| f.pattern.as_ref())
+                })
+                .collect(),
+            _ => return,
+        };
+        for (pos, sub) in subs_by_pos.iter().enumerate() {
+            let Some(sub) = sub else {
+                continue;
+            };
+            if !matches!(
+                sub.kind,
+                PatternKind::TupleVariant { .. } | PatternKind::Struct { .. }
+            ) || !pattern_consumes_field(sub)
+            {
+                continue;
+            }
+            // Only an INLINE handle word: a recursive value enum boxes its
+            // payload, and that word is the box, not the handle.
+            if !matches!(
+                drop_kinds.get(pos),
+                Some(super::state::EnumDropKind::SharedRc)
+            ) {
+                continue;
+            }
+            let Some(inner_en) = self.variant_pattern_enum_name(sub) else {
+                continue;
+            };
+            if !self
+                .type_decls
+                .shared_types
+                .get(&inner_en)
+                .is_some_and(|i| i.is_enum)
+            {
+                continue;
+            }
+            let Some(&(start_word, _)) = offsets.get(pos) else {
+                continue;
+            };
+            let Ok(handle) =
+                self.builder
+                    .build_extract_value(sv, (start_word + 1) as u32, "match.v.nested.h")
+            else {
+                continue;
+            };
+            if !handle.is_int_value() {
+                continue;
+            }
+            let inner_box = self
+                .builder
+                .build_int_to_ptr(
+                    handle.into_int_value(),
+                    self.context.ptr_type(AddressSpace::default()),
+                    "match.v.nested.box",
+                )
+                .unwrap();
+            self.suppress_shared_enum_payload_move_out(inner_box, &inner_en, sub);
         }
     }
 
