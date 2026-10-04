@@ -418,34 +418,43 @@ impl<'ctx> super::Codegen<'ctx> {
             // it while the interpreter accepted it (B-2026-07-20-4). `Vec`/
             // `VecDeque` elements only; any gap leaves `inner` as-is so the
             // existing diagnostic fires.
+            //
+            // B-2026-10-04-36 — an `Array[T, N]` tuple element
+            // (`t.0[i].len()`) has no `temp_recv_elem_types` entry, which the
+            // typechecker records for `Vec` / `VecDeque` / slice elements
+            // only, so take its full `Array[T, N]` TypeExpr from the
+            // place-chain resolver instead; the Identifier dispatch below
+            // already serves a named Array container.
             let key = (inner.span.offset, inner.span.length);
-            let hoisted = self
-                .span_tables
-                .temp_recv_elem_types
-                .get(&key)
-                .cloned()
-                .and_then(|elem_te| {
-                    let vec_te = super::Codegen::vec_type_expr_from_element(&elem_te);
-                    let elem_ptr = self.field_chain_place_ptr(inner)?;
-                    let tuple_ty = self.place_chain_aggregate_llvm_type(tup)?;
-                    let elem_ll_ty = tuple_ty.get_field_type_at_index(*tidx as u32)?;
-                    let synth = format!("__tup_container_{}", self.indexed_elem_counter);
-                    self.indexed_elem_counter += 1;
-                    self.variables.insert(
-                        synth.clone(),
-                        VarSlot {
-                            ptr: elem_ptr,
-                            ty: elem_ll_ty,
-                        },
-                    );
-                    self.register_var_from_type_expr(&synth, &vec_te);
-                    let expr = Expr {
-                        kind: ExprKind::Identifier(synth.clone()),
-                        span: inner.span,
-                    };
-                    hoisted_container = Some(synth);
-                    Some(expr)
-                });
+            let container_te = match self.span_tables.temp_recv_elem_types.get(&key).cloned() {
+                Some(elem_te) => Some(super::Codegen::vec_type_expr_from_element(&elem_te)),
+                None => self
+                    .place_chain_tuple_tes(tup)
+                    .and_then(|tes| tes.get(*tidx as usize).cloned())
+                    .map(|te| self.subst_monomorph_type_params(&te))
+                    .filter(|te| super::helpers::array_inner_type_expr(te).is_some()),
+            };
+            let hoisted = container_te.and_then(|vec_te| {
+                let elem_ptr = self.field_chain_place_ptr(inner)?;
+                let tuple_ty = self.place_chain_aggregate_llvm_type(tup)?;
+                let elem_ll_ty = tuple_ty.get_field_type_at_index(*tidx as u32)?;
+                let synth = format!("__tup_container_{}", self.indexed_elem_counter);
+                self.indexed_elem_counter += 1;
+                self.variables.insert(
+                    synth.clone(),
+                    VarSlot {
+                        ptr: elem_ptr,
+                        ty: elem_ll_ty,
+                    },
+                );
+                self.register_var_from_type_expr(&synth, &vec_te);
+                let expr = Expr {
+                    kind: ExprKind::Identifier(synth.clone()),
+                    span: inner.span,
+                };
+                hoisted_container = Some(synth);
+                Some(expr)
+            });
             hoisted
         } else if let Some(vec_te) = self.map_get_unwrap_vec_value_te(inner) {
             // B-2026-07-15-27: hoist a `<map>.get(k).unwrap()` Vec-value BORROW
@@ -774,6 +783,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (same registry set as the element synth above), if one was minted.
         if let Some(c) = hoisted_container {
             self.variables.remove(&c);
+            self.var_types.array_elem_type_exprs.remove(&c);
             self.var_types.vec_elem_types.remove(&c);
             self.var_types.slice_elem_types.remove(&c);
             self.var_types.var_elem_type_exprs.remove(&c);
