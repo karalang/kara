@@ -5052,10 +5052,12 @@ impl<'a> super::TypeChecker<'a> {
         true
     }
 
-    /// [`Self::deny_for_element_drop_copy`] for each element of a tuple or
-    /// collection literal: `(g, 1)` and `vec![g]` copy a `for` element into
-    /// the new aggregate exactly as `w.push(g)` does. Runs after the literal
-    /// is typed, so each element's type is already recorded.
+    /// [`Self::warn_borrow_projection_copy`] (and with it
+    /// [`Self::deny_for_element_drop_copy`]) for each element of a tuple or
+    /// collection literal: `(g, 1)` and `vec![g]` copy a `for` element, or a
+    /// field read through a borrow, into the new aggregate exactly as
+    /// `w.push(g)` does. Runs after the literal is typed, so each element's
+    /// type is already recorded.
     pub(super) fn deny_for_element_drop_copy_in_literal(&mut self, expr: &Expr) {
         let owned_args: Vec<&Expr>;
         let elems: Vec<&Expr> = match &expr.kind {
@@ -5079,7 +5081,23 @@ impl<'a> super::TypeChecker<'a> {
                 continue;
             }
             if let Some(ty) = self.expr_types.get(&SpanKey::from_span(&e.span)).cloned() {
-                self.deny_for_element_drop_copy(e, &ty);
+                // B-2026-10-04-22 — the WARNING half too, not only the `Drop`
+                // error: `stack.push((x, d))` copies a bare `for` element into
+                // the tuple exactly as `stack.push(x)` does, and only the bare
+                // push warned. `warn_borrow_projection_copy` runs the deny
+                // check first, so a `Drop` element still gets the error alone.
+                // A literal is checked more than once (against its
+                // expectation, then as a value), hence the span dedupe.
+                let warned = self.warnings.iter().chain(self.errors.iter()).any(|w| {
+                    w.span == e.span
+                        && matches!(
+                            w.lint_name.as_deref(),
+                            Some("borrow_projection_copy" | "for_element_drop_copy")
+                        )
+                });
+                if !warned {
+                    self.warn_borrow_projection_copy(e, &ty);
+                }
             }
         }
     }

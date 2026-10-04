@@ -50271,6 +50271,91 @@ fn borrow_projection_copy_reaches_a_for_element_over_a_borrowed_collection() {
     );
 }
 
+/// B-2026-10-04-22 — a bare `for` element, or a field read through a borrow,
+/// placed inside a tuple, array, collection or variant literal is copied into
+/// the new value exactly as a bare `w.push(g)` copies it, and the lint used to
+/// stay silent there: `stack.push((x, d))` warned nothing beside a warning on
+/// `stack.push(x)`. Only the `Drop` error had reached literals. Each site
+/// warns once, although a literal is checked more than once, and a `Drop`
+/// element still gets the error alone.
+#[test]
+fn borrow_projection_copy_reaches_a_for_element_inside_a_literal() {
+    let lints = |body: &str| -> (Vec<String>, usize) {
+        let src = format!(
+            "struct D {{ id: i64, v: Vec[i64] }}\n\
+             struct W {{ d: D }}\n\
+             struct K {{ id: i64 }}\n\
+             impl Drop for K {{ fn drop(mut ref self) {{ println(self.id); }} }}\n\
+             fn main() {{ {body} }}"
+        );
+        let parsed = parse(&src);
+        let resolved = resolve(&parsed.program);
+        let r = typecheck(&parsed.program, &resolved);
+        let warned = r
+            .warnings
+            .iter()
+            .filter(|w| w.lint_name.as_deref() == Some("borrow_projection_copy"))
+            .map(|w| w.message.clone())
+            .collect();
+        let denied = r
+            .errors
+            .iter()
+            .filter(|e| e.lint_name.as_deref() == Some("for_element_drop_copy"))
+            .count();
+        (warned, denied)
+    };
+
+    for (label, body) in [
+        (
+            "tuple push",
+            "let v = vec![D { id: 1, v: Vec.new() }]; let mut w: Vec[(D, i64)] = Vec.new(); for g in v { w.push((g, 1)); }",
+        ),
+        (
+            "tuple let",
+            "let v = vec![D { id: 1, v: Vec.new() }]; for g in v { let t = (g, 1); println(t.1); }",
+        ),
+        (
+            "vec literal",
+            "let v = vec![D { id: 1, v: Vec.new() }]; for g in v { let t = vec![g]; println(t.len()); }",
+        ),
+        (
+            "variant",
+            "let v = vec![D { id: 1, v: Vec.new() }]; for g in v { let t = Some(g); println(t.is_some()); }",
+        ),
+        (
+            "field in tuple",
+            "let v = vec![W { d: D { id: 1, v: Vec.new() } }]; for x in v { let t = (x.d, 2); println(t.1); }",
+        ),
+    ] {
+        let (got, denied) = lints(body);
+        assert_eq!(got.len(), 1, "{label}: expected one warning; got: {got:?}");
+        assert_eq!(denied, 0, "{label}: no Drop body, so no error");
+    }
+
+    for (label, body) in [
+        (
+            "copy element",
+            "let v = vec![1, 2]; let mut w: Vec[(i64, i64)] = Vec.new(); for x in v { w.push((x, 1)); }",
+        ),
+        (
+            "into_iter",
+            "let v = vec![D { id: 1, v: Vec.new() }]; let mut w: Vec[(D, i64)] = Vec.new(); for g in v.into_iter() { w.push((g, 1)); }",
+        ),
+    ] {
+        let (got, _) = lints(body);
+        assert!(got.is_empty(), "{label}: expected no warning; got: {got:?}");
+    }
+
+    let (got, denied) = lints(
+        "let v = vec![K { id: 1 }]; let mut w: Vec[(K, i64)] = Vec.new(); for g in v { w.push((g, 1)); }",
+    );
+    assert_eq!(
+        (got.len(), denied),
+        (0, 1),
+        "a Drop element gets the error alone; got warnings {got:?}"
+    );
+}
+
 /// B-2026-09-27-69 follow-up, the project owner's decision: moving an element
 /// of a bare `for` over a borrowed collection, or a field of one, is an ERROR
 /// when its type runs a user `Drop` body, since the move is an implicit copy
