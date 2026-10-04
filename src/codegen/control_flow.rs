@@ -604,12 +604,11 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 // B-2026-09-10-14 — the `if let` leg's scope verdict, block form.
                 let takes =
-                    crate::binding_use::optres_block_takes_whole_payload(pattern, then_block)
-                        && !self.optres_unowned_payload_binding_only_borrowed(
-                            value,
-                            pattern,
-                            &|n| crate::consume_class::binding_only_borrowed_block(n, then_block),
-                        );
+                    crate::binding_use::optres_block_takes_whole_payload_past_reading_match(
+                        pattern, then_block,
+                    ) && !self.optres_unowned_payload_binding_only_borrowed(value, pattern, &|n| {
+                        crate::consume_class::binding_only_borrowed_block(n, then_block)
+                    });
                 self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
                 // B-2026-10-03-5 / B-2026-10-03-28 — see the `match` arm twin.
                 self.disarm_callee_owned_bodies_for_nested_leaf_move_block(
@@ -1583,8 +1582,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // retraction loses the body and how it was measured.
         if optres_bindings_owned {
             // B-2026-09-10-14 — the `while let` leg's scope verdict.
-            let takes = crate::binding_use::optres_block_takes_whole_payload(pattern, body)
-                && !self.optres_unowned_payload_binding_only_borrowed(value, pattern, &|n| {
+            let takes =
+                crate::binding_use::optres_block_takes_whole_payload_past_reading_match(
+                    pattern, body,
+                ) && !self.optres_unowned_payload_binding_only_borrowed(value, pattern, &|n| {
                     crate::consume_class::binding_only_borrowed_block(n, body)
                 });
             self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
@@ -3101,10 +3102,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .filter(|_| self.scrutinee_is_owned_param_binding(value));
         if optres_bindings_owned {
             let takes = param_rest.is_none_or(|rest| {
-                crate::binding_use::optres_block_takes_whole_payload(pattern, rest)
-                    && !self.optres_unowned_payload_binding_only_borrowed(value, pattern, &|n| {
-                        crate::consume_class::binding_only_borrowed_block(n, rest)
-                    })
+                crate::binding_use::optres_block_takes_whole_payload_past_reading_match(
+                    pattern, rest,
+                ) && !self.optres_unowned_payload_binding_only_borrowed(value, pattern, &|n| {
+                    crate::consume_class::binding_only_borrowed_block(n, rest)
+                })
             });
             self.suppress_optres_payload_bodies_for_match_scoped(value, pattern, takes);
             if let Some(rest) = param_rest {

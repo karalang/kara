@@ -1320,20 +1320,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         &arm.pattern,
                         arms,
                     ) {
-                        let takes = crate::binding_use::optres_arm_takes_whole_payload(
-                            &arm.pattern,
-                            &arm.body,
-                            arm.guard.as_ref(),
-                        ) && !self.optres_unowned_payload_binding_only_borrowed(
-                            scrutinee,
-                            &arm.pattern,
-                            &|n| {
-                                crate::consume_class::binding_only_borrowed(n, &arm.body)
-                                    && arm.guard.as_ref().is_none_or(|g| {
-                                        crate::consume_class::binding_only_borrowed(n, g)
-                                    })
-                            },
-                        );
+                        let takes =
+                            crate::binding_use::optres_arm_takes_whole_payload_past_reading_match(
+                                &arm.pattern,
+                                &arm.body,
+                                arm.guard.as_ref(),
+                            ) && !self.optres_unowned_payload_binding_only_borrowed(
+                                scrutinee,
+                                &arm.pattern,
+                                &|n| {
+                                    crate::consume_class::binding_only_borrowed(n, &arm.body)
+                                        && arm.guard.as_ref().is_none_or(|g| {
+                                            crate::consume_class::binding_only_borrowed(n, g)
+                                        })
+                                },
+                            );
                         self.suppress_optres_payload_bodies_for_match_scoped(
                             scrutinee,
                             &arm.pattern,

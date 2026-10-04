@@ -69,6 +69,69 @@ pub(crate) fn optres_arm_takes_whole_payload(
     })
 }
 
+/// B-2026-10-03-54 — codegen's [`optres_arm_takes_whole_payload`]: a binding
+/// that is only the scrutinee of a nested `match` whose arms READ what they
+/// bind is not a take. The two backends place that leaf's body differently and
+/// agree on the output: the interpreter's inner arm registers the leaf binding
+/// and runs the body there, so it keeps the shared predicate; codegen's inner
+/// arm registers nothing for a leaf bound out of an arm binding, so the outer
+/// place has to keep its walk.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn optres_arm_takes_whole_payload_past_reading_match(
+    pattern: &crate::ast::Pattern,
+    body: &Expr,
+    guard: Option<&Expr>,
+) -> bool {
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return true;
+    };
+    patterns.iter().any(|sub| match &sub.kind {
+        crate::ast::PatternKind::Wildcard => false,
+        crate::ast::PatternKind::Binding(n) => {
+            !binding_only_read_through_or_reading_match(n, body)
+                || !guard.is_none_or(|g| binding_only_read_through(n, g))
+        }
+        _ => true,
+    })
+}
+
+/// `Block` sibling of [`optres_arm_takes_whole_payload_past_reading_match`].
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn optres_block_takes_whole_payload_past_reading_match(
+    pattern: &crate::ast::Pattern,
+    block: &Block,
+) -> bool {
+    let crate::ast::PatternKind::TupleVariant { patterns, .. } = &pattern.kind else {
+        return true;
+    };
+    patterns.iter().any(|sub| match &sub.kind {
+        crate::ast::PatternKind::Wildcard => false,
+        crate::ast::PatternKind::Binding(n) => {
+            !binding_only_read_through_or_reading_match_block(n, block)
+        }
+        _ => true,
+    })
+}
+
+/// B-2026-10-03-54 — [`binding_only_read_through`], also counting `name` as
+/// read where it is the scrutinee of a nested `match` whose arms only read
+/// what they bind (`Ok(o) => match o { Some(i) => i.id, None => 0 }`): such a
+/// match hands nothing on, so the outer place keeps the bodies.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+fn binding_only_read_through_or_reading_match(name: &str, e: &Expr) -> bool {
+    let mut t = Tally::default();
+    walk_expr(Target::Bare(name), e, &mut t);
+    !t.captured && t.mentions == t.read_through + (t.match_scrutinee - t.match_scrutinee_taking)
+}
+
+/// `Block` sibling of [`binding_only_read_through_or_reading_match`].
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+fn binding_only_read_through_or_reading_match_block(name: &str, b: &Block) -> bool {
+    let mut t = Tally::default();
+    walk_block(Target::Bare(name), b, &mut t);
+    !t.captured && t.mentions == t.read_through + (t.match_scrutinee - t.match_scrutinee_taking)
+}
+
 /// B-2026-09-20-17 — [`optres_arm_takes_whole_payload`] read THROUGH whole
 /// rebinds of the arm binding: `Some(t) => { let u = t; return u.0 }` takes
 /// only element 0, because `let u = t` hands the payload to another name and
@@ -578,11 +641,14 @@ pub(crate) fn binding_only_nested_match_scrutinee_block(name: &str, b: &Block) -
 /// `if let` / `while let` ANYWHERE in `e`? The any-mention sibling of
 /// [`binding_only_nested_match_scrutinee`]: a binding that is destructured
 /// further hands what it holds to the inner arms, whatever else it does.
+/// B-2026-10-03-54 narrowed it to a nested `match` with an arm that takes
+/// what it binds; one whose arms only read leaves the leaf with the outer
+/// place.
 #[cfg_attr(not(feature = "llvm"), allow(dead_code))]
 pub(crate) fn binding_is_nested_match_scrutinee(name: &str, e: &Expr) -> bool {
     let mut t = Tally::default();
     walk_expr(Target::Bare(name), e, &mut t);
-    t.match_scrutinee > 0
+    t.match_scrutinee_taking > 0
 }
 
 /// `Block` sibling of [`binding_is_nested_match_scrutinee`].
@@ -590,7 +656,7 @@ pub(crate) fn binding_is_nested_match_scrutinee(name: &str, e: &Expr) -> bool {
 pub(crate) fn binding_is_nested_match_scrutinee_block(name: &str, b: &Block) -> bool {
     let mut t = Tally::default();
     walk_block(Target::Bare(name), b, &mut t);
-    t.match_scrutinee > 0
+    t.match_scrutinee_taking > 0
 }
 
 /// B-2026-08-31-3 — "does the callee at this argument position take a borrow?",
@@ -623,6 +689,10 @@ struct Tally<'a> {
     /// its one consumer needs the narrower set — see
     /// [`binding_only_nested_match_scrutinee`].
     match_scrutinee: usize,
+    /// B-2026-10-03-54 — the subset of `match_scrutinee` whose nested
+    /// construct hands something it binds on (see
+    /// [`binding_is_nested_match_scrutinee`]).
+    match_scrutinee_taking: usize,
     /// A closure body mentions `name`. Closures capture by value under the
     /// heap-env model, so the capture materializes the binding however it is
     /// spelled inside — `|| r.id` takes `r` with it.
@@ -815,6 +885,25 @@ fn walk_expr(tgt: Target<'_>, e: &Expr, t: &mut Tally<'_>) {
             if tgt.matches(head) =>
         {
             t.match_scrutinee += 1;
+            // B-2026-10-03-54 — a nested `match` whose every arm only READS
+            // what it binds hands nothing on: `match o { Some(i) => i.id, .. }`.
+            // `if let` / `while let` stay counted, as before.
+            let takes = match &e.kind {
+                ExprKind::Match { arms, .. } => arms.iter().any(|arm| {
+                    crate::cfg::pattern_bindings(&arm.pattern).iter().any(|b| {
+                        !binding_only_read_through(b, &arm.body)
+                            || !arm
+                                .guard
+                                .as_ref()
+                                .is_none_or(|g| binding_only_read_through(b, g))
+                            || binding_is_nested_match_scrutinee(b, &arm.body)
+                    })
+                }),
+                _ => true,
+            };
+            if takes {
+                t.match_scrutinee_taking += 1;
+            }
         }
         _ => {}
     }
