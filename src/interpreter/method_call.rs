@@ -4977,15 +4977,17 @@ impl<'a> super::Interpreter<'a> {
         // bytes from `String.bytes()`): `is_ascii_digit` / `is_ascii_alphabetic`
         // / `is_ascii_hexdigit` → bool. Phase-8 floor for the self-hosting lexer
         // (typed in expr_method_call.rs; codegen lowers to inline range checks).
-        // The value is masked to a byte first so callers can pass an arbitrary
-        // integer without surprising sign/width behavior.
+        // A value outside 0..=255 is never ASCII, matching codegen's unsigned
+        // range checks at the receiver's own width. This used to mask the value
+        // to its low byte, so `304.is_ascii_digit()` read 0x30 and answered true
+        // where every compiled surface answers false (B-2026-10-04-20).
         if args.is_empty() {
             if let Value::Int(n) = &obj {
-                let b = *n as u8;
+                let b = u8::try_from(*n).ok();
                 let r = match method {
-                    "is_ascii_digit" => Some(b.is_ascii_digit()),
-                    "is_ascii_alphabetic" => Some(b.is_ascii_alphabetic()),
-                    "is_ascii_hexdigit" => Some(b.is_ascii_hexdigit()),
+                    "is_ascii_digit" => Some(b.is_some_and(|b| b.is_ascii_digit())),
+                    "is_ascii_alphabetic" => Some(b.is_some_and(|b| b.is_ascii_alphabetic())),
+                    "is_ascii_hexdigit" => Some(b.is_some_and(|b| b.is_ascii_hexdigit())),
                     _ => None,
                 };
                 if let Some(r) = r {
