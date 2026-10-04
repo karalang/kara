@@ -12921,7 +12921,10 @@ impl<'a> super::Interpreter<'a> {
                 // B-2026-08-30-34 — the RHS's own unsigned width, so
                 // `s.f = some_u64` into an `f64` field converts the value.
                 let src_u = self.span_unsigned_int_width(&value.span);
-                if !self.assign_to_place(target, val, src_u) {
+                // B-2026-10-04-71 — run each effectful subscript once, after
+                // the value, as compiled code does; the store walk below reads
+                // the place more than once.
+                if !self.store_to_place(target, val, src_u)? {
                     unreachable!(
                         "unsupported assignment target at {}:{}; should be caught by parser/typechecker",
                         stmt.span.line, stmt.span.column
@@ -13020,7 +13023,12 @@ impl<'a> super::Interpreter<'a> {
                 // `v[i].x += 1`), not just bare bindings. Previously only the
                 // `Identifier` target was handled — field/index compound
                 // assigns were silently dropped.
-                if !self.assign_to_place(target, result, None) {
+                // B-2026-10-04-71 — `a op= b` is `a = a op b` (design.md §
+                // Compound assignment), so the place's subscripts run once for
+                // the read above and once more for this store, after the
+                // right-hand side, as compiled code runs them. The store walk
+                // itself must not add more.
+                if !self.store_to_place(target, result, None)? {
                     unreachable!(
                         "unsupported compound-assignment target at {}:{}; should be caught by parser/typechecker",
                         stmt.span.line, stmt.span.column

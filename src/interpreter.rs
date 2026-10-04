@@ -3599,6 +3599,127 @@ impl<'a> Interpreter<'a> {
         )
     }
 
+    /// B-2026-10-04-71 — does an assignment place hold a subscript that is not
+    /// [`Self::index_expr_is_pure`] anywhere along its index / field / tuple
+    /// chain? Only such a place needs [`Self::materialize_place_subscripts`],
+    /// so the common store (`v[i] = x`, `o.f = x`) pays no clone.
+    pub(crate) fn place_has_effectful_subscript(place: &Expr) -> bool {
+        match &place.kind {
+            ExprKind::Index { object, index } => {
+                !Self::index_expr_is_pure(index) || Self::place_has_effectful_subscript(object)
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                Self::place_has_effectful_subscript(object)
+            }
+            _ => false,
+        }
+    }
+
+    /// B-2026-10-04-71 — the assignment place with every effectful subscript
+    /// evaluated exactly once, in source order (a container's subscripts
+    /// before the one applied to it, the order compiled code runs them in).
+    ///
+    /// The store walk reads its receiver more than once: `set_index` resolves
+    /// the container for its Tensor, Map and Vec arms in turn, and `set_field`
+    /// reads the struct and then writes it back through `assign_to_place`.
+    /// Each read re-evaluated every subscript inside the receiver, so
+    /// `w[idx(0)][idx(0)] = 5` ran `idx` four times where compiled code runs
+    /// it twice. An integer subscript becomes a literal, as `set_field`
+    /// already does for its own hop; any other value (a `Map` key) is bound
+    /// to a hidden local pushed onto `temps`, which
+    /// [`Self::with_place_temps`] defines around each use of the place. A
+    /// faulted subscript leaves `pending_cf` set for the caller to propagate.
+    pub(crate) fn materialize_place_subscripts(
+        &mut self,
+        place: &Expr,
+        temps: &mut Vec<(String, Value)>,
+    ) -> Expr {
+        let kind = match &place.kind {
+            ExprKind::Index { object, index } => {
+                let object = self.materialize_place_subscripts(object, temps);
+                let index = if Self::index_expr_is_pure(index) || self.pending_cf.is_some() {
+                    (**index).clone()
+                } else {
+                    let kind = match self.eval_expr_inner(index) {
+                        Value::Int(i) => ExprKind::Integer(narrow_to_i64(i).into(), None),
+                        other => {
+                            // NUL cannot appear in a source identifier, so the
+                            // hidden local never shadows a user binding.
+                            let name = format!("\0place_sub{}", temps.len());
+                            temps.push((name.clone(), other));
+                            ExprKind::Identifier(name)
+                        }
+                    };
+                    Expr {
+                        kind,
+                        span: index.span,
+                    }
+                };
+                ExprKind::Index {
+                    object: Box::new(object),
+                    index: Box::new(index),
+                }
+            }
+            ExprKind::FieldAccess { object, field } => ExprKind::FieldAccess {
+                object: Box::new(self.materialize_place_subscripts(object, temps)),
+                field: field.clone(),
+            },
+            ExprKind::TupleIndex { object, index } => ExprKind::TupleIndex {
+                object: Box::new(self.materialize_place_subscripts(object, temps)),
+                index: *index,
+            },
+            _ => return place.clone(),
+        };
+        Expr {
+            kind,
+            span: place.span,
+        }
+    }
+
+    /// B-2026-10-04-71 — `assign_to_place` for a statement's target, with each
+    /// effectful subscript evaluated exactly once (see
+    /// [`Self::materialize_place_subscripts`]). A faulted subscript returns its
+    /// control flow and stores nothing.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn store_to_place(
+        &mut self,
+        place: &Expr,
+        val: Value,
+        src_unsigned: Option<u32>,
+    ) -> Result<bool, ControlFlow> {
+        if !Self::place_has_effectful_subscript(place) {
+            return Ok(self.assign_to_place(place, val, src_unsigned));
+        }
+        let mut temps = Vec::new();
+        let place = self.materialize_place_subscripts(place, &mut temps);
+        if let Some(cf) = self.pending_cf.take() {
+            return Err(cf);
+        }
+        Ok(self.with_place_temps(&temps, |this| {
+            this.assign_to_place(&place, val, src_unsigned)
+        }))
+    }
+
+    /// B-2026-10-04-71 — run `f` with the hidden subscript locals of a
+    /// materialized place in scope. No scope is pushed when there are none,
+    /// which is every integer-subscripted place.
+    pub(crate) fn with_place_temps<R>(
+        &mut self,
+        temps: &[(String, Value)],
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if temps.is_empty() {
+            return f(self);
+        }
+        self.env.push_scope();
+        for (name, v) in temps {
+            self.env.define(name.clone(), v.clone());
+        }
+        let r = f(self);
+        self.env.pop_scope();
+        r
+    }
+
     fn set_field(&mut self, object: &Expr, field: &str, val: Value) {
         // A bare-identifier (or `self`) receiver is mutated in its env slot.
         // Plain structs are value types, so the modified struct must be
