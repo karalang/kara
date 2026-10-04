@@ -1510,6 +1510,36 @@ impl<'ctx> super::Codegen<'ctx> {
         // routed to FR5 and printed the fix. Mirror FR5 here.
         if let ExprKind::Index { object: outer, .. } = &object.kind {
             if matches!(outer.kind, ExprKind::Index { .. }) {
+                // B-2026-10-04-59 — a PLAIN struct element behind two or more
+                // index steps (`v[i][j].n`, `h.rows[i][j].s`, `a[0][1].n` over
+                // an `Array` of arrays) is the single-index arms' read one level
+                // deeper: the element was materialized by `compile_expr` above,
+                // so extract the field from it exactly as they do. Typing the
+                // element through the place chain is what the generic arm
+                // lacked; a shared element or a `ref` field still takes the
+                // deferral below.
+                if let BasicValueEnum::StructValue(sv) = obj_val {
+                    let plain_idx = self.place_chain_type_name(object).and_then(|tn| {
+                        if self.type_decls.shared_types.contains_key(tn.as_str())
+                            || !self.type_decls.struct_types.contains_key(tn.as_str())
+                        {
+                            return None;
+                        }
+                        self.type_decls
+                            .struct_field_names
+                            .get(tn.as_str())?
+                            .iter()
+                            .position(|n| n == field)
+                    });
+                    if let Some(idx) = plain_idx {
+                        if self.field_access_ref_inner(object, field).is_none() {
+                            return Ok(self
+                                .builder
+                                .build_extract_value(sv, idx as u32, field)
+                                .unwrap());
+                        }
+                    }
+                }
                 return Err(format!(
                     "codegen: chained indexed field receivers \
                      (`a[i][j].field…`) are deferred to v1.x; \
@@ -3869,9 +3899,13 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_ty: StructType<'ctx>,
         base_ptr: PointerValue<'ctx>,
     ) {
+        // B-2026-10-04-59 — the place chain last: it is what typed the parent
+        // for the store itself, so a parent `type_name_of_expr` cannot name
+        // (`v[0][0]`, an `Array` of arrays) still has its old value freed.
         let Some(type_name) = self
             .type_name_of_expr(object)
             .or_else(|| self.var_types.var_type_names.get(var_name).cloned())
+            .or_else(|| self.place_chain_type_name(object))
         else {
             return;
         };
@@ -4286,6 +4320,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     .ok()?;
                 (p, fty)
             }
+            // B-2026-10-04-59 — an array that is itself an indexed element
+            // (`a[0][1].n = x` over `Array[Array[P, 2], 1]`).
+            ExprKind::Index {
+                object: inner,
+                index: inner_idx,
+            } if !matches!(inner_idx.kind, ExprKind::Range { .. }) => {
+                let te = self.indexed_place_elem_type_expr(inner)?;
+                let fty = self.llvm_type_for_type_expr(&te);
+                if !matches!(fty, BasicTypeEnum::ArrayType(_)) {
+                    return None;
+                }
+                let p = self.nested_store_place_ptr(object)?;
+                (p, fty)
+            }
             _ => return None,
         };
         let BasicTypeEnum::ArrayType(at) = arr_ty else {
@@ -4382,6 +4430,18 @@ impl<'ctx> super::Codegen<'ctx> {
         placed
     }
 
+    /// B-2026-10-04-59 — the element `TypeExpr` of the indexed container
+    /// `object`, so a store through `object[i][j]` can type the inner element
+    /// it places. [`Self::vec_index_elem_type_expr`] answers every Vec / field /
+    /// tuple spelling; a bare `Array` local records its element separately
+    /// (see [`Self::array_index_target_elem_type_expr`] for why the two stay
+    /// apart), so it is asked second.
+    pub(super) fn indexed_place_elem_type_expr(&self, object: &Expr) -> Option<TypeExpr> {
+        self.vec_index_elem_type_expr(object)
+            .or_else(|| self.array_index_target_elem_type_expr(object))
+            .map(|te| self.subst_monomorph_type_params(&te))
+    }
+
     fn field_rooted_index_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
         let ExprKind::Index { object, index } = &expr.kind else {
             return None;
@@ -4426,6 +4486,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get_field_type_at_index(*hop as u32)?;
                 let te = self.tuple_index_elem_type_expr(inner, *hop)?;
                 let p = self.place_chain_ptr_through_borrow(object)?;
+                (p, ll_ty, te)
+            }
+            // B-2026-10-04-59 — a `Vec` that is itself an indexed ELEMENT
+            // (`v[0][j].n = x` over `Vec[Vec[P]]`, `h.rows[i][j].n = x`). The
+            // inner element is placed by the same resolver this store started
+            // in, so every container spelling it already handles (binding,
+            // field, tuple element, deeper index) composes one level further.
+            ExprKind::Index {
+                object: inner,
+                index: inner_idx,
+            } if !matches!(inner_idx.kind, ExprKind::Range { .. }) => {
+                let te = self.indexed_place_elem_type_expr(inner)?;
+                // A non-`Vec` element is the array resolver's to place; asking
+                // for the pointer here would emit its subscripts twice.
+                super::helpers::vec_inner_type_expr(&te)?;
+                let ll_ty = self.llvm_type_for_type_expr(&te);
+                let p = self.nested_store_place_ptr(object)?;
                 (p, ll_ty, te)
             }
             _ => return None,

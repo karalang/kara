@@ -15869,6 +15869,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         return p.segments.last().cloned();
                     }
                 }
+                // B-2026-10-04-59 — a container that is itself an indexed
+                // element (`v[0][j].n`, `h.rows[i][j].n`, `a[0][1].n` over an
+                // `Array` of arrays): type the inner element, then peel it.
+                if let ExprKind::Index {
+                    object: inner,
+                    index: inner_idx,
+                } = &object.kind
+                {
+                    if !matches!(inner_idx.kind, ExprKind::Range { .. }) {
+                        let container_te = self.indexed_place_elem_type_expr(inner)?;
+                        let elem_te = vec_inner_type_expr(&container_te)
+                            .or_else(|| super::helpers::array_inner_type_expr(&container_te))?;
+                        if let TypeKind::Path(p) = &elem_te.kind {
+                            return p.segments.last().cloned();
+                        }
+                    }
+                }
                 None
             }
             ExprKind::FieldAccess { object, field } => {

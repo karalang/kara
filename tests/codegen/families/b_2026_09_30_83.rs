@@ -152,14 +152,15 @@ fn main() { let mut a: Array[P, 2] = [P { n: 5 }, P { n: 6 }]; let i = 5 - 3; a[
 /// B-2026-09-30-83 — a field store whose parent place codegen cannot lower is
 /// refused at build time. `a.0[0].n = 9` through a `mut ref` TUPLE parameter
 /// used to compile to nothing and read back `5`; B-2026-09-30-89 lowered that
-/// specimen, so this pins the refusal on a nested index (`v[0][0].n = 9`),
-/// which still has no resolver. PREDICTS B-2026-10-04-59: this cell must flip
-/// to a lowered store when that row is fixed.
+/// specimen and B-2026-10-04-59 lowered the next one (a nested index), so this
+/// pins the refusal on a `Map` value (`m[1].n = 9`), which still has no
+/// resolver. PREDICTS B-2026-10-04-70: this cell must flip to a lowered store
+/// when that row is fixed.
 #[test]
 fn unlowered_field_store_place_is_a_build_error() {
     let msg = codegen_error(
         "struct P { n: i64 }
-fn main() { let mut v: Vec[Vec[P]] = [[P { n: 5 }]]; v[0][0].n = 9; println(f\"r:{v[0][0].n}\") }
+fn main() { let mut m: Map[i64, P] = Map.new(); m.insert(1, P { n: 5 }); m[1].n = 9; println(f\"r:{m[1].n}\"); }
 ",
     );
     assert!(
