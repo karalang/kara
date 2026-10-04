@@ -8694,7 +8694,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // dec'ing the shared VALUES → one ref leaked per live entry.
                 // Mirrors the struct-drop MapOrSet arm. `current_fn` is the enum
                 // drop fn here, so the walk's blocks attach to this body.
+                // B-2026-10-04-31 — the per-VALUE drop-fn channel, the
+                // shared-ENUM twin of B-2026-08-09-1's shared-struct arm.
+                // `map_drop_flags` frees one `{ptr,len,cap}` level per side, so
+                // `Map[String, Vec[String]]` released its value vectors' buffers
+                // and stranded their Strings (25 B lost with no match at all).
+                // `None` for a shared V, so the rc-dec walk below stays that
+                // case's only owner.
+                let mut val_drop_fn = None;
                 if let Some((k_te, v_te)) = super::helpers::map_kv_type_exprs(te) {
+                    val_drop_fn = self.map_val_drop_fn_for_type_expr(&v_te);
                     if let Some(heap_ty) = self.shared_heap_type_for_type_expr(&v_te) {
                         self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, true);
                     }
@@ -8714,17 +8723,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 // struct/tuple fixes; `map_drop_flags` returns `(0, 0)` here).
                 let i32_t = self.context.i32_type();
                 let (dk, dv) = self.map_drop_flags(te);
-                self.builder
-                    .build_call(
-                        self.runtime_fns.karac_map_free_with_drop_vec_fn,
-                        &[
-                            handle.into(),
-                            i32_t.const_int(dk, false).into(),
-                            i32_t.const_int(dv, false).into(),
-                        ],
-                        "",
-                    )
-                    .unwrap();
+                if let Some(val_fn) = val_drop_fn {
+                    // The drop fn owns the whole value side; the key side stays
+                    // on the flag contract, as in the shared-struct arm.
+                    self.builder
+                        .build_call(
+                            self.runtime_fns.karac_map_free_with_val_drop_fn_fn,
+                            &[
+                                handle.into(),
+                                i32_t.const_int(dk, false).into(),
+                                val_fn.as_global_value().as_pointer_value().into(),
+                            ],
+                            "",
+                        )
+                        .unwrap();
+                } else {
+                    self.builder
+                        .build_call(
+                            self.runtime_fns.karac_map_free_with_drop_vec_fn,
+                            &[
+                                handle.into(),
+                                i32_t.const_int(dk, false).into(),
+                                i32_t.const_int(dv, false).into(),
+                            ],
+                            "",
+                        )
+                        .unwrap();
+                }
                 true
             }
             _ => false,

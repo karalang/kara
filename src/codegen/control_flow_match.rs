@@ -17405,6 +17405,46 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-10-04-31 — the clone fn that gives a shared object its own copy
+    /// of a `Map[K, V]` / `Set[T]` payload an arm binding takes, or `None` to
+    /// keep the take. Declines when a key, value or element runs a user `Drop`
+    /// (moving such a payload out of a `shared enum` is E0514's territory, and
+    /// a clone would duplicate its bodies) or when the type arguments are not
+    /// spelled out.
+    pub(super) fn shared_payload_map_or_set_clone_fn(
+        &mut self,
+        field_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let te = self.subst_monomorph_type_params(field_te);
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let args: Vec<TypeExpr> = p
+            .generic_args
+            .as_ref()?
+            .iter()
+            .map(|a| match a {
+                crate::ast::GenericArg::Type(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let (k_te, v_te) = match (p.segments.last().map(String::as_str), args.as_slice()) {
+            (Some("Map") | Some("HashMap"), [k, v]) => (k.clone(), v.clone()),
+            (Some("Set") | Some("HashSet"), [t]) => (
+                t.clone(),
+                TypeExpr {
+                    kind: TypeKind::Tuple(Vec::new()),
+                    span: t.span,
+                },
+            ),
+            _ => return None,
+        };
+        if self.elem_te_runs_user_drop(&k_te) || self.elem_te_runs_user_drop(&v_te) {
+            return None;
+        }
+        Some(self.emit_map_clone_fn(&k_te, &v_te))
+    }
+
     /// B-2026-09-28-59 — replace the `String` / `Vec[elem]` a shared object
     /// holds at `field_ptr` with a copy of itself, as deep as the object's
     /// release drains it, so an arm binding can keep the original. `elem` is
@@ -17839,6 +17879,28 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             // The handle is the field's first (only) payload word.
             let word_index = (start_word + 2) as u32;
+            // B-2026-10-04-31 — the box is SHARED, so taking its handle leaves
+            // every other handle (and a second `match` on this one) reading a
+            // null table: a segfault. Give the box its own clone instead and
+            // let the binding keep the original, the Map/Set twin of
+            // `refill_shared_payload_vecstr_with_copy`. The clone fn is
+            // emitted before the GEP because emitting it moves the builder.
+            if let Some(clone_fn) = field_tes
+                .get(pos)
+                .and_then(|te| self.shared_payload_map_or_set_clone_fn(te))
+            {
+                if let Ok(word_ptr) = self.builder.build_struct_gep(
+                    heap_type,
+                    box_ptr,
+                    word_index,
+                    "match.sh.copy.map.wp",
+                ) {
+                    self.builder
+                        .build_call(clone_fn, &[word_ptr.into(), word_ptr.into()], "")
+                        .unwrap();
+                    continue;
+                }
+            }
             if let Ok(word_ptr) = self.builder.build_struct_gep(
                 heap_type,
                 box_ptr,
