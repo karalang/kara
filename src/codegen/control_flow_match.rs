@@ -17532,6 +17532,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (moving one out of a `shared enum` is E0514, and its bodies belong to
     /// the object), and an element that is neither a scalar, a `shared`
     /// handle, nor a container the release drains directly.
+    /// B-2026-10-04-32 — [`Self::aggregate_param_copy_supported_struct`] asked
+    /// the way the element copy below runs it: with a direct `shared` field
+    /// copyable as an rc-INC (`deep_copy_rc_inc_bare_shared`, which the copy
+    /// sets), the mode in which the predicate admits one. Asked in the default
+    /// mode it refused every element carrying a shared field, so `Vec[Sn]`
+    /// with `Sn { n: Node, s: String }` fell back to the old take and a second
+    /// handle's arm found the `Vec` empty.
+    fn struct_elem_copy_supported_rc_inc_shared(&mut self, name: &str) -> bool {
+        let saved = self.copy_support_for_loop_shared_mode;
+        self.copy_support_for_loop_shared_mode = true;
+        let ok = self.aggregate_param_copy_supported_struct(name, &mut Vec::new());
+        self.copy_support_for_loop_shared_mode = saved;
+        ok
+    }
+
     pub(super) fn refill_shared_payload_vecstr_with_copy(
         &mut self,
         field_ptr: PointerValue<'ctx>,
@@ -17560,7 +17575,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else if matches!(&e.kind, TypeKind::Path(p)
                     if p.generic_args.is_none()
                         && p.segments.len() == 1
-                        && self.aggregate_param_copy_supported_struct(&p.segments[0], &mut Vec::new()))
+                        && self.struct_elem_copy_supported_rc_inc_shared(&p.segments[0]))
                 {
                     // A plain struct element: outer copy here, each element's
                     // own heap below, as deep as the release's element drain.
