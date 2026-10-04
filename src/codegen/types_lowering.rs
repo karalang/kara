@@ -1329,6 +1329,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 .array_elem_type_exprs
                 .get(src.as_str())
                 .cloned(),
+            // B-2026-10-04-37 — a TUPLE ELEMENT declared `Array[T, N]`
+            // (`let x = t.0;`), the tuple twin of the field-read arm above:
+            // the element's TypeExpr comes from the chain resolver every
+            // tuple-element read uses. The entry is exactly what
+            // `let x: Array[T, N] = t.0` writes, and that annotated spelling
+            // already builds and is clean, so the unannotated binding is
+            // registered as the annotated one is.
+            ExprKind::TupleIndex { object, index } => self
+                .place_chain_tuple_tes(object)
+                .and_then(|tes| tes.get(*index as usize).cloned())
+                .map(|te| self.subst_monomorph_type_params(&te))
+                .and_then(|te| super::helpers::array_inner_type_expr(&te)),
             // B-2026-10-02-55 / B-2026-10-01-15 — a BRANCHING initializer
             // (`let k = match x { Some(t) => t, None => z() }`,
             // `let z = if c { fr(60) } else { fr(61) }`, `let a = { .. fr(1) }`).
