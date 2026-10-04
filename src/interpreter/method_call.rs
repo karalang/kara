@@ -5040,6 +5040,10 @@ impl<'a> super::Interpreter<'a> {
                     "is_uppercase" => Some(c.is_uppercase()),
                     "is_lowercase" => Some(c.is_lowercase()),
                     "is_ascii" => Some(c.is_ascii()),
+                    // B-2026-10-04-21: the ASCII byte predicates, on a `char`.
+                    "is_ascii_digit" => Some(c.is_ascii_digit()),
+                    "is_ascii_alphabetic" => Some(c.is_ascii_alphabetic()),
+                    "is_ascii_hexdigit" => Some(c.is_ascii_hexdigit()),
                     _ => None,
                 };
                 if let Some(r) = r {

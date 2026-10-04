@@ -219,8 +219,17 @@ impl<'a> super::TypeChecker<'a> {
         // value-receiver methods (codegen lowers to inline range checks; no
         // extern). `is_ascii_alpha`-vs-`_` (`is_alpha`) is composed in Kāra as
         // `b.is_ascii_alphabetic() or b == b'_'`.
+        //
+        // A `char` receiver takes the same three (B-2026-10-04-21), as Rust's
+        // `char::is_ascii_*` does: scanning a `Vec[char]` from `chars()` is the
+        // shape a parser is first written in, and `is_ascii` and
+        // `to_ascii_uppercase` were already on `char` while these were not.
+        // Codegen lowers `char` to an i32, so its range checks apply unchanged.
         if args.is_empty()
-            && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_))
+            && matches!(
+                receiver_for_lookup,
+                Type::Int(_) | Type::UInt(_) | Type::Char
+            )
             && matches!(
                 method,
                 "is_ascii_digit" | "is_ascii_alphabetic" | "is_ascii_hexdigit"
@@ -761,7 +770,7 @@ impl<'a> super::TypeChecker<'a> {
         // `is_whitespace()` → bool. The Unicode-aware companions of the
         // `u8.is_ascii_*` byte predicates; backed by interp (`char` methods) and
         // codegen (`karac_runtime_char_is_*` externs). Restricted to a `char`
-        // receiver — the ASCII predicates stay on the byte/integer scalars.
+        // receiver. The ASCII byte predicates above take a `char` too.
         if args.is_empty()
             && matches!(receiver_for_lookup, Type::Char)
             && matches!(
