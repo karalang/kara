@@ -2935,8 +2935,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_stores = |f: &crate::ast::Function| -> bool {
             f.params.iter().enumerate().any(|(idx, p)| {
                 is_bare(&p.ty)
-                    && (crate::ast::fn_moves_param_into_outliving_place(f, idx)
-                        || crate::ast::fn_conditionally_stores_param(f, idx))
+                    && (crate::ast::fn_moves_param_into_outliving_place(
+                        self.program_snapshot.as_deref(),
+                        f,
+                        idx,
+                    ) || crate::ast::fn_conditionally_stores_param(
+                        self.program_snapshot.as_deref(),
+                        f,
+                        idx,
+                    ))
             })
         };
         for item in &program.items {
@@ -3676,7 +3683,11 @@ impl<'ctx> super::Codegen<'ctx> {
             && !crate::ast::fn_returns_param(f, i)
             && !crate::ast::fn_returns_param_via_call(program, f, i)
             && crate::ast::fn_returns_param_owned_part_paths(Some(program), f, i).is_empty()
-            && !crate::ast::fn_moves_param_into_outliving_place(f, i)
+            && !crate::ast::fn_moves_param_into_outliving_place(
+                self.program_snapshot.as_deref(),
+                f,
+                i,
+            )
             && !crate::ast::fn_moves_param_into_outliving_place_via_call(program, f, i)
     }
 
@@ -3795,7 +3806,11 @@ impl<'ctx> super::Codegen<'ctx> {
         n > 0
             && self.array_param_elem_is_callee_owned(&elem_te)
             && crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
-            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            )
     }
 
     /// B-2026-09-29-15 — the bodies-only walker the callee runs, under the
@@ -3882,7 +3897,11 @@ impl<'ctx> super::Codegen<'ctx> {
             if p.segments.len() == 1 && matches!(p.segments[0].as_str(), "Option" | "Result"))
             && self.optres_payload_runs_user_drop(&param.ty)
             && crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
-            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            )
     }
 
     /// B-2026-09-23-44 — the NO-BODY sibling of
@@ -3916,7 +3935,11 @@ impl<'ctx> super::Codegen<'ctx> {
             if p.segments.len() == 1 && matches!(p.segments[0].as_str(), "Option" | "Result"))
             && !self.optres_payload_runs_user_drop(&param.ty)
             && crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
-            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            )
     }
 
     /// B-2026-09-22-14 — does the callee MOVE a caller-retained by-value
@@ -3958,7 +3981,11 @@ impl<'ctx> super::Codegen<'ctx> {
             && self.elem_te_runs_user_drop(&elem_te)
             && !self.array_param_elem_is_callee_owned(&elem_te)
             && (crate::ast::fn_moves_param_into_local_container(f, arg_index)
-                || crate::ast::fn_always_moves_param_into_outliving_place(f, arg_index))
+                || crate::ast::fn_always_moves_param_into_outliving_place(
+                    self.program_snapshot.as_deref(),
+                    f,
+                    arg_index,
+                ))
     }
 
     /// B-2026-09-25-10 — the conditional-STORE sibling of
@@ -3994,7 +4021,11 @@ impl<'ctx> super::Codegen<'ctx> {
         n > 0
             && self.elem_te_runs_user_drop(&elem_te)
             && !self.array_param_elem_is_callee_owned(&elem_te)
-            && crate::ast::fn_conditionally_stores_param(f, arg_index)
+            && crate::ast::fn_conditionally_stores_param(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            )
             && !crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
     }
 
@@ -4022,7 +4053,11 @@ impl<'ctx> super::Codegen<'ctx> {
             && self.elem_te_runs_user_drop(&elem_te)
             && !self.array_param_elem_is_callee_owned(&elem_te)
             && crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
-            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            )
     }
 
     /// B-2026-09-23-16 — the locals of `func` that every exit hands back, bare
@@ -4480,8 +4515,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         };
         self.dropless_forwarded_struct(struct_name)
-            && (crate::ast::fn_conditionally_stores_param(f, arg_index)
-                || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, arg_index))
+            && (crate::ast::fn_conditionally_stores_param(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            ) || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, arg_index))
     }
 
     /// B-2026-09-25-40 — the MONOMORPH form of
@@ -4517,8 +4555,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         self.dropless_forwarded_struct(struct_name)
-            && (crate::ast::fn_conditionally_stores_param(f, arg_index)
-                || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, arg_index))
+            && (crate::ast::fn_conditionally_stores_param(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            ) || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, arg_index))
     }
 
     /// B-2026-09-25-41 — the parameters a frame owns PER PATH itself, as
@@ -4711,10 +4752,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_empty()
             && if returned {
                 crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
-                    && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+                    && !crate::ast::fn_moves_param_into_outliving_place(
+                        self.program_snapshot.as_deref(),
+                        f,
+                        arg_index,
+                    )
             } else {
-                crate::ast::fn_conditionally_stores_param(f, arg_index)
-                    && !crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
+                crate::ast::fn_conditionally_stores_param(
+                    self.program_snapshot.as_deref(),
+                    f,
+                    arg_index,
+                ) && !crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
             }
             && param
                 .name()
@@ -4869,7 +4917,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
-            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            )
     }
 
     /// B-2026-09-25-40 — the MONOMORPH form of
@@ -4976,7 +5028,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
-            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            )
     }
 
     /// B-2026-09-08-13 — does a COPY-DECLINED by-value struct argument stay
@@ -5064,7 +5120,11 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         !self.callee_takes_over_arg_drop_body(callee_name, arg_index)
-            && !crate::ast::fn_conditionally_stores_param(f, arg_index)
+            && !crate::ast::fn_conditionally_stores_param(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            )
     }
 
     /// B-2026-09-30-85 — the recorded CONCRETE instantiation of a pattern

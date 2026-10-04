@@ -4580,8 +4580,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // one way out: a store hands the box to a container instead.
         let handback_checked = flows_into_return
             && self.callee_param_ast(name, i).is_some_and(|(f, ast_i)| {
-                !crate::ast::fn_moves_param_into_outliving_place(f, ast_i)
-                    && !crate::ast::fn_moves_param_into_local_container_any(f, ast_i)
+                !crate::ast::fn_moves_param_into_outliving_place(
+                    self.program_snapshot.as_deref(),
+                    f,
+                    ast_i,
+                ) && !crate::ast::fn_moves_param_into_local_container_any(f, ast_i)
             });
         let mut handback_slot = None;
         // B-2026-08-05-7 — the same shape once more, now for an `Option[T]`
@@ -8324,7 +8327,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // body and this binding must not. Same guarantee the two
                     // return predicates give, reached through a borrow instead
                     // of through the result.
-                    || crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+                    || crate::ast::fn_moves_param_into_outliving_place(self.program_snapshot.as_deref(), f, arg_index)
                     // B-2026-09-05-36 — or handed to a callee that stores it
                     // (`fn b_stash(x, v) { stash(x, v) }`): the same new home,
                     // one call further away.
@@ -8417,7 +8420,7 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             arg_index
         };
-        crate::ast::fn_moves_param_into_outliving_place(f, declared)
+        crate::ast::fn_moves_param_into_outliving_place(self.program_snapshot.as_deref(), f, declared)
             // B-2026-09-05-36 — or handed bare to a free function that stores
             // it (one level): `fn b_stash(x: R, v: mut ref Vec[R]) { stash(x,
             // v) }` leaves `x` alive in the caller's `v` exactly as a direct
@@ -13480,7 +13483,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .as_deref()
                 .and_then(|p| super::declarations::find_function_ast(p, callee_name))
                 .is_some_and(|f| {
-                    crate::ast::fn_always_moves_param_into_outliving_place(f, arg_index)
+                    crate::ast::fn_always_moves_param_into_outliving_place(
+                        self.program_snapshot.as_deref(),
+                        f,
+                        arg_index,
+                    )
                 })
     }
 
@@ -13535,9 +13542,17 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         (crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
-            && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
+            && !crate::ast::fn_moves_param_into_outliving_place(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            )
             && !self.conditional_handback_memory_moves_to_mono_callee(callee_name, arg_index, &tn))
-            || crate::ast::fn_conditionally_stores_param(f, arg_index)
+            || crate::ast::fn_conditionally_stores_param(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            )
     }
 
     /// B-2026-09-26-63 — does the callee's PROLOGUE run a projected
@@ -13576,7 +13591,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let own_drop = program.drop_method_keys.contains_key(tn.as_str());
         let cond_return =
             crate::ast::fn_conditionally_returns_param_bare(Some(program), f, arg_index)
-                && !crate::ast::fn_moves_param_into_outliving_place(f, arg_index);
+                && !crate::ast::fn_moves_param_into_outliving_place(
+                    self.program_snapshot.as_deref(),
+                    f,
+                    arg_index,
+                );
         if self.type_decls.struct_types.contains_key(tn.as_str()) {
             if self.type_decls.shared_types.contains_key(tn.as_str()) {
                 return None;
@@ -13618,8 +13637,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // The memory half of each prologue arm: the conditional-return
             // arm's `conditional_handback_memory_moves_to_callee`, and the
             // conditional-store arm's `owns_memory`.
-            let cond_store = crate::ast::fn_conditionally_stores_param(f, arg_index)
-                || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, arg_index);
+            let cond_store =
+                crate::ast::fn_conditionally_stores_param(
+                    self.program_snapshot.as_deref(),
+                    f,
+                    arg_index,
+                ) || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, arg_index);
             let store_takes_memory = cond_store
                 && self.struct_param_memory_stays_with_caller(&tn)
                 && self
@@ -13648,7 +13671,11 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .is_none_or(|n| crate::ast::param_rebind_aliases(f, n).len() > 1);
         let cond_store = f.generic_params.is_none()
-            && crate::ast::fn_conditionally_stores_param(f, arg_index)
+            && crate::ast::fn_conditionally_stores_param(
+                self.program_snapshot.as_deref(),
+                f,
+                arg_index,
+            )
             && f.params
                 .get(arg_index)
                 .and_then(|p| p.name())

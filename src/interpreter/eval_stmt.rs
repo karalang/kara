@@ -7760,7 +7760,7 @@ impl<'a> super::Interpreter<'a> {
             && !crate::ast::fn_returns_param(f, i)
             && !crate::ast::fn_returns_param_via_call(self.program, f, i)
             && crate::ast::fn_returns_param_owned_part_paths(Some(self.program), f, i).is_empty()
-            && !crate::ast::fn_moves_param_into_outliving_place(f, i)
+            && !crate::ast::fn_moves_param_into_outliving_place(Some(self.program), f, i)
             && !crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
     }
 
@@ -9952,7 +9952,7 @@ impl<'a> super::Interpreter<'a> {
                 // `take(mut sink, carg)` ran two — the binding's NLL fire at
                 // the call plus the container's at its drain.
                 let escapes_into_outliving_place = callee.is_some_and(|f| {
-                    crate::ast::fn_moves_param_into_outliving_place(f, i)
+                    crate::ast::fn_moves_param_into_outliving_place(Some(self.program), f, i)
                         // B-2026-09-05-36 — or handed to a callee that stores it.
                         || crate::ast::fn_moves_param_into_outliving_place_via_call(
                             self.program,
@@ -10072,7 +10072,11 @@ impl<'a> super::Interpreter<'a> {
                                 i,
                             )
                             || crate::ast::fn_always_returns_param_via_call(self.program, f, i)
-                            || crate::ast::fn_moves_param_into_outliving_place(f, i)
+                            || crate::ast::fn_moves_param_into_outliving_place(
+                                Some(self.program),
+                                f,
+                                i,
+                            )
                             || crate::ast::fn_moves_param_into_outliving_place_via_call(
                                 self.program,
                                 f,

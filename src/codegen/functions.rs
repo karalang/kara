@@ -3600,12 +3600,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // rather than merely being argued safe. Found by re-reading
                     // this diff, not by a test.
                     let cond_stored = !self.is_coroutine_compiled(&func.name)
-                        && (crate::ast::fn_conditionally_stores_param(func, i)
-                            || self.program_snapshot.as_deref().is_some_and(|p| {
-                                crate::ast::fn_conditionally_hands_param_to_flip_callee(p, func, i)
+                        && (crate::ast::fn_conditionally_stores_param(
+                            self.program_snapshot.as_deref(),
+                            func,
+                            i,
+                        ) || self.program_snapshot.as_deref().is_some_and(|p| {
+                            crate::ast::fn_conditionally_hands_param_to_flip_callee(p, func, i)
                                     // B-2026-09-28-80 — or to a storing callee.
                                     || crate::ast::fn_branch_hands_param_to_storer(p, func, i)
-                            }));
+                        }));
                     let boxed_type_name = cond_stored
                         .then(|| self.rc_fallback_boxed_type_name(&param_name, val_ty))
                         .flatten();
@@ -3772,7 +3775,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         func,
                         i,
                     )
-                    && !crate::ast::fn_moves_param_into_outliving_place(func, i)
+                    && !crate::ast::fn_moves_param_into_outliving_place(
+                        self.program_snapshot.as_deref(),
+                        func,
+                        i,
+                    )
                 {
                     if let TypeKind::Path(path) = &param.ty.kind {
                         if let Some(struct_name) = path.segments.first() {
@@ -4126,7 +4133,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (`callee_adopts_projection_body_per_path`).
                 if func.generic_params.is_none()
                     && !self.is_coroutine_compiled(&func.name)
-                    && crate::ast::fn_conditionally_stores_param(func, i)
+                    && crate::ast::fn_conditionally_stores_param(
+                        self.program_snapshot.as_deref(),
+                        func,
+                        i,
+                    )
                     && !crate::ast::fn_matches_on_bare_param(func, &param_name)
                 {
                     if let TypeKind::Path(p) = &param.ty.kind {
@@ -4177,7 +4188,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // memory, as it does for the conditional hand-back.
                 if func.generic_params.is_none()
                     && !self.is_coroutine_compiled(&func.name)
-                    && (((crate::ast::fn_conditionally_stores_param(func, i)
+                    && (((crate::ast::fn_conditionally_stores_param(self.program_snapshot.as_deref(), func, i)
                         // B-2026-09-28-80 — or handed to a storing callee
                         // from inside a branch.
                         || self.program_snapshot.as_deref().is_some_and(|p| {
@@ -4331,12 +4342,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // clearing statement.
                 if func.generic_params.is_none()
                     && !self.is_coroutine_compiled(&func.name)
-                    && (crate::ast::fn_conditionally_stores_param(func, i)
-                        || self.program_snapshot.as_deref().is_some_and(|p| {
-                            crate::ast::fn_conditionally_hands_param_to_flip_callee(p, func, i)
+                    && (crate::ast::fn_conditionally_stores_param(
+                        self.program_snapshot.as_deref(),
+                        func,
+                        i,
+                    ) || self.program_snapshot.as_deref().is_some_and(|p| {
+                        crate::ast::fn_conditionally_hands_param_to_flip_callee(p, func, i)
                                 // B-2026-09-28-80 — or to a storing callee.
                                 || crate::ast::fn_branch_hands_param_to_storer(p, func, i)
-                        }))
+                    }))
                 {
                     if let TypeKind::Path(path) = &param.ty.kind {
                         if let Some(struct_name) = path.segments.first() {

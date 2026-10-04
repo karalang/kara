@@ -2842,14 +2842,14 @@ impl<'a> super::Interpreter<'a> {
             // same pair of predicates so both backends claim the same set.
             let cond_returned =
                 crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
-                    && !crate::ast::fn_moves_param_into_outliving_place(f, i);
+                    && !crate::ast::fn_moves_param_into_outliving_place(Some(self.program), f, i);
             // B-2026-09-06-13 — and the hand-over to a callee that returns it
             // on some exits, the conditional store's twin; see the predicate.
             // B-2026-09-28-80 — or handed, from inside a branch, to a callee
             // that stores it: the caller stands down through the via-call
             // channel, so on the path that never reaches the hand-over this
             // frame is the only owner left.
-            let cond_stored = crate::ast::fn_conditionally_stores_param(f, i)
+            let cond_stored = crate::ast::fn_conditionally_stores_param(Some(self.program), f, i)
                 || crate::ast::fn_conditionally_hands_param_to_flip_callee(self.program, f, i)
                 || crate::ast::fn_branch_hands_param_to_storer(self.program, f, i);
             // B-2026-09-29-15 — or its payload bound out of a `match` / `if
@@ -3133,7 +3133,7 @@ impl<'a> super::Interpreter<'a> {
             // skipping the registration on that answer loses the body on the
             // path where it died. A param stored on SOME path keeps its
             // registration here and is disarmed per path by the store site.
-            if crate::ast::fn_always_moves_param_into_outliving_place(f, i) {
+            if crate::ast::fn_always_moves_param_into_outliving_place(Some(self.program), f, i) {
                 continue;
             }
             // Handed back on EVERY exit — the caller's result binding owns it.
@@ -3205,7 +3205,7 @@ impl<'a> super::Interpreter<'a> {
             // storing statement disarms it — the free-fn sibling's split.
             // B-2026-09-28-80 — or handed to a storing callee from inside a
             // branch, the free-function sibling's third route.
-            let cond_stored = crate::ast::fn_conditionally_stores_param(f, i)
+            let cond_stored = crate::ast::fn_conditionally_stores_param(Some(self.program), f, i)
                 || crate::ast::fn_branch_hands_param_to_storer(self.program, f, i);
             let caller_still_owns = args
                 .get(i)
@@ -3267,8 +3267,11 @@ impl<'a> super::Interpreter<'a> {
                             Some(self.program),
                             f,
                             i,
-                        ) && !crate::ast::fn_moves_param_into_outliving_place(f, i))
-                            || cond_stored)
+                        ) && !crate::ast::fn_moves_param_into_outliving_place(
+                            Some(self.program),
+                            f,
+                            i,
+                        )) || cond_stored)
                 }
                 _ => false,
             };
@@ -3437,7 +3440,7 @@ impl<'a> super::Interpreter<'a> {
                 if caller_fires
                     || crate::ast::fn_returns_param(f, i)
                     || crate::ast::fn_returns_param_payload(f, i)
-                    || crate::ast::fn_moves_param_into_outliving_place(f, i)
+                    || crate::ast::fn_moves_param_into_outliving_place(Some(self.program), f, i)
                     || crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
                     // B-2026-09-24-16 — or pushed into a container a callee
                     // local holds, whose drain runs the body.
@@ -3597,7 +3600,7 @@ impl<'a> super::Interpreter<'a> {
                         i,
                         variant.as_deref(),
                     )
-                    || crate::ast::fn_moves_param_into_outliving_place(f, i)
+                    || crate::ast::fn_moves_param_into_outliving_place(Some(self.program), f, i)
                     || crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
                     // B-2026-09-24-16 — or pushed into a container a callee
                     // local holds, whose drain runs the body.
@@ -3648,14 +3651,14 @@ impl<'a> super::Interpreter<'a> {
                             f,
                             i,
                         )
-                        || crate::ast::fn_always_moves_param_into_outliving_place(f, i)
+                        || crate::ast::fn_always_moves_param_into_outliving_place(Some(self.program), f, i)
                         // B-2026-09-24-16 — a MUST predicate too: the push into
                         // the callee's local container is on every path.
                         || crate::ast::fn_moves_param_into_local_container(f, i)
                         // B-2026-09-25-10 — or a store on SOME paths, which
                         // `method_param_drop_names` claims for the callee frame
                         // and the storing statement disarms per path.
-                        || crate::ast::fn_conditionally_stores_param(f, i)
+                        || crate::ast::fn_conditionally_stores_param(Some(self.program), f, i)
                         // B-2026-09-07-4 — the one-hop hand-back gives the same
                         // every-path guarantee the bare one does: the inner
                         // callee returns it, this one returns that, so the
@@ -3674,7 +3677,11 @@ impl<'a> super::Interpreter<'a> {
                 let i = *i;
                 crate::ast::fn_always_returns_param(Some(self.program), f, i)
                     || crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
-                    || crate::ast::fn_always_moves_param_into_outliving_place(f, i)
+                    || crate::ast::fn_always_moves_param_into_outliving_place(
+                        Some(self.program),
+                        f,
+                        i,
+                    )
                     || crate::ast::fn_moves_param_into_local_container(f, i)
                     || crate::ast::fn_always_returns_param_via_call(self.program, f, i)
             })
@@ -6217,7 +6224,7 @@ impl<'a> super::Interpreter<'a> {
                     // business, not this argument's.
                     || (include_payload_escape
                         && crate::ast::fn_returns_param_payload_of(self.program, f, i, variant))
-                    || crate::ast::fn_moves_param_into_outliving_place(f, i)
+                    || crate::ast::fn_moves_param_into_outliving_place(Some(self.program), f, i)
                     || crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
                     // B-2026-09-24-16 — or pushed into a container a callee
                     // local holds, whose drain runs the body.
@@ -6464,7 +6471,11 @@ impl<'a> super::Interpreter<'a> {
             .is_some_and(|f| {
                 crate::ast::fn_always_returns_param(Some(program), f, i)
                     || crate::ast::fn_always_returns_param_via_call(program, f, i)
-                    || crate::ast::fn_always_moves_param_into_outliving_place(f, i)
+                    || crate::ast::fn_always_moves_param_into_outliving_place(
+                        Some(self.program),
+                        f,
+                        i,
+                    )
                     || crate::ast::fn_moves_param_into_local_container(f, i)
             })
     }
@@ -6506,8 +6517,12 @@ impl<'a> super::Interpreter<'a> {
             .is_some_and(|f| {
                 f.generic_params.is_some()
                     && ((crate::ast::fn_conditionally_returns_param_bare(Some(program), f, i)
-                        && !crate::ast::fn_moves_param_into_outliving_place(f, i))
-                        || crate::ast::fn_conditionally_stores_param(f, i))
+                        && !crate::ast::fn_moves_param_into_outliving_place(
+                            Some(self.program),
+                            f,
+                            i,
+                        ))
+                        || crate::ast::fn_conditionally_stores_param(Some(self.program), f, i))
             })
     }
 
@@ -6571,9 +6586,9 @@ impl<'a> super::Interpreter<'a> {
             && (!returned || !self.struct_carries_shared_field(tn, &mut Vec::new()))
             && if returned {
                 crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
-                    && !crate::ast::fn_moves_param_into_outliving_place(f, i)
+                    && !crate::ast::fn_moves_param_into_outliving_place(Some(self.program), f, i)
             } else {
-                crate::ast::fn_conditionally_stores_param(f, i)
+                crate::ast::fn_conditionally_stores_param(Some(self.program), f, i)
                     && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
             }
             && f.params
@@ -6636,7 +6651,11 @@ impl<'a> super::Interpreter<'a> {
             .is_some_and(|f| {
                 crate::ast::fn_always_returns_param(Some(program), f, i)
                     || crate::ast::fn_always_returns_param_via_call(program, f, i)
-                    || crate::ast::fn_always_moves_param_into_outliving_place(f, i)
+                    || crate::ast::fn_always_moves_param_into_outliving_place(
+                        Some(self.program),
+                        f,
+                        i,
+                    )
                     || crate::ast::fn_moves_param_into_local_container(f, i)
             });
         if keeps || self.callee_adopts_projection_body_per_path(callee_name, method_owner, i, value)
@@ -6677,7 +6696,7 @@ impl<'a> super::Interpreter<'a> {
         }
         let own_drop = program.drop_method_keys.contains_key(tn.as_str());
         let cond_return = crate::ast::fn_conditionally_returns_param_bare(Some(program), f, i)
-            && !crate::ast::fn_moves_param_into_outliving_place(f, i);
+            && !crate::ast::fn_moves_param_into_outliving_place(Some(self.program), f, i);
         if let Some(si) = self.typecheck_result.struct_info.get(tn.as_str()) {
             if si.is_shared {
                 return false;
@@ -6696,7 +6715,7 @@ impl<'a> super::Interpreter<'a> {
             // per path when stored on some paths.
             return (own_drop
                 && (cond_return
-                    || crate::ast::fn_conditionally_stores_param(f, i)
+                    || crate::ast::fn_conditionally_stores_param(Some(self.program), f, i)
                     || crate::ast::fn_conditionally_hands_param_to_flip_callee(program, f, i)))
                 || (!own_drop
                     && (self.cond_store_field_bodies_adopted(f, i, tn.as_str())
@@ -6708,7 +6727,7 @@ impl<'a> super::Interpreter<'a> {
         };
         // B-2026-09-28-20 — or STORED on some paths, by a non-generic callee.
         let cond_store = f.generic_params.is_none()
-            && crate::ast::fn_conditionally_stores_param(f, i)
+            && crate::ast::fn_conditionally_stores_param(Some(self.program), f, i)
             && param
                 .name()
                 .is_some_and(|n| !crate::ast::fn_matches_on_bare_param(f, n));

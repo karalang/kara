@@ -5539,7 +5539,7 @@ fn fn_conditionally_returns_param_bare_legacy(
                         }
                         !fn_returns_param(gf, j)
                             && fn_returns_param_owned_part_paths(program, gf, j).is_empty()
-                            && !fn_moves_param_into_outliving_place(gf, j)
+                            && !fn_moves_param_into_outliving_place(program, gf, j)
                             && program.is_some_and(|p| {
                                 !fn_returns_param_via_call(p, gf, j)
                                     && !fn_moves_param_into_outliving_place_via_call(p, gf, j)
@@ -10500,7 +10500,7 @@ fn stored_via_call(e: &Expr, name: &str, program: &crate::Program) -> bool {
                     .is_some_and(|gf| {
                         args.iter().enumerate().any(|(j, a)| {
                             matches!(&a.value.kind, ExprKind::Identifier(n) if n == name)
-                                && (fn_moves_param_into_outliving_place(gf, j)
+                                && (fn_moves_param_into_outliving_place(Some(program), gf, j)
                                     // B-2026-09-27-95 — or keeps it in a
                                     // container or `let mut` rebind of its
                                     // own, where it dies: that frame runs the
@@ -10627,7 +10627,7 @@ fn callee_takes_param_over_inner(program: &crate::Program, gf: &Function, j: usi
         || fn_conditionally_returns_param_bare(Some(program), gf, j)
         || fn_returns_param_payload_of(program, gf, j, None)
         || fn_returns_param_via_call(program, gf, j)
-        || fn_moves_param_into_outliving_place(gf, j)
+        || fn_moves_param_into_outliving_place(Some(program), gf, j)
         || fn_moves_param_into_outliving_place_via_call(program, gf, j)
         || !fn_returns_param_tuple_arm_elems(program, gf, j).is_empty()
 }
@@ -11382,6 +11382,154 @@ fn payload_escapes_by_assignment_block(
 /// about how many paths take one.
 mod outliving_store {
     use super::*;
+    use crate::ast::{CallArg, TypeKind};
+
+    /// B-2026-09-28-38 — what the walk knows about the function it is walking
+    /// when the caller supplied the program: the program itself, the type of
+    /// a borrowed `self`, and the declared type of each `ref` / `mut ref`
+    /// param. Set only for the duration of one
+    /// [`super::fn_moves_param_into_outliving_place`] walk, and cleared again
+    /// around every question that walk asks of ANOTHER function.
+    struct RootCallCtx {
+        program: *const crate::Program,
+        self_ty: Option<String>,
+        ref_param_tys: Vec<(String, String)>,
+    }
+
+    thread_local! {
+        static ROOT_CALL_CTX: std::cell::RefCell<Option<RootCallCtx>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    fn bare_type_name(t: &TypeExpr) -> Option<String> {
+        match &t.kind {
+            TypeKind::Path(p) if p.generic_args.is_none() && p.segments.len() == 1 => {
+                p.segments.first().cloned()
+            }
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner) => bare_type_name(inner),
+            _ => None,
+        }
+    }
+
+    /// Run `body` with `f`'s receiver and `ref`-param types visible to the
+    /// walk, restoring whatever was there before.
+    pub(super) fn with_root_calls<T>(
+        program: &crate::Program,
+        f: &Function,
+        body: impl FnOnce() -> T,
+    ) -> T {
+        let self_ty = if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
+            program.items.iter().find_map(|item| match item {
+                Item::ImplBlock(imp) if imp.generic_params.is_none() => imp
+                    .items
+                    .iter()
+                    .any(|ii| {
+                        matches!(ii, ImplItem::Method(m)
+                            if m.name == f.name && m.span == f.span)
+                    })
+                    .then(|| bare_type_name(&imp.target_type))
+                    .flatten(),
+                _ => None,
+            })
+        } else {
+            None
+        };
+        let ref_param_tys = f
+            .params
+            .iter()
+            .filter(|p| matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
+            .filter_map(|p| match &p.pattern.kind {
+                PatternKind::Binding(n) => Some((n.clone(), bare_type_name(&p.ty)?)),
+                _ => None,
+            })
+            .collect();
+        let ctx = RootCallCtx {
+            program: program as *const crate::Program,
+            self_ty,
+            ref_param_tys,
+        };
+        let saved = ROOT_CALL_CTX.with(|c| c.borrow_mut().replace(ctx));
+        let out = body();
+        ROOT_CALL_CTX.with(|c| *c.borrow_mut() = saved);
+        out
+    }
+
+    /// B-2026-09-28-38 — is `object.method(args)` a call on a BARE borrowed
+    /// root (`self`, or a `ref` param) that resolves to a non-generic user
+    /// method with a borrowed receiver, whose by-value parameter receiving the
+    /// bare `name` is NOT taken over (`super::callee_takes_param_over`)? Then
+    /// the argument dies in that method's frame and the call stores nothing
+    /// into the receiver: `fn only(ref self, s: S) { self.eat(s) }` over `fn
+    /// eat(ref self, s: S) { .. }` read as a store and the caller stood down,
+    /// so `s`'s `Drop` body ran nowhere. A projection of the root
+    /// (`self.xs.push(s)`) is never asked: that is the store this walk exists
+    /// for. Answers `false` (a store, as before) whenever anything is unknown.
+    pub(super) fn root_call_keeps_arg_local(
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        name: &str,
+    ) -> bool {
+        let Some((program, ty)) = ROOT_CALL_CTX.with(|c| {
+            let c = c.borrow();
+            let c = c.as_ref()?;
+            let ty = match &object.kind {
+                // A lowered method (codegen's `Type.method`) carries its
+                // receiver as an explicit `self` param instead.
+                ExprKind::SelfValue => c.self_ty.clone().or_else(|| {
+                    c.ref_param_tys
+                        .iter()
+                        .find(|(p, _)| p == "self")
+                        .map(|(_, t)| t.clone())
+                })?,
+                ExprKind::Identifier(n) => c
+                    .ref_param_tys
+                    .iter()
+                    .find(|(p, _)| p == n)
+                    .map(|(_, t)| t.clone())?,
+                _ => return None,
+            };
+            Some((c.program, ty))
+        }) else {
+            return false;
+        };
+        // SAFETY: the pointer was taken from a live `&Program` by
+        // `with_root_calls`, whose borrow outlives this call.
+        let program = unsafe { &*program };
+        let Some(j) = args.iter().position(|a| is_bare(&a.value, name)) else {
+            return false;
+        };
+        let mut found: Vec<&Function> = Vec::new();
+        for item in &program.items {
+            if let Item::ImplBlock(imp) = item {
+                if bare_type_name(&imp.target_type).as_deref() != Some(ty.as_str()) {
+                    continue;
+                }
+                for ii in &imp.items {
+                    if let ImplItem::Method(m) = ii {
+                        if m.name == method {
+                            found.push(m);
+                        }
+                    }
+                }
+            }
+        }
+        let [g] = found.as_slice() else {
+            return false;
+        };
+        if g.generic_params.is_some()
+            || !matches!(g.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef))
+            || g.params
+                .get(j)
+                .is_none_or(|p| matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
+        {
+            return false;
+        }
+        let saved = ROOT_CALL_CTX.with(|c| c.borrow_mut().take());
+        let taken = super::callee_takes_param_over(program, g, j);
+        ROOT_CALL_CTX.with(|c| *c.borrow_mut() = saved);
+        !taken
+    }
     /// Is `e` a place expression whose ROOT is one of `roots`? Walks through
     /// field, index and tuple-index projections, so `self.buckets[i].inner`
     /// resolves to root `self`.
@@ -11472,8 +11620,15 @@ mod outliving_store {
     pub(super) fn stores(e: &Expr, name: &str, roots: &[&str]) -> bool {
         match &e.kind {
             // `self.xs.push(x)`, `store.insert(k, x)`, `self.slots[i].set(x)`.
-            ExprKind::MethodCall { object, args, .. } => {
-                (place_root_outlives(object, roots) && args.iter().any(|a| moves(&a.value, name)))
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                (place_root_outlives(object, roots)
+                    && args.iter().any(|a| moves(&a.value, name))
+                    && !root_call_keeps_arg_local(object, method, args, name))
                     || stores(object, name, roots)
                     || args.iter().any(|a| stores(&a.value, name, roots))
             }
@@ -11768,11 +11923,25 @@ pub fn fn_moves_param_into_local_aggregate(f: &Function, arg_index: usize) -> bo
 /// Slice-4 audit wrapper (`crate::param_fate::audit`): returns the legacy
 /// answer unchanged and, when `KARAC_DROP_SCHEDULE=audit`, logs where the
 /// per-param fate fact disagrees with it.
-pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bool {
-    let legacy = fn_moves_param_into_outliving_place_legacy(f, arg_index);
+///
+/// B-2026-09-28-38 — `program` lets the walk ask a method called on a
+/// BORROWED receiver (`self.eat(s)`, `q.eat(s)` over `q: ref Q`) what it does
+/// with the argument; see `outliving_store::root_call_keeps_arg_local`. `None`
+/// keeps the older reading, where any such call is a store.
+pub fn fn_moves_param_into_outliving_place(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    let legacy = match program {
+        Some(p) => outliving_store::with_root_calls(p, f, || {
+            fn_moves_param_into_outliving_place_legacy(f, arg_index)
+        }),
+        None => fn_moves_param_into_outliving_place_legacy(f, arg_index),
+    };
     crate::param_fate::audit::check(
         "moves_param_into_outliving_place",
-        None,
+        program,
         f,
         arg_index,
         legacy,
@@ -12768,11 +12937,15 @@ fn collect_block_names_for_rebind(b: &Block, out: &mut Vec<String>) {
 /// Slice-4 audit wrapper (`crate::param_fate::audit`): returns the legacy
 /// answer unchanged and, when `KARAC_DROP_SCHEDULE=audit`, logs where the
 /// per-param fate fact disagrees with it.
-pub fn fn_conditionally_stores_param(f: &Function, arg_index: usize) -> bool {
-    let legacy = fn_conditionally_stores_param_legacy(f, arg_index);
+pub fn fn_conditionally_stores_param(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    let legacy = fn_conditionally_stores_param_legacy(program, f, arg_index);
     crate::param_fate::audit::check(
         "conditionally_stores_param",
-        None,
+        program,
         f,
         arg_index,
         legacy,
@@ -12780,8 +12953,12 @@ pub fn fn_conditionally_stores_param(f: &Function, arg_index: usize) -> bool {
     )
 }
 
-fn fn_conditionally_stores_param_legacy(f: &Function, arg_index: usize) -> bool {
-    fn_conditionally_moves_param_into_outliving_place(f, arg_index)
+fn fn_conditionally_stores_param_legacy(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    fn_conditionally_moves_param_into_outliving_place(program, f, arg_index)
         || fn_conditionally_moves_param_into_local_container(f, arg_index)
 }
 
@@ -12948,7 +13125,8 @@ pub fn fn_branch_hands_param_to_storer(
         || {
             fn_branch_hands_param_to(f, arg_index, &|g, j| {
                 resolve_free_or_assoc_fn(program, g).is_some_and(|gf| {
-                    gf.self_param.is_none() && fn_moves_param_into_outliving_place(gf, j)
+                    gf.self_param.is_none()
+                        && fn_moves_param_into_outliving_place(Some(program), gf, j)
                 })
             })
         },
@@ -13381,7 +13559,24 @@ fn fn_conditionally_moves_param_into_local_container_uncached(
 ///
 /// A LOOP never counts: its body may execute zero times, so a store inside one
 /// is conditional by construction.
-pub fn fn_always_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bool {
+///
+/// B-2026-09-28-38 — `program` as for [`fn_moves_param_into_outliving_place`]:
+/// a call on a borrowed receiver that resolves to a method keeping nothing of
+/// the argument is not a store.
+pub fn fn_always_moves_param_into_outliving_place(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    match program {
+        Some(p) => outliving_store::with_root_calls(p, f, || {
+            fn_always_moves_param_into_outliving_place_walk(f, arg_index)
+        }),
+        None => fn_always_moves_param_into_outliving_place_walk(f, arg_index),
+    }
+}
+
+fn fn_always_moves_param_into_outliving_place_walk(f: &Function, arg_index: usize) -> bool {
     let Some(param) = f.params.get(arg_index) else {
         return false;
     };
@@ -13417,9 +13612,15 @@ pub fn fn_always_moves_param_into_outliving_place(f: &Function, arg_index: usize
     fn always_stores(e: &Expr, name: &str, roots: &[&str]) -> bool {
         match &e.kind {
             // The store itself, executed unconditionally by whoever reaches it.
-            ExprKind::MethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
                 outliving_store::place_root_outlives(object, roots)
                     && args.iter().any(|a| outliving_store::moves(&a.value, name))
+                    && !outliving_store::root_call_keeps_arg_local(object, method, args, name)
             }
             _ if outliving_store::replace_stores(e, name, roots) => true,
             ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) => {
@@ -13484,9 +13685,13 @@ pub fn fn_always_moves_param_into_outliving_place(f: &Function, arg_index: usize
 /// exactly what `fn_conditionally_returns_param_bare` already does for the
 /// conditionally RETURNED param, which is the same defect one escape route
 /// over.
-pub fn fn_conditionally_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bool {
-    if !fn_moves_param_into_outliving_place(f, arg_index)
-        || fn_always_moves_param_into_outliving_place(f, arg_index)
+pub fn fn_conditionally_moves_param_into_outliving_place(
+    program: Option<&crate::Program>,
+    f: &Function,
+    arg_index: usize,
+) -> bool {
+    if !fn_moves_param_into_outliving_place(program, f, arg_index)
+        || fn_always_moves_param_into_outliving_place(program, f, arg_index)
     {
         return false;
     }

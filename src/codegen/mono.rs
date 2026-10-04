@@ -2550,7 +2550,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     TypeKind::MutRef(_) => false,
                     _ => {
                         !crate::ast::fn_returns_param(&generic_fn, i)
-                            && !crate::ast::fn_moves_param_into_outliving_place(&generic_fn, i)
+                            && !crate::ast::fn_moves_param_into_outliving_place(
+                                self.program_snapshot.as_deref(),
+                                &generic_fn,
+                                i,
+                            )
                             && !crate::ast::fn_moves_param_into_local_container_any(&generic_fn, i)
                     }
                 })
@@ -3237,7 +3241,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         && matches!(p.pattern.kind, PatternKind::Binding(_))
                 })
                 && crate::ast::fn_returns_param(&generic_fn, i)
-                && !crate::ast::fn_moves_param_into_outliving_place(&generic_fn, i)
+                && !crate::ast::fn_moves_param_into_outliving_place(
+                    self.program_snapshot.as_deref(),
+                    &generic_fn,
+                    i,
+                )
                 && !crate::ast::fn_moves_param_into_local_container_any(&generic_fn, i)
             {
                 if let Some(p) = generic_fn.params.get(i) {
@@ -6802,7 +6810,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     func,
                     i,
                 )
-                && !crate::ast::fn_moves_param_into_outliving_place(func, i)
+                && !crate::ast::fn_moves_param_into_outliving_place(
+                    self.program_snapshot.as_deref(),
+                    func,
+                    i,
+                )
             {
                 // B-2026-09-02-3 — the SUBSTITUTED parameter type, not the raw
                 // one. `param.ty` here is the GENERIC AST, so a param declared
@@ -7013,10 +7025,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // no, and the registration silently does not happen. The return
             // sibling was shipped once without this and had exactly that hole.
             if !self.is_coroutine_compiled(&func.name)
-                && (crate::ast::fn_conditionally_stores_param(func, i)
-                    || self.program_snapshot.as_deref().is_some_and(|p| {
-                        crate::ast::fn_conditionally_hands_param_to_flip_callee(p, func, i)
-                    }))
+                && (crate::ast::fn_conditionally_stores_param(
+                    self.program_snapshot.as_deref(),
+                    func,
+                    i,
+                ) || self.program_snapshot.as_deref().is_some_and(|p| {
+                    crate::ast::fn_conditionally_hands_param_to_flip_callee(p, func, i)
+                }))
             {
                 let param_ty_resolved = self.subst_monomorph_type_params(&param.ty);
                 if let TypeKind::Path(path) = &param_ty_resolved.kind {
