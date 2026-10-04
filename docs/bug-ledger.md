@@ -94,23 +94,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 671 |
 | run-vs-build | 581 |
-| leak | 548 |
+| leak | 549 |
 | double-free | 412 |
 | codegen-gap | 217 |
 | missing-feature | 216 |
-| other | 167 |
+| other | 168 |
 | diagnostics | 140 |
 | perf | 134 |
 | false-positive | 119 |
 | crash | 110 |
 | soundness | 97 |
-| use-after-free | 81 |
+| use-after-free | 82 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2664 |
+| codegen | 2667 |
 | interp | 819 |
 | typecheck | 326 |
 | other | 113 |
@@ -515,6 +515,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-42 | 2026-10-04 | codegen | high | REMAINDER OF B-2026-10-01-14: A CLOSURE THAT HANDS BACK ITS BY-VALUE STRUCT PARAM ON ONLY SOME PATHS DOUBLE-FREES IT COMPILED, AND A DISCARDED CALL LOSES THE FRESH ARM'S BODY -- `let h = |x: R, k: bool| if k { x } else { mk(0) }; let r = h(mk(95), true)` aborts `free(): double free` on the JIT, -O0 and -O2 (`--interp` `r95 dR95`), and `h(mk(96), false);` prints `dR96 r` compiled against `--interp`'s `dR96 dR0 r` | — |
 | B-2026-10-04-43 | 2026-10-04 | codegen | medium | A FIELD OR INDEX READ STRAIGHT OFF A CLOSURE CALL'S STRUCT OR ARRAY RESULT DOES NOT BUILD -- `let h = |x: R| x; println(f"r{h(mk(47)).id}")` and `let f = |x: Array[R, 1]| x; let r = f([mk(92)]); println(f"r{r[0].id}")` fail with `codegen: cannot resolve field 'id' on this receiver`, while `--interp` prints `r47 dR47` and `r92 dR92` | — |
 | B-2026-10-04-44 | 2026-10-04 | interp+codegen | medium | A DISCARDED CALL THROUGH A CLOSURE THAT RETURNS A FRESH `Drop` VALUE RUNS NO BODY ON ANY SURFACE AND LEAKS IT COMPILED -- `let h = |k: i64| mk(k); h(90); println("r")` prints `r end` everywhere, where the named passthrough `id_r(mk(88));` prints `dR88 r end` | — |
+| B-2026-10-04-45 | 2026-10-04 | codegen | high | A GENERIC `shared enum G[T]` OVER `Map[..]` OWNS ITS MAP PAYLOAD NOWHERE: WITH NO MATCH THE MAP LEAKS, WITH ONE ARM BINDING THE ARM FREES IT, AND WITH TWO THE SECOND READS AND FREES A FREED TABLE (4 INVALID FREES, 15 INVALID READS) -- THE GENERIC RELEASE FN FREES ONLY BOXED PAYLOADS AND A ONE-WORD MAP HANDLE IS INLINE | — |
+| B-2026-10-04-46 | 2026-10-04 | codegen | high | AN `Option[shared]` TUPLE ELEMENT IS NEVER RELEASED BY THE TUPLE'S DROP, SO `p.0.unwrap().id` READ TWICE IS A USE-AFTER-FREE AND A TUPLE NOBODY UNWRAPS LEAKS THE HANDLE -- `let p = (Some(H { id: 11 }), 12)` then two `println(f"t{p.0.unwrap().id}")` prints `dH11 t11 t11 end` with 3 invalid accesses at -O0 against `--interp`'s `t11 t11 end dH11`, and `println(f"t{p.1}")` alone loses 16 B and the `dH11` body | — |
+| B-2026-10-04-47 | 2026-10-04 | codegen | medium | A `shared` HANDLE HELD IN A FIELD OF A NAMED STRUCT PASSED BY VALUE IS RELEASED AT THE CALLER'S SCOPE END ON EVERY COMPILED SURFACE, WHERE design.md AND `--interp` RELEASE IT AT THE END OF THE CALL -- `let w = W { o: Some(H { id: 6 }), n: 7 }; cw2(w); println("after1")` prints `w7 after1 .. end dH6` at -O0 and -O2 against `--interp`'s `w7 dH6 after1`, and the same for a by-value `self` and for a bare `shared` field | — |
 
 ### Relocated
 
