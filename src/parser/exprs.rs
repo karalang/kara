@@ -1651,6 +1651,9 @@ impl super::Parser {
             Token::Identifier { .. } => self.parse_identifier_expr(),
 
             _ => {
+                if self.recover_keyword_as_ident("expression") {
+                    return self.parse_identifier_expr();
+                }
                 self.error_unexpected_ident("expression");
                 None
             }

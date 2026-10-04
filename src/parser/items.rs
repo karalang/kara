@@ -1790,6 +1790,9 @@ impl super::Parser {
                 }
             }
             _ => {
+                if self.recover_keyword_as_ident("parameter pattern") {
+                    return self.parse_param_pattern();
+                }
                 self.error_unexpected_ident("parameter pattern");
                 None
             }

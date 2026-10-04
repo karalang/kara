@@ -957,6 +957,9 @@ impl Parser {
                 Some(name)
             }
             _ => {
+                if self.recover_keyword_as_ident("identifier") {
+                    return self.expect_identifier();
+                }
                 self.error_unexpected_ident("identifier");
                 None
             }
@@ -1136,6 +1139,90 @@ impl Parser {
         };
         let msg = self.unexpected_ident_msg(expected);
         self.error_kind(kind, &msg);
+    }
+
+    /// B-2026-10-04-60 — a raw-escapable keyword written where a NAME belongs
+    /// (`let mut distinct = 0;`, `while distinct > k`, `return distinct;`).
+    /// The diagnostic already names the remedy, `r#distinct`; this makes it
+    /// `karac fix`'s machine-applicable edit, and then retypes the token as
+    /// that identifier so parsing continues exactly as if the escape had
+    /// been written. Before, each site returned `None`, and the recovery
+    /// that followed could skip a closing brace: one keyword-named local in
+    /// a nested block ended its function early and reported the rest of the
+    /// body as top-level statements beside `fn main`, and `return distinct;`
+    /// re-read the keyword as the start of a `distinct type` item.
+    ///
+    /// Returns `true` when it recovered, so the caller re-dispatches on the
+    /// retyped token. A structural marker (`self`, `mut`, …) is not
+    /// escapable and keeps the old path, as does a refused `r#` escape.
+    fn recover_keyword_as_ident(&mut self, expected: &str) -> bool {
+        let Some(kw) = self.peek_token_ref().keyword_spelling() else {
+            return false;
+        };
+        if matches!(self.peek_token_ref(), Token::RawIdentNotAllowed(_))
+            || !crate::token::is_raw_escapable(kw)
+        {
+            return false;
+        }
+        // Only where the NEXT token reads as something that follows a name
+        // (`;`, `,`, a closer, `:`, `.`, `(`, `[`, an operator, an
+        // assignment). Malformed code also puts keywords here -- the `let` of
+        // an unsupported `if let ... and let Some(x) = e` chain, a stray
+        // `else {` -- and retyping those as names would trade one honest
+        // error for a cascade from a binding the author never meant.
+        let follows_a_name = matches!(
+            self.tokens.get(self.pos + 1).map(|t| &t.token),
+            Some(
+                Token::Semicolon
+                    | Token::Comma
+                    | Token::RightParen
+                    | Token::RightBracket
+                    | Token::RightBrace
+                    | Token::Colon
+                    | Token::Dot
+                    | Token::QuestionDot
+                    | Token::Question
+                    | Token::LeftParen
+                    | Token::LeftBracket
+                    | Token::Equal
+                    | Token::PlusEqual
+                    | Token::MinusEqual
+                    | Token::StarEqual
+                    | Token::SlashEqual
+                    | Token::PercentEqual
+                    | Token::Plus
+                    | Token::Minus
+                    | Token::Star
+                    | Token::Slash
+                    | Token::Percent
+                    | Token::EqualEqual
+                    | Token::BangEqual
+                    | Token::LessThan
+                    | Token::LessThanOrEqual
+                    | Token::GreaterThan
+                    | Token::GreaterThanOrEqual
+                    | Token::And
+                    | Token::Or
+            )
+        );
+        if !follows_a_name {
+            return false;
+        }
+        self.error_unexpected_ident(expected);
+        let span = self.current_span();
+        self.fix_edits.insert(
+            crate::resolver::SpanKey::from_span(&span),
+            crate::resolver::TextEdit {
+                offset: span.offset,
+                length: span.length,
+                replacement: format!("r#{kw}"),
+            },
+        );
+        self.tokens[self.pos].token = Token::Identifier {
+            name: kw.to_string(),
+            raw: true,
+        };
+        true
     }
 
     fn unexpected_ident_msg(&self, expected: &str) -> String {

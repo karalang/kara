@@ -506,6 +506,9 @@ impl super::Parser {
                 }
             }
             _ => {
+                if self.recover_keyword_as_ident("pattern") {
+                    return self.parse_single_pattern();
+                }
                 self.error_unexpected_ident("pattern");
                 None
             }

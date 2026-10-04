@@ -1705,6 +1705,64 @@ fn test_keyword_as_identifier_names_the_keyword() {
     );
 }
 
+/// B-2026-10-04-60 — a keyword-named local reports ONCE PER USE and carries the
+/// `r#` escape as a fix edit, and nothing cascades. Before, each site gave up on
+/// the token: a use on the right of an assignment and one in a nested block
+/// went unreported, `return distinct;` re-read the keyword as the start of a
+/// `distinct type` item ("Expected 'type' after 'distinct'"), and no site
+/// carried an edit, so `karac fix` stopped on the parse errors having applied
+/// nothing. Applying the edits must leave a program that parses clean.
+#[test]
+fn test_keyword_named_local_reports_each_use_and_fixes_to_raw_ident() {
+    let src = "fn count(s: ref String) -> i64 {\n\
+                   let mut distinct = 0;\n\
+                   for c in s.chars() {\n\
+                       if c == 'a' {\n\
+                           distinct += 1;\n\
+                       }\n\
+                   }\n\
+                   distinct = distinct + 0;\n\
+                   while distinct > 100 {\n\
+                       distinct -= 1;\n\
+                   }\n\
+                   return distinct;\n\
+               }\n\
+               fn main() { println(count(\"abca\")); }\n";
+    let result = parse(src);
+    let msgs: Vec<&str> = result.errors.iter().map(|e| e.message.as_str()).collect();
+    let kw = "'distinct' is a reserved keyword and cannot be used as an identifier; \
+              write `r#distinct` to use it as an ordinary identifier";
+    assert_eq!(
+        msgs,
+        vec![kw; 7],
+        "one error per use of `distinct`, and no cascade"
+    );
+    let mut edits: Vec<_> = result.fix_edits.values().cloned().collect();
+    assert_eq!(edits.len(), 7, "each use carries its edit: {edits:?}");
+    assert!(edits.iter().all(|e| e.replacement == "r#distinct"));
+    edits.sort_by_key(|e| std::cmp::Reverse(e.offset));
+    let mut fixed = src.to_string();
+    for e in &edits {
+        fixed.replace_range(e.offset..e.offset + e.length, &e.replacement);
+    }
+    let reparsed = parse(&fixed);
+    assert!(
+        reparsed.errors.is_empty(),
+        "the fixed program parses clean: {:?}\n{fixed}",
+        reparsed.errors
+    );
+    // A keyword NOT followed by anything a name could be -- the second `let`
+    // of an unsupported let-chain -- keeps its plain error and gets no edit:
+    // retyping it as `r#let` would invent a binding nobody wrote.
+    let chain = parse("fn main() { if let Some(a) = f() and let Some(b) = g() { } }");
+    assert!(!chain.errors.is_empty());
+    assert!(
+        chain.fix_edits.values().all(|e| e.replacement != "r#let"),
+        "{:?}",
+        chain.fix_edits
+    );
+}
+
 // ── Marker traits ───────────────────────────────────────────────────
 //
 // `marker trait NAME;` per design.md § Marker Traits (v60 item 55).
@@ -15770,11 +15828,22 @@ fn comptime_in_parameter_position_reports_the_keyword_not_the_punctuation() {
     ] {
         let (_p, errors) = parse_with_errors(src);
         assert!(!errors.is_empty(), "expected a parse error for: {src}");
+        // B-2026-10-04-60: the keyword is now retyped as `r#comptime` and
+        // parsing carries on, so `fn f(comptime)` goes on to report the
+        // missing `: Type` ("Expected Colon, found RightParen") -- true of
+        // the program even once the escape is written. What must not happen
+        // is the punctuation being blamed IN PLACE of the keyword, so the
+        // first diagnostic is the keyword's and none blames the `:` itself.
+        assert!(
+            errors[0]
+                .message
+                .starts_with("'comptime' is a reserved keyword"),
+            "the keyword is reported first; got {:?} (src: {src})",
+            errors[0].message,
+        );
         for e in &errors {
             assert!(
-                !e.message.contains("found Colon")
-                    && !e.message.contains("found Comma")
-                    && !e.message.contains("found RightParen"),
+                !e.message.contains("found Colon"),
                 "still blames the punctuation: {:?} (src: {src})",
                 e.message,
             );
