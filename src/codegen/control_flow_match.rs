@@ -17378,6 +17378,71 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-28-59 — replace the `String` / `Vec[elem]` a shared object
+    /// holds at `field_ptr` with a copy of itself, as deep as the object's
+    /// release drains it, so an arm binding can keep the original. `elem` is
+    /// `None` for a `String`. Answers `false`, touching nothing, for a shape
+    /// the copy does not cover: an element whose type runs a user `Drop` body
+    /// (moving one out of a `shared enum` is E0514, and its bodies belong to
+    /// the object), and an element that is neither a scalar, a `shared`
+    /// handle, nor a container the release drains directly.
+    pub(super) fn refill_shared_payload_vecstr_with_copy(
+        &mut self,
+        field_ptr: PointerValue<'ctx>,
+        elem: Option<&TypeExpr>,
+    ) -> bool {
+        let vec_ty = self.vec_struct_type();
+        let elem = elem.map(|e| self.subst_monomorph_type_params(e));
+        let mut struct_elem: Option<TypeExpr> = None;
+        let (elem_ty, deep_elem, shared_elem): (BasicTypeEnum<'ctx>, _, _) = match &elem {
+            None => (self.context.i8_type().into(), None, None),
+            Some(e) => {
+                if self.elem_te_runs_user_drop(e) {
+                    return false;
+                }
+                let elem_ty = self.llvm_type_for_type_expr(e);
+                if Self::elem_te_needs_direct_recursive_drain(e) {
+                    (elem_ty, Some(e.clone()), None)
+                } else if let Some(h) = self.shared_heap_type_for_type_expr(e) {
+                    (elem_ty, None, Some(h))
+                } else if matches!(&e.kind, TypeKind::Path(p)
+                    if p.segments.len() == 1 && matches!(p.segments[0].as_str(),
+                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
+                        | "isize" | "usize" | "f32" | "f64" | "bool" | "char"))
+                {
+                    (elem_ty, None, None)
+                } else if matches!(&e.kind, TypeKind::Path(p)
+                    if p.generic_args.is_none()
+                        && p.segments.len() == 1
+                        && self.aggregate_param_copy_supported_struct(&p.segments[0], &mut Vec::new()))
+                {
+                    // A plain struct element: outer copy here, each element's
+                    // own heap below, as deep as the release's element drain.
+                    struct_elem = Some(e.clone());
+                    (elem_ty, None, None)
+                } else {
+                    return false;
+                }
+            }
+        };
+        let Ok(val) = self.builder.build_load(vec_ty, field_ptr, "sh.copy.v") else {
+            return false;
+        };
+        let copied = self.emit_vecstr_defensive_copy(val, elem_ty, deep_elem.as_ref());
+        let _ = self.builder.build_store(field_ptr, copied);
+        if let Some(h) = shared_elem {
+            self.rc_inc_vec_shared_elements(field_ptr, h);
+        }
+        if let Some(e) = struct_elem {
+            let one = self.context.struct_type(&[vec_ty.into()], false);
+            let saved = self.drop_rc.deep_copy_rc_inc_bare_shared;
+            self.drop_rc.deep_copy_rc_inc_bare_shared = true;
+            self.deep_copy_vec_aggregate_elements_in_place(one, field_ptr, 0, &e);
+            self.drop_rc.deep_copy_rc_inc_bare_shared = saved;
+        }
+        true
+    }
+
     /// Shared-enum analog of [`Self::suppress_destructured_enum_payload_cleanup_at`]
     /// (which bails on `layout.is_shared`). When a `match` arm over a SHARED-enum
     /// RC box (`box_ptr`) MOVES a `Vec`/`String` payload field out into a binding,
@@ -17453,6 +17518,12 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let i64_t = self.context.i64_type();
         let zero = i64_t.const_int(0, false);
+        let payload_tes: Vec<TypeExpr> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, name, _)| name == variant_name)
+            .map(|(_, _, tes)| tes)
+            .unwrap_or_default();
         for &pos in &consumed_positions {
             if !matches!(
                 drop_kinds.get(pos),
@@ -17464,6 +17535,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(o) => *o,
                 None => continue,
             };
+            // B-2026-09-28-59 — the object belongs to every handle, and to
+            // this one again after the arm, so the binding cannot TAKE the
+            // payload: zeroing it here emptied it for `h` in `let h = g;
+            // match g { M.Y(x) => .. }; match h { .. }`, and for `g` itself
+            // on a second `match g`. Give the box a copy instead, so the
+            // binding keeps (and frees) the original and the object still
+            // holds its payload. Shapes the copy does not cover keep the
+            // take below.
+            if let Some(te) = payload_tes.get(pos).cloned() {
+                if let Ok(word_ptr) = self.builder.build_struct_gep(
+                    heap_type,
+                    box_ptr,
+                    (start_word + 2) as u32,
+                    "match.sh.copy.wp",
+                ) {
+                    let is_string = self.is_string_type_expr(&te);
+                    let is_vec = matches!(&te.kind, TypeKind::Path(p)
+                        if p.segments.first().map(String::as_str) == Some("Vec"));
+                    let elem = vec_inner_type_expr(&te);
+                    if (is_string || (is_vec && elem.is_some()))
+                        && self.refill_shared_payload_vecstr_with_copy(
+                            word_ptr,
+                            if is_string { None } else { elem.as_ref() },
+                        )
+                    {
+                        continue;
+                    }
+                }
+            }
             for w in 0..num_words {
                 let word_index = (start_word + 2 + w) as u32;
                 if let Ok(word_ptr) = self.builder.build_struct_gep(
@@ -17622,6 +17722,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 ) else {
                     continue;
                 };
+                // B-2026-09-28-59 — copy rather than take, as for a concrete
+                // payload above; the element-bodies hand-off below is only
+                // for the take.
+                let bound = self.pattern_state.pattern_binding_types.get(&key).cloned();
+                let bound_elem = self
+                    .pattern_state
+                    .pattern_binding_inner_types
+                    .get(&key)
+                    .cloned()
+                    .map(|te| self.subst_monomorph_type_params(&te));
+                let copied = match bound.as_deref() {
+                    Some("String") => self.refill_shared_payload_vecstr_with_copy(interior, None),
+                    Some("Vec") => bound_elem.as_ref().is_some_and(|e| {
+                        self.refill_shared_payload_vecstr_with_copy(interior, Some(e))
+                    }),
+                    _ => false,
+                };
+                if copied {
+                    continue;
+                }
                 let words_ty = i64_t.array_type(want as u32);
                 let _ = self.builder.build_store(interior, words_ty.const_zero());
                 // B-2026-09-28-61 — the interior's element BODIES go with it:

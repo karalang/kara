@@ -10037,15 +10037,17 @@ fn main() {
     }
 }
 
-/// Moving a `String`/`Vec` payload OUT of a SHARED-enum box (`match e { S(s)
-/// => s }`) must zero that field's words IN THE BOX so the box's
-/// `__karac_rc_drop_<E>` skips the buffer the binding now owns — else the
-/// returned String is freed by the caller AND re-freed by the box rc-drop
-/// (double-free). Regression for `suppress_shared_enum_payload_move_out`
-/// (B-2026-06-20). E2E ASAN coverage:
+/// Binding a `String`/`Vec` payload OUT of a SHARED-enum box (`match e { S(s)
+/// => s }`) gives the binding its OWN COPY and leaves the box untouched, so
+/// the box's `__karac_rc_drop_<E>` frees the original and the returned String
+/// is the caller's alone. Until B-2026-09-28-59 the payload words were zeroed
+/// IN THE BOX instead (`match.sh.suppress.wp`), which was free-once but
+/// emptied the object for every other handle to it (`let h = e;` then a
+/// second match read `0`). Regression for `suppress_shared_enum_payload_move_out`
+/// (B-2026-06-20, then B-2026-09-28-59). E2E ASAN coverage:
 /// `memory_sanitizer::asan_shared_enum_string_payload_moveout_no_double_free`.
 #[test]
-fn shared_enum_string_payload_moveout_zeros_box_cap() {
+fn shared_enum_string_payload_moveout_copies_and_leaves_box() {
     let ir = ir_for(
         "shared enum E { S(String), Other }\n\
              fn get(e: E) -> String { match e { S(s) => s, Other => \"o\".to_string() } }\n\
@@ -10053,9 +10055,9 @@ fn shared_enum_string_payload_moveout_zeros_box_cap() {
     );
     let body = function_body(&ir, "get").expect("fn get must be emitted");
     assert!(
-        body.contains("match.sh.suppress.wp"),
-        "the shared-enum String move-out must zero the box payload word(s) so \
-             the box rc-drop skips the moved-out buffer\n--- body ---\n{body}"
+        body.contains("match.sh.copy.wp") && !body.contains("match.sh.suppress.wp"),
+        "the shared-enum String arm binding must copy the payload and leave the \
+             box's words alone (B-2026-09-28-59)\n--- body ---\n{body}"
     );
 }
 

@@ -5553,7 +5553,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// elements (`Vec[shared]` — an 8-byte RC pointer slot) and no-heap elements
     /// are skipped: the former's drop is a pure rc-dec needing a paired
     /// per-element rc-inc (a distinct residual), the latter needs no copy.
-    fn deep_copy_vec_aggregate_elements_in_place(
+    pub(super) fn deep_copy_vec_aggregate_elements_in_place(
         &mut self,
         agg_ty: StructType<'ctx>,
         base_ptr: PointerValue<'ctx>,
