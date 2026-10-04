@@ -511,6 +511,8 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0267", ty("MainErrNotDisplay", None)),
     // B-2026-09-20-59 — `pub main`, `main(x: T)`, or `main[T]()`.
     ("E0286", ty("MainSignature", None)),
+    // B-2026-10-04-61 — `f() = v`, `(a, b) = (b, a)`, `a + 1 = v`.
+    ("E0287", ty("AssignTargetNotPlace", None)),
     (
         "E0268",
         ty("StringNotIndexable", Some(DiagnosticClass::TypeMismatch)),

@@ -1810,6 +1810,8 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // B-2026-09-20-59 — `main()` is `pub`, takes parameters, or is
                 // generic (design.md § Entry Point).
                 crate::typechecker::TypeErrorKind::MainSignature => "E0286",
+                // B-2026-10-04-61 — an assignment target that is not a place.
+                crate::typechecker::TypeErrorKind::AssignTargetNotPlace => "E0287",
                 // `s[i]` (scalar index) on a `String` — UTF-8 is
                 // variable-width, so `[]` is rejected in favour of
                 // `s.char_at(i)` / `s.bytes()[i]` (design.md § Character type).

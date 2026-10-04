@@ -3839,6 +3839,80 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// B-2026-10-04-61 — the left side of `=` or `op=` must be a PLACE: a
+    /// binding, `self`, a field, an index, a tuple element or a `*`
+    /// dereference, the shapes the interpreter's `assign_to_place` writes
+    /// into. Neither assignment arm asked, so `(a, b) = (b, a)`, `a + 1 = 3`
+    /// and `f() = 3` type-checked; the interpreter then hit its
+    /// "should be caught by parser/typechecker" `unreachable!`, and the
+    /// compiled backends dropped the write (the swap printed `1 2`, exit 0).
+    ///
+    /// Runs AFTER the target was inferred, so a call's recorded type is
+    /// there to read: a call returning `mut ref T` is the one shape with a
+    /// mechanical repair, the `*` that design.md § Deref as a place
+    /// expression makes the assignable form (explicit assignment targets do
+    /// not auto-deref), and it carries that as the fix-it.
+    pub(super) fn check_assignment_target_is_place(&mut self, target: &Expr) {
+        match &target.kind {
+            ExprKind::Identifier(_)
+            | ExprKind::SelfValue
+            | ExprKind::Path { .. }
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::TupleIndex { .. }
+            | ExprKind::Unary {
+                op: UnaryOp::Deref, ..
+            }
+            | ExprKind::Error => return,
+            _ => {}
+        }
+        let returns_mut_ref = matches!(
+            target.kind,
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+        ) && matches!(
+            self.expr_types.get(&SpanKey::from_span(&target.span)),
+            Some(Type::MutRef(_))
+        );
+        let (why, fix_it) = if returns_mut_ref {
+            (
+                "it is a call returning a `mut ref`; write `*` in front of it to assign \
+                 through the reference",
+                Some(super::FixIt {
+                    span: Span {
+                        length: 0,
+                        ..target.span
+                    },
+                    replacement: "*".to_string(),
+                }),
+            )
+        } else if matches!(target.kind, ExprKind::Tuple(_)) {
+            (
+                "a parenthesized tuple is a value, not a place; to assign several places at \
+                 once, drop the parentheses (`a, b = b, a`)",
+                None,
+            )
+        } else {
+            (
+                "only a binding, a field, an index, a tuple element or a `*` dereference \
+                 can be assigned to",
+                None,
+            )
+        };
+        let kind = TypeErrorKind::AssignTargetNotPlace;
+        self.errors.push(super::TypeError {
+            message: format!(
+                "error[E_ASSIGN_TARGET_NOT_PLACE]: this expression cannot be assigned to: {why}"
+            ),
+            span: target.span,
+            class: super::class_for_type_error_kind(&kind),
+            kind,
+            lint_name: None,
+            fix_it,
+            expected: None,
+            got: None,
+        });
+    }
+
     /// Recursive const-init structural walk for slice 4. Permits
     /// literals, references to other bindings (any `Path`/`Identifier`
     /// — the resolver already validated the reference resolves), and
@@ -6104,6 +6178,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.assigning_lhs = true;
                 let target_ty = self.infer_expr(target);
                 self.assigning_lhs = saved;
+                self.check_assignment_target_is_place(target);
                 // B-2026-09-23-11 — the RHS is walked twice, once by the
                 // value-position checks above and once here against the
                 // target's type, so a fault INSIDE it (`s = s + y` with
@@ -6135,6 +6210,7 @@ impl<'a> super::TypeChecker<'a> {
                 // accepted, including a `mut ref` operand on either side.
                 let binop = Self::compound_op_binop(op);
                 self.infer_binary(&binop, target, value, &stmt.span);
+                self.check_assignment_target_is_place(target);
             }
             // Handled by the early return above; kept for exhaustiveness.
             StmtKind::Expr(_) => {}

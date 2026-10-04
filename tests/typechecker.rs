@@ -52367,3 +52367,65 @@ fn index_move_rejects_a_consuming_unwrap_on_an_indexed_element() {
         assert_eq!(hits(&wrap(body)), 0, "{label}: must stay legal");
     }
 }
+
+/// B-2026-10-04-61 — an assignment target must be a place. `(a, b) = (b, a)`,
+/// `a + 1 = 3`, `one() = 3` and `s.clone() += "y"` all type-checked; the
+/// interpreter then panicked at its "should be caught by parser/typechecker"
+/// `unreachable!` and the compiled backends dropped the write, so the swap
+/// printed `1 2`. A call returning `mut ref` gets the `*` as a fix-it, and the
+/// place forms (`*` deref, field, index, tuple element) stay legal.
+#[test]
+fn assignment_target_must_be_a_place() {
+    let prelude = "fn one() -> i64 { return 1; }\n\
+                   fn bump(v: mut ref i64) -> mut ref i64 { return v; }\n";
+    for (body, needle) in [
+        (
+            "let mut a = 1; let mut b = 2; (a, b) = (b, a);",
+            "drop the parentheses (`a, b = b, a`)",
+        ),
+        ("let mut a = 1; a + 1 = 3;", "only a binding, a field"),
+        ("one() = 3;", "only a binding, a field"),
+        (
+            "let mut s = \"x\"; s.clone() += \"y\";",
+            "only a binding, a field",
+        ),
+        (
+            "let mut x = 1; bump(mut x) += 5;",
+            "write `*` in front of it",
+        ),
+    ] {
+        let errs = typecheck_errors(&format!("{prelude}fn main() {{ {body} }}"));
+        let hit: Vec<_> = errs
+            .iter()
+            .filter(|e| e.message.contains("E_ASSIGN_TARGET_NOT_PLACE"))
+            .collect();
+        assert_eq!(hit.len(), 1, "one place error for `{body}`: {errs:?}");
+        assert!(hit[0].message.contains(needle), "`{body}`: {:?}", hit[0]);
+    }
+    // The `mut ref` call carries the insertion of `*` at its start.
+    let src = "fn main() {\n    let mut m: Map[char, i64] = Map.new();\n    \
+               m.entry('a').or_insert(0) += 1;\n}\n";
+    let errs = typecheck_errors(src);
+    let fix = errs
+        .iter()
+        .find_map(|e| e.fix_it.clone())
+        .expect("the place error carries a fix-it");
+    assert_eq!(fix.replacement, "*");
+    assert_eq!(fix.span.length, 0);
+    assert_eq!(&src[fix.span.offset..fix.span.offset + 2], "m.");
+    typecheck_ok(
+        "struct P { x: i64, t: (i64, i64) }\n\
+         fn bump(v: mut ref i64) -> mut ref i64 { return v; }\n\
+         fn main() {\n\
+             let mut m: Map[char, i64] = Map.new();\n\
+             *m.entry('a').or_insert(0) += 1;\n\
+             let mut x = 1;\n\
+             *bump(mut x) += 5;\n\
+             let mut p = P { x: 1, t: (2, 3) };\n\
+             p.x = 4;\n\
+             p.t.1 += 1;\n\
+             let mut v = vec![1, 2];\n\
+             v[0] = 9;\n\
+         }",
+    );
+}

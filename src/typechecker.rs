@@ -1169,6 +1169,10 @@ pub enum TypeErrorKind {
     /// § Entry Point: "`main()` ... is never `pub`, takes no parameters".
     /// `E_MAIN_SIGNATURE` (B-2026-09-20-59).
     MainSignature,
+    /// The left side of `=` or `op=` is not a place -- a call, a tuple, an
+    /// operator expression -- so there is nothing to write into.
+    /// `E_ASSIGN_TARGET_NOT_PLACE` (B-2026-10-04-61).
+    AssignTargetNotPlace,
     /// A `#[gpu]`-annotated function uses a type that is not GPU-compatible
     /// — a heap-allocated type (`String`, `Vec[T]`, `Map`/`Set`, …), an
     /// RC/`shared` reference type (`shared struct`, `Rc[T]`, `Arc[T]`,
@@ -1353,6 +1357,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::MainReturnType
         | TypeErrorKind::MainErrNotDisplay
         | TypeErrorKind::MainSignature
+        | TypeErrorKind::AssignTargetNotPlace
         | TypeErrorKind::CrossTaskUnsafeCapture
         | TypeErrorKind::LazyLockRuntimeCapture
         | TypeErrorKind::GpuNotSafe
