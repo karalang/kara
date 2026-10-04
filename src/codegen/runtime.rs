@@ -8624,7 +8624,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .contains_key(enum_name.as_str())
                     && !self.type_decls.enum_inst_var_types.contains_key(name)
                     && val.get_type() == BasicTypeEnum::from(layout.llvm_type)
-                    && self.enum_needs_scope_exit_owner(&enum_name)
+                    && (self.enum_needs_scope_exit_owner(&enum_name)
+                        || self.uam_enum_boxed_optres_copyable(&enum_name))
                     && !self.enum_boxed_array_payload_runs_user_drop(&enum_name)
                     && !self.enum_param_owned_by_transfer(&enum_name)
                     && !self.type_runs_user_drop(&enum_name, &mut Vec::new())
@@ -8645,6 +8646,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let saved_scratch =
                         std::mem::take(&mut self.payload_vars.privatized_box_variants_scratch);
                     self.deep_copy_enum_heap_payload_in_place(&enum_name, slot, &layout);
+                    self.uam_duplicate_boxed_optres_payloads(&enum_name, slot, &layout);
                     self.payload_vars.privatized_box_variants_scratch = saved_scratch;
                     self.drop_rc.deep_copy_rc_inc_bare_shared = saved_rc_inc;
                     let cloned = self
@@ -8751,6 +8753,177 @@ impl<'ctx> super::Codegen<'ctx> {
             .uam_copied_sites
             .insert((expr.span.offset, expr.span.length));
         copied
+    }
+
+    /// B-2026-10-04-33 — does `enum_name` carry a heap-BOXED `Option`/`Result`
+    /// payload (`EnumDropKind::BoxedOptRes`), every one of which the copy
+    /// below can duplicate? Such an enum needs no scope-exit owner by
+    /// [`Self::enum_needs_scope_exit_owner`]'s reckoning, so the user-enum arm
+    /// of [`Self::uam_defensive_copy`] declined it, the site was not recorded
+    /// as copied, and the source disarm zeroed the box word the later read of
+    /// the source then followed: a null read.
+    fn uam_enum_boxed_optres_copyable(&self, enum_name: &str) -> bool {
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name) else {
+            return false;
+        };
+        let variant_tes: std::collections::HashMap<String, Vec<crate::ast::TypeExpr>> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .map(|(_tag, name, tes)| (name, tes))
+            .collect();
+        let mut any = false;
+        for (vname, kinds) in &layout.field_drop_kinds {
+            for (fi, kind) in kinds.iter().enumerate() {
+                if *kind != super::state::EnumDropKind::BoxedOptRes {
+                    continue;
+                }
+                let Some(te) = variant_tes.get(vname).and_then(|t| t.get(fi)) else {
+                    return false;
+                };
+                // A payload of scalars owns nothing inside the box, so the
+                // envelope is the whole copy (`Option[i64]`).
+                let scalar_payload = matches!(&te.kind, TypeKind::Path(p)
+                    if p.generic_args.as_ref().is_some_and(|args| !args.is_empty()
+                        && args.iter().all(|a| matches!(a,
+                            GenericArg::Type(t) if matches!(&t.kind, TypeKind::Path(ap)
+                                if ap.segments.len() == 1
+                                    && ap.generic_args.is_none()
+                                    && super::param_own::is_primitive_type_name(&ap.segments[0]))))));
+                if !scalar_payload
+                    && !self.field_copy_supported(te, &mut vec![enum_name.to_string()])
+                {
+                    return false;
+                }
+                any = true;
+            }
+        }
+        any
+    }
+
+    /// B-2026-10-04-33 — the copy half of [`Self::uam_enum_boxed_optres_copyable`]:
+    /// give each live `BoxedOptRes` payload of the enum in `slot` its own box,
+    /// and the box its own heap. `deep_copy_enum_heap_payload_in_place` leaves
+    /// the kind alone on purpose (a by-value param's entry copy must not
+    /// duplicate it), so this runs at the use-after-move site only. The
+    /// interior is copied as well as the envelope: a later arm that moves the
+    /// payload out of either value then owns a buffer of its own.
+    fn uam_duplicate_boxed_optres_payloads(
+        &mut self,
+        enum_name: &str,
+        slot: PointerValue<'ctx>,
+        layout: &super::state::EnumLayout<'ctx>,
+    ) {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let variant_tes: std::collections::HashMap<String, Vec<crate::ast::TypeExpr>> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .map(|(_tag, name, tes)| (name, tes))
+            .collect();
+        let mut tag_entries: Vec<(String, u64)> =
+            layout.tags.iter().map(|(n, t)| (n.clone(), *t)).collect();
+        tag_entries.sort_by_key(|(_, t)| *t);
+        for (vname, tag_v) in &tag_entries {
+            let (Some(kinds), Some(offsets)) = (
+                layout.field_drop_kinds.get(vname),
+                layout.field_word_offsets.get(vname),
+            ) else {
+                continue;
+            };
+            for (fi, (kind, (start_word, _))) in kinds.iter().zip(offsets.iter()).enumerate() {
+                if *kind != super::state::EnumDropKind::BoxedOptRes {
+                    continue;
+                }
+                let Some(te) = variant_tes.get(vname).and_then(|t| t.get(fi)).cloned() else {
+                    continue;
+                };
+                let payload_ty = self.llvm_type_for_type_expr(&te);
+                let tag_ptr = self
+                    .builder
+                    .build_struct_gep(layout.llvm_type, slot, 0, "uam.optres.tag.p")
+                    .unwrap();
+                let tag = self
+                    .builder
+                    .build_load(i64_t, tag_ptr, "uam.optres.tag")
+                    .unwrap()
+                    .into_int_value();
+                let word_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        layout.llvm_type,
+                        slot,
+                        (*start_word + 1) as u32,
+                        "uam.optres.wp",
+                    )
+                    .unwrap();
+                let word = self
+                    .builder
+                    .build_load(i64_t, word_ptr, "uam.optres.w")
+                    .unwrap()
+                    .into_int_value();
+                let old_box = self
+                    .builder
+                    .build_int_to_ptr(word, ptr_ty, "uam.optres.box")
+                    .unwrap();
+                let is_variant = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        tag,
+                        i64_t.const_int(*tag_v, false),
+                        "uam.optres.isv",
+                    )
+                    .unwrap();
+                let not_null = self
+                    .builder
+                    .build_is_not_null(old_box, "uam.optres.nn")
+                    .unwrap();
+                let live = self
+                    .builder
+                    .build_and(is_variant, not_null, "uam.optres.live")
+                    .unwrap();
+                let copy_bb = self.context.append_basic_block(fn_val, "uam.optres.copy");
+                let join_bb = self.context.append_basic_block(fn_val, "uam.optres.join");
+                self.builder
+                    .build_conditional_branch(live, copy_bb, join_bb)
+                    .unwrap();
+                self.builder.position_at_end(copy_bb);
+                let size = payload_ty
+                    .size_of()
+                    .map(|s| {
+                        if s.get_type().get_bit_width() == 64 {
+                            s
+                        } else {
+                            self.builder
+                                .build_int_z_extend(s, i64_t, "uam.optres.sz64")
+                                .unwrap()
+                        }
+                    })
+                    .unwrap_or_else(|| i64_t.const_int(32, false));
+                let new_box = self
+                    .builder
+                    .build_call(self.runtime_fns.malloc_fn, &[size.into()], "uam.optres.nb")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let loaded = self
+                    .builder
+                    .build_load(payload_ty, old_box, "uam.optres.ld")
+                    .unwrap();
+                self.builder.build_store(new_box, loaded).unwrap();
+                let one = self.context.struct_type(&[payload_ty], false);
+                self.deep_copy_one_aggregate_field(new_box, one, 0, &te);
+                let new_word = self
+                    .builder
+                    .build_ptr_to_int(new_box, i64_t, "uam.optres.nw")
+                    .unwrap();
+                self.builder.build_store(word_ptr, new_word).unwrap();
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+                self.builder.position_at_end(join_bb);
+            }
+        }
     }
 
     /// The span `uam_consume_sites` keys a PLACE consume under — B-2026-08-18-31.
