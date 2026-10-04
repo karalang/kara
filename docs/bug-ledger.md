@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 677 |
+| miscompile | 678 |
 | run-vs-build | 583 |
 | leak | 552 |
 | double-free | 412 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2679 |
-| interp | 825 |
+| codegen | 2680 |
+| interp | 826 |
 | typecheck | 327 |
 | other | 113 |
 | ownership | 80 |
@@ -298,7 +298,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-32 | 2026-09-28 | interp+codegen | medium | A NAMED `Option`/`Result` TUPLE ARG DESTRUCTURED IN THE CALLEE (`Some((w, n)) => return n`) LOSES THE ELEMENT'S `Drop` BODY -- concrete `Option[(W, i64)]`: `--interp` prints `  1 c9` with no `dW1/n1` while jit / `-O0` / `-O2` run it (and leak 2 B at `-O0`); generic `Option[(T, i64)]` and concrete `Result[(W, i64), i64]`: the body is lost on ALL FOUR surfaces with memory clean. A FRESH temp arg of the same shape runs the body everywhere, so the named binding is the axis. | — |
 | B-2026-09-28-33 | 2026-09-28 | typecheck+interp+codegen | medium | `partial_move_of_drop_enum` MISSES A PAYLOAD MOVED INTO A PRELUDE CONSTRUCTOR -- `match e { E.A(r) => { return Some(r); } ... }` and `let x = Some(r); return x;` over an `enum E` with its own `impl Drop` compile without the error that `E.A(r) => { return r; }` gets, and the backends then disagree about the enum's body: `--interp` prints no `dE` and jit / `-O0` / `-O2` print it once per call. The lint asks `binding_only_borrowed_with`, which reads the bare `Some(..)` callee as an entry-copying free function, so `r` looks borrowed. | — |
 | B-2026-09-28-35 | 2026-09-28 | codegen | medium | A `match` OVER A BY-VALUE `Result` PARAM HANDED BACK THROUGH AN IDENTITY CALLEE, WHOSE ARMS ONLY READ, RUNS NO PAYLOAD `Drop` BODY ON ANY COMPILED SURFACE -- `fn peek(a: Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => 0 } }` prints `k30 end` on jit / -O0 / -O2 where `--interp` prints `d1 k30 end`; memory is balanced, only the body is lost. The `Err(e) => e` spelling is right, because one escaping name keeps the match on the consuming path | — |
-| B-2026-09-28-38 | 2026-09-28 | interp+codegen | medium | A BY-VALUE ARGUMENT HANDED TO A METHOD CALLED ON A BORROWED RECEIVER (`self`, OR A `ref` PARAM) READS AS STORED INTO THAT RECEIVER, SO ITS `Drop` BODY RUNS NOWHERE, WHETHER OR NOT THE PARAM IS ALSO RETURNED ON SOME PATHS, ON EVERY SURFACE -- `fn only(ref self, s: S) { self.eat(s); println("o") }` over `fn eat(ref self, s: S) { println("qx") }` prints `qx o a` for `q.only(mks(1)); println("a")` and never `dS1`; the originally filed `fn pq(ref self, s: S, k: bool) -> S { if k { return s } self.eat(s); return mks(0) }` is the conditional-return spelling of the same fault | — |
 | B-2026-09-28-42 | 2026-09-28 | codegen | high | AN INLINE `Array` PAYLOAD CONSTRUCTED DIRECTLY AS A FREE-FUNCTION ARGUMENT STILL HAS TWO OWNERS -- `eatopt(Option.Some(a))` over `fn eatopt(o: Option[Array[S, 1]])` and a one-`String` `S` aborts with `free(): double free detected in tcache 2` on JIT, `-O0` and `-O2` against `--interp`'s `in daaaaaaaa0 end`; the `Result`, matching-callee, returning-callee and generic-passthrough spellings do the same. B-2026-09-19-59 fixed every other consumer of this payload and deliberately left this one alone | — |
 | B-2026-09-28-43 | 2026-09-28 | codegen | medium | FOUR SPELLINGS OF AN INLINE `Array` PAYLOAD RUN THE ELEMENT'S `Drop` BODY ON `--interp` AND NOWHERE COMPILED, WITH MEMORY CLEAN -- a named `Option[Array[S, 1]]` local handed to a by-value callee, the envelope in a struct-literal field, in a tuple element, and a fresh `Some([S { .. }])` literal matched in place; JIT, `-O0` and `-O2` all agree and valgrind reports nothing | — |
 | B-2026-09-28-44 | 2026-09-28 | codegen | medium | A STRUCT LEAF OF A DESTRUCTURED BY-VALUE TUPLE PAYLOAD HANDED TO A BY-VALUE CALLEE RUNS NO `Drop` BODY AND LEAKS ON EVERY COMPILED SURFACE -- `fn t(o: Option[(W, i64)]) -> i64 { match o { Some((a, b)) => { return sink(a) + b; } .. } }` over `fn sink(w: W) -> i64 { return w.id; }` prints `m10 end` on jit / -O0 / -O2 where `--interp` prints `dW1/n1 m10 end`, and valgrind reports 2 B in 1 block at -O0 | — |
@@ -524,6 +523,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-57 | 2026-10-04 | interp+codegen | medium | OVERWRITING A WHOLE TUPLE ELEMENT NEVER RUNS THE DISPLACED VALUE'S `Drop` BODY -- `t.0 = R { id: 6 }` over `(R, i64)` prints no `dR5` on any backend, owned or through `mut ref`, while the local (`x = ..`) and struct-field (`w.r = ..`) spellings run it at the store | — |
 | B-2026-10-04-58 | 2026-10-04 | codegen | low | A `for` LOOP OVER AN `Array` HELD IN A TUPLE ELEMENT FAILS THE BUILD -- `for p in a.0 { .. }` over `(Array[P, 2], i64)` stops `karac build` with `for-loop over this iterable is not lowered ... (source shape: a tuple element)`, while `--interp` prints `r:11`; `for x in b.0` over `(Vec[i64], i64)` and `for p in a.0.iter()` both build | — |
 | B-2026-10-04-59 | 2026-10-04 | codegen | low | A FIELD STORE THROUGH A NESTED INDEX FAILS THE BUILD -- `v[0][0].n = 9` over `Vec[Vec[P]]` stops `karac build` with `assignment to field 'n' through this place is not yet lowered`, while `--interp` prints `r:9`; the one-level store `v[0].n = 9` builds | — |
+| B-2026-10-04-63 | 2026-10-04 | interp+codegen | medium | A PAYLOAD OR FIELD OF A BY-VALUE PARAM HANDED TO A METHOD ON A BORROWED RECEIVER STILL READS AS STORED INTO THAT RECEIVER, SO ITS `Drop` BODY RUNS NOWHERE ON EVERY SURFACE -- `fn po(ref self, o: Option[S]) { match o { Some(r) => self.eat(r), None => {} } println("po") }` over `fn eat(ref self, s: S)` prints `qx po a` for `q.po(Some(mks(1))); println("a")`, never `dS1`, and `fn pw(ref self, w: W) { self.eat(w.r); .. }` likewise loses `dS2` | — |
 
 ### Relocated
 
@@ -3438,6 +3438,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-36 | codegen | high | DESTRUCTURING A TUPLE PAYLOAD WITH ANY SUB-WORD ELEMENT FAILS MODULE VERIFICATION ON EVERY COMPILED SURFACE -- `let g = Some((3i32, 5)); if let Some(… | 0e1671b2c |
 | B-2026-09-28-13 | interp+codegen | high | HANDING BACK A PARAM DECLARED `Option`/`Result` THROUGH AN IDENTITY CALL WHOSE RESULT IS DISCARDED, BOUND, PASSED ON OR MISSED DOUBLES OR LOSES ITS `… | fd8971494 |
 | B-2026-09-28-37 | interp+codegen | medium | REMAINDER OF B-2026-09-28-4: A FRESH-TEMP SCRUTINEE WHOSE PAYLOAD IS A PARAM VIEW LEAKS ITS BOX COMPILED (`if let None = mk2o(x)`, `match mk2o(x) { . | 395eff03c |
+| B-2026-09-28-38 | interp+codegen | medium | A BY-VALUE ARGUMENT HANDED TO A METHOD CALLED ON A BORROWED RECEIVER (`self`, OR A `ref` PARAM) READS AS STORED INTO THAT RECEIVER, SO ITS `Drop` BOD… | 1b0d064d1 |
 | B-2026-09-28-39 | other | medium | A FIXTURE THAT PANICS AFTER LINKING LEAVES ITS EXECUTABLE IN `/tmp`, SO A STALE `target/release/karac_jit_runner` UNDER `KARAC_REQUIRE_RUNTIME_ARCHIV… | bd3aed5db |
 | B-2026-09-28-40 | interp+codegen | medium | A STRUCT PROJECTION HANDED TO A CALLEE THAT RETURNS IT IN `Some` ON ONLY SOME PATHS RUNS ITS FIELDS' `Drop` BODIES TWICE ON THE HANDED PATH, ON EVERY… | 93fdb03b0 |
 | B-2026-09-28-41 | interp+codegen | medium | A `Drop`-CARRYING VALUE STORED ON ONLY SOME PATHS LOST OR DOUBLED ITS BODIES IN THREE SPELLINGS 4982484f9 DECLINED -- FIXED for a struct with a `shar… | 789467fc9 |
