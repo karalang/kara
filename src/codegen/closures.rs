@@ -986,6 +986,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // concrete struct/enum type name.)
         let mut heap_struct_captures: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
+        // B-2026-10-01-14 — the params this closure hands back bare on every
+        // path; see `closure_handback_params`.
+        let handback_params: std::collections::HashSet<usize> = self
+            .closure_handback_params(body)
+            .into_iter()
+            .map(|(i, _)| i)
+            .collect();
 
         if let Some(layout) = path_layout.as_ref() {
             // Per-path unpack: one env slot per captured CapturePath.
@@ -1257,8 +1264,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.adopt_closure_param_as_loop_binding(&param_name, &te);
                     // Returned whole (`|q| q`), the view is handed back as an
                     // independent deep copy, as a returned capture is.
+                    // B-2026-10-01-14 — unless every path hands it back bare:
+                    // then the copy is taken HERE, at entry, which covers a
+                    // `return q` and a rebind as well as the tail (both handed
+                    // the caller's buffer back and double-freed it).
                     if let Some((n, tn)) = self.captured_heap_agg_type(&param_name) {
-                        heap_struct_captures.insert(n, tn);
+                        if handback_params.contains(&i) {
+                            self.entry_copy_closure_param(&param_name, &tn);
+                        } else {
+                            heap_struct_captures.insert(n, tn);
+                        }
                     }
                 }
             }
@@ -1986,9 +2001,18 @@ impl<'ctx> super::Codegen<'ctx> {
         let declared = fn_type.get_param_types();
         let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
             vec![BasicMetadataValueEnum::from(env_ptr)];
+        // B-2026-10-01-14 — the params the bound closure literal hands back.
+        let handback = self
+            .closure_state
+            .closure_handback
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
         for (i, arg) in args.iter().enumerate() {
             // `declared[0]` is the env pointer, so user arg `i` is `declared[i + 1]`.
-            let val = self.compile_indirect_call_arg(arg, i, declared.get(i + 1).copied())?;
+            let hands_back = handback.iter().any(|(j, _)| *j == i);
+            let val =
+                self.compile_indirect_call_arg(arg, i, declared.get(i + 1).copied(), hands_back)?;
             call_args.push(BasicMetadataValueEnum::from(val));
         }
 
@@ -2034,10 +2058,36 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &CallArg,
         idx: usize,
         declared: Option<BasicMetadataTypeEnum<'ctx>>,
+        // B-2026-10-01-14 — the callee hands this argument back bare on every
+        // path (`closure_handback_params`), having copied it at entry.
+        hands_back: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if !matches!(declared, Some(BasicMetadataTypeEnum::PointerType(_))) {
             let val = self.compile_expr(&arg.value)?;
             self.free_fresh_owned_heap_closure_arg(&arg.value, val);
+            // B-2026-10-01-14 — the argument's `Drop` body goes with the copy
+            // the callee hands back, and only its MEMORY stays here: the named
+            // passthrough's terms (`suppress_user_drop_body_keeping_memory`),
+            // whose callee copies at entry exactly as this one now does. A
+            // named argument downgrades its own binding; a fresh one is
+            // registered as before and downgraded on the spot.
+            if hands_back {
+                if let ExprKind::Identifier(n) = &arg.value.kind {
+                    let n = n.clone();
+                    self.suppress_user_drop_body_keeping_memory(&n);
+                } else {
+                    let before: Vec<usize> = self
+                        .drop_rc
+                        .scope_cleanup_actions
+                        .iter()
+                        .map(Vec::len)
+                        .collect();
+                    self.track_inline_owned_aggregate_arg(val, &arg.value, false);
+                    self.downgrade_new_own_wrapper_drops_to_memory(&before);
+                }
+                self.disarm_struct_literal_arg_sources(&arg.value);
+                return Ok(val);
+            }
             // B-2026-08-28-38 — the caller-side owner for a BY-VALUE aggregate
             // argument, which a closure call never registered. Under
             // caller-retains a by-value struct param's user `Drop` body belongs
@@ -2101,6 +2151,158 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(val);
         }
         Ok(self.materialize_rvalue_for_ref_arg(val, idx))
+    }
+
+    /// B-2026-10-01-14 — the by-value params of the closure literal with this
+    /// `body` that it hands back BARE on every path, as `(index, struct
+    /// name)`: [`crate::ast::fn_always_returns_param`] (every exit) together
+    /// with [`crate::ast::fn_returns_param`] (some exit is the bare param, so
+    /// the closure's result type IS the param's type), over a param annotated
+    /// with a non-generic, non-`shared` struct.
+    ///
+    /// Asked of the literal, so the closure's own entry copy and the call
+    /// site's downgrade read one answer. A struct is the only kind admitted:
+    /// it is the kind `entry_copy_closure_param` copies, and an enum param
+    /// already takes a box of its own (`adopt_closure_param_as_loop_binding`).
+    pub(super) fn closure_handback_params(&self, body: &Expr) -> Vec<(usize, String)> {
+        let Some(f) = self
+            .closure_state
+            .closure_asts
+            .get(&(body.span.offset, body.span.length))
+        else {
+            return Vec::new();
+        };
+        let program = self.program_snapshot.as_deref();
+        f.params
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| {
+                if !matches!(p.pattern.kind, PatternKind::Binding(_)) {
+                    return None;
+                }
+                let TypeKind::Path(pe) = &p.ty.kind else {
+                    return None;
+                };
+                let [tn] = pe.segments.as_slice() else {
+                    return None;
+                };
+                if pe.generic_args.is_some()
+                    || !self.type_decls.struct_types.contains_key(tn)
+                    || self.type_decls.shared_types.contains_key(tn)
+                {
+                    return None;
+                }
+                (crate::ast::fn_returns_param(f, i)
+                    && crate::ast::fn_always_returns_param(program, f, i))
+                .then(|| (i, tn.clone()))
+            })
+            .collect()
+    }
+
+    /// B-2026-10-01-14 — record, for each name a `let` binds, which params
+    /// the closure literal it binds hands back; a `let` of anything else (or
+    /// a `let mut`, which can be reassigned) clears the name.
+    pub(super) fn note_closure_handback_binding(
+        &mut self,
+        names: Vec<String>,
+        value: &Expr,
+        is_mut: bool,
+    ) {
+        let handback = match &value.kind {
+            ExprKind::Closure { body, .. } if !is_mut => self.closure_handback_params(body),
+            _ => Vec::new(),
+        };
+        for name in names {
+            if handback.is_empty() {
+                self.closure_state.closure_handback.remove(&name);
+            } else {
+                self.closure_state
+                    .closure_handback
+                    .insert(name, handback.clone());
+            }
+        }
+    }
+
+    /// B-2026-10-01-14 — give a hand-back param a copy of its own at entry
+    /// (`karac_clone_<T>` into a fresh slot, stored back under the param's
+    /// name), so every exit that hands it back hands back THIS frame's buffers
+    /// and the caller's argument keeps its own. Before it, `|x: R| x` copied
+    /// at the tail only, and `|x: R| { return x; }` handed the caller's
+    /// buffers out: `free(): double free` on every compiled surface.
+    fn entry_copy_closure_param(&mut self, name: &str, tn: &str) {
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let Some(slot) = self.variables.get(name).map(|s| s.ptr) else {
+            return;
+        };
+        let Some(agg_ty) = self.type_decls.struct_types.get(tn).copied() else {
+            return;
+        };
+        let te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![tn.to_string()],
+                generic_args: None,
+                span: Span::default(),
+            }),
+            span: Span::default(),
+        };
+        let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+        // `emit_clone_fn_*` / `create_entry_alloca` may move the builder.
+        let cur = self.builder.get_insert_block();
+        let dst = self.create_entry_alloca(fn_val, "closure.param.copy", agg_ty.into());
+        if let Some(bb) = cur {
+            self.builder.position_at_end(bb);
+        }
+        self.builder
+            .build_call(clone_fn, &[slot.into(), dst.into()], "closure.param.clone")
+            .unwrap();
+        let copied = self
+            .builder
+            .build_load(agg_ty, dst, "closure.param.copied")
+            .unwrap();
+        self.builder.build_store(slot, copied).unwrap();
+    }
+
+    /// B-2026-10-01-14 — the actions registered since `before` (each frame's
+    /// length then) that run a struct's `Drop` wrapper, rewritten to its
+    /// memory walk alone: the argument registration of a hand-back closure
+    /// call, whose body the result now runs. The replacement
+    /// [`Self::suppress_user_drop_body_keeping_memory`] makes for a binding.
+    fn downgrade_new_own_wrapper_drops_to_memory(&mut self, before: &[usize]) {
+        let mut hits: Vec<(usize, usize, inkwell::values::PointerValue<'ctx>, String)> = Vec::new();
+        for (fi, frame) in self.drop_rc.scope_cleanup_actions.iter().enumerate() {
+            let start = before.get(fi).copied().unwrap_or(0);
+            for (ai, action) in frame.iter().enumerate().skip(start) {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_ptr,
+                    type_name,
+                    kind: super::state::UserDropKind::OwnWrapper,
+                    ..
+                } = action
+                {
+                    hits.push((fi, ai, *binding_ptr, type_name.clone()));
+                }
+            }
+        }
+        // Highest index first, so a removal never shifts one still to visit.
+        for (fi, ai, ptr, type_name) in hits.into_iter().rev() {
+            let field_fn = self
+                .emit_vec_elem_struct_with_shared_drop_fn(&type_name)
+                .or_else(|| self.emit_struct_drop_synthesis(&type_name));
+            match field_fn {
+                Some(drop_fn) => {
+                    self.drop_rc.scope_cleanup_actions[fi][ai] =
+                        super::state::CleanupAction::StructDrop {
+                            struct_alloca: ptr,
+                            drop_fn,
+                        };
+                }
+                None => {
+                    self.drop_rc.scope_cleanup_actions[fi].remove(ai);
+                }
+            }
+        }
     }
 
     /// Whether a named binding passed to a by-pointer (`ref`/`mut ref`) param
@@ -2273,7 +2475,8 @@ impl<'ctx> super::Codegen<'ctx> {
             vec![BasicMetadataValueEnum::from(env_ptr)];
         for (i, arg) in args.iter().enumerate() {
             // `declared[0]` is the env pointer, so user arg `i` is `declared[i + 1]`.
-            let val = self.compile_indirect_call_arg(arg, i, declared.get(i + 1).copied())?;
+            let val =
+                self.compile_indirect_call_arg(arg, i, declared.get(i + 1).copied(), false)?;
             call_args.push(BasicMetadataValueEnum::from(val));
         }
 

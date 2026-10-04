@@ -4528,6 +4528,14 @@ impl<'a> super::Interpreter<'a> {
         name: &str,
         assoc_only: bool,
     ) -> Option<&crate::ast::Function> {
+        // B-2026-10-01-14 — a closure callee, named by its body span
+        // (`closure_value_name`). Before this a closure reached here as the
+        // bare `<closure>`, resolved to nothing, and every hand-back question
+        // answered "no": `let h = |x: R| x; let r = h(w);` ran `w`'s body at
+        // the call and `r`'s again, where `fn h(x: R) -> R { x }` ran one.
+        if let Some(key) = closure_name_key(name) {
+            return self.closure_fns.get(&key);
+        }
         if let Some(f) = self.program.items.iter().find_map(|item| match item {
             crate::ast::Item::Function(f) if f.name == name => Some(f),
             _ => None,
@@ -7828,4 +7836,44 @@ impl super::Interpreter<'_> {
         }
         container
     }
+}
+
+impl super::Interpreter<'_> {
+    /// B-2026-10-01-14 — does a call through the closure bound to `name` hand
+    /// one of its by-value arguments back, on the terms
+    /// `record_passthrough_arg_moves` stands the caller down on? Then a
+    /// DISCARDED result is that argument's only owner.
+    pub(crate) fn discard_owed_by_closure_handback(&self, name: &str) -> bool {
+        let Some(Value::Function {
+            name: cname,
+            closure_env: Some(_),
+            ..
+        }) = self.env.slot_ref(name)
+        else {
+            return false;
+        };
+        let Some(f) = closure_name_key(cname.as_str()).and_then(|k| self.closure_fns.get(&k))
+        else {
+            return false;
+        };
+        (0..f.params.len()).any(|i| {
+            crate::ast::fn_returns_param(f, i)
+                || crate::ast::fn_always_returns_param(Some(self.program), f, i)
+                || crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
+        })
+    }
+}
+
+/// B-2026-10-01-14 — the name a closure VALUE carries: its body span, so a
+/// call through it can be resolved back to the literal
+/// ([`crate::ast::collect_closure_functions`]).
+pub(crate) fn closure_value_name(body: &crate::token::Span) -> String {
+    format!("<closure@{}+{}>", body.offset, body.length)
+}
+
+/// The inverse of [`closure_value_name`]; `None` for any other name.
+pub(crate) fn closure_name_key(name: &str) -> Option<(usize, usize)> {
+    let rest = name.strip_prefix("<closure@")?.strip_suffix('>')?;
+    let (o, l) = rest.split_once('+')?;
+    Some((o.parse().ok()?, l.parse().ok()?))
 }

@@ -134,6 +134,10 @@ pub struct Interpreter<'a> {
     /// codegen EMITS can never disagree. Empty for every program that has no
     /// colliding impl group, which is nearly all of them.
     pub(crate) impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames,
+    /// B-2026-10-01-14 — every closure literal as a `Function`, keyed by its
+    /// body span, so a call through a closure binding resolves to an AST the
+    /// hand-back predicates can read (`callee_fn_by_bare_name`).
+    pub(crate) closure_fns: std::collections::HashMap<(usize, usize), crate::ast::Function>,
     #[allow(dead_code)]
     pub(crate) typecheck_result: &'a TypeCheckResult,
     pub(crate) env: Env,
@@ -1405,6 +1409,7 @@ impl<'a> Interpreter<'a> {
         Interpreter {
             program,
             impl_dispatch_names: crate::impl_dispatch::collect_impl_dispatch_names(program),
+            closure_fns: crate::ast::collect_closure_functions(program),
             typecheck_result,
             env: Env::new(),
             captured_output: None,

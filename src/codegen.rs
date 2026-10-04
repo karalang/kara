@@ -6910,6 +6910,8 @@ impl<'ctx> Codegen<'ctx> {
                 pending_closure_fn_type: None,
                 pending_closure_param_hints: None,
                 closure_capture_paths: FxHashMap::default(),
+                closure_asts: Default::default(),
+                closure_handback: std::collections::HashMap::new(),
             },
             indexed_elem_counter: 0,
             optional_chain_counter: 0,
@@ -8430,6 +8432,8 @@ impl<'ctx> Codegen<'ctx> {
         // `compile_expr` → `compile_call` → `compile_generic_call`.
         // Cheap `Rc` clones flow to per-mono callers as they fire.
         self.program_snapshot = Some(Rc::new(program.clone()));
+        // B-2026-10-01-14 — closure literals as `Function`s; see the field.
+        self.closure_state.closure_asts = Rc::new(crate::ast::collect_closure_functions(program));
         // B-2026-09-28-13 — the escape walk's identity hand-backs, for this
         // program (the interpreter installs its own at construction).
         crate::result_escape::set_program(program);

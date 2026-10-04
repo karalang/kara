@@ -2344,7 +2344,9 @@ impl<'a> super::Interpreter<'a> {
                     span: body.span,
                 };
                 Value::Function {
-                    name: "<closure>".to_string(),
+                    // B-2026-10-01-14 — names the literal, so a call through
+                    // this value can ask the callee's hand-back questions.
+                    name: super::eval_call::closure_value_name(&body.span),
                     param_patterns: params.iter().map(|p| p.pattern.clone()).collect(),
                     param_defaults: params.iter().map(|_| None).collect(),
                     body: std::sync::Arc::new(closure_body),

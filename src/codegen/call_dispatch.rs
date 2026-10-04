@@ -9242,6 +9242,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         // not disambiguation.
                         self.discarded_escaped_part_type_name(fn_name, args)
                             .or_else(|| self.discarded_whole_param_type_name(fn_name, args))
+                            // B-2026-10-01-14 — a closure that hands its
+                            // by-value struct argument back: the result is
+                            // that argument's only owner now, and the
+                            // closure's param annotation names its type.
+                            .or_else(|| {
+                                self.closure_state
+                                    .closure_handback
+                                    .get(fn_name.as_str())
+                                    .and_then(|hb| hb.first())
+                                    .map(|(_, tn)| tn.clone())
+                            })
                             .or(declared)
                     }
                 }

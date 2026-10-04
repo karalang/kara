@@ -57,6 +57,8 @@ pub(super) struct VarMetadataSnapshot<'ctx> {
     arm_binding_tuple_elem_tes: Option<Vec<TypeExpr>>,
     atomic_var_inner_is_bool: bool,
     closure_fn_types: Option<FunctionType<'ctx>>,
+    /// B-2026-10-01-14 — scoped like `closure_fn_types`.
+    closure_handback: Option<Vec<(usize, String)>>,
     len_alias: Option<String>,
     vec_elem_types: Option<BasicTypeEnum<'ctx>>,
     slice_elem_types: Option<BasicTypeEnum<'ctx>>,
@@ -126,6 +128,7 @@ impl<'ctx> super::Codegen<'ctx> {
             arm_binding_tuple_elem_tes: self.var_types.arm_binding_tuple_elem_tes.remove(name),
             atomic_var_inner_is_bool: self.atomic_var_inner_is_bool.remove(name),
             closure_fn_types: self.closure_state.closure_fn_types.remove(name),
+            closure_handback: self.closure_state.closure_handback.remove(name),
             len_alias: self.bce.len_alias.remove(name),
             vec_elem_types: self.var_types.vec_elem_types.remove(name),
             slice_elem_types: self.var_types.slice_elem_types.remove(name),
@@ -215,6 +218,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let Some(v) = snap.closure_fn_types {
             self.closure_state.closure_fn_types.insert(key.clone(), v);
+        }
+        if let Some(v) = snap.closure_handback {
+            self.closure_state.closure_handback.insert(key.clone(), v);
         }
         if let Some(v) = snap.len_alias {
             self.bce.len_alias.insert(key.clone(), v);
@@ -465,6 +471,7 @@ pub(super) struct VarEnvSnapshot<'ctx> {
     tuple_var_elem_type_exprs: HashMap<String, Vec<TypeExpr>>,
     atomic_var_inner_is_bool: HashSet<String>,
     closure_fn_types: HashMap<String, FunctionType<'ctx>>,
+    closure_handback: HashMap<String, Vec<(usize, String)>>,
     len_alias: HashMap<String, String>,
     vec_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
     slice_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
@@ -516,6 +523,7 @@ impl<'ctx> super::Codegen<'ctx> {
             tuple_var_elem_type_exprs: self.var_types.tuple_var_elem_type_exprs.clone(),
             atomic_var_inner_is_bool: self.atomic_var_inner_is_bool.clone(),
             closure_fn_types: self.closure_state.closure_fn_types.clone(),
+            closure_handback: self.closure_state.closure_handback.clone(),
             len_alias: self.bce.len_alias.clone(),
             vec_elem_types: self.var_types.vec_elem_types.clone(),
             slice_elem_types: self.var_types.slice_elem_types.clone(),
@@ -604,6 +612,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.tuple_var_elem_type_exprs = snap.tuple_var_elem_type_exprs;
         self.atomic_var_inner_is_bool = snap.atomic_var_inner_is_bool;
         self.closure_state.closure_fn_types = snap.closure_fn_types;
+        self.closure_state.closure_handback = snap.closure_handback;
         self.bce.len_alias = snap.len_alias;
         self.var_types.vec_elem_types = snap.vec_elem_types;
         self.var_types.slice_elem_types = snap.slice_elem_types;

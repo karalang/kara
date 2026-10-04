@@ -5417,6 +5417,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.closure_state
                             .closure_fn_types
                             .insert(var_name.clone(), fn_type);
+                        // B-2026-10-01-14 — and which params it hands back.
+                        self.note_closure_handback_binding(vec![var_name.clone()], value, *is_mut);
                         // B-2026-07-18-43: record the closure's returned `Vec[T]`
                         // type (a bare `|| v` / block tail naming a Vec visible in
                         // this outer scope) so an inline index of the call result
@@ -8191,6 +8193,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             .insert(bound_name, fn_type);
                     }
                 }
+                // B-2026-10-01-14 — any other `let` of the name clears it.
+                self.note_closure_handback_binding(pattern.binding_names(), value, *is_mut);
                 // B-2026-07-18-43: if the RHS is a closure whose body returns a
                 // Vec/VecDeque (a bare `|| v` or a block tail naming one), record
                 // the returned `Vec[T]` `TypeExpr` under the binding name(s) so an

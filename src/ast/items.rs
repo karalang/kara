@@ -8269,6 +8269,117 @@ pub fn fn_escaping_param_payload_variants(
     variants
 }
 
+/// B-2026-10-01-14 — a closure literal viewed as a [`Function`], so the
+/// hand-back predicates a call site asks of a NAMED callee
+/// ([`fn_always_returns_param`] and its siblings) answer for a closure callee
+/// too. Without it a closure answered none of them: `let h = |x: R| x;
+/// let r = h(w);` treated `w` as dying at the call and `r` as a second owner,
+/// and ran the body twice, while `fn h(x: R) -> R { x }` ran it once.
+///
+/// The body block is the closure's own block when it has one, so a `return`
+/// inside it is an exit of this function exactly as it is of the closure. An
+/// unannotated parameter gets the placeholder type `_`, which no predicate's
+/// type test matches, so a test that needs the type declines rather than
+/// guessing. Keyed by the closure BODY's span, which is the span every caller
+/// can recover from the closure value it holds.
+pub fn closure_as_function(params: &[super::ClosureParam], body: &Expr) -> Function {
+    let block = match &body.kind {
+        ExprKind::Block(b) => b.clone(),
+        _ => Block {
+            stmts: Vec::new(),
+            final_expr: Some(Box::new(body.clone())),
+            span: body.span,
+        },
+    };
+    let placeholder = |sp: Span| TypeExpr {
+        kind: super::TypeKind::Path(PathExpr {
+            segments: vec!["_".to_string()],
+            generic_args: None,
+            span: sp,
+        }),
+        span: sp,
+    };
+    Function {
+        span: body.span,
+        attributes: Vec::new(),
+        doc_comment: None,
+        is_pub: false,
+        is_private: false,
+        is_unsafe: false,
+        is_comptime: false,
+        name: "<closure>".to_string(),
+        generic_params: None,
+        params: params
+            .iter()
+            .map(|cp| Param {
+                span: cp.span,
+                pattern: cp.pattern.clone(),
+                ty: cp.ty.clone().unwrap_or_else(|| placeholder(cp.span)),
+                default_value: None,
+                doc_comment: None,
+                is_comptime: false,
+                is_frozen: false,
+            })
+            .collect(),
+        self_param: None,
+        self_is_frozen: false,
+        return_type: None,
+        effects: None,
+        requires: Vec::new(),
+        ensures: Vec::new(),
+        where_clause: None,
+        body: block,
+        stdlib_origin: false,
+        deprecation: None,
+        unstable: None,
+        is_track_caller: false,
+        is_gpu: false,
+        inline_hint: None,
+        is_cold: false,
+        lint_overrides: Vec::new(),
+        profile_compat: Vec::new(),
+        no_effect: Vec::new(),
+        abi: None,
+    }
+}
+
+/// B-2026-10-01-14 — every closure literal in `program`, as
+/// [`closure_as_function`] sees it, keyed by its body's `(offset, length)`.
+pub fn collect_closure_functions(
+    program: &crate::Program,
+) -> std::collections::HashMap<(usize, usize), Function> {
+    fn walk(e: &Expr, out: &mut std::collections::HashMap<(usize, usize), Function>) {
+        if let ExprKind::Closure { params, body, .. } = &e.kind {
+            out.entry((body.span.offset, body.span.length))
+                .or_insert_with(|| closure_as_function(params, body));
+        }
+        crate::rc_elide::walk_children_pub(&e.kind, &mut |c| walk(c, out));
+    }
+    fn walk_block(b: &Block, out: &mut std::collections::HashMap<(usize, usize), Function>) {
+        for s in &b.stmts {
+            crate::rc_elide::walk_stmt_children_pub(s, &mut |c| walk(c, out));
+        }
+        if let Some(t) = &b.final_expr {
+            walk(t, out);
+        }
+    }
+    let mut out = std::collections::HashMap::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) => walk_block(&f.body, &mut out),
+            Item::ImplBlock(imp) => {
+                for it in &imp.items {
+                    if let ImplItem::Method(f) = it {
+                        walk_block(&f.body, &mut out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// B-2026-09-29-16 — is by-value `Option` / `Result` parameter `arg_index`
 /// unwrapped (`unwrap` / `expect` / `unwrap_err` / `expect_err`) on EVERY path,
 /// and mentioned nowhere else?

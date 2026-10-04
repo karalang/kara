@@ -13158,6 +13158,15 @@ impl<'a> super::Interpreter<'a> {
                                 // runs `dR3` on every backend instead of on
                                 // none.
                                 self.run_discarded_value_user_drops(discarded);
+                            } else if self.discard_owed_by_closure_handback(fn_name) {
+                                // B-2026-10-01-14 — a closure that hands its
+                                // by-value argument back (`h(mk(78));` over
+                                // `let h = |x: R| x;`). The argument walk now
+                                // stands down for it, as it does for a named
+                                // passthrough, so the result is the value's
+                                // only owner; with no declared return type to
+                                // route by, the value says what is owed.
+                                self.run_discarded_value_user_drops(discarded);
                             } else if let Some(tn) = self.user_fn_return_type_name(fn_name) {
                                 // B-2026-09-06-1 — a GENERIC callee's declared
                                 // return is its own parameter; the value says

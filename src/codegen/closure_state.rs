@@ -73,4 +73,18 @@ pub(crate) struct ClosureState<'ctx> {
     /// path and any codegen-only tests that don't run the ownership
     /// pass).
     pub(crate) closure_capture_paths: FxHashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
+    /// B-2026-10-01-14 — every closure literal of the program viewed as a
+    /// `Function` ([`crate::ast::collect_closure_functions`]), keyed by its
+    /// body span, so a closure can be asked the hand-back questions a named
+    /// callee is asked.
+    pub(crate) closure_asts:
+        std::rc::Rc<std::collections::HashMap<(usize, usize), crate::ast::Function>>,
+    /// B-2026-10-01-14 — immutable `let` bindings of a closure literal that
+    /// hands a by-value struct param back BARE on every path
+    /// ([`super::Codegen::closure_handback_params`]): binding name →
+    /// `(param index, struct name)`. Such a closure takes its own copy of the
+    /// param at entry, so a call through the binding keeps the argument's
+    /// MEMORY with the caller and gives its `Drop` body to the result, as a
+    /// named passthrough callee does.
+    pub(crate) closure_handback: std::collections::HashMap<String, Vec<(usize, String)>>,
 }
