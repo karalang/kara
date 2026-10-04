@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 681 |
 | run-vs-build | 586 |
 | leak | 560 |
-| double-free | 414 |
+| double-free | 415 |
 | codegen-gap | 220 |
 | missing-feature | 216 |
 | other | 168 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2697 |
+| codegen | 2698 |
 | interp | 833 |
 | typecheck | 327 |
 | other | 113 |
@@ -524,6 +524,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-81 | 2026-10-04 | codegen | medium | A FRESH `Some([..])` TEMPORARY HANDED TO A BY-VALUE `Option[Array[R, 2]]` PARAM THAT THE CALLEE RETURNS LEAKS EVERY ELEMENT'S HEAP COMPILED -- `let r = keep(Some([mk(29), mk(30)]))` over `fn keep(x: Option[Array[R, 2]]) -> Option[Array[R, 2]] { return x; }` prints the right bodies on every surface and loses 2 blocks (each element's `String`) at -O0; the conditional hand-back `midc(Some([..]), true)` loses the same, and a NAMED local argument is clean | — |
 | B-2026-10-04-82 | 2026-10-04 | codegen | medium | `let mut h = x; h = None;` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM LEAKS EVERY ELEMENT'S HEAP COMPILED -- the displaced value's box is freed without its interior; bodies are right on every surface (`dR31 dR32 o6`), valgrind -O0 reports 2 blocks definitely lost, temporary or named argument alike | — |
 | B-2026-10-04-83 | 2026-10-04 | interp+codegen | medium | FORWARDING A BY-VALUE `Option[Array[R, 2]]` PARAM TO ANOTHER BY-VALUE CALLEE RUNS THE ELEMENT `Drop` BODIES AT DIFFERENT POINTS PER BACKEND -- `fn fw(x: Option[Array[R, 2]]) { ok(x); println("fw"); }` prints `ok dR27 dR28 fw` on every compiled surface and `ok fw dR27 dR28` under `--interp`; the rebind spelling `let h = x; ok(h);` splits the same way | — |
+| B-2026-10-04-76 | 2026-10-04 | codegen | high | AN INDEX READ OF A NON-`Copy` ELEMENT AS A BLOCK TAIL OR A `shared enum` ARM TAIL ALIASES THE ELEMENT INSTEAD OF DEEP-COPYING IT, SO IT IS FREED TWICE COMPILED -- `let s = { let x = m; x[1] }` over `m: Vec[String]` and `match t { M.My(x) => x[1], _ => .. }` over `shared enum M { My(Vec[String]), N }` print the right string and report 3 and 4 valgrind errors (invalid reads and an invalid free) | — |
 
 ### Relocated
 
