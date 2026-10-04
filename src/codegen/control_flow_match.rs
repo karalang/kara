@@ -15864,8 +15864,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .get(obj_ty.as_str())?
                         .get(fidx)?;
                     // B-2026-09-30-83 — an `Array[T, N]` field peels the same way.
-                    let elem_te = vec_inner_type_expr(field_te)
-                        .or_else(|| super::helpers::array_inner_type_expr(field_te))?;
+                    // B-2026-10-04-70 — and a `Map` field to its VALUE type.
+                    let elem_te = super::helpers::indexed_elem_type_expr(field_te)?;
                     if let TypeKind::Path(p) = &elem_te.kind {
                         return p.segments.last().cloned();
                     }
@@ -15873,12 +15873,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // B-2026-09-20-25 — a container held in a TUPLE element
                 // (`t.0[0].n`), through the same resolver the read uses.
-                if let ExprKind::TupleIndex { .. } = &object.kind {
+                if let ExprKind::TupleIndex {
+                    object: tuple,
+                    index: hop,
+                } = &object.kind
+                {
                     if let Some(TypeKind::Path(p)) =
                         self.vec_index_elem_type_expr(object).map(|te| te.kind)
                     {
                         return p.segments.last().cloned();
                     }
+                    // B-2026-10-04-70 — a `Map` in a tuple (`t.0[1].n`), which
+                    // the `Vec`-only resolver above declines, and a tuple that
+                    // is itself an indexed element (`v[0].0[0].n` over
+                    // `Vec[(Vec[P], i64)]`).
+                    let container_te = self
+                        .indexed_tuple_elem_type_expr(tuple, *hop)
+                        .or_else(|| self.tuple_index_elem_type_expr(tuple, *hop))?;
+                    if let TypeKind::Path(p) =
+                        super::helpers::indexed_elem_type_expr(&container_te)?.kind
+                    {
+                        return p.segments.last().cloned();
+                    }
+                    return None;
                 }
                 // B-2026-10-04-59 — a container that is itself an indexed
                 // element (`v[0][j].n`, `h.rows[i][j].n`, `a[0][1].n` over an
@@ -15890,8 +15907,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     if !matches!(inner_idx.kind, ExprKind::Range { .. }) {
                         let container_te = self.indexed_place_elem_type_expr(inner)?;
-                        let elem_te = vec_inner_type_expr(&container_te)
-                            .or_else(|| super::helpers::array_inner_type_expr(&container_te))?;
+                        // B-2026-10-04-70 — a `Map` element peels to its value.
+                        let elem_te = super::helpers::indexed_elem_type_expr(&container_te)?;
                         if let TypeKind::Path(p) = &elem_te.kind {
                             return p.segments.last().cloned();
                         }
@@ -15920,6 +15937,18 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::TupleIndex { object, index } => {
                 if let Some(elems) = self.place_chain_tuple_tes(object) {
                     if let Some(TypeKind::Path(p)) = elems.get(*index as usize).map(|t| &t.kind) {
+                        return p.segments.last().cloned();
+                    }
+                }
+                // B-2026-10-04-70 — a tuple that is a MAP VALUE (`m[1].0.n` over
+                // `Map[i64, (P, i64)]`). Kept to maps: a `Vec` element tuple the
+                // resolver above does not type is a scrutinee shape whose
+                // payload-move paths rely on getting no name here.
+                if self.indexes_a_map(object) {
+                    if let Some(TypeKind::Path(p)) = self
+                        .indexed_tuple_elem_type_expr(object, *index)
+                        .map(|te| te.kind)
+                    {
                         return p.segments.last().cloned();
                     }
                 }

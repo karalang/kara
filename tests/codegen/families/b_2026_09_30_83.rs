@@ -149,24 +149,23 @@ fn main() { let mut a: Array[P, 2] = [P { n: 5 }, P { n: 6 }]; let i = 5 - 3; a[
     );
 }
 
-/// B-2026-09-30-83 — a field store whose parent place codegen cannot lower is
-/// refused at build time. `a.0[0].n = 9` through a `mut ref` TUPLE parameter
-/// used to compile to nothing and read back `5`; B-2026-09-30-89 lowered that
-/// specimen and B-2026-10-04-59 lowered the next one (a nested index), so this
-/// pins the refusal on a `Map` value (`m[1].n = 9`), which still has no
-/// resolver. PREDICTS B-2026-10-04-70: this cell must flip to a lowered store
-/// when that row is fixed.
+/// B-2026-09-30-83 — a field store whose parent place codegen could not lower
+/// used to compile to nothing; it was made a build error, pinned here on one
+/// specimen after another as each was lowered (a `mut ref` tuple parameter by
+/// B-2026-09-30-89, a nested index by B-2026-10-04-59). B-2026-10-04-70
+/// lowered the last known one, a `Map` value (`m[1].n = 9`), so the pin now
+/// holds that it LANDS: no store spelling known to reach the refusal remains.
 #[test]
-fn unlowered_field_store_place_is_a_build_error() {
-    let msg = codegen_error(
-        "struct P { n: i64 }
+fn map_value_field_store_lands_where_it_was_refused() {
+    let prog = "struct P { n: i64 }
 fn main() { let mut m: Map[i64, P] = Map.new(); m.insert(1, P { n: 5 }); m[1].n = 9; println(f\"r:{m[1].n}\"); }
-",
-    );
-    assert!(
-        msg.contains("assignment to field 'n' through this place is not yet lowered"),
-        "{msg}"
-    );
+";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(prog);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), "r:9\n", "interpreter");
+    if let Some(aot) = run_program(prog) {
+        assert_eq!(aot, "r:9\n", "AOT");
+    }
 }
 
 /// B-2026-09-30-84 — an annotated `Array` element handed to a `mut ref`

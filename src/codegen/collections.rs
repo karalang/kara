@@ -2883,6 +2883,60 @@ impl<'ctx> super::Codegen<'ctx> {
             index: tidx,
         } = &object.kind
         {
+            // B-2026-10-04-70 — a `Map` held in a tuple element (`t.0[1]`,
+            // `w[0].0[1]`). The `Vec` arm below rebuilds the container type
+            // from the recorded ELEMENT type, which cannot spell a map, so
+            // this read died on "Index operator applied to non-array type"
+            // while `--interp` answered. Type the element from its declaration
+            // and index it through a synth binding, as the field arm above does.
+            // A `Vec` there takes this route too when the place chain cannot
+            // reach the tuple (`mm[1].0[0]`, the tuple being a map VALUE).
+            // The indexed-tuple resolver first: it answers only for a tuple
+            // that is an indexed element, and exactly, where the general one
+            // can fall back to a `String` guess from the LLVM layout.
+            let decl_te = self
+                .indexed_tuple_elem_type_expr(tup, *tidx)
+                .or_else(|| self.tuple_index_elem_type_expr(tup, *tidx));
+            let chained = decl_te
+                .as_ref()
+                .filter(|te| {
+                    super::helpers::map_kv_type_exprs(te).is_some()
+                        || super::helpers::vec_inner_type_expr(te).is_some()
+                })
+                .and_then(|_| self.place_chain_ptr_through_borrow(object));
+            let is_map = decl_te
+                .as_ref()
+                .is_some_and(|te| super::helpers::map_kv_type_exprs(te).is_some());
+            let placed = match (is_map, chained) {
+                (true, Some(p)) => Some(p),
+                (_, None) if decl_te.is_some() => {
+                    self.indexed_tuple_elem_place(tup, *tidx).map(|(p, _, _)| p)
+                }
+                _ => None,
+            };
+            if let (Some(container_te), Some(elem_ptr)) = (decl_te.clone(), placed) {
+                let synth = format!("__tup_elem_{}", self.indexed_elem_counter);
+                self.indexed_elem_counter += 1;
+                let ty = self.llvm_type_for_type_expr(&container_te);
+                self.variables
+                    .insert(synth.clone(), super::state::VarSlot { ptr: elem_ptr, ty });
+                self.register_var_from_type_expr(&synth, &container_te);
+                let synth_expr = Expr {
+                    kind: ExprKind::Identifier(synth.clone()),
+                    span: object.span,
+                };
+                let result = self.compile_index(&synth_expr, index);
+                self.variables.remove(&synth);
+                self.var_types.vec_elem_types.remove(&synth);
+                self.var_types.slice_elem_types.remove(&synth);
+                self.var_types.var_elem_type_exprs.remove(&synth);
+                self.var_types.var_type_names.remove(&synth);
+                self.mapset.map_key_types.remove(&synth);
+                self.mapset.map_val_types.remove(&synth);
+                self.mapset.map_key_type_names.remove(&synth);
+                self.mapset.map_key_type_exprs.remove(&synth);
+                return result;
+            }
             let key = (object.span.offset, object.span.length);
             if let Some(elem_te) = self.span_tables.temp_recv_elem_types.get(&key).cloned() {
                 // B-2026-08-10-5 — pick the CONTAINER shape from the tuple's

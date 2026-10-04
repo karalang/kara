@@ -1509,7 +1509,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // call to the very same expression (`a[i][j].field.to_string()`)
         // routed to FR5 and printed the fix. Mirror FR5 here.
         if let ExprKind::Index { object: outer, .. } = &object.kind {
-            if matches!(outer.kind, ExprKind::Index { .. }) {
+            {
                 // B-2026-10-04-59 — a PLAIN struct element behind two or more
                 // index steps (`v[i][j].n`, `h.rows[i][j].s`, `a[0][1].n` over
                 // an `Array` of arrays) is the single-index arms' read one level
@@ -1518,6 +1518,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // element through the place chain is what the generic arm
                 // lacked; a shared element or a `ref` field still takes the
                 // deferral below.
+                //
+                // B-2026-10-04-70 — and a plain struct VALUE of a map held in a
+                // field (`o.m[1].n`), behind one index step: no single-index arm
+                // types a map field's value, and the element is materialized the
+                // same way.
                 if let BasicValueEnum::StructValue(sv) = obj_val {
                     let plain_idx = self.place_chain_type_name(object).and_then(|tn| {
                         if self.type_decls.shared_types.contains_key(tn.as_str())
@@ -1540,6 +1545,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+            }
+            if matches!(outer.kind, ExprKind::Index { .. }) {
                 return Err(format!(
                     "codegen: chained indexed field receivers \
                      (`a[i][j].field…`) are deferred to v1.x; \
@@ -4119,6 +4126,20 @@ impl<'ctx> super::Codegen<'ctx> {
             // skipped, and the store exited through the no-op tail — the
             // write was SILENTLY LOST (interp applied it; reads were fine).
             // Fall through to the field-rooted resolver below.
+            // B-2026-10-04-70 — a named `Map` (`m[k].n = 9`): the value half of
+            // the found entry, in place. No resolver below places a map value,
+            // so the store was refused at build time.
+            ExprKind::Index { object, index }
+                if matches!(&object.kind, ExprKind::Identifier(n)
+                    if self.mapset.map_val_types.contains_key(n.as_str())) =>
+            {
+                let ExprKind::Identifier(n) = &object.kind else {
+                    return None;
+                };
+                self.lower_indexed_elem_ptr_map(n, index)
+                    .ok()
+                    .map(|(p, _)| p)
+            }
             ExprKind::Index { object, index } => match self.field_chain_place_ptr(expr) {
                 Some(p) => Some(p),
                 None => match self.field_rooted_index_place_ptr(expr) {
@@ -4141,7 +4162,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // element in place (owned roots; ref-param roots bail there).
             // B-2026-09-30-89 — and through a `ref` / `mut ref` root, where
             // the chain walker bails: `a.0.n = 8` over `a: mut ref (P, i64)`.
-            ExprKind::TupleIndex { .. } => self.place_chain_ptr_through_borrow(expr),
+            // B-2026-10-04-70 — and through a tuple that is an indexed element
+            // the chain walker does not place (`m[1].0.n = 9` over a `Map`).
+            ExprKind::TupleIndex { object, index } => {
+                match self.place_chain_ptr_through_borrow(expr) {
+                    Some(p) => Some(p),
+                    None => self
+                        .indexed_tuple_elem_place(object, *index)
+                        .map(|(p, _, _)| p),
+                }
+            }
             ExprKind::FieldAccess { object, field } => {
                 let base_ptr = self.nested_store_place_ptr(object)?;
                 let obj_ty = self.place_chain_type_name(object)?;
@@ -4442,6 +4472,65 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|te| self.subst_monomorph_type_params(&te))
     }
 
+    /// B-2026-10-04-70 — the declared type of element `hop` of a tuple that is
+    /// itself an indexed element (`v[0].0` over `Vec[(Vec[P], i64)]`).
+    /// `tuple_index_elem_type_expr` reads `place_chain_tuple_tes`, which has no
+    /// arm for an indexed tuple; widening that shared resolver reaches callers
+    /// outside stores, so the store and its parent-type lookup ask here instead.
+    pub(super) fn indexed_tuple_elem_type_expr(&self, tuple: &Expr, hop: u64) -> Option<TypeExpr> {
+        let ExprKind::Index { object, index } = &tuple.kind else {
+            return None;
+        };
+        if matches!(index.kind, ExprKind::Range { .. }) {
+            return None;
+        }
+        match self.indexed_place_elem_type_expr(object)?.kind {
+            TypeKind::Tuple(tes) => tes.get(hop as usize).cloned(),
+            _ => None,
+        }
+    }
+
+    /// B-2026-10-04-70 — is `place` an index into a `Map` (`m[k]`, `v[0][k]`)?
+    pub(super) fn indexes_a_map(&self, place: &Expr) -> bool {
+        let ExprKind::Index { object, .. } = &place.kind else {
+            return false;
+        };
+        match &object.kind {
+            ExprKind::Identifier(n) => self.mapset.map_val_types.contains_key(n.as_str()),
+            ExprKind::Index { object: inner, .. } => self
+                .indexed_place_elem_type_expr(inner)
+                .is_some_and(|te| super::helpers::map_kv_type_exprs(&te).is_some()),
+            _ => false,
+        }
+    }
+
+    /// B-2026-10-04-70 — the storage of element `hop` of a tuple that is an
+    /// indexed element (`v[0].0` over `Vec[(Vec[P], i64)]`, `m[1].0` over
+    /// `Map[i64, (P, i64)]`), with its LLVM and declared types. The tuple is
+    /// placed by [`Self::nested_store_place_ptr`], so a `Map` value is the
+    /// entry's own slot and the store lands in the container.
+    pub(super) fn indexed_tuple_elem_place(
+        &mut self,
+        tuple: &Expr,
+        hop: u64,
+    ) -> Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, TypeExpr)> {
+        let te = self.indexed_tuple_elem_type_expr(tuple, hop)?;
+        let ExprKind::Index { object, .. } = &tuple.kind else {
+            return None;
+        };
+        let tuple_te = self.indexed_place_elem_type_expr(object)?;
+        let BasicTypeEnum::StructType(agg) = self.llvm_type_for_type_expr(&tuple_te) else {
+            return None;
+        };
+        let ll_ty = agg.get_field_type_at_index(hop as u32)?;
+        let tuple_ptr = self.nested_store_place_ptr(tuple)?;
+        let p = self
+            .builder
+            .build_struct_gep(agg, tuple_ptr, hop as u32, "nested.store.tuple.elem")
+            .ok()?;
+        Some((p, ll_ty, te))
+    }
+
     fn field_rooted_index_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
         let ExprKind::Index { object, index } = &expr.kind else {
             return None;
@@ -4481,12 +4570,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 object: inner,
                 index: hop,
             } => {
-                let ll_ty = self
-                    .place_chain_aggregate_llvm_type_through_borrow(inner)?
-                    .get_field_type_at_index(*hop as u32)?;
-                let te = self.tuple_index_elem_type_expr(inner, *hop)?;
-                let p = self.place_chain_ptr_through_borrow(object)?;
-                (p, ll_ty, te)
+                // B-2026-10-04-70 — the tuple is an indexed element
+                // (`v[0].0[0].n = 9` over `Vec[(Vec[P], i64)]`, or a map
+                // value): place the tuple with this store's own resolver, then
+                // GEP its element. Asked first because it answers exactly or
+                // not at all.
+                if self.indexed_tuple_elem_type_expr(inner, *hop).is_some() {
+                    self.indexed_tuple_elem_place(inner, *hop)?
+                } else {
+                    let te = self.tuple_index_elem_type_expr(inner, *hop)?;
+                    let ll_ty = self
+                        .place_chain_aggregate_llvm_type_through_borrow(inner)?
+                        .get_field_type_at_index(*hop as u32)?;
+                    let p = self.place_chain_ptr_through_borrow(object)?;
+                    (p, ll_ty, te)
+                }
             }
             // B-2026-10-04-59 — a `Vec` that is itself an indexed ELEMENT
             // (`v[0][j].n = x` over `Vec[Vec[P]]`, `h.rows[i][j].n = x`). The
@@ -4500,7 +4598,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 let te = self.indexed_place_elem_type_expr(inner)?;
                 // A non-`Vec` element is the array resolver's to place; asking
                 // for the pointer here would emit its subscripts twice.
-                super::helpers::vec_inner_type_expr(&te)?;
+                // B-2026-10-04-70 — a `Map` element is placed below, through
+                // its value slot.
+                if super::helpers::vec_inner_type_expr(&te).is_none()
+                    && super::helpers::map_kv_type_exprs(&te).is_none()
+                {
+                    return None;
+                }
                 let ll_ty = self.llvm_type_for_type_expr(&te);
                 let p = self.nested_store_place_ptr(object)?;
                 (p, ll_ty, te)
@@ -4519,6 +4623,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.register_var_from_type_expr(&synth, &field_te);
         let elem = if self.var_types.vec_elem_types.contains_key(synth.as_str()) {
             self.vec_index_elem_ptr(&synth, index).ok()
+        } else if self.mapset.map_val_types.contains_key(synth.as_str()) {
+            // B-2026-10-04-70 — a `Map` container (a field, an element, a
+            // tuple element): the value half of the found entry, in place, so
+            // the store lands in the map. A missing key panics, as the read does.
+            self.lower_indexed_elem_ptr_map(&synth, index)
+                .ok()
+                .map(|(p, _)| p)
         } else {
             None
         };

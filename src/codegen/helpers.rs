@@ -258,6 +258,20 @@ pub(super) fn map_kv_type_exprs(te: &TypeExpr) -> Option<(TypeExpr, TypeExpr)> {
     }
 }
 
+/// B-2026-10-04-70 — the type of `c[k]` for a container `c` of type `te`:
+/// a `Vec` / `VecDeque` or `Array` element, or a `Map` / `SortedMap` VALUE.
+///
+/// The place resolvers peeled with `vec_inner_type_expr` and
+/// `array_inner_type_expr` alone, and the first of those answers a `Map` with
+/// nothing at all (it would be the KEY if it answered), so a store through a
+/// map value one level down (`v[0][1].n = 9` over `Vec[Map[i64, P]]`,
+/// `o.m[1].n = 9`) typed no parent and was refused.
+pub(super) fn indexed_elem_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
+    vec_inner_type_expr(te)
+        .or_else(|| array_inner_type_expr(te))
+        .or_else(|| map_kv_type_exprs(te).map(|(_, v)| v))
+}
+
 /// Extract the type name from an impl block's target TypeExpr.
 /// Returns `None` for non-path targets (slice/array/etc.) since those
 /// can't carry user-defined impl methods in v1.
