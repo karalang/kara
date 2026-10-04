@@ -12964,6 +12964,19 @@ impl<'a> super::Interpreter<'a> {
                             .retain(|(n, path)| !(n == &base && path.first() == Some(&field)));
                         self.record_field_assign_of_param_view(&base, &field, value);
                     }
+                } else if let ExprKind::TupleIndex { object, index } = &target.kind {
+                    // B-2026-10-04-73 — the TUPLE-ELEMENT sibling: an element
+                    // moved out (`let x = t.0`) and then given a new value is
+                    // the tuple's to drop again. The record stayed, so the new
+                    // value's body ran nowhere (`x5 dR5 end0`, no `dR6`).
+                    // Removed at the store, so a store on one path re-arms
+                    // only the path that ran it. Codegen's twin is
+                    // `rearm_reassigned_moved_tuple_elem`.
+                    if let ExprKind::Identifier(base) = &object.kind {
+                        let key = (base.clone(), *index as usize);
+                        self.moved_out_tuple_elem_bodies.remove(&key);
+                        self.moved_out_tuple_elem_payload_bodies.remove(&key);
+                    }
                 }
             }
             StmtKind::CompoundAssign { target, op, value } => {

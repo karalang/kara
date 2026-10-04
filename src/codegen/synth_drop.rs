@@ -10870,6 +10870,138 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-10-04-73 — the TUPLE-ELEMENT twin of
+    /// [`Self::rearm_reassigned_moved_field`]: an element moved out
+    /// (`let x = t.0`) and then given a value of its own (`t.0 = mk(6)`) is
+    /// the tuple's to drop again. The mask was one-way, so the replacement's
+    /// body ran nowhere on any surface (`x5 dR5 end0`, no `dR6`).
+    ///
+    /// Called AFTER the store, for the order the field twin states: the
+    /// displacement reads the mask first and declines the husk.
+    ///
+    /// Three shapes, by how the move-out was recorded:
+    /// * a conditional move-out minted a `#<index>` runtime flag, so this
+    ///   store sets it back to `true` on the path that runs;
+    /// * an unconditional move-out in the walk's own frame masked the element
+    ///   statically, so a store in that same frame un-masks it and rebuilds
+    ///   the walker;
+    /// * a store one frame DEEPER than the walk is runtime-conditional, so the
+    ///   `before_store` call mints a `#<index>` flag `false` at entry and
+    ///   un-masks the walker, the after-store call sets the flag, and the
+    ///   death site's leaf tree picks the masked walk on the path that never
+    ///   stored (the B-2026-09-08-5 shape).
+    pub(super) fn rearm_reassigned_moved_tuple_elem(
+        &mut self,
+        base: &str,
+        index: u32,
+        tuple_ty: inkwell::types::StructType<'ctx>,
+        before_store: bool,
+    ) {
+        if self.borrow_vars.ref_params.contains_key(base) {
+            return;
+        }
+        let key = format!("#{index}");
+        let bool_t = self.context.bool_type();
+        if let Some(flag) = self
+            .drop_rc
+            .field_view_flags
+            .get(base)
+            .and_then(|m| m.get(&key))
+            .copied()
+            .filter(|f| self.drop_rc.tuple_elem_move_flag_types.contains_key(f))
+        {
+            if !before_store {
+                let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
+            }
+            return;
+        }
+        let masked = self
+            .tuple_moved_elem_bodies
+            .get(base)
+            .is_some_and(|s| s.contains(&index));
+        if !masked {
+            return;
+        }
+        let Some(elem_tes) = self.var_types.tuple_var_elem_tes.get(base).cloned() else {
+            return;
+        };
+        let owns_walk = |f: &Vec<super::state::CleanupAction<'ctx>>| {
+            f.iter().any(|a| {
+                matches!(a,
+                    super::state::CleanupAction::UserDrop { binding_name, kind, .. }
+                        if binding_name == base
+                            && *kind == super::state::UserDropKind::ContainerElemBodies)
+            })
+        };
+        let Some(n) = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .rposition(owns_walk)
+        else {
+            return;
+        };
+        let unconditional = n + 1 == self.drop_rc.scope_cleanup_actions.len();
+        // The deeper-frame shape converts BEFORE the store, so the
+        // displacement compiled in front of it sees the flag rather than the
+        // static mask. In a loop that is the difference: the second pass
+        // displaces the first pass's value, which a decline baked in at
+        // compile time never would (`for i in 0..3 { t.0 = mk(i); }` after a
+        // move-out lost `dR0 dR1`). The after-store call then takes the flag
+        // arm above and stores `true`. The same-frame shape stays after the
+        // store, where the static un-mask cannot be seen by the displacement.
+        if unconditional == before_store {
+            return;
+        }
+        if !unconditional {
+            let flags = self.drop_rc.field_view_flags.get(base);
+            if flags.map(|m| m.len()).unwrap_or(0) + 1 > Self::FIELD_VIEW_SELECT_MAX {
+                return;
+            }
+            let Some(fn_val) = self.current_fn else {
+                return;
+            };
+            let Some(entry) = fn_val.get_first_basic_block() else {
+                return;
+            };
+            let b = self.context.create_builder();
+            match entry.get_terminator() {
+                Some(term) => b.position_before(&term),
+                None => b.position_at_end(entry),
+            }
+            let Ok(slot) = b.build_alloca(bool_t, &format!("rearmflag.{base}.{index}")) else {
+                return;
+            };
+            if b.build_store(slot, bool_t.const_int(0, false)).is_err() {
+                return;
+            }
+            self.store_at_loop_decl_anchor(base, slot, false);
+            self.drop_rc
+                .field_view_flags
+                .entry(base.to_string())
+                .or_default()
+                .insert(key, slot);
+            self.drop_rc
+                .tuple_elem_move_flag_types
+                .insert(slot, (tuple_ty, elem_tes.clone()));
+        }
+        if let Some(s) = self.tuple_moved_elem_bodies.get_mut(base) {
+            s.remove(&index);
+        }
+        if let Some(s) = self.tuple_moved_elem_payload_bodies.get_mut(base) {
+            s.remove(&index);
+        }
+        let tree = self.tuple_skip_tree_for_var(base);
+        let rebuilt = self
+            .emit_tuple_elem_user_drop_bodies_fn_tree(tuple_ty, &elem_tes, &tree)
+            .unwrap_or_else(|| self.emit_empty_field_bodies_fn());
+        self.replace_user_drop_fn_for_var(
+            base,
+            super::state::UserDropKind::ContainerElemBodies,
+            rebuilt,
+        );
+    }
+
     /// B-2026-07-30-11 — emit `__karac_dropelems_<T>(vec: *mut {ptr,len,cap})`:
     /// run the user `impl Drop` BODY of every live element of a `Vec[T]` /
     /// `VecDeque[T]`, forward over `0..len`. `None` when `T` runs no user body.

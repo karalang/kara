@@ -15441,17 +15441,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // now enforced for a tuple one by `tuple_skip_tree_for_var`.
         let tree = self.tuple_skip_tree_for_var(var_name);
         self.suppress_container_elem_bodies_for_var(var_name);
-        if let Some(bodies) =
-            self.emit_tuple_elem_user_drop_bodies_fn_tree(tuple_ty, &elem_tes, &tree)
-        {
-            self.track_user_drop_var_with_fn(
-                "",
-                var_name,
-                slot.ptr,
-                bodies,
-                UserDropKind::ContainerElemBodies,
-            );
-        }
+        // B-2026-10-04-73 — nothing left to walk still keeps the action, with
+        // an empty walker, as the struct twin does (B-2026-09-29-21):
+        // `rearm_reassigned_moved_tuple_elem` finds the walk by that action,
+        // so a retracted one left `let x = t.0; t.0 = mk(6);` running the
+        // replacement's body nowhere whenever `t.0` was the tuple's only
+        // Drop-bearing element.
+        let bodies = self
+            .emit_tuple_elem_user_drop_bodies_fn_tree(tuple_ty, &elem_tes, &tree)
+            .unwrap_or_else(|| self.emit_empty_field_bodies_fn());
+        self.track_user_drop_var_with_fn(
+            "",
+            var_name,
+            slot.ptr,
+            bodies,
+            UserDropKind::ContainerElemBodies,
+        );
     }
 
     /// B-2026-09-06-11 — [`Self::disarm_tuple_elem_bodies_at`] for an element

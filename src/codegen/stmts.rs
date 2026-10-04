@@ -16943,10 +16943,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     // heap in place (cap-guarded), and store. A receiver shape
                     // the chain can't resolve loud-bails instead of silently
                     // dropping the write.
+                    // B-2026-10-04-73 — and an element that had moved out is
+                    // the tuple's to drop again once it holds the new value:
+                    // converted to a runtime flag before the displacement when
+                    // the store is a frame deeper, re-armed after the store.
+                    let rearm = match &object.kind {
+                        ExprKind::Identifier(base) => self
+                            .place_chain_aggregate_llvm_type(object)
+                            .map(|ty| (base.clone(), ty)),
+                        _ => None,
+                    };
+                    if let Some((base, ty)) = &rearm {
+                        self.rearm_reassigned_moved_tuple_elem(base, *index as u32, *ty, true);
+                    }
                     // B-2026-10-04-57 — the displaced element's `Drop` bodies,
                     // before the store frees its memory.
                     self.emit_displaced_tuple_elem_bodies(object, *index, value);
                     self.compile_tuple_index_store(object, *index, val)?;
+                    if let Some((base, ty)) = &rearm {
+                        self.rearm_reassigned_moved_tuple_elem(base, *index as u32, *ty, false);
+                    }
                     // B-2026-10-04-72 — a named STRUCT source moved into the
                     // element (`t.1 = n`). The suppression below covers only
                     // Vec/String/Map/Set elements, so `n` kept its memory
