@@ -73,6 +73,16 @@ impl FormatSpec {
             precision: None,
             radix: Radix::Dec,
         };
+        // `{x:?}` / `{x:#?}` (with or without width flags before the `?`) is
+        // the Debug form design.md § Strings reserves and defers: name it as
+        // such rather than letting the `?` reach the `[type]` slot and be
+        // reported as an unknown radix (B-2026-10-05-48).
+        if raw.ends_with('?') {
+            return Err(format!(
+                "format spec `{raw}`: `?` is Debug formatting, which is reserved but not \
+                 implemented yet; write `{{x}}` for the value's Display form"
+            ));
+        }
         let chars: Vec<char> = raw.chars().collect();
         let mut i = 0;
 
@@ -662,6 +672,13 @@ mod tests {
         assert!(FormatSpec::parse(".").is_err());
         assert!(FormatSpec::parse(".2x").is_err());
         assert!(FormatSpec::parse("4z").is_err());
+        // B-2026-10-05-48: the reserved Debug forms are named as Debug
+        // formatting, not as an unsupported radix.
+        for raw in ["?", "#?", ">8?"] {
+            let e = FormatSpec::parse(raw).unwrap_err();
+            assert!(e.contains("Debug formatting"), "{raw:?}: {e}");
+            assert!(!e.contains("unsupported type"), "{raw:?}: {e}");
+        }
         // B-2026-10-02-42: an unsupported sign flag is named as one.
         for raw in ["-", "-5", " 5"] {
             let e = FormatSpec::parse(raw).unwrap_err();

@@ -617,6 +617,11 @@ fn test_fstring_format_specifier_errors() {
             "unsupported type",
         ),
         (
+            // B-2026-10-05-48: the reserved Debug form says what it is.
+            "fn main() { let s = \"hi\"; println(f\"{s:?}\"); }",
+            "Debug formatting",
+        ),
+        (
             "fn main() { let f = 1.0; println(f\"{f:8}\"); }",
             "needs a precision",
         ),
