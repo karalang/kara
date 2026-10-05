@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 695 |
+| miscompile | 696 |
 | run-vs-build | 592 |
 | leak | 579 |
 | double-free | 421 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2752 |
-| interp | 854 |
+| codegen | 2753 |
+| interp | 855 |
 | typecheck | 335 |
 | other | 113 |
 | ownership | 80 |
@@ -534,13 +534,13 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-82 | 2026-10-05 | codegen | medium | A GENERIC ENUM WHOSE PAYLOAD IS AN `Option[S1]` LEAKS THE `S1` BOX AND ITS STRING WHEN AN ARM ONLY READS THE PAYLOAD -- `let g = G.X(Option.Some(s(9))); match g { G.X(o) => { println("  in") } G.Y => {} }` over `enum G[T] { X(T), Y }` prints `gread in dS9` on every surface, agreeing, and loses 41 B (32 direct, 9 indirect) compiled | — |
 | B-2026-10-05-83 | 2026-10-05 | codegen | low | A WHOLE `Option[String]` PAYLOAD VIEW OF A USER ENUM MOVED INTO A TUPLE LITERAL LEAKS THE STRING -- `match h { Hs.P(o) => { let t = (o, 1); println("  in") } Hs.Q => {} }` over `enum Hs { P(Option[String]), Q }` prints `in end` on every surface and loses 10 B compiled | — |
 | B-2026-10-05-84 | 2026-10-05 | interp | low | `--interp` LOSES THE `Drop` BODY OF A USER ENUM'S `Option[S1]` PAYLOAD WHEN THE ARM MOVES IT ONLY ON A BRANCH NOT TAKEN -- `match h { Ho.P(o) => { let c = false; if c { let u = o; println("  a") } else { println("  b") } } Ho.Q => {} }` prints `b end` interpreted against `b dS9 end` compiled | — |
-| B-2026-10-05-90 | 2026-10-05 | codegen | medium | A BY-VALUE PARAMETER OF A GENERIC-STRUCT TYPE ON A METHOD OF A CONCRETE IMPL OVER THAT STRUCT LEAKS THE ARGUMENT'S HEAP COMPILED -- `impl P[String, Vec[i64]] { fn eat(ref self, o: P[String, Vec[i64]]) -> i64 { 1 } }` called as `r.eat(s)` prints `1` everywhere and valgrind reports `s`'s String and Vec buffers definitely lost; the same parameter on a non-generic struct's impl (`impl H { fn eat(ref self, o: P[String, Vec[i64]]) }`) and on a free function are clean | — |
-| B-2026-10-05-92 | 2026-10-05 | codegen | medium | AN `Option` PARAMETER OF A METHOD IN A CONCRETE IMPL OVER A GENERIC ENUM LOSES ITS PAYLOAD'S `Drop` BODY AND LEAKS IT COMPILED -- `impl G[R] { fn opt(ref self, o: Option[G[R]]) -> i64 { match o { Some(_) => 1, None => 0 } } }` called as `e.opt(Some(mk(8)))` prints `dR8` then `1` under `--interp` and only `1` on build and -O0, with the boxed payload and its String definitely lost | — |
+| B-2026-10-05-92 | 2026-10-05 | codegen | medium | [CORRECTED 2026-10-05: NOT PARAMS-ONLY AND NOT SPECIFIC TO A CONCRETE IMPL. A plain LOCAL `{ let o = Some(G.X(R { .. })); }` never runs `dR` on `--interp` OR compiled (valgrind -O0: 62 B lost, 32 direct + 30 indirect), a free fn `fopt(Some(mk(10)))` over `fn fopt(o: Option[G[R]])` loses it compiled, and a NAMED `let o = Some(mk(12)); e.opt(o)` loses it on both backends. `Option[R]` and `Option[E]` (non-generic enum) are right in every spelling. So the gap is an `Option` whose payload is a GENERIC ENUM INSTANTIATION, the B-2026-09-20-51 / B-2026-09-27-31 family, and it belongs to the drop work rather than the by-value-param area.] AN `Option` PARAMETER OF A METHOD IN A CONCRETE IMPL OVER A GENERIC ENUM LOSES ITS PAYLOAD'S `Drop` BODY AND LEAKS IT COMPILED -- `impl G[R] { fn opt(ref self, o: Option[G[R]]) -> i64 { match o { Some(_) => 1, None => 0 } } }` called as `e.opt(Some(mk(8)))` prints `dR8` then `1` under `--interp` and only `1` on build and -O0, with the boxed payload and its String definitely lost | — |
 | B-2026-10-05-86 | 2026-10-05 | codegen | medium | AFTER A `match` OR `if let` MOVES THE PAYLOAD OUT OF A `let mut` `Option` LOCAL, REASSIGNING THE LOCAL TO A FRESH `Some` NEVER RUNS THE NEW VALUE'S `Drop` BODY COMPILED -- `let mut h: Option[R] = Some(mk(31)); match h { Some(a) => println(f"m{a.id}"), None => println("n") } h = Some(mk(37)); println("w4");` prints `m31 dR31 w4` where `--interp` prints `m31 dR31 dR37 w4`; valgrind clean, so only the body is missing | — |
 | B-2026-10-05-93 | 2026-10-05 | codegen+interp | medium | A DISCARDED `Array` LITERAL OF `Option` ELEMENTS WITH A BARE `None` ITEM RUNS NO PAYLOAD `Drop` BODY ON ANY BACKEND AND LEAKS THE `Some` BOX COMPILED -- `let _ = Array[Some(mk(3)), None];` prints `end` on --interp, -O0 and -O2 (due: `dW1_3 end`), 32 B definitely lost | — |
 | B-2026-10-05-94 | 2026-10-05 | codegen+interp | low | AN UNANNOTATED `Array` LITERAL OF `shared enum` ELEMENTS RUNS ITS PAYLOAD `Drop` BODY AT SCOPE EXIT COMPILED BUT AT THE BINDING ON --interp -- `let a = Array[H.A(mk(3)), H.B]; println("mid");` prints `mid end dW1_3` compiled against `dW1_3 mid end` | — |
 | B-2026-10-05-97 | 2026-10-05 | codegen | high | A STRUCT LITERAL WHOSE FIELDS ARE WRITTEN OUT OF DECLARATION ORDER STORES EACH VALUE IN THE WRONG FIELD COMPILED -- `struct F { a: i64, b: i64 }; let f = F { b: 3, a: 5 }` prints `a=3 b=5` under `karac run` and `build` and `a=5 b=3` under `--interp`; with fields of different types the module fails verification, and with a nested struct field the binary prints garbage | — |
 | B-2026-10-05-98 | 2026-10-05 | codegen | medium | REMAINDER OF B-2026-10-04-67: A PLAIN USER ENUM WHOSE VARIANT HOLDS A TUPLE WITH AN `Option[shared]` ELEMENT STILL LEAKS THE 40 B PAYLOAD BOX AND THE HANDLE AND LOSES ITS `Drop` BODY COMPILED -- `let e = Et.A(mk(1)); println("x")` over `enum Et { A((Option[H], i64)), B }` prints `x end` against `--interp`'s `x dH1 end`, and an `unwrap` read in the arm runs the body before the read (`dH4 x4`); the `shared enum` spelling is fixed | — |
+| B-2026-10-05-104 | 2026-10-05 | interp+codegen | medium | A NAMED generic-struct argument passed by value inside an expression (`println(f"r{fp(o)}")`, `o: P[R, i64]`) runs its field's Drop body at CALL RETURN when compiled (`dR6 r7`) but at STATEMENT END under --interp (`r7 dR6`); the temporary spelling agrees on both (`dR8 r9`) and a non-generic struct agrees on statement end (`r3 dR2`) | — |
 
 ### Relocated
 
@@ -3770,6 +3770,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-76 | codegen | medium | A DISCARDED CALL TO A GENERIC CALLEE THAT HANDS ITS BY-VALUE PARAM BACK LOSES A STRUCT-LITERAL ARGUMENT'S `Drop` BODY COMPILED -- `g(R { id: 82 });`… | 8566e7660 |
 | B-2026-10-05-77 | interp+codegen | medium | A GENERIC CALLEE THAT READS A BY-VALUE PARAM AND ONLY THEN REBINDS ITS NAME TO ANOTHER PARAM (`fn g3[T](s: T, o: T, c: bool) -> T { if c { return s }… | 6b3d114a8 |
 | B-2026-10-05-78 | parser | low | A CLOSURE WRITTEN WITH A RUST-STYLE RETURN TYPE, `\|val: i64\| -> f64 { . | 06a832e18 |
+| B-2026-10-05-90 | codegen | medium | A BY-VALUE PARAMETER OF A GENERIC-STRUCT TYPE ON A METHOD OF A CONCRETE IMPL OVER THAT STRUCT LEAKS THE ARGUMENT'S HEAP COMPILED -- `impl P[String, V… | e903f98dc |
 | B-2026-10-05-91 | typecheck | medium | A CONCRETE IMPL BLOCK OVER A GENERIC STRUCT TYPES `self`'S FIELDS AT THE BARE TYPE PARAMETER, SO ANY OPERATION ON ONE IS REFUSED -- `impl Bx[i64] { f… | a9bb81eb5 |
 | B-2026-10-05-85 | codegen | high | A NAMED `Option[R]` ARGUMENT PASSED BY VALUE INTO A CALLEE THAT REASSIGNS ITS `let mut` REBIND ON ONLY SOME PATHS DOUBLE-FREES COMPILED -- `let o = S… | f46a720a8 |
 | B-2026-10-05-95 | codegen | medium | A `for` LOOP OVER AN UNNAMED SortedSet OR SortedMap FAILS THE BUILD -- `for v in a.intersection(b)` over two SortedSets, `for v in make_sorted_set()`… | a37653ccc |
