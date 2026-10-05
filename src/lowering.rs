@@ -244,6 +244,7 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     for item in &mut program.items {
         lowerer.lower_item(item);
     }
+    rename_param_shadowing_lets(program);
     let wild_binding_types = std::mem::take(&mut lowerer.wild_binding_types);
     // Collapse `let rows = t.iter_axis(0); for row in rows { … }` into the
     // direct `for row in t.iter_axis(0) { … }` — B-2026-07-29-24. Only the
@@ -3264,4 +3265,127 @@ fn collect_named_types(ty: &Type, out: &mut rustc_hash::FxHashSet<String>) {
         // variants.
         _ => {}
     }
+}
+
+/// B-2026-10-05-77 — give every `let` that rebinds a by-value parameter's
+/// NAME a fresh name of its own, in its pattern and in every use it reaches.
+///
+/// `fn g3[T](s: T, o: T, c: bool) -> T { if c { return s } let s = o; s }`
+/// spells two bindings `s`: the param before the `let`, `o`'s rebind after
+/// it. The interpreter and codegen decide who runs a by-value param's `Drop`
+/// body through predicates keyed by NAME (`fn_returns_param`,
+/// `param_whole_aliases`, the conditional-return channel, the rebind walks),
+/// and none of them carries positions, so the tail `s` read as the param
+/// handed back and `o` as never returned: `d25 k25 d25` on both backends,
+/// where `d24 k25 d25` is due. A non-generic callee was already right,
+/// because the per-param fate it is settled by is position-aware and declines
+/// generics (`param_fate::flip_reaches`). B-2026-10-05-29 and -45 taught two
+/// of those walks the shadow by special case; this makes the names differ
+/// instead, the same cure `codegen/scrutinee_shadow.rs` applies to a pattern
+/// binding that shadows its own scrutinee (B-2026-09-29-41).
+///
+/// Here, after typecheck and before ownership, effect and concurrency
+/// analysis, rather than in codegen: both backends read the same predicates,
+/// every table those later passes publish by name is computed on the renamed
+/// tree, and the typechecker's tables are keyed by span, which a rename
+/// keeps. The fresh name is the original plus a suffix, which the ownership
+/// checker strips from its diagnostics (`binding_rename::display_names`), so
+/// a message still names the binding the user wrote.
+fn rename_param_shadowing_lets(program: &mut Program) {
+    let counter = std::cell::Cell::new(0usize);
+    for item in program.items.iter_mut() {
+        match item {
+            Item::Function(f) => rename_param_shadows_in_fn(f, &counter),
+            Item::ImplBlock(b) => {
+                for ii in b.items.iter_mut() {
+                    if let ImplItem::Method(f) = ii {
+                        rename_param_shadows_in_fn(f, &counter);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn rename_param_shadows_in_fn(f: &mut Function, counter: &std::cell::Cell<usize>) {
+    let names: Vec<String> = f
+        .params
+        .iter()
+        .filter(|p| !matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
+        .filter_map(|p| p.name().map(str::to_string))
+        .collect();
+    for n in &names {
+        rename_shadows_in_block(&mut f.body, n, counter);
+    }
+}
+
+fn rename_shadows_in_block(b: &mut Block, n: &str, counter: &std::cell::Cell<usize>) {
+    use crate::binding_rename::{pattern_binds, rename_pattern_binding, rename_uses_block};
+    let mut i = 0;
+    while i < b.stmts.len() {
+        rename_shadows_in_stmt(&mut b.stmts[i], n, counter);
+        if let StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } =
+            &mut b.stmts[i].kind
+        {
+            if pattern_binds(pattern, n) {
+                counter.set(counter.get() + 1);
+                let to = format!(
+                    "{n}{}{}",
+                    crate::binding_rename::PARAM_SHADOW_SUFFIX,
+                    counter.get()
+                );
+                rename_pattern_binding(pattern, n, &to);
+                // The binding's scope is the REST of the block; an inner
+                // `let` of the same name stops the rename there and is
+                // renamed in its own turn.
+                let mut rest = Block {
+                    stmts: b.stmts.split_off(i + 1),
+                    final_expr: b.final_expr.take(),
+                    span: b.span,
+                };
+                rename_uses_block(&mut rest, n, &to);
+                b.stmts.append(&mut rest.stmts);
+                b.final_expr = rest.final_expr;
+            }
+        }
+        i += 1;
+    }
+    if let Some(fe) = b.final_expr.as_mut() {
+        rename_shadows_in_expr(fe, n, counter);
+    }
+}
+
+fn rename_shadows_in_stmt(s: &mut Stmt, n: &str, counter: &std::cell::Cell<usize>) {
+    match &mut s.kind {
+        StmtKind::Let { value, .. } => rename_shadows_in_expr(value, n, counter),
+        StmtKind::LetUninit { .. } => {}
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            rename_shadows_in_expr(value, n, counter);
+            rename_shadows_in_block(else_block, n, counter);
+        }
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            rename_shadows_in_block(body, n, counter)
+        }
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            rename_shadows_in_expr(target, n, counter);
+            rename_shadows_in_expr(value, n, counter);
+        }
+        StmtKind::MultiAssign { targets, values } => {
+            for e in targets.iter_mut().chain(values.iter_mut()) {
+                rename_shadows_in_expr(e, n, counter);
+            }
+        }
+        StmtKind::Expr(e) => rename_shadows_in_expr(e, n, counter),
+    }
+}
+
+fn rename_shadows_in_expr(e: &mut Expr, n: &str, counter: &std::cell::Cell<usize>) {
+    crate::import_alias::walk_expr_children(
+        e,
+        &mut |c| rename_shadows_in_expr(c, n, counter),
+        &mut |b| rename_shadows_in_block(b, n, counter),
+    );
 }

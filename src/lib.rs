@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod attribute_validator;
+pub mod binding_rename;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod binding_use;
 pub mod build_cache;

@@ -4709,16 +4709,20 @@ fn test_body_splitting_8n_writeback_includes_let_shadowed_local() {
              }",
     );
     let body = extract_fn_ir(&ir, "__kara_poll_driver");
-    // The let-store (slice 8m) puts `99` into n.slot.
+    // B-2026-10-05-77 — lowering gives a `let` that rebinds a by-value
+    // param's name a name of its own (`n__param_shadow1`), so the shadow is
+    // its own captured local rather than a rewrite of the param's slot. The
+    // property under test is unchanged: the let-store (slice 8m) puts `99`
+    // into the shadow's slot ...
     assert!(
-        body.contains("store i64 99, ptr %n.slot"),
-        "let n = 99 must store 99 into n.slot:\n{body}"
+        body.contains("store i64 99, ptr %n__param_shadow1.slot"),
+        "let n = 99 must store 99 into the shadow's slot:\n{body}"
     );
-    // The writeback then loads n.slot (which now has 99) and
-    // stores into the state-struct field.
+    // ... and the writeback before the yield loads that slot (which now has
+    // 99) into the state-struct field.
     assert!(
-        body.contains("%n.writeback = load i64, ptr %n.slot"),
-        "writeback must load from the (now-shadowed) n.slot:\n{body}"
+        body.contains("%n__param_shadow1.writeback = load i64, ptr %n__param_shadow1.slot"),
+        "writeback must load from the shadow's slot:\n{body}"
     );
 }
 

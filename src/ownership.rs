@@ -1852,6 +1852,18 @@ impl<'a> OwnershipChecker<'a> {
         // same warning).
         use_after_move_consume_sites.extend(self.all_uam_consume_sites.iter().copied());
 
+        // B-2026-10-05-77 — lowering renamed every `let` that rebinds a
+        // by-value param's name; a diagnostic names the binding as written.
+        for e in self.errors.iter_mut().chain(self.notes.iter_mut()) {
+            e.message = crate::binding_rename::display_names(&e.message);
+            if let Some(s) = e.suggestion.as_mut() {
+                *s = crate::binding_rename::display_names(s);
+            }
+            if let Some(r) = e.replacement.as_mut() {
+                r.replacement = crate::binding_rename::display_names(&r.replacement);
+            }
+        }
+
         OwnershipCheckResult {
             param_modes: self.param_modes,
             use_after_move_consume_sites,
