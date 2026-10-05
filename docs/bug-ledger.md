@@ -92,15 +92,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 686 |
+| miscompile | 687 |
 | run-vs-build | 589 |
 | leak | 565 |
 | double-free | 418 |
-| codegen-gap | 223 |
-| missing-feature | 216 |
+| codegen-gap | 224 |
+| missing-feature | 217 |
 | other | 168 |
+| perf | 141 |
 | diagnostics | 141 |
-| perf | 137 |
 | false-positive | 119 |
 | crash | 111 |
 | soundness | 98 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2718 |
-| interp | 841 |
-| typecheck | 327 |
+| codegen | 2722 |
+| interp | 845 |
+| typecheck | 328 |
 | other | 113 |
 | ownership | 80 |
 | cli | 73 |
@@ -531,6 +531,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-11 | 2026-10-05 | codegen+interp | medium | AN OWNED-`self` GENERIC-ENUM METHOD THAT RETURNS SOMETHING OTHER THAN `self` NEVER RUNS THE RECEIVER PAYLOAD'S `Drop` BODY ON ANY SURFACE AND LEAKS IT COMPILED -- `fn other(self, o: G[T]) -> G[T] { return o; }` and `fn fresh(self) -> G[T] { return G.Y; }` over `impl[T] G[T]` at `G[R]` print `x3s3 dR3 end` / `y end` with no `dR2` / `dR1` under `--interp`, -O0 and -O2, 2 B definitely lost; the non-generic `impl E` twin and the free-function twin are correct | — |
 | B-2026-10-05-12 | 2026-10-05 | codegen | medium | AN OWNED-`self` GENERIC-ENUM METHOD THAT RETURNS `self` ON ONE PATH AND A `Self` PARAMETER ON ANOTHER LOSES THE PARAMETER'S `Drop` BODY COMPILED WHEN IT RETURNS `self` -- `d.pick(true, mk(7))` over `fn pick(self, c: bool, o: Self) -> Self { if c { return self; } return o; }` prints `x6s6 dR6 end` at -O0 and -O2 where `--interp` prints `dR7 x6s6 dR6 end`, 34 B definitely lost; reachable since B-2026-09-28-73 | — |
 | B-2026-10-05-13 | 2026-10-05 | codegen | medium | A `Self`-TYPED PARAMETER IN A CONCRETE IMPL OVER A GENERIC ENUM FAILS MODULE VERIFICATION -- `impl G[R] { fn cself(self, o: Self) -> i64 { 1 } }` called as `d.cself(mk(5))` fails `Call parameter type does not match function signature` (`call { i64, i64 } @mk(i64 5)`) under `karac build`, while `--interp` prints `dR5 1 dR4 end`; the generic-struct twin is B-2026-09-27-116 | — |
+| B-2026-10-05-15 | 2026-10-05 | interp | medium | `--interp` COPIES A `String` ARGUMENT INTO A `ref` OR `mut ref` PARAMETER ON EVERY CALL, so a helper that appends to a `mut ref String` is still quadratic after B-2026-10-05-14 -- 20,000 calls of an empty `fn noop(out: mut ref String) {}` on a 20,000-char string take 0.15 s more than the loop without them, the same for `ref String`, and `gen_text`'s `out.push(..)` through such a param still takes 4.2 s for 200,000 pushes | — |
+| B-2026-10-05-17 | 2026-10-05 | codegen | medium | `karac build` CANNOT LOWER `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` -- design.md's `CountUp` in a `for` loop fails `for-loop over this iterable is not lowered` (a struct literal or call as the iterable) or ``for` over `c` -- the binding is not an iterable this backend can lower`` (a named binding), while `while let Some(v) = c.next()` over the same value builds and runs | — |
+| B-2026-10-05-18 | 2026-10-05 | typecheck+interp+codegen | medium | THE ITERATOR ADAPTORS ARE NOT AVAILABLE ON A USER TYPE THAT IMPLEMENTS `Iterator` -- `CountUp { .. }.collect()` and `.sum()` fail `no method 'collect' on type 'CountUp'` / `no method 'sum' on type 'CountUp'`, where design.md § Iterator Adaptors defines them as extension methods on every `Iterator` | — |
+| B-2026-10-05-19 | 2026-10-05 | codegen | medium | `let mut rest = items;` OVER A BY-VALUE `Vec` PARAMETER DEEP-COPIES THE WHOLE VEC, ELEMENTS INCLUDED, ON EVERY CALL -- kata 341's `push_reversed(mut ref self, items: Vec[Nested])` clones each list's entire subtree once per level above it, and its bench runs 0.55 s against 0.34 s with the same loop written inline (310M against 214M instructions; Rust 137M) | — |
+| B-2026-10-05-20 | 2026-10-05 | codegen | medium | `Vec[T].pop()` FOR AN ELEMENT WIDER THAN THREE WORDS HEAP-ALLOCATES A BOX FOR THE `Some` PAYLOAD ON EVERY CALL, EVEN WHEN `while let Some(x) = v.pop()` UNPACKS IT AT ONCE -- a four-word enum, struct or tuple element pays a `malloc` and a `free` per pop (kata 341's stack iterator: about two per tree node), a three-word one pays nothing | — |
 
 ### Relocated
 
@@ -3722,6 +3727,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-3 | codegen | high | A `let` THAT SHADOWS A SHARED BINDING IN THE SAME SCOPE RELEASES THE NEW BOX TWICE AND THE OLD ONE NEVER -- `let p = P { s: hs(1) }; let p = P { s: h… | 65ba03f24 |
 | B-2026-10-05-5 | codegen | high | A ONE-WORD `Array` HELD AS A TUPLE OR STRUCT FIELD INSIDE AN ENUM PAYLOAD READS ITS ELEMENT AS 0 COMPILED -- `Some((Array[5], 7))` matched as `t` pri… | e2493dffa |
 | B-2026-10-05-7 | codegen+interp | medium | A BINDING THE BLOCK DOES NOT DECLARE, PASSED BY VALUE TO A CALLEE THAT HANDS IT BACK ON NO EXIT, RUNS ITS `Drop` BODY AT THE END OF THE ENCLOSING ARM… | d476f99eb |
+| B-2026-10-05-14 | interp | medium | `--interp` COPIES THE WHOLE `String` ON EVERY `push` / `push_str`, SO BUILDING A STRING ONE CHARACTER AT A TIME IS QUADRATIC -- 50,000 `s.push('x')`… | 4c789647b |
+| B-2026-10-05-16 | interp | high | `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` RUNS THE BODY ONCE UNDER `--interp`, WITH THE ITERATOR ITSELF BOUND TO `v` -- de… | 3a7995069 |
 
 </details>
 
