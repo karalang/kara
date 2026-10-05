@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 589 |
 | leak | 563 |
 | double-free | 417 |
-| codegen-gap | 221 |
+| codegen-gap | 222 |
 | missing-feature | 216 |
 | other | 168 |
 | diagnostics | 141 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2710 |
+| codegen | 2711 |
 | interp | 836 |
 | typecheck | 327 |
 | other | 113 |
@@ -515,8 +515,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-78 | 2026-10-04 | codegen | low | MOVING A `for` BINDING OUT TWICE IN ONE ITERATION (`out.push(p); let q = p;`) LEAKS ONE COPY PER ITERATION, over a `Vec` and an `Array` alike -- 4 B in 2 blocks at -O0 for a two-element `Vec[P]` with a one-`String` `P`, where each move alone is clean | — |
 | B-2026-10-04-79 | 2026-10-04 | codegen+runtime | medium | AFTER B-2026-10-04-56 KATA 340'S `Map[char, i64]` BENCH STILL RUNS 1.85x RUST AT EQUAL HASHING (399 ms vs 216): each hash costs 92 instructions against Rust's ~74, the erased `remove` path hashes a key the `get` before it already hashed, and the mono insert costs ~70 instructions a call beyond its hash | — |
 | B-2026-10-04-80 | 2026-10-04 | codegen | low | `hs[idx(0)].t.1[0] = 4` -- AN INDEX STORE THROUGH A TUPLE FIELD OF AN ELEMENT WHOSE SUBSCRIPT IS A CALL -- FAILS TO COMPILE with `Index assignment target must be a variable`; the same store with an identifier subscript (`hs[i].t.1[0] = 4`) compiles and prints 4, and `--interp` accepts both | — |
-| B-2026-10-04-81 | 2026-10-04 | codegen | medium | A FRESH `Some([..])` TEMPORARY HANDED TO A BY-VALUE `Option[Array[R, 2]]` PARAM THAT THE CALLEE RETURNS LEAKS EVERY ELEMENT'S HEAP COMPILED -- `let r = keep(Some([mk(29), mk(30)]))` over `fn keep(x: Option[Array[R, 2]]) -> Option[Array[R, 2]] { return x; }` prints the right bodies on every surface and loses 2 blocks (each element's `String`) at -O0; the conditional hand-back `midc(Some([..]), true)` loses the same, and a NAMED local argument is clean | — |
-| B-2026-10-04-82 | 2026-10-04 | codegen | medium | `let mut h = x; h = None;` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM LEAKS EVERY ELEMENT'S HEAP COMPILED -- the displaced value's box is freed without its interior; bodies are right on every surface (`dR31 dR32 o6`), valgrind -O0 reports 2 blocks definitely lost, temporary or named argument alike | — |
 | B-2026-10-04-83 | 2026-10-04 | interp+codegen | medium | FORWARDING A BY-VALUE `Option[Array[R, 2]]` PARAM TO ANOTHER BY-VALUE CALLEE RUNS THE ELEMENT `Drop` BODIES AT DIFFERENT POINTS PER BACKEND -- `fn fw(x: Option[Array[R, 2]]) { ok(x); println("fw"); }` prints `ok dR27 dR28 fw` on every compiled surface and `ok fw dR27 dR28` under `--interp`; the rebind spelling `let h = x; ok(h);` splits the same way | — |
 | B-2026-10-04-76 | 2026-10-04 | codegen | high | AN INDEX READ OF A NON-`Copy` ELEMENT AS A BLOCK TAIL OR A `shared enum` ARM TAIL ALIASES THE ELEMENT INSTEAD OF DEEP-COPYING IT, SO IT IS FREED TWICE COMPILED -- `let s = { let x = m; x[1] }` over `m: Vec[String]` and `match t { M.My(x) => x[1], _ => .. }` over `shared enum M { My(Vec[String]), N }` print the right string and report 3 and 4 valgrind errors (invalid reads and an invalid free) | — |
 | B-2026-10-04-84 | 2026-10-04 | codegen | medium | REMAINDER OF B-2026-10-04-74: A NAMED USER-ENUM OR `Option` LOCAL MOVED INTO A FIELD OR TUPLE ELEMENT ON ONE PATH ONLY LOSES ITS `Drop` BODY ON THE OTHER PATH COMPILED -- `let n = E.A(mk(6)); if c { t.0 = n; }` prints no `dR6` with `c` false and leaks its 29 B String (an `Option` source loses the body and frees the memory); `--interp` is right on both paths | — |
@@ -529,6 +527,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-2 | 2026-10-05 | codegen | medium | AFTER B-2026-10-04-54, `.clone()` ON A TUPLE ELEMENT STILL FAILS `karac build` WHEN THE SUBSCRIPT IS AN EXPRESSION -- `cases[i + 1].0.clone()` over `Vec[(String, i64)]` bails with "Vec/String method 'clone' is not yet supported in codegen" while `cases[i]`, `cases[1]` and `cases[j]` (with `let j = i + 1`) all build; kata 340's differential is the program it blocks | — |
 | B-2026-10-05-4 | 2026-10-05 | codegen | medium | REMAINDER OF B-2026-10-03-39: A `shared enum` WHOSE PAYLOAD IS A PLAIN USER ENUM THE FIX DECLINES STILL LEAKS THAT PAYLOAD ON EVERY RELEASE -- `shared enum H { Z(V), N }` over `enum V { Z(M), N }` and `shared enum M { My(Vec[String]), N }`: `let s = H.Z(V.Z(M.N))` alone loses 16 B direct + 40 indirect at -O0 | — |
 | B-2026-10-05-5 | 2026-10-05 | codegen | high | A ONE-WORD `Array` HELD AS A TUPLE OR STRUCT FIELD INSIDE AN ENUM PAYLOAD READS ITS ELEMENT AS 0 COMPILED -- `Some((Array[5], 7))` matched as `t` prints `t.0[0]` as 0 under `karac build` at -O0 and -O2 (interp 5), across Option / Result / user enums and destructuring patterns; the struct-field spelling fails module verification instead (`insertvalue { [1 x i64], i64 } undef, i64 %payload, 0`). Two elements, a two-word element, no enum around the tuple, or no tuple around the array are all correct | — |
+| B-2026-10-05-6 | 2026-10-05 | codegen | medium | A `let mut` REBIND OF A BY-VALUE `Option` PARAM THAT IS MATCHED ON AND THEN REASSIGNED RUNS NO BODY FOR THE PARAM'S VALUE COMPILED -- `fn q1(x: Option[Array[R, 2]]) { let mut h = x; match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } h = None; println("q1"); }` prints `m11 q1 dR11 dR12` on `--interp` against `m11 q1` compiled, leaking 2 blocks; `Option[R]` loses `dR41` too (no leak), and reassigning to a fresh `Some` loses both values' bodies | — |
 
 ### Relocated
 
@@ -3711,6 +3710,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-73 | codegen+interp | medium | REASSIGNING A TUPLE ELEMENT THAT HAS MOVED OUT NEVER RUNS THE NEW VALUE'S `Drop` BODY, ON EVERY SURFACE -- `let x = t.0; t.0 = mk(6);` prints `x5 dR5… | 23e26459d |
 | B-2026-10-04-74 | codegen+interp | medium | A NAMED LOCAL MOVED INTO A FIELD, `Vec` ELEMENT OR TUPLE ELEMENT ON ONE PATH ONLY IS LOST ON THE OTHER PATH COMPILED AND DROPPED TWICE ON THE MOVING… | e4f5c6438 |
 | B-2026-10-04-77 | codegen | high | A `for` BINDING OVER A FIXED `Array` IS NOT REGISTERED LIKE A `Vec` LOOP'S: a method on a `String` / `Vec` element (`for x in ss { x.len() }` over `A… | c8d492da7 |
+| B-2026-10-04-81 | codegen | medium | A FRESH `Some([..])` TEMPORARY HANDED TO A BY-VALUE `Option[Array[R, 2]]` PARAM THAT THE CALLEE RETURNS LEAKS EVERY ELEMENT'S HEAP COMPILED -- `let r… | cc45f9a23 |
+| B-2026-10-04-82 | codegen | medium | `let mut h = x; h = None;` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM LEAKS EVERY ELEMENT'S HEAP COMPILED -- the displaced value's box is freed with… | e1b812d1c |
 | B-2026-10-04-89 | codegen | low | A TUPLE-ELEMENT ASSIGNMENT THROUGH A `Map` VALUE FAILS THE BUILD -- `m[1].1 = 7` over `Map[i64, (P, i64)]` stops `karac build` with `tuple-element as… | 72ed9ef21 |
 | B-2026-10-04-90 | codegen | low | A METHOD CALL ON A CONTAINER HELD IN A TUPLE THAT IS ITSELF AN INDEXED ELEMENT OR A MAP VALUE FAILS THE BUILD -- `mm[1].0.push(p)` over `Map[i64, (Ve… | 00e05652c |
 | B-2026-10-05-3 | codegen | high | A `let` THAT SHADOWS A SHARED BINDING IN THE SAME SCOPE RELEASES THE NEW BOX TWICE AND THE OLD ONE NEVER -- `let p = P { s: hs(1) }; let p = P { s: h… | 65ba03f24 |
