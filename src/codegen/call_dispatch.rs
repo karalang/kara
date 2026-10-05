@@ -9182,6 +9182,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(arg_fn.as_str())
                     .cloned()
             }
+            // B-2026-10-05-76 — a STRUCT LITERAL is the same fresh temporary,
+            // its type named by the literal itself. Non-generic structs only:
+            // a generic literal's layout is its instantiation, not its name.
+            ExprKind::StructLiteral {
+                path, spread: None, ..
+            } if path.len() == 1 => {
+                let name = path[0].as_str();
+                let program = self.program_snapshot.as_deref()?;
+                program
+                    .items
+                    .iter()
+                    .any(|it| {
+                        matches!(it, crate::ast::Item::StructDef(s)
+                        if s.name == name && s.generic_params.is_none()
+                            && !s.is_shared && !s.is_par)
+                    })
+                    .then(|| name.to_string())
+            }
             ExprKind::Identifier(var) => {
                 let tn = self.var_types.var_type_names.get(var.as_str()).cloned()?;
                 // B-2026-09-25-30 — a type with nothing to free is admitted
