@@ -15,283 +15,29 @@ use super::{
 };
 
 impl<'a> super::TypeChecker<'a> {
-    /// If `ty` is a `distinct type`, return whether it derives ANY of
-    /// `wanted` (so the caller's trait gate is satisfied), wrapped in
-    /// `Some`; `None` when `ty` is not a distinct type (caller continues its
-    /// normal struct/enum/primitive logic). Distinct types are opaque — they
-    /// inherit NO operations from their base, so a derive-support query must
-    /// consult the explicit `#[derive(...)]` set, not the base's support
-    /// (design.md § Distinct Types — "No operations carry through by
-    /// default"). This is the gate that makes `a == b` / `a < b` / hashing /
-    /// `Display` require the corresponding derive on a distinct type.
+    /// See [`super::env::TypeEnv::distinct_derive_supported`].
     fn distinct_derive_supported(&self, ty: &Type, wanted: &[&str]) -> Option<bool> {
-        if let Type::Named { name, .. } = ty {
-            if let Some(traits) = self.env.distinct_types.get(name) {
-                return Some(wanted.iter().any(|w| traits.contains(*w)));
-            }
-        }
-        None
+        self.env.distinct_derive_supported(ty, wanted)
     }
 
-    /// Check whether a type supports `==` / `!=` (PartialEq).
-    /// All primitives including floats support PartialEq.
-    /// Named types (structs/enums) require `#[derive(Eq)]` or `#[derive(PartialEq)]`.
+    /// See [`super::env::TypeEnv::type_supports_partial_eq`].
     pub(super) fn type_supports_partial_eq(&self, ty: &Type) -> bool {
-        if let Some(ok) = self.distinct_derive_supported(ty, &["Eq", "PartialEq"]) {
-            return ok;
-        }
-        match ty {
-            // Refinement types are structurally transparent — derive
-            // support follows the base type.
-            Type::Refinement { base, .. } => self.type_supports_partial_eq(base),
-            Type::Int(_)
-            | Type::UInt(_)
-            | Type::Float(_)
-            | Type::Bool
-            | Type::Char
-            | Type::Str
-            | Type::Unit => true,
-            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_partial_eq(e)),
-            Type::Array { element, .. } => self.type_supports_partial_eq(element),
-            Type::Vector { element, .. } => self.type_supports_partial_eq(element),
-            Type::Slice { element, .. } => self.type_supports_partial_eq(element),
-            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_partial_eq(inner),
-            // `Vec[T]` has value (content) equality when `T` does — the exact
-            // arm `type_supports_eq` carries, for the exact same reason: the
-            // built-in `Vec` is registered in `env.structs` with NO derived
-            // traits, so without this it falls through to the generic `Named`
-            // lookup below and reports `Vec` as un-`PartialEq`.
-            //
-            // B-2026-08-18-6: `Eq` and `Hash` both grew this arm and
-            // `PartialEq` did not, which made the WEAKER trait the stricter
-            // gate — `#[derive(Eq)] struct A { v: Vec[i64] }` compiled while
-            // `#[derive(PartialEq)]` on the same field was refused. Nothing
-            // about the lowering justified the split: `==` on a Vec-carrying
-            // struct routes through `emit_eq_fn_for_struct` (B-2026-08-12-5),
-            // the type-directed comparator, whichever of the two traits was
-            // written.
-            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
-                self.type_supports_partial_eq(&args[0])
-            }
-            Type::Named { name, args } => {
-                // A user-provided `impl Eq for Name` is sufficient — the
-                // lowering pass dispatches `==`/`!=` through it. Falls back
-                // to `#[derive(Eq)]`/`#[derive(PartialEq)]` when no impl is
-                // registered (e.g. for compiler-provided structural eq on
-                // built-in enums like `Option`/`Result`).
-                if self.env.has_impl("Eq", name, args) {
-                    return true;
-                }
-                if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Eq") || info.derived_traits.contains("PartialEq")
-                } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Eq") || info.derived_traits.contains("PartialEq")
-                } else {
-                    true
-                }
-            }
-            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_partial_eq(inner),
-            Type::Shared(name) => {
-                if self.env.has_impl("Eq", name, &[]) {
-                    return true;
-                }
-                if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Eq") || info.derived_traits.contains("PartialEq")
-                } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Eq") || info.derived_traits.contains("PartialEq")
-                } else {
-                    true
-                }
-            }
-            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
-                true
-            }
-            Type::Never => true,
-            Type::Function { .. }
-            | Type::OnceFunction { .. }
-            | Type::Pointer { .. }
-            | Type::Weak(_)
-            // `impl Trait` existentials only carry the trait surface,
-            // not the witness's derive metadata; the derive-matches-bound
-            // path is handled directly in `type_satisfies_bound` by the
-            // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
-            // Shape-kinded args are not value types — no derive surface.
-            Type::Shape(_) => false,
-        }
+        self.env.type_supports_partial_eq(ty)
     }
 
-    /// Check whether a type supports full `Eq` (required for Map/Set keys, etc.).
-    /// Floats (f32/f64) do NOT support Eq due to IEEE 754 NaN != NaN.
-    /// Named types require `#[derive(Eq)]`.
+    /// See [`super::env::TypeEnv::type_supports_eq`].
     pub(super) fn type_supports_eq(&self, ty: &Type) -> bool {
-        if let Some(ok) = self.distinct_derive_supported(ty, &["Eq"]) {
-            return ok;
-        }
-        match ty {
-            Type::Refinement { base, .. } => self.type_supports_eq(base),
-            Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
-            // f32/f64 follow IEEE 754: NaN != NaN, so they don't implement Eq
-            Type::Float(_) => false,
-            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_eq(e)),
-            Type::Array { element, .. } => self.type_supports_eq(element),
-            Type::Vector { element, .. } => self.type_supports_eq(element),
-            Type::Slice { element, .. } => self.type_supports_eq(element),
-            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_eq(inner),
-            // `Vec[T]` has value (content) equality when `T` does — element-wise
-            // compare, like the `Array`/`Slice` arms above. The built-in `Vec`
-            // is registered in `env.structs` with no derived traits, so without
-            // this arm it falls through to the generic `Named` lookup below and
-            // (wrongly) reports `Vec` as un-`Eq`, blocking `Set[Vec[T]]` /
-            // `Map[Vec[T], _]`. Codegen's per-element `karac_eq_Vec_<elem>`
-            // walks the contents to match the interpreter (B-2026-06-20-15).
-            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
-                self.type_supports_eq(&args[0])
-            }
-            Type::Named { name, .. } => {
-                if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
-                } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
-                } else {
-                    // Unknown type — permissive to avoid cascading errors
-                    // when the resolver has already flagged it.
-                    true
-                }
-            }
-            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_eq(inner),
-            Type::Shared(name) => {
-                if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
-                } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
-                } else {
-                    true
-                }
-            }
-            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
-                true
-            }
-            Type::Never => true,
-            Type::Function { .. }
-            | Type::OnceFunction { .. }
-            | Type::Pointer { .. }
-            | Type::Weak(_)
-            // `impl Trait` existentials only carry the trait surface,
-            // not the witness's derive metadata; the derive-matches-bound
-            // path is handled directly in `type_satisfies_bound` by the
-            // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
-            // Shape-kinded args are not value types — no derive surface.
-            Type::Shape(_) => false,
-        }
+        self.env.type_supports_eq(ty)
     }
 
-    /// Check whether a type supports `Hash`. Floats do not — NaN-as-key would
-    /// break the hash/eq contract. Named types require `#[derive(Hash)]`.
+    /// See [`super::env::TypeEnv::type_supports_hash`].
     pub(super) fn type_supports_hash(&self, ty: &Type) -> bool {
-        if let Some(ok) = self.distinct_derive_supported(ty, &["Hash"]) {
-            return ok;
-        }
-        match ty {
-            Type::Refinement { base, .. } => self.type_supports_hash(base),
-            Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
-            Type::Float(_) => false,
-            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_hash(e)),
-            Type::Array { element, .. } => self.type_supports_hash(element),
-            Type::Vector { element, .. } => self.type_supports_hash(element),
-            Type::Slice { element, .. } => self.type_supports_hash(element),
-            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_hash(inner),
-            // `Vec[T]` hashes by content when `T` does — element-wise, like the
-            // `Array`/`Slice` arms above. Without this arm the built-in `Vec`
-            // (registered in `env.structs` with no derived traits) falls through
-            // to the generic `Named` lookup below and reports `Vec` as un-`Hash`,
-            // blocking `Set[Vec[T]]` / `Map[Vec[T], _]`. Codegen's per-element
-            // `karac_hash_Vec_<elem>` walks the contents to match (B-2026-06-20-15).
-            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
-                self.type_supports_hash(&args[0])
-            }
-            Type::Named { name, .. } => {
-                if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
-                } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
-                } else {
-                    true
-                }
-            }
-            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_hash(inner),
-            Type::Shared(name) => {
-                if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
-                } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
-                } else {
-                    true
-                }
-            }
-            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
-                true
-            }
-            Type::Never => true,
-            Type::Function { .. }
-            | Type::OnceFunction { .. }
-            | Type::Pointer { .. }
-            | Type::Weak(_)
-            // `impl Trait` existentials only carry the trait surface,
-            // not the witness's derive metadata; the derive-matches-bound
-            // path is handled directly in `type_satisfies_bound` by the
-            // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
-            // Shape-kinded args are not value types — no derive surface.
-            Type::Shape(_) => false,
-        }
+        self.env.type_supports_hash(ty)
     }
 
-    /// True if the user has an `impl Ord for Type` registered on the
-    /// canonical type name. Sibling to the `derived_traits` check below;
-    /// lets a user-supplied `cmp` (which can encode arbitrary order —
-    /// reverse, custom tiebreaks, partial-field — that the derive-equivalent
-    /// field cascade can't reproduce) count toward the Ord bound at any
-    /// consumer site. Scans `env.impls` directly: the impl list is small
-    /// (one entry per impl block), and Ord checks aren't a hot path. The
-    /// codegen consumer (`emit_sort_by_key_inline_thunk`) consults
-    /// `Program.user_ord_typed_exprs` to dispatch to the user's compiled
-    /// `Type.cmp` indirectly.
-    /// Whether `name` carries a hand-written `impl Hash` (B-2026-08-26-10).
-    ///
-    /// Counts toward the `Hash` bound for the same reason `has_user_impl_ord`
-    /// counts toward `Ord`: both backends now dispatch to the impl, so refusing
-    /// it here would reject a program they can both run correctly.
-    pub(super) fn has_user_impl_hash(&self, name: &str) -> bool {
-        self.env
-            .impls
-            .iter()
-            .any(|imp| imp.trait_name.as_deref() == Some("Hash") && imp.target_type == name)
-    }
-
-    /// Whether `name` carries a hand-written `impl PartialEq` AND the `impl Eq`
-    /// marker.
-    ///
-    /// BOTH, because that is already the `==` operator's rule — a bare
-    /// `impl PartialEq` does not drive `==`, and a container that hashed through
-    /// a user impl while comparing structurally would place a key by one rule
-    /// and look it up by another.
-    pub(super) fn has_user_impl_eq(&self, name: &str) -> bool {
-        let has = |t: &str| {
-            self.env
-                .impls
-                .iter()
-                .any(|imp| imp.trait_name.as_deref() == Some(t) && imp.target_type == name)
-        };
-        has("PartialEq") && has("Eq")
-    }
-
+    /// See [`super::env::TypeEnv::has_user_impl_ord`].
     pub(super) fn has_user_impl_ord(&self, name: &str) -> bool {
-        self.env
-            .impls
-            .iter()
-            .any(|imp| imp.trait_name.as_deref() == Some("Ord") && imp.target_type == name)
+        self.env.has_user_impl_ord(name)
     }
 
     /// Check whether a type supports total `Ord`. Floats do not (see Eq).
@@ -587,124 +333,9 @@ impl<'a> super::TypeChecker<'a> {
         ))
     }
 
-    /// Whether a named aggregate's DERIVED ordering is one both backends can
-    /// actually lower — the typechecker's half of the parity rule the two
-    /// backends already enforce independently (B-2026-08-27-47).
-    ///
-    /// A GENERIC aggregate is the case that splits. Its derived comparator has
-    /// to order a payload whose type is a type PARAMETER, and neither backend
-    /// can do that from the declaration alone: codegen's
-    /// `emit_cmp_fn_for_type_expr` refuses a `Path` carrying `generic_args` and
-    /// its `emit_cmp_fn_for_enum` reads payload `TypeExpr`s by enum NAME (so it
-    /// sees `T`, never the instantiation), and the interpreter's
-    /// `aggregate_is_orderable` requires `generic_params.is_empty()` for the
-    /// same stated reason. Both therefore reject `<` on `Option[i64]` —
-    /// agreeing, so `<` never split.
-    ///
-    /// `.cmp` DID split, because it never consulted that gate on either side:
-    /// the typechecker admitted it here (this arm asked only about the derive,
-    /// never about the arguments) and the interpreter answered it straight out
-    /// of `value_compare`, which has runtime values and so can order what no
-    /// static comparator can. Codegen had nothing to answer with and failed the
-    /// build. Measured on the unfixed compiler, all check-green and
-    /// interp-green and build-refused: `Option[i64]`, `Result[i64, i64]`, a
-    /// user `enum MyOpt[T]`, a user `struct Pair[T]`, and — transitively — a
-    /// non-generic `#[derive(Ord)]` struct holding an `Option[i64]` field.
-    ///
-    /// Rejecting here rather than teaching codegen the instantiation is the
-    /// narrow move, and it is the direction this file already takes for exactly
-    /// this shape: `type_supports_display` rejects `Type::Unit` so that a
-    /// meaningless interpolation cannot render differently per backend. Making
-    /// the generic case WORK is a real feature (a monomorphized comparator per
-    /// instantiation) and belongs on the roadmap, not in a run-vs-build fix;
-    /// when it lands, this gate widens and nothing else has to move.
-    ///
-    /// A user `impl Ord` always wins, generic or not, and that escape hatch is
-    /// load-bearing rather than defensive: a hand-written `impl[T] Ord for
-    /// W[T]` is a declared function, so it dispatches through the normal
-    /// user-impl path and was measured working on BOTH backends. Gating it out
-    /// would break code that compiles today.
-    fn derived_ord_is_lowerable(
-        &self,
-        name: &str,
-        generic_params: &[String],
-        derived: &std::collections::HashSet<String>,
-    ) -> bool {
-        if self.has_user_impl_ord(name) {
-            return true;
-        }
-        generic_params.is_empty() && derived.contains("Ord")
-    }
-
-    /// The `PartialOrd` twin of [`Self::derived_ord_is_lowerable`], carrying the
-    /// same rule for the same reason.
-    ///
-    /// Kept in step deliberately. `register_ord_orderable_types` admits a
-    /// `#[derive(PartialOrd)]` aggregate into codegen's comparator family on
-    /// equal footing with `Ord`, so a generic one reaches the identical dead
-    /// end; letting only the `Ord` spelling narrow would leave
-    /// `#[derive(PartialOrd)] struct S { x: Option[i64] }` accepted at check and
-    /// refused at build — the very split being closed, moved one derive over.
-    fn derived_partial_ord_is_lowerable(
-        &self,
-        name: &str,
-        generic_params: &[String],
-        derived: &std::collections::HashSet<String>,
-    ) -> bool {
-        if self.has_user_impl_ord(name) {
-            return true;
-        }
-        generic_params.is_empty() && (derived.contains("PartialOrd") || derived.contains("Ord"))
-    }
-
+    /// See [`super::env::TypeEnv::type_supports_ord`].
     pub(super) fn type_supports_ord(&self, ty: &Type) -> bool {
-        if let Some(ok) = self.distinct_derive_supported(ty, &["Ord"]) {
-            return ok;
-        }
-        match ty {
-            Type::Refinement { base, .. } => self.type_supports_ord(base),
-            Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
-            Type::Float(_) => false,
-            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_ord(e)),
-            Type::Array { element, .. } => self.type_supports_ord(element),
-            Type::Vector { element, .. } => self.type_supports_ord(element),
-            Type::Slice { element, .. } => self.type_supports_ord(element),
-            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_ord(inner),
-            Type::Named { name, .. } => {
-                if let Some(info) = self.env.structs.get(name) {
-                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
-                } else if let Some(info) = self.env.enums.get(name) {
-                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
-                } else {
-                    true
-                }
-            }
-            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_ord(inner),
-            Type::Shared(name) => {
-                if let Some(info) = self.env.structs.get(name) {
-                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
-                } else if let Some(info) = self.env.enums.get(name) {
-                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
-                } else {
-                    true
-                }
-            }
-            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
-                true
-            }
-            Type::Never => true,
-            Type::Function { .. }
-            | Type::OnceFunction { .. }
-            | Type::Pointer { .. }
-            | Type::Weak(_)
-            // `impl Trait` existentials only carry the trait surface,
-            // not the witness's derive metadata; the derive-matches-bound
-            // path is handled directly in `type_satisfies_bound` by the
-            // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
-            // Shape-kinded args are not value types — no derive surface.
-            Type::Shape(_) => false,
-        }
+        self.env.type_supports_ord(ty)
     }
 
     /// Check whether a type implements `Display`.
@@ -803,76 +434,9 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// Check whether a type supports `PartialOrd` (admits NaN for floats).
+    /// See [`super::env::TypeEnv::type_supports_partial_ord`].
     pub(super) fn type_supports_partial_ord(&self, ty: &Type) -> bool {
-        if let Some(ok) = self.distinct_derive_supported(ty, &["PartialOrd", "Ord"]) {
-            return ok;
-        }
-        match ty {
-            Type::Refinement { base, .. } => self.type_supports_partial_ord(base),
-            Type::Int(_)
-            | Type::UInt(_)
-            | Type::Float(_)
-            | Type::Bool
-            | Type::Char
-            | Type::Str
-            | Type::Unit => true,
-            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_partial_ord(e)),
-            Type::Array { element, .. } => self.type_supports_partial_ord(element),
-            Type::Vector { element, .. } => self.type_supports_partial_ord(element),
-            Type::Slice { element, .. } => self.type_supports_partial_ord(element),
-            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_partial_ord(inner),
-            Type::Named { name, .. } => {
-                if let Some(info) = self.env.structs.get(name) {
-                    self.derived_partial_ord_is_lowerable(
-                        name,
-                        &info.generic_params,
-                        &info.derived_traits,
-                    )
-                } else if let Some(info) = self.env.enums.get(name) {
-                    self.derived_partial_ord_is_lowerable(
-                        name,
-                        &info.generic_params,
-                        &info.derived_traits,
-                    )
-                } else {
-                    true
-                }
-            }
-            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_partial_ord(inner),
-            Type::Shared(name) => {
-                if let Some(info) = self.env.structs.get(name) {
-                    self.derived_partial_ord_is_lowerable(
-                        name,
-                        &info.generic_params,
-                        &info.derived_traits,
-                    )
-                } else if let Some(info) = self.env.enums.get(name) {
-                    self.derived_partial_ord_is_lowerable(
-                        name,
-                        &info.generic_params,
-                        &info.derived_traits,
-                    )
-                } else {
-                    true
-                }
-            }
-            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
-                true
-            }
-            Type::Never => true,
-            Type::Function { .. }
-            | Type::OnceFunction { .. }
-            | Type::Pointer { .. }
-            | Type::Weak(_)
-            // `impl Trait` existentials only carry the trait surface,
-            // not the witness's derive metadata; the derive-matches-bound
-            // path is handled directly in `type_satisfies_bound` by the
-            // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
-            // Shape-kinded args are not value types — no derive surface.
-            Type::Shape(_) => false,
-        }
+        self.env.type_supports_partial_ord(ty)
     }
     /// Returns `true` when `ty` is a distinct type that derives `Arithmetic`.
     pub(super) fn distinct_type_has_arithmetic(&self, ty: &Type) -> bool {
@@ -1125,174 +689,14 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
-    /// Check whether a type supports `Clone`. GAT slice 8b
-    /// carry-forward (a). All primitives clone trivially; named
-    /// types require `#[derive(Clone)]` (`Copy` implies `Clone` because
-    /// `extract_derived_traits` closes the derive set over its
-    /// dependencies — B-2026-08-17-33 — so this is an invariant by
-    /// construction rather than by a separate validation pass). Used by
-    /// `type_satisfies_bound` so a `T: Clone` bound discharges
-    /// against the derive metadata directly — built-in derive-only
-    /// traits aren't registered as impl-table entries, so without
-    /// this path a `: Clone` bound would conservatively reject every
-    /// concrete RHS at slice 7's `gat_rhs_satisfies_bound`. Mirrors
-    /// the field-shape walk in `type_supports_hash` /
-    /// `type_supports_display`.
+    /// See [`super::env::TypeEnv::type_supports_clone`].
     pub(super) fn type_supports_clone(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Refinement { base, .. } => self.type_supports_clone(base),
-            Type::Int(_)
-            | Type::UInt(_)
-            | Type::Float(_)
-            | Type::Bool
-            | Type::Char
-            | Type::Str
-            | Type::Unit => true,
-            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_clone(e)),
-            Type::Array { element, .. } => self.type_supports_clone(element),
-            Type::Vector { element, .. } => self.type_supports_clone(element),
-            // Slices clone (the slice header is `(ptr, len)` — bitwise copy);
-            // the borrowed data is not duplicated.
-            Type::Slice { .. } => true,
-            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_clone(inner),
-            Type::Named { name, args } => {
-                // Built-in collections clone when their type args clone
-                // (Option / Result / Vec / Map / Set follow the standard
-                // shape). User-defined types require `#[derive(Clone)]`.
-                if matches!(
-                    name.as_str(),
-                    "Option"
-                        | "Result"
-                        | "Vec"
-                        | "VecDeque"
-                        | "Map"
-                        | "SortedMap"
-                        | "Set"
-                        | "SortedSet"
-                ) {
-                    return args.iter().all(|a| self.type_supports_clone(a));
-                }
-                if self.env.has_impl("Clone", name, args) {
-                    return true;
-                }
-                if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Clone")
-                } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Clone")
-                } else if let Some(traits) = self.env.distinct_types.get(name) {
-                    traits.contains("Clone")
-                } else {
-                    // Unknown nominal — be permissive to avoid noise on
-                    // unrelated diagnostics. Slice 7's
-                    // gat_rhs_satisfies_bound path tightens to
-                    // false-conservative when reaching here from the
-                    // bounds path; the impl-site discharge surface
-                    // dominates.
-                    true
-                }
-            }
-            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_clone(inner),
-            // A `shared` handle always clones: `clone` on one is the REFCOUNT
-            // BUMP, not a deep copy, which is exactly what
-            // `clone_receiver_self_type` already answers for the same type
-            // (unconditionally, no derive consulted). This arm used to demand
-            // `#[derive(Clone)]` and so disagreed with it: `n.clone()` on a
-            // `shared struct` compiled, while `Option[N]` holding the same
-            // handle reported `no method 'clone' on type 'Option'`, because the
-            // payload check came through here. The two answers have to match —
-            // a derive cannot be what decides whether a refcount can be
-            // incremented (B-2026-08-27-23).
-            Type::Shared(_) => true,
-            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
-                true
-            }
-            Type::Never => true,
-            Type::Function { .. }
-            | Type::OnceFunction { .. }
-            | Type::Pointer { .. }
-            | Type::Weak(_)
-            // `impl Trait` existentials only carry the trait surface,
-            // not the witness's derive metadata; the derive-matches-bound
-            // path is handled directly in `type_satisfies_bound` by the
-            // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
-            // Shape-kinded args are not value types — no derive surface.
-            Type::Shape(_) => false,
-        }
+        self.env.type_supports_clone(ty)
     }
 
-    /// Check whether a type supports `Debug`. GAT slice 8b
-    /// carry-forward (a). Mirrors `type_supports_display` (Debug is
-    /// the developer-facing dump trait — same surface coverage as
-    /// Display for slice 7/8 bound-discharge purposes).
+    /// See [`super::env::TypeEnv::type_supports_debug`].
     pub(super) fn type_supports_debug(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Refinement { base, .. } => self.type_supports_debug(base),
-            Type::Int(_)
-            | Type::UInt(_)
-            | Type::Float(_)
-            | Type::Bool
-            | Type::Char
-            | Type::Str
-            | Type::Unit => true,
-            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_debug(e)),
-            Type::Array { element, .. } => self.type_supports_debug(element),
-            Type::Vector { element, .. } => self.type_supports_debug(element),
-            Type::Slice { element, .. } => self.type_supports_debug(element),
-            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_debug(inner),
-            Type::Named { name, args } => {
-                if matches!(
-                    name.as_str(),
-                    "Option"
-                        | "Result"
-                        | "Vec"
-                        | "VecDeque"
-                        | "Map"
-                        | "SortedMap"
-                        | "Set"
-                        | "SortedSet"
-                ) {
-                    return args.iter().all(|a| self.type_supports_debug(a));
-                }
-                if self.env.has_impl("Debug", name, args) {
-                    return true;
-                }
-                if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Debug")
-                } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Debug")
-                } else if let Some(traits) = self.env.distinct_types.get(name) {
-                    traits.contains("Debug")
-                } else {
-                    true
-                }
-            }
-            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_debug(inner),
-            Type::Shared(name) => {
-                if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Debug")
-                } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Debug")
-                } else {
-                    true
-                }
-            }
-            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
-                true
-            }
-            Type::Never => true,
-            Type::Function { .. }
-            | Type::OnceFunction { .. }
-            | Type::Pointer { .. }
-            | Type::Weak(_)
-            // `impl Trait` existentials only carry the trait surface,
-            // not the witness's derive metadata; the derive-matches-bound
-            // path is handled directly in `type_satisfies_bound` by the
-            // existential-trait-name comparison, not via these helpers.
-            | Type::Existential { .. } => false,
-            // Shape-kinded args are not value types — no derive surface.
-            Type::Shape(_) => false,
-        }
+        self.env.type_supports_debug(ty)
     }
 
     /// Built-in `Numeric` marker trait: satisfied by the primitive numeric
@@ -1312,50 +716,9 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// Check whether a type is Copy (primitive or derives Copy).
+    /// See [`super::env::TypeEnv::is_type_copy`].
     pub(super) fn is_type_copy(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Int(_)
-            | Type::UInt(_)
-            | Type::Float(_)
-            | Type::Bool
-            | Type::Char
-            | Type::Unit
-            | Type::Never
-            | Type::Error => true,
-            // Raw pointers are unconditionally Copy — they carry no
-            // ownership and have no destructor, which is exactly why
-            // `E_UNION_FIELD_NOT_COPY` tells the user to "hold it behind a
-            // raw pointer (`*mut T` / `*const T`)". Without this arm that
-            // advice was self-contradictory: `union EpollData { ptr: *mut
-            // u8, … }` — the canonical `epoll_data` FFI shape, and the one
-            // the union feature exists to express — was rejected by the
-            // very rule whose suggested fix it already followed
-            // (B-2026-08-12-7).
-            Type::Pointer { .. } => true,
-            Type::Tuple(types) => types.iter().all(|t| self.is_type_copy(t)),
-            // Array[T, N] is Copy iff T is Copy.
-            Type::Array { element, .. } => self.is_type_copy(element),
-            Type::Vector { element, .. } => self.is_type_copy(element),
-            // Slice[T] is unconditionally Copy; mut Slice[T] is not.
-            Type::Slice { mutable, .. } => !mutable,
-            Type::Named { name, args } => {
-                // Option[T] / Result[T, E] are Copy when all type args are Copy.
-                if matches!(name.as_str(), "Option" | "Result") {
-                    return args.iter().all(|a| self.is_type_copy(a));
-                }
-                if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Copy")
-                } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Copy")
-                } else if let Some(traits) = self.env.distinct_types.get(name) {
-                    traits.contains("Copy")
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        }
+        self.env.is_type_copy(ty)
     }
 
     /// Validate that #[derive(Copy)] structs/enums have all-Copy fields, and
@@ -1527,40 +890,9 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// Whether `ty` has a reachable `default()` — the predicate driving
-    /// the `#[derive(Default)]` field check. v1 floor scope: the scalar
-    /// primitives (every one has a zero-like value, floats included) plus
-    /// any named struct/enum that actually carries a `default` method
-    /// (derive-synthesized in [`crate::desugar`] or hand-written). Container
-    /// / generic-argument / tuple / ref field types are out of scope and
-    /// report cleanly here rather than failing deep in the synthesized
-    /// body. Permissive on inference/error types to avoid cascading.
+    /// See [`super::env::TypeEnv::type_supports_default`].
     pub(super) fn type_supports_default(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Refinement { base, .. } => self.type_supports_default(base),
-            Type::Int(_)
-            | Type::UInt(_)
-            | Type::Float(_)
-            | Type::Bool
-            | Type::Char
-            | Type::Str
-            | Type::Unit => true,
-            Type::Named { name, .. } | Type::Shared(name) => self.type_has_default_method(name),
-            Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => true,
-            _ => false,
-        }
-    }
-
-    /// True when some impl of `name` (inherent or trait) exposes a
-    /// `default` associated function. The derive-synthesized inherent
-    /// impl is already present in `env.impls` by the time the recursive
-    /// derive validator runs, so this answers both the derived and the
-    /// hand-written case uniformly.
-    fn type_has_default_method(&self, name: &str) -> bool {
-        self.env
-            .impls
-            .iter()
-            .any(|imp| imp.target_type == name && imp.methods.contains_key("default"))
+        self.env.type_supports_default(ty)
     }
 
     /// Compound-payload enum codegen (Slice CP, CP5 carve-out) —
@@ -2082,6 +1414,732 @@ impl<'a> super::TypeChecker<'a> {
             Type::Rc(_) | Type::Arc(_) | Type::Weak(_) | Type::Shared(_) => false,
             _ => false,
         }
+    }
+}
+
+/// The derive-only builtin traits answered from the type environment alone,
+/// so the generic-impl bound gate (`TypeEnv::bound_satisfied`, which method
+/// resolution runs) and the free-fn bound gate (`type_satisfies_bound`) give
+/// the same answer for the same type and bound (B-2026-10-05-43). Each
+/// `TypeChecker` method of the same name delegates here.
+impl super::env::TypeEnv {
+    /// If `ty` is a `distinct type`, return whether it derives ANY of
+    /// `wanted` (so the caller's trait gate is satisfied), wrapped in
+    /// `Some`; `None` when `ty` is not a distinct type (caller continues its
+    /// normal struct/enum/primitive logic). Distinct types are opaque — they
+    /// inherit NO operations from their base, so a derive-support query must
+    /// consult the explicit `#[derive(...)]` set, not the base's support
+    /// (design.md § Distinct Types — "No operations carry through by
+    /// default"). This is the gate that makes `a == b` / `a < b` / hashing /
+    /// `Display` require the corresponding derive on a distinct type.
+    fn distinct_derive_supported(&self, ty: &Type, wanted: &[&str]) -> Option<bool> {
+        if let Type::Named { name, .. } = ty {
+            if let Some(traits) = self.distinct_types.get(name) {
+                return Some(wanted.iter().any(|w| traits.contains(*w)));
+            }
+        }
+        None
+    }
+
+    /// Check whether a type supports `==` / `!=` (PartialEq).
+    /// All primitives including floats support PartialEq.
+    /// Named types (structs/enums) require `#[derive(Eq)]` or `#[derive(PartialEq)]`.
+    pub(super) fn type_supports_partial_eq(&self, ty: &Type) -> bool {
+        if let Some(ok) = self.distinct_derive_supported(ty, &["Eq", "PartialEq"]) {
+            return ok;
+        }
+        match ty {
+            // Refinement types are structurally transparent — derive
+            // support follows the base type.
+            Type::Refinement { base, .. } => self.type_supports_partial_eq(base),
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Str
+            | Type::Unit => true,
+            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_partial_eq(e)),
+            Type::Array { element, .. } => self.type_supports_partial_eq(element),
+            Type::Vector { element, .. } => self.type_supports_partial_eq(element),
+            Type::Slice { element, .. } => self.type_supports_partial_eq(element),
+            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_partial_eq(inner),
+            // `Vec[T]` has value (content) equality when `T` does — the exact
+            // arm `type_supports_eq` carries, for the exact same reason: the
+            // built-in `Vec` is registered in `env.structs` with NO derived
+            // traits, so without this it falls through to the generic `Named`
+            // lookup below and reports `Vec` as un-`PartialEq`.
+            //
+            // B-2026-08-18-6: `Eq` and `Hash` both grew this arm and
+            // `PartialEq` did not, which made the WEAKER trait the stricter
+            // gate — `#[derive(Eq)] struct A { v: Vec[i64] }` compiled while
+            // `#[derive(PartialEq)]` on the same field was refused. Nothing
+            // about the lowering justified the split: `==` on a Vec-carrying
+            // struct routes through `emit_eq_fn_for_struct` (B-2026-08-12-5),
+            // the type-directed comparator, whichever of the two traits was
+            // written.
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                self.type_supports_partial_eq(&args[0])
+            }
+            Type::Named { name, args } => {
+                // A user-provided `impl Eq for Name` is sufficient — the
+                // lowering pass dispatches `==`/`!=` through it. Falls back
+                // to `#[derive(Eq)]`/`#[derive(PartialEq)]` when no impl is
+                // registered (e.g. for compiler-provided structural eq on
+                // built-in enums like `Option`/`Result`).
+                if self.has_impl("Eq", name, args) {
+                    return true;
+                }
+                if let Some(info) = self.structs.get(name) {
+                    info.derived_traits.contains("Eq") || info.derived_traits.contains("PartialEq")
+                } else if let Some(info) = self.enums.get(name) {
+                    info.derived_traits.contains("Eq") || info.derived_traits.contains("PartialEq")
+                } else {
+                    true
+                }
+            }
+            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_partial_eq(inner),
+            Type::Shared(name) => {
+                if self.has_impl("Eq", name, &[]) {
+                    return true;
+                }
+                if let Some(info) = self.structs.get(name) {
+                    info.derived_traits.contains("Eq") || info.derived_traits.contains("PartialEq")
+                } else if let Some(info) = self.enums.get(name) {
+                    info.derived_traits.contains("Eq") || info.derived_traits.contains("PartialEq")
+                } else {
+                    true
+                }
+            }
+            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
+                true
+            }
+            Type::Never => true,
+            Type::Function { .. }
+            | Type::OnceFunction { .. }
+            | Type::Pointer { .. }
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
+        }
+    }
+
+    /// Check whether a type supports full `Eq` (required for Map/Set keys, etc.).
+    /// Floats (f32/f64) do NOT support Eq due to IEEE 754 NaN != NaN.
+    /// Named types require `#[derive(Eq)]`.
+    pub(super) fn type_supports_eq(&self, ty: &Type) -> bool {
+        if let Some(ok) = self.distinct_derive_supported(ty, &["Eq"]) {
+            return ok;
+        }
+        match ty {
+            Type::Refinement { base, .. } => self.type_supports_eq(base),
+            Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
+            // f32/f64 follow IEEE 754: NaN != NaN, so they don't implement Eq
+            Type::Float(_) => false,
+            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_eq(e)),
+            Type::Array { element, .. } => self.type_supports_eq(element),
+            Type::Vector { element, .. } => self.type_supports_eq(element),
+            Type::Slice { element, .. } => self.type_supports_eq(element),
+            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_eq(inner),
+            // `Vec[T]` has value (content) equality when `T` does — element-wise
+            // compare, like the `Array`/`Slice` arms above. The built-in `Vec`
+            // is registered in `env.structs` with no derived traits, so without
+            // this arm it falls through to the generic `Named` lookup below and
+            // (wrongly) reports `Vec` as un-`Eq`, blocking `Set[Vec[T]]` /
+            // `Map[Vec[T], _]`. Codegen's per-element `karac_eq_Vec_<elem>`
+            // walks the contents to match the interpreter (B-2026-06-20-15).
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                self.type_supports_eq(&args[0])
+            }
+            Type::Named { name, .. } => {
+                if let Some(info) = self.structs.get(name) {
+                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
+                } else if let Some(info) = self.enums.get(name) {
+                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
+                } else {
+                    // Unknown type — permissive to avoid cascading errors
+                    // when the resolver has already flagged it.
+                    true
+                }
+            }
+            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_eq(inner),
+            Type::Shared(name) => {
+                if let Some(info) = self.structs.get(name) {
+                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
+                } else if let Some(info) = self.enums.get(name) {
+                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
+                } else {
+                    true
+                }
+            }
+            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
+                true
+            }
+            Type::Never => true,
+            Type::Function { .. }
+            | Type::OnceFunction { .. }
+            | Type::Pointer { .. }
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
+        }
+    }
+
+    /// Check whether a type supports `Hash`. Floats do not — NaN-as-key would
+    /// break the hash/eq contract. Named types require `#[derive(Hash)]`.
+    pub(super) fn type_supports_hash(&self, ty: &Type) -> bool {
+        if let Some(ok) = self.distinct_derive_supported(ty, &["Hash"]) {
+            return ok;
+        }
+        match ty {
+            Type::Refinement { base, .. } => self.type_supports_hash(base),
+            Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
+            Type::Float(_) => false,
+            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_hash(e)),
+            Type::Array { element, .. } => self.type_supports_hash(element),
+            Type::Vector { element, .. } => self.type_supports_hash(element),
+            Type::Slice { element, .. } => self.type_supports_hash(element),
+            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_hash(inner),
+            // `Vec[T]` hashes by content when `T` does — element-wise, like the
+            // `Array`/`Slice` arms above. Without this arm the built-in `Vec`
+            // (registered in `env.structs` with no derived traits) falls through
+            // to the generic `Named` lookup below and reports `Vec` as un-`Hash`,
+            // blocking `Set[Vec[T]]` / `Map[Vec[T], _]`. Codegen's per-element
+            // `karac_hash_Vec_<elem>` walks the contents to match (B-2026-06-20-15).
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                self.type_supports_hash(&args[0])
+            }
+            Type::Named { name, .. } => {
+                if let Some(info) = self.structs.get(name) {
+                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
+                } else if let Some(info) = self.enums.get(name) {
+                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
+                } else {
+                    true
+                }
+            }
+            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_hash(inner),
+            Type::Shared(name) => {
+                if let Some(info) = self.structs.get(name) {
+                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
+                } else if let Some(info) = self.enums.get(name) {
+                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
+                } else {
+                    true
+                }
+            }
+            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
+                true
+            }
+            Type::Never => true,
+            Type::Function { .. }
+            | Type::OnceFunction { .. }
+            | Type::Pointer { .. }
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
+        }
+    }
+
+    /// True if the user has an `impl Ord for Type` registered on the
+    /// canonical type name. Sibling to the `derived_traits` check below;
+    /// lets a user-supplied `cmp` (which can encode arbitrary order —
+    /// reverse, custom tiebreaks, partial-field — that the derive-equivalent
+    /// field cascade can't reproduce) count toward the Ord bound at any
+    /// consumer site. Scans `env.impls` directly: the impl list is small
+    /// (one entry per impl block), and Ord checks aren't a hot path. The
+    /// codegen consumer (`emit_sort_by_key_inline_thunk`) consults
+    /// `Program.user_ord_typed_exprs` to dispatch to the user's compiled
+    /// `Type.cmp` indirectly.
+    /// Whether `name` carries a hand-written `impl Hash` (B-2026-08-26-10).
+    ///
+    /// Counts toward the `Hash` bound for the same reason `has_user_impl_ord`
+    /// counts toward `Ord`: both backends now dispatch to the impl, so refusing
+    /// it here would reject a program they can both run correctly.
+    pub(super) fn has_user_impl_hash(&self, name: &str) -> bool {
+        self.impls
+            .iter()
+            .any(|imp| imp.trait_name.as_deref() == Some("Hash") && imp.target_type == name)
+    }
+
+    /// Whether `name` carries a hand-written `impl PartialEq` AND the `impl Eq`
+    /// marker.
+    ///
+    /// BOTH, because that is already the `==` operator's rule — a bare
+    /// `impl PartialEq` does not drive `==`, and a container that hashed through
+    /// a user impl while comparing structurally would place a key by one rule
+    /// and look it up by another.
+    pub(super) fn has_user_impl_eq(&self, name: &str) -> bool {
+        let has = |t: &str| {
+            self.impls
+                .iter()
+                .any(|imp| imp.trait_name.as_deref() == Some(t) && imp.target_type == name)
+        };
+        has("PartialEq") && has("Eq")
+    }
+
+    pub(super) fn has_user_impl_ord(&self, name: &str) -> bool {
+        self.impls
+            .iter()
+            .any(|imp| imp.trait_name.as_deref() == Some("Ord") && imp.target_type == name)
+    }
+
+    /// Whether a named aggregate's DERIVED ordering is one both backends can
+    /// actually lower — the typechecker's half of the parity rule the two
+    /// backends already enforce independently (B-2026-08-27-47).
+    ///
+    /// A GENERIC aggregate is the case that splits. Its derived comparator has
+    /// to order a payload whose type is a type PARAMETER, and neither backend
+    /// can do that from the declaration alone: codegen's
+    /// `emit_cmp_fn_for_type_expr` refuses a `Path` carrying `generic_args` and
+    /// its `emit_cmp_fn_for_enum` reads payload `TypeExpr`s by enum NAME (so it
+    /// sees `T`, never the instantiation), and the interpreter's
+    /// `aggregate_is_orderable` requires `generic_params.is_empty()` for the
+    /// same stated reason. Both therefore reject `<` on `Option[i64]` —
+    /// agreeing, so `<` never split.
+    ///
+    /// `.cmp` DID split, because it never consulted that gate on either side:
+    /// the typechecker admitted it here (this arm asked only about the derive,
+    /// never about the arguments) and the interpreter answered it straight out
+    /// of `value_compare`, which has runtime values and so can order what no
+    /// static comparator can. Codegen had nothing to answer with and failed the
+    /// build. Measured on the unfixed compiler, all check-green and
+    /// interp-green and build-refused: `Option[i64]`, `Result[i64, i64]`, a
+    /// user `enum MyOpt[T]`, a user `struct Pair[T]`, and — transitively — a
+    /// non-generic `#[derive(Ord)]` struct holding an `Option[i64]` field.
+    ///
+    /// Rejecting here rather than teaching codegen the instantiation is the
+    /// narrow move, and it is the direction this file already takes for exactly
+    /// this shape: `type_supports_display` rejects `Type::Unit` so that a
+    /// meaningless interpolation cannot render differently per backend. Making
+    /// the generic case WORK is a real feature (a monomorphized comparator per
+    /// instantiation) and belongs on the roadmap, not in a run-vs-build fix;
+    /// when it lands, this gate widens and nothing else has to move.
+    ///
+    /// A user `impl Ord` always wins, generic or not, and that escape hatch is
+    /// load-bearing rather than defensive: a hand-written `impl[T] Ord for
+    /// W[T]` is a declared function, so it dispatches through the normal
+    /// user-impl path and was measured working on BOTH backends. Gating it out
+    /// would break code that compiles today.
+    fn derived_ord_is_lowerable(
+        &self,
+        name: &str,
+        generic_params: &[String],
+        derived: &std::collections::HashSet<String>,
+    ) -> bool {
+        if self.has_user_impl_ord(name) {
+            return true;
+        }
+        generic_params.is_empty() && derived.contains("Ord")
+    }
+
+    /// The `PartialOrd` twin of [`Self::derived_ord_is_lowerable`], carrying the
+    /// same rule for the same reason.
+    ///
+    /// Kept in step deliberately. `register_ord_orderable_types` admits a
+    /// `#[derive(PartialOrd)]` aggregate into codegen's comparator family on
+    /// equal footing with `Ord`, so a generic one reaches the identical dead
+    /// end; letting only the `Ord` spelling narrow would leave
+    /// `#[derive(PartialOrd)] struct S { x: Option[i64] }` accepted at check and
+    /// refused at build — the very split being closed, moved one derive over.
+    fn derived_partial_ord_is_lowerable(
+        &self,
+        name: &str,
+        generic_params: &[String],
+        derived: &std::collections::HashSet<String>,
+    ) -> bool {
+        if self.has_user_impl_ord(name) {
+            return true;
+        }
+        generic_params.is_empty() && (derived.contains("PartialOrd") || derived.contains("Ord"))
+    }
+
+    pub(super) fn type_supports_ord(&self, ty: &Type) -> bool {
+        if let Some(ok) = self.distinct_derive_supported(ty, &["Ord"]) {
+            return ok;
+        }
+        match ty {
+            Type::Refinement { base, .. } => self.type_supports_ord(base),
+            Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Str | Type::Unit => true,
+            Type::Float(_) => false,
+            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_ord(e)),
+            Type::Array { element, .. } => self.type_supports_ord(element),
+            Type::Vector { element, .. } => self.type_supports_ord(element),
+            Type::Slice { element, .. } => self.type_supports_ord(element),
+            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_ord(inner),
+            Type::Named { name, .. } => {
+                if let Some(info) = self.structs.get(name) {
+                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
+                } else if let Some(info) = self.enums.get(name) {
+                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
+                } else {
+                    true
+                }
+            }
+            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_ord(inner),
+            Type::Shared(name) => {
+                if let Some(info) = self.structs.get(name) {
+                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
+                } else if let Some(info) = self.enums.get(name) {
+                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
+                } else {
+                    true
+                }
+            }
+            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
+                true
+            }
+            Type::Never => true,
+            Type::Function { .. }
+            | Type::OnceFunction { .. }
+            | Type::Pointer { .. }
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
+        }
+    }
+
+    /// Check whether a type supports `PartialOrd` (admits NaN for floats).
+    pub(super) fn type_supports_partial_ord(&self, ty: &Type) -> bool {
+        if let Some(ok) = self.distinct_derive_supported(ty, &["PartialOrd", "Ord"]) {
+            return ok;
+        }
+        match ty {
+            Type::Refinement { base, .. } => self.type_supports_partial_ord(base),
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Str
+            | Type::Unit => true,
+            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_partial_ord(e)),
+            Type::Array { element, .. } => self.type_supports_partial_ord(element),
+            Type::Vector { element, .. } => self.type_supports_partial_ord(element),
+            Type::Slice { element, .. } => self.type_supports_partial_ord(element),
+            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_partial_ord(inner),
+            Type::Named { name, .. } => {
+                if let Some(info) = self.structs.get(name) {
+                    self.derived_partial_ord_is_lowerable(
+                        name,
+                        &info.generic_params,
+                        &info.derived_traits,
+                    )
+                } else if let Some(info) = self.enums.get(name) {
+                    self.derived_partial_ord_is_lowerable(
+                        name,
+                        &info.generic_params,
+                        &info.derived_traits,
+                    )
+                } else {
+                    true
+                }
+            }
+            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_partial_ord(inner),
+            Type::Shared(name) => {
+                if let Some(info) = self.structs.get(name) {
+                    self.derived_partial_ord_is_lowerable(
+                        name,
+                        &info.generic_params,
+                        &info.derived_traits,
+                    )
+                } else if let Some(info) = self.enums.get(name) {
+                    self.derived_partial_ord_is_lowerable(
+                        name,
+                        &info.generic_params,
+                        &info.derived_traits,
+                    )
+                } else {
+                    true
+                }
+            }
+            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
+                true
+            }
+            Type::Never => true,
+            Type::Function { .. }
+            | Type::OnceFunction { .. }
+            | Type::Pointer { .. }
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
+        }
+    }
+
+    /// Check whether a type supports `Clone`. GAT slice 8b
+    /// carry-forward (a). All primitives clone trivially; named
+    /// types require `#[derive(Clone)]` (`Copy` implies `Clone` because
+    /// `extract_derived_traits` closes the derive set over its
+    /// dependencies — B-2026-08-17-33 — so this is an invariant by
+    /// construction rather than by a separate validation pass). Used by
+    /// `type_satisfies_bound` so a `T: Clone` bound discharges
+    /// against the derive metadata directly — built-in derive-only
+    /// traits aren't registered as impl-table entries, so without
+    /// this path a `: Clone` bound would conservatively reject every
+    /// concrete RHS at slice 7's `gat_rhs_satisfies_bound`. Mirrors
+    /// the field-shape walk in `type_supports_hash` /
+    /// `type_supports_display`.
+    pub(super) fn type_supports_clone(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Refinement { base, .. } => self.type_supports_clone(base),
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Str
+            | Type::Unit => true,
+            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_clone(e)),
+            Type::Array { element, .. } => self.type_supports_clone(element),
+            Type::Vector { element, .. } => self.type_supports_clone(element),
+            // Slices clone (the slice header is `(ptr, len)` — bitwise copy);
+            // the borrowed data is not duplicated.
+            Type::Slice { .. } => true,
+            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_clone(inner),
+            Type::Named { name, args } => {
+                // Built-in collections clone when their type args clone
+                // (Option / Result / Vec / Map / Set follow the standard
+                // shape). User-defined types require `#[derive(Clone)]`.
+                if matches!(
+                    name.as_str(),
+                    "Option"
+                        | "Result"
+                        | "Vec"
+                        | "VecDeque"
+                        | "Map"
+                        | "SortedMap"
+                        | "Set"
+                        | "SortedSet"
+                ) {
+                    return args.iter().all(|a| self.type_supports_clone(a));
+                }
+                if self.has_impl("Clone", name, args) {
+                    return true;
+                }
+                if let Some(info) = self.structs.get(name) {
+                    info.derived_traits.contains("Clone")
+                } else if let Some(info) = self.enums.get(name) {
+                    info.derived_traits.contains("Clone")
+                } else if let Some(traits) = self.distinct_types.get(name) {
+                    traits.contains("Clone")
+                } else {
+                    // Unknown nominal — be permissive to avoid noise on
+                    // unrelated diagnostics. Slice 7's
+                    // gat_rhs_satisfies_bound path tightens to
+                    // false-conservative when reaching here from the
+                    // bounds path; the impl-site discharge surface
+                    // dominates.
+                    true
+                }
+            }
+            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_clone(inner),
+            // A `shared` handle always clones: `clone` on one is the REFCOUNT
+            // BUMP, not a deep copy, which is exactly what
+            // `clone_receiver_self_type` already answers for the same type
+            // (unconditionally, no derive consulted). This arm used to demand
+            // `#[derive(Clone)]` and so disagreed with it: `n.clone()` on a
+            // `shared struct` compiled, while `Option[N]` holding the same
+            // handle reported `no method 'clone' on type 'Option'`, because the
+            // payload check came through here. The two answers have to match —
+            // a derive cannot be what decides whether a refcount can be
+            // incremented (B-2026-08-27-23).
+            Type::Shared(_) => true,
+            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
+                true
+            }
+            Type::Never => true,
+            Type::Function { .. }
+            | Type::OnceFunction { .. }
+            | Type::Pointer { .. }
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
+        }
+    }
+
+    /// Check whether a type supports `Debug`. GAT slice 8b
+    /// carry-forward (a). Mirrors `type_supports_display` (Debug is
+    /// the developer-facing dump trait — same surface coverage as
+    /// Display for slice 7/8 bound-discharge purposes).
+    pub(super) fn type_supports_debug(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Refinement { base, .. } => self.type_supports_debug(base),
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Str
+            | Type::Unit => true,
+            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_debug(e)),
+            Type::Array { element, .. } => self.type_supports_debug(element),
+            Type::Vector { element, .. } => self.type_supports_debug(element),
+            Type::Slice { element, .. } => self.type_supports_debug(element),
+            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_debug(inner),
+            Type::Named { name, args } => {
+                if matches!(
+                    name.as_str(),
+                    "Option"
+                        | "Result"
+                        | "Vec"
+                        | "VecDeque"
+                        | "Map"
+                        | "SortedMap"
+                        | "Set"
+                        | "SortedSet"
+                ) {
+                    return args.iter().all(|a| self.type_supports_debug(a));
+                }
+                if self.has_impl("Debug", name, args) {
+                    return true;
+                }
+                if let Some(info) = self.structs.get(name) {
+                    info.derived_traits.contains("Debug")
+                } else if let Some(info) = self.enums.get(name) {
+                    info.derived_traits.contains("Debug")
+                } else if let Some(traits) = self.distinct_types.get(name) {
+                    traits.contains("Debug")
+                } else {
+                    true
+                }
+            }
+            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_debug(inner),
+            Type::Shared(name) => {
+                if let Some(info) = self.structs.get(name) {
+                    info.derived_traits.contains("Debug")
+                } else if let Some(info) = self.enums.get(name) {
+                    info.derived_traits.contains("Debug")
+                } else {
+                    true
+                }
+            }
+            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
+                true
+            }
+            Type::Never => true,
+            Type::Function { .. }
+            | Type::OnceFunction { .. }
+            | Type::Pointer { .. }
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
+            // Shape-kinded args are not value types — no derive surface.
+            Type::Shape(_) => false,
+        }
+    }
+
+    /// Check whether a type is Copy (primitive or derives Copy).
+    pub(super) fn is_type_copy(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Unit
+            | Type::Never
+            | Type::Error => true,
+            // Raw pointers are unconditionally Copy — they carry no
+            // ownership and have no destructor, which is exactly why
+            // `E_UNION_FIELD_NOT_COPY` tells the user to "hold it behind a
+            // raw pointer (`*mut T` / `*const T`)". Without this arm that
+            // advice was self-contradictory: `union EpollData { ptr: *mut
+            // u8, … }` — the canonical `epoll_data` FFI shape, and the one
+            // the union feature exists to express — was rejected by the
+            // very rule whose suggested fix it already followed
+            // (B-2026-08-12-7).
+            Type::Pointer { .. } => true,
+            Type::Tuple(types) => types.iter().all(|t| self.is_type_copy(t)),
+            // Array[T, N] is Copy iff T is Copy.
+            Type::Array { element, .. } => self.is_type_copy(element),
+            Type::Vector { element, .. } => self.is_type_copy(element),
+            // Slice[T] is unconditionally Copy; mut Slice[T] is not.
+            Type::Slice { mutable, .. } => !mutable,
+            Type::Named { name, args } => {
+                // Option[T] / Result[T, E] are Copy when all type args are Copy.
+                if matches!(name.as_str(), "Option" | "Result") {
+                    return args.iter().all(|a| self.is_type_copy(a));
+                }
+                if let Some(info) = self.structs.get(name) {
+                    info.derived_traits.contains("Copy")
+                } else if let Some(info) = self.enums.get(name) {
+                    info.derived_traits.contains("Copy")
+                } else if let Some(traits) = self.distinct_types.get(name) {
+                    traits.contains("Copy")
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `ty` has a reachable `default()` — the predicate driving
+    /// the `#[derive(Default)]` field check. v1 floor scope: the scalar
+    /// primitives (every one has a zero-like value, floats included) plus
+    /// any named struct/enum that actually carries a `default` method
+    /// (derive-synthesized in [`crate::desugar`] or hand-written). Container
+    /// / generic-argument / tuple / ref field types are out of scope and
+    /// report cleanly here rather than failing deep in the synthesized
+    /// body. Permissive on inference/error types to avoid cascading.
+    pub(super) fn type_supports_default(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Refinement { base, .. } => self.type_supports_default(base),
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Str
+            | Type::Unit => true,
+            Type::Named { name, .. } | Type::Shared(name) => self.type_has_default_method(name),
+            Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => true,
+            _ => false,
+        }
+    }
+
+    /// True when some impl of `name` (inherent or trait) exposes a
+    /// `default` associated function. The derive-synthesized inherent
+    /// impl is already present in `env.impls` by the time the recursive
+    /// derive validator runs, so this answers both the derived and the
+    /// hand-written case uniformly.
+    fn type_has_default_method(&self, name: &str) -> bool {
+        self.impls
+            .iter()
+            .any(|imp| imp.target_type == name && imp.methods.contains_key("default"))
     }
 }
 

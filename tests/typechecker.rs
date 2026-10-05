@@ -46842,6 +46842,99 @@ fn main() {
     );
 }
 
+/// B-2026-10-05-43 — the two bound gates give ONE answer for the derive-only
+/// builtins, for every builtin type and not just the shapes earlier fixes named.
+///
+/// `impl[T: Clone] G[T]` refused `G[String]` ("`String` does not implement
+/// `Clone`") while `fn f[T: Clone](x: T)` accepted it. Measured over the nine
+/// derive-only traits and fourteen builtin types below, the gates disagreed on
+/// 48 of 126 cells, in both directions: the impl gate refused every builtin
+/// collection under `Clone` and `Debug`, `String` under `Hash` and `Default`,
+/// `Vec` under the equality traits, and accepted `Option` and `Result` under
+/// `Ord` and `PartialOrd`, including `Option[f64]`, which nothing orders. The
+/// impl gate now asks the free-fn gate's predicates. The test checks every
+/// cell for agreement, then pins a few answers so that agreeing on the WRONG
+/// answer fails too.
+#[test]
+fn derive_only_bounds_agree_on_impl_and_free_fn_gates() {
+    fn clean(src: &str) -> bool {
+        let parsed = parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse: {:?}\n{src}",
+            parsed.errors
+        );
+        let resolved = resolve(&parsed.program);
+        resolved.errors.is_empty() && typecheck(&parsed.program, &resolved).errors.is_empty()
+    }
+    let traits = [
+        "Clone",
+        "Copy",
+        "Debug",
+        "PartialEq",
+        "Eq",
+        "PartialOrd",
+        "Ord",
+        "Hash",
+        "Default",
+    ];
+    let types = [
+        ("String", "\"x\".to_string()"),
+        ("Vec[i64]", "vec![1]"),
+        ("Vec[f64]", "vec![1.5]"),
+        ("Vec[String]", "vec![\"a\".to_string()]"),
+        ("Option[i64]", "Some(1)"),
+        ("Option[String]", "Some(\"a\".to_string())"),
+        ("Option[f64]", "Some(1.5)"),
+        ("Result[i64, String]", "Ok(1)"),
+        ("Map[i64, i64]", "Map.new()"),
+        ("Set[i64]", "Set.new()"),
+        ("SortedMap[i64, i64]", "SortedMap.new()"),
+        ("VecDeque[i64]", "VecDeque.new()"),
+        ("SortedSet[i64]", "SortedSet.new()"),
+        ("(String, i64)", "(\"a\".to_string(), 1)"),
+    ];
+    let mut verdict = std::collections::HashMap::new();
+    let mut disagree = Vec::new();
+    for t in traits {
+        for (ty, val) in types {
+            let free = clean(&format!(
+                "fn f[T: {t}](x: T) -> i64 {{ return 1; }}\n\
+                 fn main() {{ let v: {ty} = {val}; println(f\"{{f(v)}}\"); }}\n"
+            ));
+            let imp = clean(&format!(
+                "struct G[T] {{ v: T }}\n\
+                 impl[T: {t}] G[T] {{ fn one(ref self) -> i64 {{ return 1; }} }}\n\
+                 fn main() {{ let v: {ty} = {val}; let g = G {{ v: v }}; \
+                 println(f\"{{g.one()}}\"); }}\n"
+            ));
+            if free != imp {
+                disagree.push(format!("{t} on {ty}: free fn {free}, impl {imp}"));
+            }
+            verdict.insert((t, ty), imp);
+        }
+    }
+    assert!(
+        disagree.is_empty(),
+        "the gates disagree:\n{}",
+        disagree.join("\n")
+    );
+    for (t, ty, want) in [
+        ("Clone", "String", true),
+        ("Clone", "Vec[String]", true),
+        ("Clone", "Map[i64, i64]", true),
+        ("Debug", "Option[String]", true),
+        ("Hash", "String", true),
+        ("Eq", "Vec[i64]", true),
+        ("Default", "String", true),
+        ("Copy", "String", false),
+        ("Eq", "Vec[f64]", false),
+        ("Ord", "Option[f64]", false),
+    ] {
+        assert_eq!(verdict[&(t, ty)], want, "`{t}` on `{ty}`");
+    }
+}
+
 /// B-2026-08-26-10 — a rejection must not deny an impl the author can see, nor
 /// prescribe a derive that would silently discard it.
 ///
