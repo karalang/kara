@@ -2599,6 +2599,11 @@ struct RebindWalk {
     /// Only [`fn_conditionally_returns_param_bare`] reads it.
     destructured: Vec<String>,
     bound: std::collections::HashMap<String, usize>,
+    /// B-2026-10-05-45 — params [`param_shadowed_before_use`]: each such name
+    /// is bound twice, but every mention of it is the shadowing local's, so it
+    /// counts as bound once for the alias questions about that LOCAL
+    /// ([`RebindWalk::local_once`]). Not for questions about the param.
+    shadow_locals: std::collections::HashSet<String>,
 }
 impl RebindWalk {
     fn note_destructured(&mut self, e: &Expr) {
@@ -3006,7 +3011,27 @@ fn rebind_walk_uncached(f: &Function) -> RebindWalk {
         w.mut_rebinds.retain(|r| !demoted.contains(r));
         w.rebinds.extend(demoted);
     }
+    // B-2026-10-05-45 — a param whose name a top-level `let` rebinds before
+    // anything mentions it (`fn g5(s: T, o: T) -> T { let s = o; s }`) names
+    // ONE binding wherever it appears, the local. Without this `s` was never
+    // an alias of `o`, and the caller kept `o`'s body while the result owned
+    // it too.
+    for p in &f.params {
+        if let Some(n) = p.name() {
+            if param_shadowed_before_use(f, n) {
+                w.shadow_locals.insert(n.to_string());
+            }
+        }
+    }
     w
+}
+
+impl RebindWalk {
+    /// Is LOCAL `x` bound once, counting a param it shadows before any use
+    /// as no second binding (B-2026-10-05-45)?
+    fn local_once(&self, x: &str) -> bool {
+        self.bound.get(x) == Some(&1) || self.shadow_locals.contains(x)
+    }
 }
 
 fn rebind_walk_raw(f: &Function) -> std::rc::Rc<RebindWalk> {
@@ -3030,6 +3055,7 @@ fn rebind_walk_raw_uncached(f: &Function) -> RebindWalk {
         call_rebinds: Vec::new(),
         destructured: Vec::new(),
         bound: std::collections::HashMap::new(),
+        shadow_locals: std::collections::HashSet::new(),
     };
     for p in &f.params {
         if let Some(n) = p.name() {
@@ -3069,6 +3095,9 @@ fn rebind_walk_raw_uncached(f: &Function) -> RebindWalk {
 /// Over-approximates on purpose. A false positive stands the caller down and
 /// costs at most a leak; a false negative is a double free.
 pub fn param_rebound_into_local(f: &Function, param_name: &str) -> bool {
+    if param_shadowed_before_use(f, param_name) {
+        return false;
+    }
     let w = rebind_walk(f);
     let aliases = close_rebind_aliases(&w, param_name);
     w.rebinds
@@ -3085,11 +3114,54 @@ pub fn param_rebound_into_local(f: &Function, param_name: &str) -> bool {
 /// when the rebind is mutable, because the callee frees the displaced box on
 /// reassignment and nothing on the caller's side can see that write.
 pub fn param_rebound_into_mut_local(f: &Function, param_name: &str) -> bool {
+    if param_shadowed_before_use(f, param_name) {
+        return false;
+    }
     let w = rebind_walk(f);
     let aliases = close_rebind_aliases(&w, param_name);
     w.mut_rebinds
         .iter()
         .any(|(_, y)| aliases.iter().any(|a| a == y))
+}
+
+/// B-2026-10-05-45 — is by-value param `n` rebound by a top-level `let n = ..`
+/// before anything mentions it, with no other binding of the name? Then every
+/// mention of `n` in the body is that local's, and the param itself is never
+/// read: it has no aliases and nothing hands it back.
+pub fn param_shadowed_before_use(f: &Function, n: &str) -> bool {
+    if !f.params.iter().any(|p| p.name() == Some(n)) || rebind_walk_raw(f).bound.get(n) != Some(&2)
+    {
+        return false;
+    }
+    let Some(k) = f.body.stmts.iter().position(|st| {
+        matches!(&st.kind, StmtKind::Let { pattern, .. }
+            if matches!(&pattern.kind, PatternKind::Binding(x) if x == n))
+    }) else {
+        return false;
+    };
+    let StmtKind::Let { value, .. } = &f.body.stmts[k].kind else {
+        return false;
+    };
+    let before = Expr {
+        kind: ExprKind::Block(Block {
+            stmts: f.body.stmts[..k].to_vec(),
+            final_expr: None,
+            span: f.body.span,
+        }),
+        span: f.body.span,
+    };
+    !crate::deque_head::expr_mentions_name_deep(value, n)
+        && !crate::deque_head::expr_mentions_name_deep(&before, n)
+}
+
+/// [`close_rebind_aliases`] for a by-value PARAM: a param
+/// [`param_shadowed_before_use`] has no alias but itself, since a rebind of its
+/// name is a rebind of the local that shadows it.
+fn close_param_aliases(f: &Function, w: &RebindWalk, param_name: &str) -> Vec<String> {
+    if param_shadowed_before_use(f, param_name) {
+        return vec![param_name.to_string()];
+    }
+    close_rebind_aliases(w, param_name)
 }
 
 /// The transitive whole-rebind closure of `seed` over `w.rebinds`, admitting
@@ -3099,9 +3171,7 @@ fn close_rebind_aliases(w: &RebindWalk, seed: &str) -> Vec<String> {
     loop {
         let before = aliases.len();
         for (x, y) in &w.rebinds {
-            if aliases.iter().any(|a| a == y)
-                && !aliases.iter().any(|a| a == x)
-                && w.bound.get(x.as_str()) == Some(&1)
+            if aliases.iter().any(|a| a == y) && !aliases.iter().any(|a| a == x) && w.local_once(x)
             {
                 aliases.push(x.clone());
             }
@@ -3233,6 +3303,11 @@ fn param_whole_aliases_uncached(
     f: &Function,
     param_name: &str,
 ) -> Vec<String> {
+    // B-2026-10-05-45 — see `close_param_aliases`: every later mention of
+    // the name is the shadowing local's, call rebinds included.
+    if param_shadowed_before_use(f, param_name) {
+        return vec![param_name.to_string()];
+    }
     let w = rebind_walk(f);
     let mut aliases = close_rebind_aliases(&w, param_name);
     let Some(program) = program else {
@@ -3241,7 +3316,7 @@ fn param_whole_aliases_uncached(
     loop {
         let before = aliases.len();
         for (x, key, idents) in &w.call_rebinds {
-            if aliases.iter().any(|a| a == x) || w.bound.get(x.as_str()) != Some(&1) {
+            if aliases.iter().any(|a| a == x) || !w.local_once(x) {
                 continue;
             }
             let Some(g) = resolve_free_or_assoc_fn(program, key) else {
@@ -3442,7 +3517,7 @@ fn param_wrap_aliases_impl_uncached(
     loop {
         let before = out.len();
         for (x, y, path) in &all_wraps {
-            if w.bound.get(x.as_str()) != Some(&1) || out.iter().any(|(a, _)| a == x) {
+            if !w.local_once(x) || out.iter().any(|(a, _)| a == x) {
                 continue;
             }
             if whole.iter().any(|a| a == y) {
@@ -3454,7 +3529,7 @@ fn param_wrap_aliases_impl_uncached(
             }
         }
         for (x, y) in &w.rebinds {
-            if w.bound.get(x.as_str()) != Some(&1) || out.iter().any(|(a, _)| a == x) {
+            if !w.local_once(x) || out.iter().any(|(a, _)| a == x) {
                 continue;
             }
             if let Some((_, inner)) = out.iter().find(|(a, _)| a == y) {
@@ -3467,7 +3542,7 @@ fn param_wrap_aliases_impl_uncached(
         // whole param through such a call is (`param_whole_aliases`).
         if let Some(program) = program {
             for (x, key, idents) in &w.call_rebinds {
-                if w.bound.get(x.as_str()) != Some(&1) || out.iter().any(|(a, _)| a == x) {
+                if !w.local_once(x) || out.iter().any(|(a, _)| a == x) {
                     continue;
                 }
                 let Some(g) = resolve_free_or_assoc_fn(program, key) else {
@@ -3489,7 +3564,7 @@ fn param_wrap_aliases_impl_uncached(
         // new name. One that goes PAST the path is a part of the param and is
         // not followed.
         for (x, root, chain) in &w.proj_rebinds {
-            if w.bound.get(x.as_str()) != Some(&1) || out.iter().any(|(a, _)| a == x) {
+            if !w.local_once(x) || out.iter().any(|(a, _)| a == x) {
                 continue;
             }
             if let Some((_, wpath)) = out.iter().find(|(a, _)| a == root) {
@@ -3548,9 +3623,7 @@ fn close_many(w: &RebindWalk, seed: &[String]) -> Vec<String> {
     loop {
         let before = aliases.len();
         for (x, y) in &w.rebinds {
-            if aliases.iter().any(|a| a == y)
-                && !aliases.iter().any(|a| a == x)
-                && w.bound.get(x.as_str()) == Some(&1)
+            if aliases.iter().any(|a| a == y) && !aliases.iter().any(|a| a == x) && w.local_once(x)
             {
                 aliases.push(x.clone());
             }
@@ -3603,7 +3676,7 @@ fn close_many(w: &RebindWalk, seed: &[String]) -> Vec<String> {
 /// stand-down and the callee's per-path drop naming the same binding on
 /// every path.
 pub fn param_rebind_aliases(f: &Function, param_name: &str) -> Vec<String> {
-    close_rebind_aliases(&rebind_walk(f), param_name)
+    close_param_aliases(f, &rebind_walk(f), param_name)
 }
 
 /// B-2026-09-20-17 — [`param_rebind_aliases`] for a binding that is not a
@@ -3630,6 +3703,7 @@ pub fn expr_rebind_aliases(body: &Expr, seed: &str) -> Vec<String> {
         call_rebinds: Vec::new(),
         destructured: Vec::new(),
         bound: std::collections::HashMap::new(),
+        shadow_locals: std::collections::HashSet::new(),
     };
     w.expr(body);
     close_rebind_aliases(&w, seed)
@@ -3701,6 +3775,7 @@ fn arm_local_part_yield(body: &Expr, roots: &[String], tail: bool) -> Vec<ParamP
         call_rebinds: Vec::new(),
         destructured: Vec::new(),
         bound: std::collections::HashMap::new(),
+        shadow_locals: std::collections::HashSet::new(),
     };
     w.expr(body);
     if w.bound.get(x.as_str()) != Some(&1) || crate::binding_use::bare_value_mentions(&x, body) != 1
@@ -12378,6 +12453,9 @@ fn unmutated_param_mut_rebinds_uncached(f: &Function) -> Vec<usize> {
     }
     let bound = rebind_walk_raw(f).bound.clone();
     let once = |n: &str| bound.get(n) == Some(&1);
+    // B-2026-10-05-45 — the local that shadows a param before any use is the
+    // only binding its name has.
+    let once_local = |n: &str| once(n) || param_shadowed_before_use(f, n);
     // The names the param's value goes by: the param, then every top-level
     // whole rebind of one of them -- an immutable one, or a `let mut` this
     // demotes (`let c = a; let mut d = c;` is `let d = c` too).
@@ -12398,7 +12476,7 @@ fn unmutated_param_mut_rebinds_uncached(f: &Function) -> Vec<usize> {
         else {
             continue;
         };
-        if !aliases.contains(&src.as_str()) || !once(c) {
+        if !aliases.contains(&src.as_str()) || !once_local(c) {
             continue;
         }
         if *is_mut {
