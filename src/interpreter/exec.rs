@@ -1270,6 +1270,38 @@ impl Env {
         self.scopes.len()
     }
 
+    /// Run `f` on a `String` binding's storage in place, resolving `name` the
+    /// way [`Self::set`] does and writing through a `SharedCell` alias. `None`
+    /// (and `f` not run) when the binding is absent, is not a `String`, or is a
+    /// `MapSlotRef` / `VecSlotRef`, whose writes `set` redirects elsewhere: the
+    /// caller then takes its read-modify-write path. B-2026-10-05-14: the
+    /// in-place append that keeps `s.push(c)` from copying the whole string.
+    pub(crate) fn with_string_slot_mut<R>(
+        &mut self,
+        name: &str,
+        f: impl FnOnce(&mut String) -> R,
+    ) -> Option<R> {
+        let slot = self
+            .scopes
+            .iter_mut()
+            .rev()
+            .find_map(|scope| scope.get_mut(name))?;
+        let out = match slot {
+            Value::String(s) => f(s),
+            Value::SharedCell(cell) => match &mut *cell.lock().unwrap() {
+                Value::String(s) => f(s),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        for (watched, written) in self.watches.iter_mut() {
+            if watched == name {
+                *written = true;
+            }
+        }
+        Some(out)
+    }
+
     /// Borrow a binding's slot WITHOUT cloning it. `get` clones, which for
     /// any `SharedStruct` reachable from the slot bumps the `Arc`
     /// strong-count and defeats a last-reference test — the same reason
