@@ -20106,7 +20106,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// frees a LOCAL's value is registered by a `track_*` call that takes that
     /// local's slot, so "retract everything keyed on this slot" is the whole
     /// handshake rather than an approximation of it.
-    fn cleanup_action_slot(action: &CleanupAction<'ctx>) -> Option<PointerValue<'ctx>> {
+    pub(super) fn cleanup_action_slot(action: &CleanupAction<'ctx>) -> Option<PointerValue<'ctx>> {
         match action {
             CleanupAction::FreeVecBuffer { vec_alloca, .. } => Some(*vec_alloca),
             CleanupAction::StructDrop { struct_alloca, .. } => Some(*struct_alloca),

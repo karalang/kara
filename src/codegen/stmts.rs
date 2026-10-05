@@ -5354,7 +5354,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Identifier(n) = &value.kind {
                         self.fire_container_elem_bodies_now(n);
                     }
-                } else if !view_stays_with_param {
+                } else if !view_stays_with_param
+                    && !self.user_optres_view_rebind_owns_nothing(value)
+                {
                     self.suppress_boxed_payload_view_move(value);
                 }
                 // B-2026-10-01-10 — the same discard over any binding whose

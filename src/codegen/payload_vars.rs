@@ -12,6 +12,17 @@
 
 use std::collections::{HashMap, HashSet};
 
+/// One `user_boxed_optres_views` entry: (fn, binding slot, enum slot, enum
+/// type, payload start word, payload type) — see that field (B-2026-09-29-33).
+pub(crate) type UserBoxedOptresView<'ctx> = (
+    inkwell::values::FunctionValue<'ctx>,
+    inkwell::values::PointerValue<'ctx>,
+    inkwell::values::PointerValue<'ctx>,
+    inkwell::types::StructType<'ctx>,
+    usize,
+    Option<crate::ast::TypeExpr>,
+);
+
 /// B-2026-09-16-31 — `Clone` so a nested mono compile started from inside a
 /// STATEMENT can be undone. `compile_function` clears sixteen of these tables
 /// on entry, which is right for the function being compiled and wrong for the
@@ -397,6 +408,15 @@ pub(crate) struct PayloadVars<'ctx> {
     /// Keyed by binding name and snapshotted with the rest of the per-arm var
     /// environment, so an arm's view cannot leak into a sibling arm.
     pub(crate) boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
+    /// B-2026-09-29-33 — whole-payload bindings that are VIEWS of a USER
+    /// enum's heap-boxed `Option`/`Result` payload (`Hs.P(o)`, kind
+    /// `EnumDropKind::BoxedOptRes`), whose box drop now walks the interior:
+    /// `name -> (fn, binding slot, enum slot, enum type, payload start word)`.
+    /// When the view hands the interior on (a nested `match` arm that takes a
+    /// leaf, the arm's tail value), the box is stood down through the enum
+    /// slot. The fn and binding slot are checked at use, so a stale entry from
+    /// another function or an unrelated rebinding of the name is ignored.
+    pub(crate) user_boxed_optres_views: HashMap<String, UserBoxedOptresView<'ctx>>,
     /// B-2026-09-30-104 — the instantiated payload type of a FRESH-TEMP boxed
     /// `Option`/`Result` scrutinee, keyed by the slot
     /// `track_freshtemp_boxed_enum_scrutinee` staged it in. A temp has no

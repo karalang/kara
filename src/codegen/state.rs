@@ -352,6 +352,11 @@ pub(crate) enum EnumDropKind {
     /// too needs the entry-copy to duplicate the box and the match-out
     /// suppression to zero THROUGH it — a separate slice, and the one where the
     /// symmetry rule above actually bites.
+    ///
+    /// B-2026-09-29-33 — that slice, for the drop and the match-out: the drop
+    /// arm now walks the interior, and an arm that takes it stands the box's
+    /// copy down through the box (`stamp_boxed_optres_taken`). The entry copy
+    /// is unchanged, so the enum is still caller-retained as a by-value param.
     BoxedOptRes,
     /// B-2026-09-14-12 — a fixed-size `Array[T, N]` payload wide enough to be
     /// heap-BOXED, and the array peer of [`Self::BoxedOptRes`] one row over.

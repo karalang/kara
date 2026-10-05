@@ -880,13 +880,22 @@ impl<'ctx> super::Codegen<'ctx> {
                             // no-op — the same defensive re-zero the
                             // `VecOrString` arm does to its cap.
                             //
-                            // BOX ONLY, deliberately: the interior belongs to
-                            // whoever matched it out, and `is_heap_bearing()`
-                            // is false for this kind precisely so the entry
-                            // deep-copy never duplicates the box and the
-                            // match-out suppression never zeroes this word.
-                            // Freeing the interior here would double-free the
-                            // buffer a `W(Some(s))` arm's `s` already owns.
+                            // B-2026-09-29-33 — and the interior first. It
+                            // was box-only until then, which leaked every
+                            // interior nobody matched out (and lost an
+                            // `Option[shared]` payload's `Drop` body,
+                            // B-2026-10-04-75). An arm that TAKES the interior
+                            // (`W(Some(s))` with `s` owning it) stamps the boxed
+                            // `Option`/`Result` with a tag no variant carries
+                            // (`stamp_boxed_optres_taken`), so this walk stands
+                            // down for it. `is_heap_bearing()` stays false: the
+                            // entry copy still does not duplicate the box.
+                            let inner_drop = variant_field_tes
+                                .iter()
+                                .find(|(n, _)| n == variant_name)
+                                .and_then(|(_, tes)| tes.get(fi))
+                                .cloned()
+                                .map(|te| self.emit_drop_fn_for_type_expr(&te));
                             let w_idx = (*start_word + 1) as u32;
                             if let Ok(word_ptr) = self.builder.build_struct_gep(
                                 layout.llvm_type,
@@ -917,6 +926,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .build_conditional_branch(is_null, skip_bb, free_bb)
                                     .unwrap();
                                 self.builder.position_at_end(free_bb);
+                                if let Some(f) = inner_drop {
+                                    self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
+                                }
                                 self.builder
                                     .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                                     .unwrap();

@@ -1237,6 +1237,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // covers the plain binding, whose fields were freed by the
                     // box's inner walk as well as by whoever received the value.
                     self.suppress_boxed_payload_whole_binding(scrutinee, &arm.pattern, &arm.body);
+                    // B-2026-09-29-33 — the user-enum boxed `Option`/`Result`
+                    // twin, for a view the suppressor above recorded.
+                    self.stand_down_user_boxed_optres_view_for_arm(
+                        scrutinee,
+                        &arm.pattern,
+                        &arm.body,
+                    );
                     // B-2026-09-01-30 — a whole-value arm binding over an
                     // OWNED by-value param inherits that param's ownership.
                     //
@@ -16479,6 +16486,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // *moves* into a binding (a `Wildcard`/literal sub-pattern doesn't
             // claim ownership, so its field's drop must still fire to free the
             // payload). Only heap-bearing kinds need their source drop skipped.
+            if *kind == super::state::EnumDropKind::BoxedOptRes {
+                self.neutralize_taken_boxed_optres_interior(
+                    slot_ptr,
+                    layout.llvm_type,
+                    start_word,
+                    pattern,
+                    pos,
+                );
+                continue;
+            }
             if !kind.is_heap_bearing() {
                 continue;
             }
@@ -16626,6 +16643,247 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Declines a position whose binding already owns a `StructDrop` on the
     /// same slot, so a shape that is registered elsewhere keeps its single
     /// owner instead of gaining a second.
+    /// B-2026-09-29-33 — the arm half of the `BoxedOptRes` drop arm walking
+    /// the box's interior. When a binding under this payload position took an
+    /// owner of its own (a cleanup action keyed on its slot), the interior is
+    /// the binding's now, so the box is stood down
+    /// ([`Self::stamp_boxed_optres_taken`]). A binding that registered nothing
+    /// is a view, and the box keeps the interior; a whole-payload view is
+    /// recorded so a later hand-on through it can stand the box down too. A
+    /// partly owned interior (`Some((a, _))`) is stood down whole, which leaks
+    /// the untaken leaf rather than freeing the taken one twice.
+    fn neutralize_taken_boxed_optres_interior(
+        &mut self,
+        slot_ptr: PointerValue<'ctx>,
+        enum_ty: StructType<'ctx>,
+        start_word: usize,
+        pattern: &Pattern,
+        pos: usize,
+    ) {
+        let (names, whole): (Vec<String>, Option<String>) = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => match patterns.get(pos) {
+                Some(sub) => (
+                    sub.binding_names(),
+                    match &sub.kind {
+                        PatternKind::Binding(n) => Some(n.clone()),
+                        _ => None,
+                    },
+                ),
+                None => return,
+            },
+            PatternKind::Struct { path, fields, .. } => {
+                let Some(variant) = path.last() else {
+                    return;
+                };
+                let Some(enum_name) = self.variant_pattern_enum_name(pattern) else {
+                    return;
+                };
+                let field_names = self
+                    .enum_variant_struct_field_names(&enum_name, variant)
+                    .unwrap_or_default();
+                let Some(fp) = fields
+                    .iter()
+                    .find(|fp| field_names.iter().position(|n| n == &fp.name) == Some(pos))
+                else {
+                    return;
+                };
+                match fp.pattern.as_ref() {
+                    Some(p) => (
+                        p.binding_names(),
+                        match &p.kind {
+                            PatternKind::Binding(n) => Some(n.clone()),
+                            _ => None,
+                        },
+                    ),
+                    None => (vec![fp.name.clone()], Some(fp.name.clone())),
+                }
+            }
+            _ => return,
+        };
+        let payload_te = self.variant_pattern_enum_name(pattern).and_then(|en| {
+            let variant = match &pattern.kind {
+                PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                    path.last().cloned()
+                }
+                _ => None,
+            }?;
+            self.enum_variant_field_type_exprs(&en)
+                .into_iter()
+                .find(|(_, v, _)| *v == variant)
+                .and_then(|(_, _, tes)| tes.get(pos).cloned())
+        });
+        if self.bindings_took_owner(&names) {
+            self.stamp_boxed_optres_taken(slot_ptr, enum_ty, start_word, payload_te.as_ref());
+            return;
+        }
+        if let (Some(n), Some(f)) = (whole, self.current_fn) {
+            if let Some(b) = self.variables.get(n.as_str()).map(|v| v.ptr) {
+                self.payload_vars
+                    .user_boxed_optres_views
+                    .insert(n, (f, b, slot_ptr, enum_ty, start_word, payload_te));
+            }
+        }
+    }
+
+    /// Did any of `names` register an owner of its own? An rc-dec is not one:
+    /// a `shared` leaf takes a reference of its own, and the box keeps its.
+    fn bindings_took_owner(&self, names: &[String]) -> bool {
+        use super::state::CleanupAction as A;
+        names.iter().any(|n| {
+            let Some(slot) = self.variables.get(n.as_str()).map(|v| v.ptr) else {
+                return false;
+            };
+            self.drop_rc
+                .scope_cleanup_actions
+                .iter()
+                .flatten()
+                .any(|a| {
+                    if matches!(a, A::RcDec { .. } | A::RcDecOption { .. }) {
+                        return false;
+                    }
+                    Self::cleanup_action_slot(a) == Some(slot)
+                        || matches!(a, A::UserDrop { binding_name, .. } if binding_name == n)
+                })
+        })
+    }
+
+    /// B-2026-09-29-33 — `let p = o` over a whole-payload view of a user
+    /// enum's boxed `Option`/`Result` that registered no owner of its own:
+    /// the rebind takes nothing over (an `Option[String]` view, where an
+    /// `Option[S1]` view carries its `UserDrop` on to `p`), so the box keeps
+    /// the interior, or nothing would free it. The destination is not
+    /// registered yet at this point, so the source is what can be asked.
+    pub(super) fn user_optres_view_rebind_owns_nothing(&self, value: &Expr) -> bool {
+        matches!(&value.kind, ExprKind::Identifier(n)
+            if self.payload_vars.user_boxed_optres_views.contains_key(n.as_str())
+                && !self.bindings_took_owner(std::slice::from_ref(n)))
+    }
+
+    /// B-2026-09-29-33 — `name` is a whole-payload view of a user enum's boxed
+    /// `Option`/`Result` (`user_boxed_optres_views`) that has just handed the
+    /// interior on: stand the box down. `leaf_taken` says a LEAF was copied
+    /// out (a nested `match` arm's binding), so an inner envelope is freed
+    /// too; when the whole view moves (`let u = o`, the arm's tail value) the
+    /// taker holds that envelope and only the tag is stamped.
+    pub(super) fn stamp_user_boxed_optres_view(&mut self, name: &str, leaf_taken: bool) {
+        let Some((f, b, slot, ty, sw, te)) =
+            self.payload_vars.user_boxed_optres_views.get(name).cloned()
+        else {
+            return;
+        };
+        if self.current_fn != Some(f) || self.variables.get(name).map(|v| v.ptr) != Some(b) {
+            return;
+        }
+        self.stamp_boxed_optres_taken(slot, ty, sw, te.as_ref().filter(|_| leaf_taken));
+    }
+
+    /// B-2026-09-29-33 — a nested `match` over a whole-payload view that took a
+    /// leaf (`Hs.P(o) => match o { Some(s) => .. }`), or the arm's tail value
+    /// being that view: the interior left the box.
+    pub(super) fn stand_down_user_boxed_optres_view_for_arm(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        body: &Expr,
+    ) {
+        if self.pattern_state.pattern_binding_is_borrow {
+            return;
+        }
+        if let ExprKind::Identifier(src) = &scrutinee.kind {
+            if self
+                .payload_vars
+                .user_boxed_optres_views
+                .contains_key(src.as_str())
+                && self.bindings_took_owner(&pattern.binding_names())
+            {
+                let src = src.clone();
+                self.stamp_user_boxed_optres_view(&src, true);
+            }
+        }
+        if let ExprKind::Identifier(t) = &Self::block_tail_expr(body).kind {
+            if pattern.binding_names().contains(t)
+                && self
+                    .payload_vars
+                    .user_boxed_optres_views
+                    .contains_key(t.as_str())
+                && self.branch_value_is_owned(scrutinee)
+            {
+                let t = t.clone();
+                self.stamp_user_boxed_optres_view(&t, false);
+            }
+        }
+    }
+
+    /// Stamp the boxed `Option`/`Result` at `start_word` of the enum in
+    /// `slot_ptr` with a tag no variant carries, so its drop stands down and
+    /// the enum's drop frees the envelope alone. A payload boxed again inside
+    /// the `Option`/`Result` (`Option[S1]` over a four-word struct) has its
+    /// inner envelope freed first: the taker copied the value out of it.
+    fn stamp_boxed_optres_taken(
+        &mut self,
+        slot_ptr: PointerValue<'ctx>,
+        enum_ty: StructType<'ctx>,
+        start_word: usize,
+        payload_te: Option<&TypeExpr>,
+    ) {
+        let envelope = payload_te.and_then(|te| {
+            let TypeKind::Path(p) = &te.kind else {
+                return None;
+            };
+            match (
+                p.segments.last().map(String::as_str),
+                p.generic_args.as_deref(),
+            ) {
+                (Some("Option"), Some([GenericArg::Type(t)])) => {
+                    let t = t.clone();
+                    self.emit_option_drop_fn_envelope_only(&t)
+                }
+                (Some("Result"), Some([GenericArg::Type(a), GenericArg::Type(b)])) => {
+                    let (a, b) = (a.clone(), b.clone());
+                    self.emit_result_drop_fn_envelope_only(&a, &b, "OkErr")
+                }
+                _ => None,
+            }
+        });
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let Ok(wp) = self.builder.build_struct_gep(
+            enum_ty,
+            slot_ptr,
+            (start_word + 1) as u32,
+            "optres.taken.wp",
+        ) else {
+            return;
+        };
+        let bp = self
+            .builder
+            .build_load(ptr_ty, wp, "optres.taken.box")
+            .unwrap()
+            .into_pointer_value();
+        let is_null = self
+            .builder
+            .build_is_null(bp, "optres.taken.isnull")
+            .unwrap();
+        let do_bb = self.context.append_basic_block(cur_fn, "optres.taken.do");
+        let join_bb = self.context.append_basic_block(cur_fn, "optres.taken.join");
+        self.builder
+            .build_conditional_branch(is_null, join_bb, do_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        if let Some(f) = envelope {
+            self.builder.build_call(f, &[bp.into()], "").unwrap();
+        }
+        // The tag is word 0 of every `Option`/`Result` layout.
+        self.builder
+            .build_store(bp, i64_t.const_int(QUESTION_MOVED_TAG, false))
+            .unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
+    }
+
     fn register_tuple_payload_binding_drop(
         &mut self,
         enum_name: &str,
@@ -23624,6 +23882,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &value.kind else {
             return;
         };
+        // B-2026-09-29-33 — a whole-payload view of a USER enum's boxed
+        // `Option`/`Result`, whose box drop walks the interior: the
+        // destination now owns it (`Ho.P(o) => { let u = o; .. }`), so the
+        // box stands down on this path.
+        if self
+            .payload_vars
+            .user_boxed_optres_views
+            .contains_key(name.as_str())
+        {
+            let name = name.clone();
+            self.stamp_user_boxed_optres_view(&name, false);
+            return;
+        }
         let Some(slot) = self
             .payload_vars
             .boxed_optres_payload_view_vars

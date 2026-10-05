@@ -6571,6 +6571,7 @@ impl<'ctx> Codegen<'ctx> {
                 plain_alias_generic_params: HashMap::new(),
                 shared_enum_payload_view_vars: std::collections::HashMap::new(),
                 boxed_optres_payload_view_vars: HashMap::new(),
+                user_boxed_optres_views: HashMap::new(),
                 freshtemp_boxed_payload_inst: HashMap::new(),
                 boxed_array_view_moved_by_scrutinee: HashMap::new(),
                 arm_array_payload_unowned_interior: std::collections::HashSet::new(),
