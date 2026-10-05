@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 693 |
+| miscompile | 694 |
 | run-vs-build | 592 |
-| leak | 577 |
+| leak | 578 |
 | double-free | 421 |
 | codegen-gap | 227 |
 | missing-feature | 217 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2747 |
-| interp | 852 |
+| codegen | 2749 |
+| interp | 854 |
 | typecheck | 334 |
 | other | 113 |
 | ownership | 80 |
@@ -401,8 +401,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-81 | 2026-09-30 | codegen+interp | high | A BLOCK OR BRANCH ARGUMENT WHOSE VALUE IS A `Vec` OF `Drop` ELEMENTS RUNS NO ELEMENT BODY ON ANY SURFACE -- `tv(if c { mk1() } else { mk1() })` and `tv({ [mw(8)] })` over `fn tv(x: Vec[W]) -> i64` print `v5 w8 end` on all five surfaces where `d5` and `d8` are due after each call, while the direct literal `tv([mw(2), mw(3)])` prints `d2 d3` as it should; memory is clean | — |
 | B-2026-09-30-82 | 2026-09-30 | codegen | medium | REMAINDER OF B-2026-09-30-58: A BRANCH ARGUMENT WHERE ONE ARM'S COLLECTION LITERAL HOLDS A HEAP PLACE STILL LEAKS THE TAKEN ARM'S BUFFER ON EVERY COMPILED SURFACE -- `vs(if c { [s] } else { [ms(1)] })` over `fn vs(x: Vec[String])` loses 1 block at -O0 on the path that does not move `s`; output right everywhere | — |
 | B-2026-09-30-70 | 2026-09-30 | codegen | medium | A FRESH `Ok([..])` ARGUMENT TO A BY-VALUE `Result[Array[P, 1], E]` PARAM LEAKS THE ELEMENT'S `String` AT `-O0` -- `take(Ok([P2 { v: 42, tag: f"t{1}" }]))` loses 2 B in 1 block with no user `Drop` anywhere and whether or not the callee matches, while the `Option` twin, the boxed `Array[P, 2]` payload, a struct payload and the named-local `Ok(a)` spelling are all clean; stdout is correct, so only a leak gate sees it | — |
-| B-2026-09-30-92 | 2026-09-30 | codegen | high | A NESTED `Array` LITERAL OF `Drop` ELEMENTS RUNS NO ELEMENT BODY COMPILED, BOUND OR DISCARDED, AND LEAKS THEIR HEAP -- `let a = Array[Array[mk(4)], Array[mk(5)]];` and its `let _ =` spelling print `end` on jit, -O0 and -O2 auto-par against `--interp`'s `dW1_4 dW1_5 end`, with 2 blocks lost | — |
-| B-2026-09-30-93 | 2026-09-30 | codegen+interp | high | A COLLECTION LITERAL OF AN ENUM WHOSE PAYLOAD HAS A `Drop` RUNS NO PAYLOAD BODY -- discarded (`let _ = Array[E.A(mk(3)), E.B];`, `let _ = [E.A(mk(3)), E.B];`) on ALL surfaces, and BOUND (`let a = Array[E.A(mk(3)), E.B];`) on every compiled surface against `--interp`'s `dW1_3 end`; 1 block lost compiled in each | — |
 | B-2026-09-30-94 | 2026-09-30 | codegen+interp | medium | A REPEAT LITERAL OF A `Drop` VALUE (`let _ = Array[mk(6); 1];`) RUNS NO BODY ON ANY SURFACE AND LEAKS ITS HEAP COMPILED -- all five surfaces print `end` where one `dW1_6` is due, and valgrind reports 1 block lost | — |
 | B-2026-09-30-96 | 2026-09-30 | interp+codegen | medium | A BY-VALUE PARAM WRAPPED INTO A LOCAL STRUCT OR TUPLE THAT IS THEN STORED IN A CALLER-HELD CONTAINER RUNS ITS `Drop` BODY TWICE ON EVERY SURFACE, EVEN UNCONDITIONALLY -- `fn w4(a: R, xs: mut ref Vec[P]) { let x = P { r: a, n: 1 }; xs.push(x); }` prints `dR7` when the call returns and `dR7` again when `xs` dies; pushing the literal directly (`xs.push(P { r: a, n: 1 })`) runs it once | — |
 | B-2026-09-30-97 | 2026-09-30 | codegen+interp | high | A BY-VALUE PARAM MOVED INTO A LITERAL IS OWNED TWICE OR NOT AT ALL, the param half of B-2026-09-30-59 -- a discarded tuple or struct literal (`fn f(w: W1) { let _ = (w, 1); println("in") }`) runs `w`'s `Drop` body TWICE on all four surfaces (`dW1_7 in dW1_7`); the `[w]` / `Array[w]` spelling runs it twice under `--interp` and once compiled but leaks 1 block; and `return take([w])` leaks 1 block compiled with the right output | — |
@@ -542,6 +540,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-91 | 2026-10-05 | typecheck | medium | A CONCRETE IMPL BLOCK OVER A GENERIC STRUCT TYPES `self`'S FIELDS AT THE BARE TYPE PARAMETER, SO ANY OPERATION ON ONE IS REFUSED -- `impl Bx[i64] { fn get(self) -> i64 { return self.v + self.n; } }` over `struct Bx[T] { v: T, n: i64 }` fails "type 'T' does not implement trait Add", and `impl Bx[String] { fn l(ref self) -> String { self.v.clone() } }` fails "no method 'clone' on type parameter 'T'"; the STRUCT twin of B-2026-09-27-115 | — |
 | B-2026-10-05-92 | 2026-10-05 | codegen | medium | AN `Option` PARAMETER OF A METHOD IN A CONCRETE IMPL OVER A GENERIC ENUM LOSES ITS PAYLOAD'S `Drop` BODY AND LEAKS IT COMPILED -- `impl G[R] { fn opt(ref self, o: Option[G[R]]) -> i64 { match o { Some(_) => 1, None => 0 } } }` called as `e.opt(Some(mk(8)))` prints `dR8` then `1` under `--interp` and only `1` on build and -O0, with the boxed payload and its String definitely lost | — |
 | B-2026-10-05-86 | 2026-10-05 | codegen | medium | AFTER A `match` OR `if let` MOVES THE PAYLOAD OUT OF A `let mut` `Option` LOCAL, REASSIGNING THE LOCAL TO A FRESH `Some` NEVER RUNS THE NEW VALUE'S `Drop` BODY COMPILED -- `let mut h: Option[R] = Some(mk(31)); match h { Some(a) => println(f"m{a.id}"), None => println("n") } h = Some(mk(37)); println("w4");` prints `m31 dR31 w4` where `--interp` prints `m31 dR31 dR37 w4`; valgrind clean, so only the body is missing | — |
+| B-2026-10-05-93 | 2026-10-05 | codegen+interp | medium | A DISCARDED `Array` LITERAL OF `Option` ELEMENTS WITH A BARE `None` ITEM RUNS NO PAYLOAD `Drop` BODY ON ANY BACKEND AND LEAKS THE `Some` BOX COMPILED -- `let _ = Array[Some(mk(3)), None];` prints `end` on --interp, -O0 and -O2 (due: `dW1_3 end`), 32 B definitely lost | — |
+| B-2026-10-05-94 | 2026-10-05 | codegen+interp | low | AN UNANNOTATED `Array` LITERAL OF `shared enum` ELEMENTS RUNS ITS PAYLOAD `Drop` BODY AT SCOPE EXIT COMPILED BUT AT THE BINDING ON --interp -- `let a = Array[H.A(mk(3)), H.B]; println("mid");` prints `mid end dW1_3` compiled against `dW1_3 mid end` | — |
 
 ### Relocated
 
@@ -3584,6 +3584,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-78 | interp | low | `--interp` skips a leaf's `Drop` body for a nested generic struct pattern over a local `Option` -- `let o = Option.Some(G { v: R { id: 4, s: "hello"… | 0bfcff2e0 |
 | B-2026-09-30-85 | codegen | medium | A GENERIC struct inline in a `Result` payload leaks its heap -- `let r: Result[G[String], i64] = Result.Ok(G { v: mk(1), n: 10 })` over `struct G[T]… | 989ad012e |
 | B-2026-09-30-80 | codegen | medium | `Vec.contains` ON A COLLECTION-LITERAL, BLOCK OR BRANCH RECEIVER FAILS TO COMPILE -- `[1, 3].contains(3)`, `{ mk(3) }.contains(3)` and `(match c { tr… | 73be65bba |
+| B-2026-09-30-92 | codegen | high | A NESTED `Array` LITERAL OF `Drop` ELEMENTS RUNS NO ELEMENT BODY COMPILED, BOUND OR DISCARDED, AND LEAKS THEIR HEAP -- `let a = Array[Array[mk(4)], A… | e62b8f974 |
+| B-2026-09-30-93 | codegen+interp | high | A COLLECTION LITERAL OF AN ENUM WHOSE PAYLOAD HAS A `Drop` RUNS NO PAYLOAD BODY -- discarded (`let _ = Array[E.A(mk(3)), E.B];`, `let _ = [E.A(mk(3))… | e62b8f974 |
 | B-2026-09-30-95 | codegen | high | A VALUE MOVED INTO A STRUCT, TUPLE OR ARRAY LITERAL BOUND INSIDE A BRANCH LOSES ITS `Drop` BODY AND LEAKS ITS HEAP ON THE PATH THAT NEVER BUILT THE L… | 472771516 |
 | B-2026-09-30-98 | codegen | high | AN `Option`/`Result` PAYLOAD BINDING MOVED INTO A TUPLE IS FREED TWICE -- `match o { Some(w) => { let _ = (w, 1); println("arm") }, None => {} }` abo… | 4f56fcb92 |
 | B-2026-09-30-86 | codegen | high | `r.unwrap()` ON A `Result` WHOSE INLINE PAYLOAD IS WIDER THAN THREE WORDS RETURNS A WRONG VALUE on every compiled surface -- over `struct S { v: Stri… | 33fe00f92 |
