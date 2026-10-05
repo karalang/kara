@@ -314,6 +314,48 @@ fn a_128bit_enum_payload_type_checks() {
     }
 }
 
+/// B-2026-10-05-72 — Rust's associated functions on primitives name the
+/// Kāra spelling. `char.from_u32(n)`, `i64.max_value()` and `u8.min_value()`
+/// were refused with a bare "no associated function", which reads as if the
+/// operation did not exist. The suggested spelling must itself type-check.
+#[test]
+fn rust_associated_functions_on_primitives_name_the_kara_spelling() {
+    for (call, needle, fixed) in [
+        (
+            "char.from_u32(65u32).unwrap()",
+            "write `char.try_from(n)`",
+            "char.try_from(65u32).unwrap()",
+        ),
+        ("i64.max_value()", "write `i64.MAX`", "i64.MAX"),
+        ("u8.min_value()", "write `u8.MIN`", "u8.MIN"),
+    ] {
+        let errs = typecheck_errors(&format!(
+            "fn main() {{ let x = {call}; println(f\"{{x}}\"); }}"
+        ));
+        let hit: Vec<_> = errs
+            .iter()
+            .filter(|e| e.message.contains("no associated function"))
+            .collect();
+        assert_eq!(hit.len(), 1, "`{call}`: {errs:?}");
+        assert!(
+            hit[0].message.contains(needle),
+            "`{call}`: {}",
+            hit[0].message
+        );
+        typecheck_ok(&format!(
+            "fn main() {{ let x = {fixed}; println(f\"{{x}}\"); }}"
+        ));
+    }
+    // A name with no known spelling keeps the bare message.
+    let errs = typecheck_errors("fn main() { let x = i64.frobnicate(); println(f\"{x}\"); }");
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .ends_with("no associated function 'frobnicate' on type 'i64'")),
+        "{errs:?}"
+    );
+}
+
 /// `is_power_of_two` / `next_power_of_two` are unsigned-only, and on a signed
 /// receiver the error now says so and names the cast, with the sign caveat
 /// (B-2026-10-05-25). The bare "no method 'is_power_of_two' on type

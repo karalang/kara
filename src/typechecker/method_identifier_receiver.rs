@@ -513,8 +513,22 @@ impl<'a> super::TypeChecker<'a> {
                     for arg in args {
                         self.infer_expr(&arg.value);
                     }
+                    // B-2026-10-05-72 — name the Kāra spelling of the
+                    // Rust associated functions authors reach for first. The
+                    // bare "no associated function" read as if the operation
+                    // did not exist, and `char.try_from` is not something a
+                    // reader finds by guessing.
+                    let is_int = type_name.starts_with('i') || type_name.starts_with('u');
+                    let hint = match (type_name.as_str(), method) {
+                        (_, "max_value") if is_int => format!("; write `{type_name}.MAX`"),
+                        (_, "min_value") if is_int => format!("; write `{type_name}.MIN`"),
+                        ("char", "from_u32") => "; write `char.try_from(n)`, which takes a \
+                             `u32` code point and returns a `Result`"
+                            .to_string(),
+                        _ => String::new(),
+                    };
                     self.type_error(
-                        format!("no associated function '{method}' on type '{type_name}'"),
+                        format!("no associated function '{method}' on type '{type_name}'{hint}"),
                         *span,
                         TypeErrorKind::NoMethodFound,
                     );
