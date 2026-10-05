@@ -41,6 +41,9 @@ pub(crate) type LetViewTailFrame<'ctx> = (
 
 /// Drop, clone and RC-fallback lowering state.
 pub(crate) struct DropRc<'ctx> {
+    /// B-2026-10-05-3 — a counter that makes each private name
+    /// `pin_shadowed_rc_decs` hands a shadowed shared binding's `RcDec` unique.
+    pub(crate) shadowed_rc_names: usize,
     /// B-2026-08-08-25 leg 1 — sources whose inline `Option`/`Result` payload a
     /// read-only match LEFT WITH THEM (`scrutinee_is_readonly_inline_optres_local`
     /// classified the match as a borrow, so no arm binding took ownership).

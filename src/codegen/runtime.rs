@@ -2884,6 +2884,56 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-10-05-3 — a `let` that SHADOWS a shared binding in the same
+    /// scope (`let p = P { .. }; let p = P { .. }`) left the old binding's
+    /// pending `RcDec` resolving by NAME at drain time, so it reloaded the NEW
+    /// binding's handle: the new box was released twice and the old one never
+    /// (2 invalid reads/frees and the old box lost, on every shape measured,
+    /// a shadowed shared param included). The shadow sits in the same frame
+    /// as the action, so the action is handed a private name that keeps
+    /// designating the OLD slot. The slot is an entry-block alloca, so the
+    /// drain still reloads through it (a reassignment before the shadow
+    /// still releases the live value) and dominates every drain point.
+    ///
+    /// Only the innermost frame: a shadow in an inner block is undone when
+    /// that block ends, and the outer action resolves by name correctly
+    /// again. The NEW binding's own action is already queued (the `let`
+    /// registers it before binding) and is told apart by its pointer, which
+    /// is the value being bound. Arc-promoted and RC-fallback names keep their
+    /// own handling, since their drain reads other per-name state.
+    pub(super) fn pin_shadowed_rc_decs(&mut self, name: &str, val: BasicValueEnum<'ctx>) {
+        let Some(slot) = self.variables.get(name).copied() else {
+            return;
+        };
+        if !slot.ty.is_pointer_type()
+            || self.is_arc_binding(name)
+            || self.drop_rc.rc_fallback_heap_types.contains_key(name)
+        {
+            return;
+        }
+        let new_ptr = val.is_pointer_value().then(|| val.into_pointer_value());
+        let hidden = format!("{name}\u{1}shadowed.{}", self.drop_rc.shadowed_rc_names);
+        let mut renamed = false;
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+            for action in frame.iter_mut() {
+                match action {
+                    CleanupAction::RcDec { name: n, ptr, .. }
+                    | CleanupAction::FreeSharedElided { name: n, ptr }
+                        if n == name && Some(*ptr) != new_ptr =>
+                    {
+                        *n = hidden.clone();
+                        renamed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if renamed {
+            self.drop_rc.shadowed_rc_names += 1;
+            self.variables.insert(hidden, slot);
+        }
+    }
+
     /// Phase-B1 cluster-root sibling of `track_rc_var`: queues the
     /// link-following free-walk. The member's recursive drop fn is
     /// still lazily synthesized — fresh-node and cursor bindings keep

@@ -17640,6 +17640,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // stack slot, not the box. Pin it to the handle before the
                 // name stops meaning the box; see `pin_rc_dec_before_rebind`.
                 self.pin_rc_dec_before_rebind(name);
+                self.pin_shadowed_rc_decs(name, val);
                 if !self.suppress_shadow_metadata_purge && self.variables.contains_key(name) {
                     self.forget_var_metadata(name);
                 }
