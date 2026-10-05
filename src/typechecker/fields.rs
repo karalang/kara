@@ -423,13 +423,22 @@ impl<'a> super::TypeChecker<'a> {
         if struct_info.generic_params.is_empty() {
             return field_ty.clone();
         }
-        let args: &[Type] = match obj_ty {
-            Type::Named { args, .. } => args,
+        let (name, args): (&str, &[Type]) = match obj_ty {
+            Type::Named { name, args } => (name, args),
             Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
-                Type::Named { args, .. } => args,
+                Type::Named { name, args } => (name, args),
                 _ => return field_ty.clone(),
             },
             _ => return field_ty.clone(),
+        };
+        // B-2026-10-05-91 — the erased receiver of a concrete `impl G[i64]`
+        // reads its fields at the impl's args, not at the bare parameters.
+        let args = match &self.current_concrete_impl_target {
+            Some(Type::Named {
+                name: target,
+                args: target_args,
+            }) if args.is_empty() && target == name => target_args.as_slice(),
+            _ => args,
         };
         if args.len() != struct_info.generic_params.len() {
             return field_ty.clone();

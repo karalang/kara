@@ -52698,3 +52698,48 @@ fn assignment_target_must_be_a_place() {
          }",
     );
 }
+
+/// B-2026-10-05-91: a concrete impl over a generic struct reads `self`'s
+/// fields at the impl's args. Each of these was refused with the field typed
+/// as the bare parameter. The generic impl's own field still reads `T`, and
+/// a field read at `String` is still a `String`.
+#[test]
+fn concrete_impl_over_generic_struct_reads_fields_at_its_args() {
+    typecheck_ok(
+        "struct Bx[T] { v: T, n: i64 }\n\
+         impl Bx[i64] { fn get(self) -> i64 { return self.v + self.n; } }\n\
+         impl Bx[String] { fn len2(ref self) -> i64 { return self.v.len() + self.n; } }\n\
+         fn main() { }",
+    );
+    typecheck_ok(
+        "struct P[A, B] { a: A, b: B }\n\
+         impl P[String, Vec[i64]] { fn name(ref self) -> String { return self.a.clone(); } }\n\
+         fn main() { }",
+    );
+    typecheck_ok(
+        "struct Bx[T] { v: T, n: i64 }\n\
+         impl[T] Bx[T] { fn count(ref self) -> i64 { return self.n; } }\n\
+         impl Bx[i64] { fn get(self) -> i64 { return self.v + self.n; } }\n\
+         fn main() { }",
+    );
+    for (prog, want) in [
+        (
+            "struct Bx[T] { v: T, n: i64 }\n\
+             impl[T] Bx[T] { fn dbl(self) -> T { return self.v + self.v; } }\n\
+             fn main() { }",
+            "'T'",
+        ),
+        (
+            "struct Bx[T] { v: T, n: i64 }\n\
+             impl Bx[String] { fn bad(self) -> i64 { return self.v + self.n; } }\n\
+             fn main() { }",
+            "String",
+        ),
+    ] {
+        let errors = typecheck_errors(prog);
+        assert!(
+            errors.iter().any(|e| e.message.contains(want)),
+            "expected an error naming {want} in: {prog}, got {errors:?}"
+        );
+    }
+}

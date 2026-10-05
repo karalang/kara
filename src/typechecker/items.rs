@@ -3173,6 +3173,27 @@ impl<'a> super::TypeChecker<'a> {
             _ => None,
         };
         let saved_impl_target = std::mem::replace(&mut self.current_impl_target, impl_target);
+        // B-2026-10-05-91 — the concrete half of the same erasure: `impl
+        // Bx[i64]` erases `self` to `Bx` as well, and its field reads need
+        // the `i64` back. Every arg must be concrete, so no impl parameter
+        // can leak into a field's type through it.
+        let concrete_impl_target = match (&self_type, &full_target) {
+            (
+                Type::Named { name, args },
+                Type::Named {
+                    args: full_args, ..
+                },
+            ) if args.is_empty()
+                && !full_args.is_empty()
+                && full_args.iter().all(type_is_fully_concrete)
+                && name == &type_name =>
+            {
+                Some(full_target.clone())
+            }
+            _ => None,
+        };
+        let saved_concrete_impl_target =
+            std::mem::replace(&mut self.current_concrete_impl_target, concrete_impl_target);
 
         self.validate_all_bounds(&imp.generic_params, &imp.where_clause, &gp);
 
@@ -3481,6 +3502,7 @@ impl<'a> super::TypeChecker<'a> {
 
         self.enclosing_bounds = saved_bounds;
         self.current_impl_target = saved_impl_target;
+        self.current_concrete_impl_target = saved_concrete_impl_target;
         self.lint_override_stack.pop();
     }
 

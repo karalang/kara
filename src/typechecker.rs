@@ -2339,6 +2339,14 @@ pub struct TypeChecker<'a> {
     /// set only while that erasure is in effect in a GENERIC impl, so `check_assignable` can
     /// read the erased `G` as the `G[T]` it stands for.
     pub(super) current_impl_target: Option<Type>,
+    /// B-2026-10-05-91 — inside a CONCRETE `impl G[i64]` the receiver is
+    /// typed as the same erased `G`, so a field declared `v: T` read off it
+    /// came back as the bare parameter `T` and every operation on it was
+    /// refused. This holds the impl target WITH its concrete args, set only
+    /// while that erasure is in effect in a fully-concrete impl over a
+    /// generic struct, so a field read on the erased receiver can substitute
+    /// them (`field_type_with_receiver_args`).
+    pub(super) current_concrete_impl_target: Option<Type>,
     /// FE-3c — true while type-checking the body of a `#[gpu]` function, so
     /// the closure-capture hook (`closure_type_with_capture_inference`) can
     /// reject closures that capture host (non-`GpuSafe`) state. Saved/
@@ -2866,6 +2874,7 @@ impl<'a> TypeChecker<'a> {
             closure_return_types: Vec::new(),
             current_self_type: None,
             current_impl_target: None,
+            current_concrete_impl_target: None,
             in_defer: false,
             neg_validated_suffixed_literal: None,
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
