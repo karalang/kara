@@ -14547,6 +14547,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(())
             }
             StmtKind::Assign { target, value } => {
+                // B-2026-10-05-40 — `self = v` in a `mut ref self` method.
+                // The receiver is the `self` param slot, registered exactly
+                // as a `mut ref` param named `self` is, so it takes the
+                // store-through that `p = v` takes there. Every arm below
+                // matches the target as an `Identifier`; `self` parses as
+                // `SelfValue`, so the assignment fell through all of them
+                // and was dropped: the method returned with the receiver
+                // unchanged and the new value leaked.
+                if matches!(&target.kind, ExprKind::SelfValue) {
+                    let renamed = Stmt {
+                        kind: StmtKind::Assign {
+                            target: Expr {
+                                kind: ExprKind::Identifier("self".to_string()),
+                                span: target.span,
+                            },
+                            value: value.clone(),
+                        },
+                        span: stmt.span,
+                    };
+                    return self.compile_stmt_inner(&renamed);
+                }
                 // B-2026-09-30-6 — see `DropRc::assigned_names`.
                 if let ExprKind::Identifier(n) = &target.kind {
                     self.drop_rc.assigned_names.insert(n.clone());
