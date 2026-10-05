@@ -111,9 +111,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 return None;
             }
             imp.items.iter().find_map(|ii| match ii {
-                ImplItem::Method(m) if m.name == method && m.generic_params.is_none() => Some(
-                    super::helpers::make_impl_method_function(type_name, m, &imp.target_type),
-                ),
+                ImplItem::Method(m) if m.name == method && m.generic_params.is_none() => {
+                    let mut synth =
+                        super::helpers::make_impl_method_function(type_name, m, &imp.target_type);
+                    self.type_concrete_generic_struct_self(&mut synth, type_name, &imp.target_type);
+                    Some(synth)
+                }
                 _ => None,
             })
         })?;

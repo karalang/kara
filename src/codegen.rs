@@ -9050,6 +9050,11 @@ impl<'ctx> Codegen<'ctx> {
                                 }
                                 let mut synth =
                                     make_impl_method_function(&type_name, method, &imp.target_type);
+                                self.type_concrete_generic_struct_self(
+                                    &mut synth,
+                                    &type_name,
+                                    &imp.target_type,
+                                );
                                 // Carry the disambiguated symbol (see
                                 // `dispatch_head`); a no-op unless this impl is
                                 // in a colliding group.
@@ -9248,6 +9253,11 @@ impl<'ctx> Codegen<'ctx> {
                                 }
                                 let mut synth =
                                     make_impl_method_function(&type_name, method, &imp.target_type);
+                                self.type_concrete_generic_struct_self(
+                                    &mut synth,
+                                    &type_name,
+                                    &imp.target_type,
+                                );
                                 synth.name.clone_from(&qualified);
                                 self.compile_concrete_impl_method(
                                     &synth,

@@ -5622,6 +5622,73 @@ impl<'ctx> super::Codegen<'ctx> {
         self.module.get_function(&mangled)
     }
 
+    /// B-2026-09-27-116 — the `self` of a method in a CONCRETE impl over a
+    /// generic user struct (`impl Bx[String]` over `struct Bx[T] { v: T, .. }`)
+    /// is typed at the instantiation the impl names, not the bare head.
+    ///
+    /// `make_impl_method_function` keeps a struct target's bare name, which is
+    /// the ERASED layout (`T` as one word). An enum gets away with that because
+    /// its payload area does not change size with `T`; a struct's fields do, so
+    /// the method was declared taking `{ i64, i64 }` while every caller passed
+    /// `{ { ptr, i64, i64 }, i64 }`, and module verification failed. Applied at
+    /// the declaration, the body compile and the view-variant synthesis, so the
+    /// three agree. A `Self` in the signature, which the synthesis rewrites to
+    /// the same bare head, takes the instantiation too.
+    pub(super) fn type_concrete_generic_struct_self(
+        &self,
+        synth: &mut Function,
+        type_name: &str,
+        target_type: &TypeExpr,
+    ) {
+        if self
+            .type_decls
+            .struct_generic_params
+            .get(type_name)
+            .is_none_or(|p| p.is_empty())
+        {
+            return;
+        }
+        let crate::ast::TypeKind::Path(tp) = &target_type.kind else {
+            return;
+        };
+        let Some(args) = tp.generic_args.clone() else {
+            return;
+        };
+        // `self`, and every `Self` the synthesis rewrote to the bare head
+        // (`-> Self`, `o: Self`, `Option[Self]`): the bare head names no
+        // instantiation of a generic struct, so each one means the target.
+        fn retype(te: &mut TypeExpr, head: &str, args: &[crate::ast::GenericArg]) {
+            match &mut te.kind {
+                crate::ast::TypeKind::Path(p) => {
+                    if p.generic_args.is_none() && p.segments.len() == 1 && p.segments[0] == head {
+                        p.generic_args = Some(args.to_vec());
+                    } else if let Some(ga) = p.generic_args.as_mut() {
+                        for a in ga.iter_mut() {
+                            if let crate::ast::GenericArg::Type(t) = a {
+                                retype(t, head, args);
+                            }
+                        }
+                    }
+                }
+                crate::ast::TypeKind::Ref(inner) | crate::ast::TypeKind::MutRef(inner) => {
+                    retype(inner, head, args)
+                }
+                crate::ast::TypeKind::Tuple(elems) => {
+                    for e in elems.iter_mut() {
+                        retype(e, head, args);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for param in synth.params.iter_mut() {
+            retype(&mut param.ty, type_name, &args);
+        }
+        if let Some(rt) = synth.return_type.as_mut() {
+            retype(rt, type_name, &args);
+        }
+    }
+
     /// B-2026-09-17-13 — compile a method of a NON-generic impl block, under
     /// the substitution its target spells out when that target is a GENERIC
     /// user enum at concrete args (`impl G1[String]` binds `T = String`).
@@ -5658,7 +5725,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => None,
                     })
                     .collect();
-                let params = self.enum_generic_param_names(type_name);
+                let mut params = self.enum_generic_param_names(type_name);
+                // B-2026-09-27-116 — a generic STRUCT target binds its params
+                // the same way (`impl Bx[String]` binds `T = String`), and its
+                // `self` was declared at that instantiation by
+                // `type_concrete_generic_struct_self`.
+                if params.is_empty() {
+                    params = self
+                        .type_decls
+                        .struct_generic_params
+                        .get(type_name)
+                        .cloned()
+                        .unwrap_or_default();
+                }
                 if params.is_empty() || params.len() != args.len() {
                     Vec::new()
                 } else {
