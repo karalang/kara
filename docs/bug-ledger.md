@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 683 |
+| miscompile | 686 |
 | run-vs-build | 589 |
 | leak | 563 |
 | double-free | 417 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2711 |
-| interp | 836 |
+| codegen | 2714 |
+| interp | 839 |
 | typecheck | 327 |
 | other | 113 |
 | ownership | 80 |
@@ -528,6 +528,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-4 | 2026-10-05 | codegen | medium | REMAINDER OF B-2026-10-03-39: A `shared enum` WHOSE PAYLOAD IS A PLAIN USER ENUM THE FIX DECLINES STILL LEAKS THAT PAYLOAD ON EVERY RELEASE -- `shared enum H { Z(V), N }` over `enum V { Z(M), N }` and `shared enum M { My(Vec[String]), N }`: `let s = H.Z(V.Z(M.N))` alone loses 16 B direct + 40 indirect at -O0 | — |
 | B-2026-10-05-5 | 2026-10-05 | codegen | high | A ONE-WORD `Array` HELD AS A TUPLE OR STRUCT FIELD INSIDE AN ENUM PAYLOAD READS ITS ELEMENT AS 0 COMPILED -- `Some((Array[5], 7))` matched as `t` prints `t.0[0]` as 0 under `karac build` at -O0 and -O2 (interp 5), across Option / Result / user enums and destructuring patterns; the struct-field spelling fails module verification instead (`insertvalue { [1 x i64], i64 } undef, i64 %payload, 0`). Two elements, a two-word element, no enum around the tuple, or no tuple around the array are all correct | — |
 | B-2026-10-05-6 | 2026-10-05 | codegen | medium | A `let mut` REBIND OF A BY-VALUE `Option` PARAM THAT IS MATCHED ON AND THEN REASSIGNED RUNS NO BODY FOR THE PARAM'S VALUE COMPILED -- `fn q1(x: Option[Array[R, 2]]) { let mut h = x; match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } h = None; println("q1"); }` prints `m11 q1 dR11 dR12` on `--interp` against `m11 q1` compiled, leaking 2 blocks; `Option[R]` loses `dR41` too (no leak), and reassigning to a fresh `Some` loses both values' bodies | — |
+| B-2026-10-05-8 | 2026-10-05 | codegen+interp | low | REMAINDER OF B-2026-10-05-7: TWO HAND-OFF SPELLINGS STILL RUN THE BINDING'S `Drop` BODY LATE ON EVERY SURFACE -- an owned-`self` method on an arm binding (`Some(r) => { r.gone(); println("after") }` prints `after dR11`) and a DESTRUCTURED local tuple (`match t { (a, b) => { eat(a); println("mid"); eat(b); .. } }` prints `mid after dR38 dR39` where `dR38 mid dR39 after` is due) | — |
+| B-2026-10-05-9 | 2026-10-05 | codegen+interp | medium | A BY-VALUE PARAM PROJECTED TO A SCALAR AND THEN SHADOWED (`fn c1(s: S) -> i64 { let s = s.r.id; s }`) LOSES THE CALLER'S `Drop` BODY, ON A DIFFERENT ARGUMENT SPELLING PER BACKEND -- compiled, a TEMPORARY argument runs no `d3` (`c1(mks(3))`); interpreted, a NAMED one runs no `d6` (`let a = mks(6); c1(a)`). Each backend gets the other spelling right; B-2026-09-29-61's close claimed c1 was fixed and its own fixture pin had lost `d3` | — |
 
 ### Relocated
 
@@ -3715,6 +3717,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-89 | codegen | low | A TUPLE-ELEMENT ASSIGNMENT THROUGH A `Map` VALUE FAILS THE BUILD -- `m[1].1 = 7` over `Map[i64, (P, i64)]` stops `karac build` with `tuple-element as… | 72ed9ef21 |
 | B-2026-10-04-90 | codegen | low | A METHOD CALL ON A CONTAINER HELD IN A TUPLE THAT IS ITSELF AN INDEXED ELEMENT OR A MAP VALUE FAILS THE BUILD -- `mm[1].0.push(p)` over `Map[i64, (Ve… | 00e05652c |
 | B-2026-10-05-3 | codegen | high | A `let` THAT SHADOWS A SHARED BINDING IN THE SAME SCOPE RELEASES THE NEW BOX TWICE AND THE OLD ONE NEVER -- `let p = P { s: hs(1) }; let p = P { s: h… | 65ba03f24 |
+| B-2026-10-05-7 | codegen+interp | medium | A BINDING THE BLOCK DOES NOT DECLARE, PASSED BY VALUE TO A CALLEE THAT HANDS IT BACK ON NO EXIT, RUNS ITS `Drop` BODY AT THE END OF THE ENCLOSING ARM… | d476f99eb |
 
 </details>
 
