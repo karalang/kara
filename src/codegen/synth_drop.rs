@@ -12311,6 +12311,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         if p.segments.last().is_some_and(|n| {
                             self.type_decls.shared_type_names.contains(n.as_str())
                         }))
+                    // B-2026-10-04-67 — and the `Option[shared T]` element by
+                    // the same NAME table, for the same reason: the
+                    // `tuple_elem_is_option_shared` disjunct above resolves
+                    // through `shared_types`, empty while `declare_enums`
+                    // classifies a payload, so `enum Et { A((Option[H], i64)), B }`
+                    // classified the tuple as needing no drop and leaked its
+                    // 40 B box and the handle.
+                    || matches!(&te.kind, TypeKind::Path(p)
+                        if p.segments.last().is_some_and(|n| n == "Option")
+                            && matches!(p.generic_args.as_deref(),
+                                Some([GenericArg::Type(t)]) if matches!(&t.kind,
+                                    TypeKind::Path(q) if q.segments.last().is_some_and(|n| {
+                                        self.type_decls.shared_type_names.contains(n.as_str())
+                                    }))))
                     // B-2026-09-06-72 — a plain STRUCT element that
                     // transitively owns a `shared` field. Exactly the
                     // disjunct above one level down, and the same relation

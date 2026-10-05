@@ -8363,12 +8363,6 @@ impl<'ctx> Codegen<'ctx> {
         self.register_ord_orderable_types(program);
         self.declare_enums(program);
         self.build_struct_types(program);
-        // B-2026-09-17-21 — AFTER `build_struct_types`, because the interior walk this
-        // synthesizes recurses into the element type's own LLVM struct, and
-        // BEFORE any function body, so no drop site can be emitted against an
-        // empty table. See the fn's own note on why the constructor is the
-        // wrong site despite being the obvious one.
-        self.register_shared_enum_boxed_payload_interior_drops(program);
         // Phase 5 line 569 slice 4: lower `#[repr(C)] union Foo { ... }`
         // declarations to LLVM storage types so `size_of[Foo]` /
         // `align_of[Foo]` resolve correctly and union literals /
@@ -9149,6 +9143,18 @@ impl<'ctx> Codegen<'ctx> {
         // body to be compiled (Prereq.2 finding); the impl-method body
         // pass at the bottom of this function compiles user-side bodies
         // in their own pass.
+        // B-2026-09-17-21 — AFTER `build_struct_types`, because the interior walk this
+        // synthesizes recurses into the element type's own LLVM struct, and
+        // BEFORE any function body, so no drop site can be emitted against an
+        // empty table. See the fn's own note on why the constructor is the
+        // wrong site despite being the obvious one.
+        // B-2026-10-04-67 — and AFTER the program snapshot and the impl-method
+        // declarations: the walk can reach a `shared` element's rc-dec helper,
+        // whose drop fn asks the snapshot whether the element has a user
+        // `Drop` and calls `<T>.drop` (`emit_shared_struct_rc_drop_fn`). Asked
+        // earlier, the answer was "no", the helper cached a bare `free`, and
+        // every later release of that type skipped its body.
+        self.register_shared_enum_boxed_payload_interior_drops(program);
         self.emit_user_drop_wrappers(program);
 
         // Second pass: compile concrete functions (generic ones are compiled lazily).

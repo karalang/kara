@@ -241,10 +241,15 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         // B-2026-10-04-46 — see `PayloadVars::user_enum_payload_slots`.
+        // B-2026-10-04-67 — not over a `shared` enum, whose box drop now
+        // reaches the element (the payload classifies `NestedTuple` /
+        // `BoxedTuple` by name): there the `unwrap` read takes its ref back
+        // like any other tuple root, or the element is released twice.
         if let PatternKind::Binding(name) = &pattern.kind {
             if !self
                 .pattern_state
                 .pattern_binding_scrutinee_is_option_result
+                && !self.pattern_state.pattern_binding_scrutinee_is_shared_enum
                 && self
                     .pattern_state
                     .current_variant_payload_bindings

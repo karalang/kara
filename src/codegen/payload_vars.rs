@@ -477,7 +477,9 @@ pub(crate) struct PayloadVars<'ctx> {
     /// by nothing (the enum's drop does not reach it), so an `unwrap()` field
     /// read through `t.0` must keep releasing the ref it borrows rather than
     /// take one back the way a local or param tuple does. Keyed by slot, so a
-    /// later binding of the same name is never mistaken for one.
+    /// later binding of the same name is never mistaken for one. A `shared`
+    /// enum's payload is left out since B-2026-10-04-67: its box drop
+    /// releases the element.
     pub(crate) user_enum_payload_slots: HashSet<inkwell::values::PointerValue<'ctx>>,
     /// B-2026-09-19-60 — a CONSUMING arm's binding over a seeded fresh-temp
     /// scrutinee (`match Option.Some(a) { Some(v) => { let u = v; .. } }`),
