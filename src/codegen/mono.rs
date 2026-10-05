@@ -5640,6 +5640,41 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: &str,
         target_type: &TypeExpr,
     ) {
+        // B-2026-10-05-13 — a `Self` PARAMETER (`fn cself(self, o: Self)`) is
+        // the target type, for every target. The synthesis rewrites `Self` only
+        // in the return type, so the parameter reached codegen as a path naming
+        // no type: a plain struct's `o.a` had no field layout, and a generic
+        // enum's `o` was declared at the wrong width.
+        fn replace_self(te: &mut TypeExpr, target: &TypeExpr) {
+            match &mut te.kind {
+                crate::ast::TypeKind::Path(p) => {
+                    if p.generic_args.is_none() && p.segments.len() == 1 && p.segments[0] == "Self"
+                    {
+                        *te = target.clone();
+                    } else if let Some(ga) = p.generic_args.as_mut() {
+                        for a in ga.iter_mut() {
+                            if let crate::ast::GenericArg::Type(t) = a {
+                                replace_self(t, target);
+                            }
+                        }
+                    }
+                }
+                crate::ast::TypeKind::Ref(inner) | crate::ast::TypeKind::MutRef(inner) => {
+                    replace_self(inner, target)
+                }
+                crate::ast::TypeKind::Tuple(elems) => {
+                    for e in elems.iter_mut() {
+                        replace_self(e, target);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if matches!(&target_type.kind, crate::ast::TypeKind::Path(_)) {
+            for param in synth.params.iter_mut() {
+                replace_self(&mut param.ty, target_type);
+            }
+        }
         if self
             .type_decls
             .struct_generic_params
