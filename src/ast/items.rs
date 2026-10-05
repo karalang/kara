@@ -12886,7 +12886,232 @@ pub fn param_reassigned_rebind_local(f: &Function, arg_index: usize) -> Option<&
 /// value that dies is the local's, so the callee owns it and the caller
 /// stands down.
 pub fn param_taken_over_rebind_local(f: &Function, arg_index: usize) -> Option<&str> {
-    param_reassigned_rebind_local(f, arg_index).or_else(|| param_mutated_rebind_local(f, arg_index))
+    param_reassigned_rebind_local(f, arg_index)
+        .or_else(|| param_mutated_rebind_local(f, arg_index))
+        .or_else(|| param_branch_reassigned_rebind_local(f, arg_index))
+}
+
+/// B-2026-10-04-50 — does `f` rebind by-value parameter `arg_index` whole into
+/// a `let mut` local that it reassigns whole on SOME path but not on every one
+/// (`let mut c = a; if b { c = mk(9); }`, a reassignment in a loop or a `match`
+/// arm)?
+///
+/// [`param_reassigned_rebind_local`] is a MUST-analysis and declines this, so
+/// the caller kept the value -- and the reassignment displaced it anyway: the
+/// interpreter ran the displaced body in the callee and again in the caller,
+/// and compiled the displaced memory was freed twice. Per path, the value that
+/// dies is the local's: either the reassignment displaces it here, or the local
+/// still holds it when the call ends. So the local owns it on every path, the
+/// caller stands down ([`param_taken_over_rebind_local`]), and the local drops
+/// at the END OF THE CALL ([`param_rebinds_dropping_at_call_end`]), which is
+/// where rule 3 runs the parameter's value on the path that never reassigns.
+///
+/// Narrow in the same way as [`param_mutated_rebind_local`]: the `let` is a
+/// top-level statement, the local and the parameter are each bound exactly
+/// once, the parameter is not mentioned after the `let`, and every later
+/// mention of the local is a whole reassignment (at any depth outside a
+/// closure or `defer`), an assignment through a field of it, a read through a
+/// field or element of it, or the local handed back bare by `return` or the
+/// body's tail. Not in a generic callee.
+pub fn param_branch_reassigned_rebind_local(f: &Function, arg_index: usize) -> Option<&str> {
+    // Memoized (the interpreter asks on every call); the owned answer is
+    // mapped back onto the `let` that binds it.
+    let c = analysis_memo("param_branch_reassigned_rebind_local", f, arg_index, || {
+        param_branch_reassigned_rebind_local_uncached(f, arg_index)
+    })?;
+    f.body.stmts.iter().find_map(|st| match &st.kind {
+        StmtKind::Let { pattern, .. } => match &pattern.kind {
+            PatternKind::Binding(n) if *n == c => Some(n.as_str()),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+fn param_branch_reassigned_rebind_local_uncached(f: &Function, arg_index: usize) -> Option<String> {
+    if f.generic_params.is_some()
+        || param_reassigned_rebind_local(f, arg_index).is_some()
+        || param_mutated_rebind_local(f, arg_index).is_some()
+    {
+        return None;
+    }
+    let param = f.params.get(arg_index)?;
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return None;
+    }
+    let PatternKind::Binding(name) = &param.pattern.kind else {
+        return None;
+    };
+    let walk = rebind_walk_raw(f);
+    if walk.bound.get(name.as_str()) != Some(&1) {
+        return None;
+    }
+    let (k, c) = f
+        .body
+        .stmts
+        .iter()
+        .enumerate()
+        .find_map(|(i, st)| match &st.kind {
+            StmtKind::Let {
+                is_mut: true,
+                pattern,
+                value,
+                ..
+            } => match (&pattern.kind, &value.kind) {
+                (PatternKind::Binding(c), ExprKind::Identifier(src)) if src == name => {
+                    Some((i, c.as_str()))
+                }
+                _ => None,
+            },
+            _ => None,
+        })?;
+    if walk.bound.get(c) != Some(&1)
+        || !walk.assigned.contains(c)
+        || demoted_param_rebind_names(f).contains(&c)
+    {
+        return None;
+    }
+    let rest = &f.body.stmts[k + 1..];
+    let tail = f.body.final_expr.as_deref();
+    let mentions = |e: &Expr, n: &str| crate::deque_head::expr_mentions_name_deep(e, n);
+    let mut param_later = tail.is_some_and(|e| mentions(e, name));
+    for st in rest {
+        crate::rc_elide::walk_stmt_children_pub(st, &mut |e| {
+            param_later |= mentions(e, name);
+        });
+    }
+    if param_later {
+        return None;
+    }
+    let mut ok = true;
+    for st in rest {
+        branch_rebind_stmt_ok(st, c, &mut ok);
+    }
+    if let Some(e) = tail {
+        if !matches!(&e.kind, ExprKind::Identifier(n) if n == c) {
+            branch_rebind_expr_ok(e, c, &mut ok);
+        }
+    }
+    ok.then(|| c.to_string())
+}
+
+/// [`param_branch_reassigned_rebind_local`]'s statement walk: unlike the
+/// mutated-rebind walk it descends into nested blocks STATEMENT by statement,
+/// so a whole reassignment inside a branch, a loop or an arm is seen as one.
+fn branch_rebind_stmt_ok(st: &super::Stmt, c: &str, ok: &mut bool) {
+    if !*ok {
+        return;
+    }
+    let mentions = |e: &Expr| crate::deque_head::expr_mentions_name_deep(e, c);
+    match &st.kind {
+        StmtKind::Assign { target, value } if matches!(&target.kind, ExprKind::Identifier(t) if t == c) => {
+            if mentions(value) {
+                *ok = false;
+            } else {
+                branch_rebind_expr_ok(value, c, ok);
+            }
+        }
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            mutated_rebind_place_ok(target, c, false, ok);
+            branch_rebind_expr_ok(value, c, ok);
+        }
+        StmtKind::MultiAssign { targets, values } => {
+            if targets.iter().chain(values.iter()).any(mentions) {
+                *ok = false;
+            }
+        }
+        // The local is bound exactly once, so a later `let` cannot shadow it.
+        StmtKind::Let { value, .. } => branch_rebind_expr_ok(value, c, ok),
+        StmtKind::Expr(e) => branch_rebind_expr_ok(e, c, ok),
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            let mut names = Vec::new();
+            collect_block_names_for_rebind(body, &mut names);
+            if names.iter().any(|n| n == c) {
+                *ok = false;
+            }
+        }
+        _ => crate::rc_elide::walk_stmt_children_pub(st, &mut |e| {
+            if mentions(e) {
+                *ok = false;
+            }
+        }),
+    }
+}
+
+fn branch_rebind_block_ok(b: &Block, c: &str, ok: &mut bool) {
+    for st in &b.stmts {
+        branch_rebind_stmt_ok(st, c, ok);
+    }
+    if let Some(e) = &b.final_expr {
+        branch_rebind_expr_ok(e, c, ok);
+    }
+}
+
+fn branch_rebind_expr_ok(e: &Expr, c: &str, ok: &mut bool) {
+    if !*ok {
+        return;
+    }
+    let is_c = |x: &Expr| matches!(&x.kind, ExprKind::Identifier(n) if n == c);
+    match &e.kind {
+        ExprKind::Identifier(n) if n == c => *ok = false,
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. }
+            if is_c(object) => {}
+        ExprKind::Index { object, index } if is_c(object) => branch_rebind_expr_ok(index, c, ok),
+        ExprKind::Return(Some(inner)) if is_c(inner) => {}
+        ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::LabeledBlock { body: b, .. } => {
+            branch_rebind_block_ok(b, c, ok)
+        }
+        ExprKind::Loop { body, .. } => branch_rebind_block_ok(body, c, ok),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            branch_rebind_expr_ok(condition, c, ok);
+            branch_rebind_block_ok(then_block, c, ok);
+            if let Some(x) = else_branch {
+                branch_rebind_expr_ok(x, c, ok);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            branch_rebind_expr_ok(condition, c, ok);
+            branch_rebind_block_ok(body, c, ok);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            branch_rebind_expr_ok(iterable, c, ok);
+            branch_rebind_block_ok(body, c, ok);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            branch_rebind_expr_ok(scrutinee, c, ok);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    branch_rebind_expr_ok(g, c, ok);
+                }
+                branch_rebind_expr_ok(&arm.body, c, ok);
+            }
+        }
+        // Anything else that holds a block (`if let`, `while let`, `par`,
+        // closures, ...) keeps today's arrangement if it mentions the local.
+        ExprKind::IfLet { .. }
+        | ExprKind::WhileLet { .. }
+        | ExprKind::Closure { .. }
+        | ExprKind::Comptime(_)
+        | ExprKind::Try(_)
+        | ExprKind::Seq(_)
+        | ExprKind::Par(_) => {
+            if crate::deque_head::expr_mentions_name_deep(e, c) {
+                *ok = false;
+            }
+        }
+        kind => {
+            crate::rc_elide::walk_children_pub(kind, &mut |sub| branch_rebind_expr_ok(sub, c, ok))
+        }
+    }
 }
 
 /// B-2026-09-27-95 — does `f` rebind by-value parameter `arg_index` whole into
@@ -13055,6 +13280,14 @@ fn param_rebinds_dropping_at_call_end_uncached(f: &Function) -> Vec<String> {
         }
     }
     let mut out = Vec::new();
+    // B-2026-10-04-50 — a rebind reassigned on SOME path drops at the end of
+    // the call too: on the path that never reassigns it still holds the
+    // parameter's value, which rule 3 runs there.
+    for i in 0..f.params.len() {
+        if let Some(c) = param_branch_reassigned_rebind_local(f, i) {
+            out.push(c.to_string());
+        }
+    }
     for c in (0..f.params.len())
         .filter_map(|i| param_mutated_rebind_local(f, i))
         .filter(|c| !fn_assigns_local_whole(f, c))

@@ -3805,6 +3805,9 @@ impl<'a> super::Interpreter<'a> {
                             p.ty.kind,
                             crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
                         ) && crate::ast::param_mutated_rebind_local(f, *i).is_none()
+                            // B-2026-10-04-50 — nor one a rebind reassigned on
+                            // some path owns.
+                            && crate::ast::param_branch_reassigned_rebind_local(f, *i).is_none()
                             && !coll_owned.contains(i)
                     })
                     .filter_map(|(_, p)| p.name().map(str::to_string))

@@ -1,0 +1,68 @@
+//! B-2026-10-04-50: by-value param rebind reassigned on some path
+
+use super::*;
+
+/// B-2026-10-04-50: a `let mut` rebind of a by-value param that the body
+/// reassigns whole on SOME path but not on every one (inside an `if`, both
+/// arms, a `for` / `while` loop, a `match` arm). The caller kept the value, and
+/// the reassignment displaced it anyway: `--interp` ran the displaced body in
+/// the callee and again in the caller, and compiled the displaced memory was
+/// freed twice (a crash for any type with a heap field). The rebind now owns
+/// the value on every path and drops at the end of the call. Cells cover a
+/// struct, a Drop enum, `Option[R]`, `Option[Array[R, 2]]`, both arms, loops,
+/// a returned rebind on both paths, a field read, a field store before the
+/// reassignment, a read on the other arm, a `Vec`, and a tail field read.
+#[test]
+fn e2e_branch_reassigned_param_rebind_owns_the_value_once() {
+    let Some(out) = run_program(
+        r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+enum E { A(R), N }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+fn f1(a: R, b: bool) { let mut c = a; if b { c = mk(9); } println("in"); }
+fn f2(a: E, b: bool) { let mut c = a; if b { c = E.N; } println("in"); }
+fn f3(a: Option[R], b: bool) { let mut c = a; if b { c = None; } println("in"); }
+fn f4(a: Option[Array[R, 2]], b: bool) { let mut c = a; if b { c = None; } println("in"); }
+fn f5(a: R, b: bool) { let mut c = a; if b { c = mk(8); } else { c = mk(9); } println("in"); }
+fn f6(a: R) { let mut c = a; for i in 0..2 { c = mk(10 + i); } println("in"); }
+fn f7(a: R, b: bool) -> R { let mut c = a; if b { c = mk(9); } println("in"); return c; }
+fn f8(a: R, b: bool) { let mut c = a; if b { c = mk(9); } println(f"in{c.id}"); }
+fn f9(a: R, b: bool) { let mut c = a; println("p"); if b { c = mk(9); println("q"); } println("in"); }
+fn f10(a: Vec[R], b: bool) { let mut c = a; if b { c = Vec.new(); } println("in"); }
+fn f11(a: R, n: i64) { let mut c = a; match n { 1 => { c = mk(9); } _ => {} } println("in"); }
+fn f12(a: R) { let mut c = a; let mut i = 0; while i < 2 { c = mk(20 + i); i = i + 1; } println("in"); }
+fn f13(a: R, b: bool) { let mut c = a; if b { c.id = 7; c = mk(9); } println("in"); }
+fn f14(a: R, b: bool) { let mut c = a; if b { c = mk(9); } else { println(f"e{c.id}"); } println("in"); }
+fn f15(a: R, b: bool) -> i64 { let mut c = a; if b { c = mk(9); } println("in"); c.id }
+fn main() {
+  f1(mk(1), true); println("k_s1t")
+  f1(mk(1), false); println("k_s1f")
+  f2(E.A(mk(1)), true); println("k_s2t")
+  f2(E.A(mk(1)), false); println("k_s2f")
+  f3(Some(mk(1)), true); println("k_s3t")
+  f3(Some(mk(1)), false); println("k_s3f")
+  f4(Some([mk(1), mk(2)]), true); println("k_s4t")
+  f4(Some([mk(1), mk(2)]), false); println("k_s4f")
+  f5(mk(1), true); println("k_s5t")
+  f6(mk(1)); println("k_s6")
+  let r = f7(mk(1), true); println(f"k_s7t{r.id}")
+  let r = f7(mk(1), false); println(f"k_s7f{r.id}")
+  f8(mk(1), true); println("k_s8t")
+  let x = mk(1); f9(x, true); println("k_s9t")
+  let mut v: Vec[R] = Vec.new(); v.push(mk(1)); v.push(mk(2)); f10(v, true); println("k_u1t")
+  let mut v: Vec[R] = Vec.new(); v.push(mk(1)); v.push(mk(2)); f10(v, false); println("k_u1f")
+  f11(mk(1), 1); println("k_u2t")
+  f11(mk(1), 2); println("k_u2f")
+  f12(mk(1)); println("k_u3")
+  f13(mk(1), true); println("k_u5t")
+  f14(mk(1), false); println("k_u6t")
+  let n = f15(mk(1), true); println(f"k_u8t{n}")
+  println("end")
+}
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(out, "dR1\nin\ndR9\nk_s1t\nin\ndR1\nk_s1f\ndE\ndR1\nin\ndE\nk_s2t\nin\ndE\ndR1\nk_s2f\ndR1\nin\nk_s3t\nin\ndR1\nk_s3f\ndR1\ndR2\nin\nk_s4t\nin\ndR1\ndR2\nk_s4f\ndR1\nin\ndR8\nk_s5t\ndR1\ndR10\nin\ndR11\nk_s6\ndR1\nin\nk_s7t9\ndR9\nin\nk_s7f1\ndR1\ndR1\nin9\ndR9\nk_s8t\np\ndR1\nq\nin\ndR9\nk_s9t\ndR1\ndR2\nin\nk_u1t\nin\ndR1\ndR2\nk_u1f\ndR1\nin\ndR9\nk_u2t\nin\ndR1\nk_u2f\ndR1\ndR20\nin\ndR21\nk_u3\ndR7\nin\ndR9\nk_u5t\ne1\nin\ndR1\nk_u6t\ndR1\nin\ndR9\nk_u8t9\nend\n", "got:\n{out}");
+}
