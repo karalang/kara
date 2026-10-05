@@ -855,6 +855,20 @@ impl<'a> super::TypeChecker<'a> {
         self.infer_struct_literal_expected(path, fields, span, None, true)
     }
 
+    /// B-2026-10-05-96 — a bare `S { .. }` literal with no spread and
+    /// no written generic args, the one form that takes its type args from the
+    /// expected type it is checked against.
+    fn is_unannotated_struct_literal(e: &Expr) -> bool {
+        matches!(
+            &e.kind,
+            ExprKind::StructLiteral {
+                spread: None,
+                generic_args: None,
+                ..
+            }
+        )
+    }
+
     /// Struct-literal inference, optionally seeded by the type-args of an
     /// EXPECTED generic-struct type (`let b: Box[Vec[i64]] = Box { value:
     /// Vec.new() }`). Without a seed, each struct type param becomes a fresh
@@ -1078,6 +1092,23 @@ impl<'a> super::TypeChecker<'a> {
                     let resolved = resolve_type_var_top(&sub, &self.env.substitutions);
                     if matches!(resolved, Type::TypeVar(_) | Type::TypeParam(_)) {
                         raw.clone()
+                    } else if !seeded
+                        && !matches!(raw, Type::TypeParam(_))
+                        && super::types::contains_type_param(&raw)
+                        && Self::is_unannotated_struct_literal(&f.value)
+                    {
+                        // B-2026-10-05-96 — a nested generic struct
+                        // literal (`W { inner: Bx { v: 5, n: 0 }, .. }`) is
+                        // SEEDED from its expected args, so the raw slot below
+                        // would hand it this struct's own `T` as a concrete
+                        // arg: it typed as `Bx[T]`, the unify bound `?T0` to
+                        // that out-of-scope `T`, and the binding failed with
+                        // "cannot infer type parameter". The metavar slot
+                        // (`Bx[?T0]`) seeds it with `?T0` instead, which its
+                        // own field check binds. A BARE `T` slot keeps the raw
+                        // path below: a bare metavar pushed into `check_expr`
+                        // reports a mismatch instead of binding.
+                        sub
                     } else if !seeded && super::types::contains_type_param(&raw) {
                         // B-2026-07-18-50 — UNSEEDED generic solve: a field whose
                         // declared type WRAPS the struct's type param in a

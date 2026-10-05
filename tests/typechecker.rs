@@ -52743,3 +52743,31 @@ fn concrete_impl_over_generic_struct_reads_fields_at_its_args() {
         );
     }
 }
+
+/// B-2026-10-05-96: a generic struct literal nested in another one
+/// binds its parameters from the values. Before the fix the inner literal was
+/// seeded with the outer struct's own `T`, and every literal below was
+/// refused with "cannot infer type parameter".
+#[test]
+fn nested_generic_struct_literal_binds_from_values() {
+    let defs = "struct Bx[T] { v: T, n: i64 }\nstruct W[T] { inner: Bx[T], tag: T }\nstruct Pr[A, B] { a: Bx[A], b: Bx[B] }\n";
+    for body in [
+        "let w = W { inner: Bx { v: 5, n: 0 }, tag: 3 }; let x: i64 = w.tag + w.inner.v;",
+        "let s = W { inner: Bx { v: \"ab\", n: 2 }, tag: \"cd\" }; let x: String = s.inner.v;",
+        "let p = Pr { a: Bx { v: 1, n: 2 }, b: Bx { v: \"x\", n: 3 } }; let x: String = p.b.v;",
+        "let w = W { tag: 3, inner: Bx { v: 5, n: 0 } }; let x: i64 = w.inner.v;",
+        "let w = W { inner: Bx { v: Bx { v: 6, n: 0 }, n: 0 }, tag: Bx { v: 1, n: 1 } }; let x: i64 = w.tag.v;",
+    ] {
+        typecheck_ok(&format!("{defs}fn main() {{ {body} }}"));
+    }
+    // Two fields that disagree on `T` are still refused, by naming the clash.
+    let errors = typecheck_errors(&format!(
+        "{defs}fn main() {{ let a = W {{ inner: Bx {{ v: 5, n: 0 }}, tag: \"s\" }}; }}"
+    ));
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("already bound to 'i64'")),
+        "got {errors:?}"
+    );
+}
