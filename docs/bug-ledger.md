@@ -94,14 +94,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 692 |
 | run-vs-build | 592 |
-| leak | 575 |
+| leak | 577 |
 | double-free | 420 |
 | codegen-gap | 227 |
 | missing-feature | 217 |
 | other | 168 |
 | diagnostics | 147 |
 | perf | 144 |
-| false-positive | 120 |
+| false-positive | 121 |
 | crash | 112 |
 | soundness | 98 |
 | use-after-free | 82 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2743 |
+| codegen | 2745 |
 | interp | 852 |
-| typecheck | 333 |
+| typecheck | 334 |
 | other | 113 |
 | ownership | 80 |
 | cli | 74 |
@@ -276,7 +276,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-132 | 2026-09-27 | codegen+interp | medium | A PLAIN STRUCT WITH A FIELD OF A BOXED GENERIC ENUM NEVER RUNS THE PAYLOAD'S `Drop` BODY AND LEAKS ITS HEAP ON EVERY COMPILED SURFACE, AND `--interp` RUNS IT TWICE WHEN THE STRUCT IS BUILT FROM A PARAM -- `struct W { h: Ho[S] }`, `let w = W { h: b }` prints `w end` compiled (vg=1, 4 B) against `dS2 w end` under `--interp`; `fn pkw(h: Ho[S]) { let w = W { h: h }; println("w") }` prints `dS2 w dS2 end` under `--interp` | — |
 | B-2026-09-27-114 | 2026-09-27 | codegen | medium | A TEMP RECEIVER OF AN OWNED-`self` METHOD LOSES A GENERIC ENUM'S OWN `Drop` BODY ON EVERY COMPILED SURFACE -- `G.X(R { .. }).look()` over `impl[T] Drop for G[T]` and `fn look(self) -> i64 { match self { G.X(t) => .. } }` prints `dR3 c7` where `--interp` prints `dG dR3 c7`; a named receiver and a NON-generic enum temp are correct, and the concrete `impl G[R]` spelling now behaves identically to the generic one | — |
 | B-2026-09-27-115 | 2026-09-27 | typecheck | medium | A CONCRETE IMPL BLOCK OVER A GENERIC ENUM TYPES `self` AS THE BARE HEAD, SO ITS PAYLOAD'S FIELDS AND METHODS AND ITS OWN SIBLING METHODS ARE REJECTED -- `impl G[R] { fn peek(ref self) -> i64 { match self { G.X(t) => { return t.id; } .. } } }` fails `no field 'id' on type 'this type'`, `v.len()` over `impl G1[String]` fails `no method 'len' on type parameter 'T'`, and `self.n()` fails `no method 'n' on type 'G1'`; `--interp` refuses them too, since it is the checker | — |
-| B-2026-09-27-116 | 2026-09-27 | codegen | medium | A CONCRETE IMPL BLOCK OVER A GENERIC STRUCT FAILS MODULE VERIFICATION -- `impl Bx[String] { fn get(self) -> String { return self.v; } }` over `struct Bx[T] { v: T, n: i64 }` fails `Call parameter type does not match function signature` (`{ { ptr, i64, i64 }, i64 }` passed to `@Bx.get({ i64, i64 })`) and `ret i64 %v` against `{ ptr, i64, i64 }`, on JIT and `build`; `--interp` prints the string | — |
 | B-2026-09-27-119 | 2026-09-27 | codegen | medium | AN OWNED-`self` METHOD OVER A GENERIC ENUM WHOSE PAYLOAD IS A `shared struct` LEAKS THE HANDLE -- `c.keep()` over `impl G1[Sh] { fn keep(self) -> i64 { match self { G1.Y(v) => { return 1; } .. } } }` loses 32 B in 1 block plus 26 B indirect at -O0, identically for `impl[T] G1[T]`; the by-value free function `keep(c)` over the same match is clean, and so is the binding with no call | — |
 | B-2026-09-27-122 | 2026-09-27 | interp | medium | `--interp` RUNS THE PAYLOAD'S `Drop` BODY TWICE WHEN AN OWNED-`self` METHOD FORWARDS `self` TO ANOTHER THAT REBINDS IT -- `fn fwd(self) -> i64 { return self.reb(); }` over `fn reb(self) -> i64 { let e = self; match e { .. } }` prints `dR3 c7 dR3` under `--interp`; every compiled surface prints `c7 dR3`, memory clean | — |
 | B-2026-09-27-125 | 2026-09-27 | codegen | high | HANDING ONE LEAF OF A DESTRUCTURED TUPLE PAYLOAD TO A BY-VALUE CALLEE RUNS EVERY ELEMENT'S `Drop` BODY TWICE ON EVERY COMPILED SURFACE AND LEAKS -- `match o { Some((a, b)) => { eat(b); .. } }` over `Option[(R, R)]` prints `e4 t3 dR3 dR4 dR3 dR4` on the JIT, -O0, -O2 and auto-par=0 against `e4 t3 dR4 dR3` under `--interp`, losing 4 B in 2 blocks; three elements run each body three times | — |
@@ -507,7 +506,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-68 | 2026-10-04 | interp | low | `--interp` LOSES THE `Drop` BODY OF AN `Option[shared]` HANDLE IN A TUPLE CAPTURED BY A CLOSURE, AND OF ONE DISPLACED BY A TUPLE-ELEMENT STORE -- `fn cap(i: i64) { let p = mk(i); let f = || p.1; println(f"c{f()}") }` then `cap(1)` prints `c1 end` interpreted against compiled `c1 dH1 end` | — |
 | B-2026-10-04-78 | 2026-10-04 | codegen | low | MOVING A `for` BINDING OUT TWICE IN ONE ITERATION (`out.push(p); let q = p;`) LEAKS ONE COPY PER ITERATION, over a `Vec` and an `Array` alike -- 4 B in 2 blocks at -O0 for a two-element `Vec[P]` with a one-`String` `P`, where each move alone is clean | — |
 | B-2026-10-04-79 | 2026-10-04 | codegen+runtime | medium | AFTER B-2026-10-04-56 KATA 340'S `Map[char, i64]` BENCH STILL RUNS 1.85x RUST AT EQUAL HASHING (399 ms vs 216): each hash costs 92 instructions against Rust's ~74, the erased `remove` path hashes a key the `get` before it already hashed, and the mono insert costs ~70 instructions a call beyond its hash | — |
-| B-2026-10-04-80 | 2026-10-04 | codegen | low | `hs[idx(0)].t.1[0] = 4` -- AN INDEX STORE THROUGH A TUPLE FIELD OF AN ELEMENT WHOSE SUBSCRIPT IS A CALL -- FAILS TO COMPILE with `Index assignment target must be a variable`; the same store with an identifier subscript (`hs[i].t.1[0] = 4`) compiles and prints 4, and `--interp` accepts both | — |
 | B-2026-10-04-83 | 2026-10-04 | interp+codegen | medium | FORWARDING A BY-VALUE `Option[Array[R, 2]]` PARAM TO ANOTHER BY-VALUE CALLEE RUNS THE ELEMENT `Drop` BODIES AT DIFFERENT POINTS PER BACKEND -- `fn fw(x: Option[Array[R, 2]]) { ok(x); println("fw"); }` prints `ok dR27 dR28 fw` on every compiled surface and `ok fw dR27 dR28` under `--interp`; the rebind spelling `let h = x; ok(h);` splits the same way | — |
 | B-2026-10-04-84 | 2026-10-04 | codegen | medium | REMAINDER OF B-2026-10-04-74: A NAMED USER-ENUM OR `Option` LOCAL MOVED INTO A FIELD OR TUPLE ELEMENT ON ONE PATH ONLY LOSES ITS `Drop` BODY ON THE OTHER PATH COMPILED -- `let n = E.A(mk(6)); if c { t.0 = n; }` prints no `dR6` with `c` false and leaks its 29 B String (an `Option` source loses the body and frees the memory); `--interp` is right on both paths | — |
 | B-2026-10-04-87 | 2026-10-04 | codegen+interp | medium | REASSIGNING A WHOLE STRUCT BINDING FROM A LITERAL THAT MOVES A NAMED LOCAL IN (`w = W { r: n, k: 1 }`) RUNS THE LOCAL'S `Drop` BODY TWICE, ON EVERY SURFACE -- `dR5 dR6 end1 dR6` where `dR5 end1 dR6` is due; memory is clean, so only the body doubles; the same inside `if c { .. }` and a bare block | — |
@@ -519,7 +517,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-10 | 2026-10-05 | codegen+interp | high | THE HAND-BACK OF AN OWNED-`self` GENERIC-ENUM METHOD USED WITHOUT BINDING IT CRASHES COMPILED -- `show(mk(9).id())`, `show(d.id())`, `match mk(9).id() { .. }` and `f(mk(9).id())` over `impl[T] G[T] { fn id(self) -> Self { return self; } }` at `G[R]` segfault or abort `free(): double free` at -O0 and -O2, while `let e = mk(9).id(); show(e)` is correct; `--interp` also loses the payload's `Drop` body in the call-argument spellings | — |
 | B-2026-10-05-11 | 2026-10-05 | codegen+interp | medium | AN OWNED-`self` GENERIC-ENUM METHOD THAT RETURNS SOMETHING OTHER THAN `self` NEVER RUNS THE RECEIVER PAYLOAD'S `Drop` BODY ON ANY SURFACE AND LEAKS IT COMPILED -- `fn other(self, o: G[T]) -> G[T] { return o; }` and `fn fresh(self) -> G[T] { return G.Y; }` over `impl[T] G[T]` at `G[R]` print `x3s3 dR3 end` / `y end` with no `dR2` / `dR1` under `--interp`, -O0 and -O2, 2 B definitely lost; the non-generic `impl E` twin and the free-function twin are correct | — |
 | B-2026-10-05-12 | 2026-10-05 | codegen | medium | AN OWNED-`self` GENERIC-ENUM METHOD THAT RETURNS `self` ON ONE PATH AND A `Self` PARAMETER ON ANOTHER LOSES THE PARAMETER'S `Drop` BODY COMPILED WHEN IT RETURNS `self` -- `d.pick(true, mk(7))` over `fn pick(self, c: bool, o: Self) -> Self { if c { return self; } return o; }` prints `x6s6 dR6 end` at -O0 and -O2 where `--interp` prints `dR7 x6s6 dR6 end`, 34 B definitely lost; reachable since B-2026-09-28-73 | — |
-| B-2026-10-05-13 | 2026-10-05 | codegen | medium | A `Self`-TYPED PARAMETER IN A CONCRETE IMPL OVER A GENERIC ENUM FAILS MODULE VERIFICATION -- `impl G[R] { fn cself(self, o: Self) -> i64 { 1 } }` called as `d.cself(mk(5))` fails `Call parameter type does not match function signature` (`call { i64, i64 } @mk(i64 5)`) under `karac build`, while `--interp` prints `dR5 1 dR4 end`; the generic-struct twin is B-2026-09-27-116 | — |
 | B-2026-10-05-15 | 2026-10-05 | interp | medium | `--interp` COPIES A `String` ARGUMENT INTO A `ref` OR `mut ref` PARAMETER ON EVERY CALL, so a helper that appends to a `mut ref String` is still quadratic after B-2026-10-05-14 -- 20,000 calls of an empty `fn noop(out: mut ref String) {}` on a 20,000-char string take 0.15 s more than the loop without them, the same for `ref String`, and `gen_text`'s `out.push(..)` through such a param still takes 4.2 s for 200,000 pushes | — |
 | B-2026-10-05-18 | 2026-10-05 | typecheck+interp+codegen | medium | THE ITERATOR ADAPTORS ARE NOT AVAILABLE ON A USER TYPE THAT IMPLEMENTS `Iterator` -- `CountUp { .. }.collect()` and `.sum()` fail `no method 'collect' on type 'CountUp'` / `no method 'sum' on type 'CountUp'`, where design.md § Iterator Adaptors defines them as extension methods on every `Iterator` | — |
 | B-2026-10-05-19 | 2026-10-05 | codegen | medium | `let mut rest = items;` OVER A BY-VALUE `Vec` PARAMETER DEEP-COPIES THE WHOLE VEC, ELEMENTS INCLUDED, ON EVERY CALL -- kata 341's `push_reversed(mut ref self, items: Vec[Nested])` clones each list's entire subtree once per level above it, and its bench runs 0.55 s against 0.34 s with the same loop written inline (310M against 214M instructions; Rust 137M) | — |
@@ -542,6 +539,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-82 | 2026-10-05 | codegen | medium | A GENERIC ENUM WHOSE PAYLOAD IS AN `Option[S1]` LEAKS THE `S1` BOX AND ITS STRING WHEN AN ARM ONLY READS THE PAYLOAD -- `let g = G.X(Option.Some(s(9))); match g { G.X(o) => { println("  in") } G.Y => {} }` over `enum G[T] { X(T), Y }` prints `gread in dS9` on every surface, agreeing, and loses 41 B (32 direct, 9 indirect) compiled | — |
 | B-2026-10-05-83 | 2026-10-05 | codegen | low | A WHOLE `Option[String]` PAYLOAD VIEW OF A USER ENUM MOVED INTO A TUPLE LITERAL LEAKS THE STRING -- `match h { Hs.P(o) => { let t = (o, 1); println("  in") } Hs.Q => {} }` over `enum Hs { P(Option[String]), Q }` prints `in end` on every surface and loses 10 B compiled | — |
 | B-2026-10-05-84 | 2026-10-05 | interp | low | `--interp` LOSES THE `Drop` BODY OF A USER ENUM'S `Option[S1]` PAYLOAD WHEN THE ARM MOVES IT ONLY ON A BRANCH NOT TAKEN -- `match h { Ho.P(o) => { let c = false; if c { let u = o; println("  a") } else { println("  b") } } Ho.Q => {} }` prints `b end` interpreted against `b dS9 end` compiled | — |
+| B-2026-10-05-90 | 2026-10-05 | codegen | medium | A BY-VALUE PARAMETER OF A GENERIC-STRUCT TYPE ON A METHOD OF A CONCRETE IMPL OVER THAT STRUCT LEAKS THE ARGUMENT'S HEAP COMPILED -- `impl P[String, Vec[i64]] { fn eat(ref self, o: P[String, Vec[i64]]) -> i64 { 1 } }` called as `r.eat(s)` prints `1` everywhere and valgrind reports `s`'s String and Vec buffers definitely lost; the same parameter on a non-generic struct's impl (`impl H { fn eat(ref self, o: P[String, Vec[i64]]) }`) and on a free function are clean | — |
+| B-2026-10-05-91 | 2026-10-05 | typecheck | medium | A CONCRETE IMPL BLOCK OVER A GENERIC STRUCT TYPES `self`'S FIELDS AT THE BARE TYPE PARAMETER, SO ANY OPERATION ON ONE IS REFUSED -- `impl Bx[i64] { fn get(self) -> i64 { return self.v + self.n; } }` over `struct Bx[T] { v: T, n: i64 }` fails "type 'T' does not implement trait Add", and `impl Bx[String] { fn l(ref self) -> String { self.v.clone() } }` fails "no method 'clone' on type parameter 'T'"; the STRUCT twin of B-2026-09-27-115 | — |
+| B-2026-10-05-92 | 2026-10-05 | codegen | medium | AN `Option` PARAMETER OF A METHOD IN A CONCRETE IMPL OVER A GENERIC ENUM LOSES ITS PAYLOAD'S `Drop` BODY AND LEAKS IT COMPILED -- `impl G[R] { fn opt(ref self, o: Option[G[R]]) -> i64 { match o { Some(_) => 1, None => 0 } } }` called as `e.opt(Some(mk(8)))` prints `dR8` then `1` under `--interp` and only `1` on build and -O0, with the boxed payload and its String definitely lost | — |
 
 ### Relocated
 
@@ -3436,6 +3436,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-27-98 | codegen+interp | medium | A BY-VALUE PLAIN `Drop` STRUCT PARAM THAT THE CALLEE RETURNS ON SOME PATHS AND PASSES TO A BY-VALUE CONSUMER ON THE OTHERS LOSES ITS `Drop` BODY ON T… | 06bbbf7e7 |
 | B-2026-09-27-130 | codegen | high | A NON-GENERIC USER ENUM PARAM WITH AN INLINE `Drop` PAYLOAD, RETURNED ON SOME PATHS AND PASSED TO A BY-VALUE CONSUMER ON THE OTHERS, CRASHES WITH NO… | 66ff48480 |
 | B-2026-09-27-131 | interp | medium | `--interp` LOSES THE `Drop` BODY OF A BOXED GENERIC ENUM PARAM THAT THE CALLEE REBINDS (`let m = h;`), RETURNS ON SOME PATHS AND PASSES TO A BY-VALUE… | 18f314d0c |
+| B-2026-09-27-116 | codegen | medium | A CONCRETE IMPL BLOCK OVER A GENERIC STRUCT FAILS MODULE VERIFICATION -- `impl Bx[String] { fn get(self) -> String { return self.v; } }` over `struct… | ff069f123 |
 | B-2026-09-27-117 | codegen | medium | A GENERIC METHOD IN A CONCRETE IMPL BLOCK OVER A GENERIC ENUM FAILS MODULE VERIFICATION -- `impl G[R] { fn wg[U](self, u: U) -> i64 }` called as `b.w… | 9707e357f |
 | B-2026-09-27-118 | codegen | low | A FIELD READ ON THE RESULT OF AN OWNED-`self` METHOD OVER A TEMP ENUM RECEIVER DOES NOT LOWER -- `E.X(R { . | d2f4e95c0 |
 | B-2026-09-27-120 | codegen | low | WITH TWO CONCRETE IMPLS OF ONE GENERIC ENUM, NO METHOD OF EITHER CAN BE CALLED ON A TEMP RECEIVER -- `G1.Y([4, 5]).show()` beside `impl G1[Vec[i64]]`… | 8995731ee |
@@ -3731,6 +3732,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-74 | codegen+interp | medium | A NAMED LOCAL MOVED INTO A FIELD, `Vec` ELEMENT OR TUPLE ELEMENT ON ONE PATH ONLY IS LOST ON THE OTHER PATH COMPILED AND DROPPED TWICE ON THE MOVING… | e4f5c6438 |
 | B-2026-10-04-75 | codegen | medium | A USER ENUM WHOSE PAYLOAD IS AN `Option[shared]` NEVER RELEASES THE HANDLE, SO ITS `Drop` BODY RUNS ON NO COMPILED SURFACE -- `enum Hn { N(Option[Nd]… | 999e3e887 |
 | B-2026-10-04-77 | codegen | high | A `for` BINDING OVER A FIXED `Array` IS NOT REGISTERED LIKE A `Vec` LOOP'S: a method on a `String` / `Vec` element (`for x in ss { x.len() }` over `A… | c8d492da7 |
+| B-2026-10-04-80 | codegen | low | `hs[idx(0)].t.1[0] = 4` -- AN INDEX STORE THROUGH A TUPLE FIELD OF AN ELEMENT WHOSE SUBSCRIPT IS A CALL -- FAILS TO COMPILE with `Index assignment ta… | aaaa71896 |
 | B-2026-10-04-81 | codegen | medium | A FRESH `Some([..])` TEMPORARY HANDED TO A BY-VALUE `Option[Array[R, 2]]` PARAM THAT THE CALLEE RETURNS LEAKS EVERY ELEMENT'S HEAP COMPILED -- `let r… | cc45f9a23 |
 | B-2026-10-04-82 | codegen | medium | `let mut h = x; h = None;` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM LEAKS EVERY ELEMENT'S HEAP COMPILED -- the displaced value's box is freed with… | e1b812d1c |
 | B-2026-10-04-76 | codegen | high | AN INDEX READ OF A NON-`Copy` ELEMENT AS A BLOCK TAIL OR A `shared enum` ARM TAIL ALIASES THE ELEMENT INSTEAD OF DEEP-COPYING IT, SO IT IS FREED TWIC… | 476281f98 |
@@ -3744,6 +3746,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-5 | codegen | high | A ONE-WORD `Array` HELD AS A TUPLE OR STRUCT FIELD INSIDE AN ENUM PAYLOAD READS ITS ELEMENT AS 0 COMPILED -- `Some((Array[5], 7))` matched as `t` pri… | e2493dffa |
 | B-2026-10-05-7 | codegen+interp | medium | A BINDING THE BLOCK DOES NOT DECLARE, PASSED BY VALUE TO A CALLEE THAT HANDS IT BACK ON NO EXIT, RUNS ITS `Drop` BODY AT THE END OF THE ENCLOSING ARM… | d476f99eb |
 | B-2026-10-05-9 | codegen+interp | medium | A BY-VALUE PARAM PROJECTED TO A SCALAR AND THEN SHADOWED (`fn c1(s: S) -> i64 { let s = s.r.id; s }`) LOSES THE CALLER'S `Drop` BODY, ON A DIFFERENT… | c22ad1095 |
+| B-2026-10-05-13 | codegen | medium | A `Self`-TYPED PARAMETER IN A CONCRETE IMPL OVER A GENERIC ENUM FAILS MODULE VERIFICATION -- `impl G[R] { fn cself(self, o: Self) -> i64 { 1 } }` cal… | f7b0abc3b |
 | B-2026-10-05-14 | interp | medium | `--interp` COPIES THE WHOLE `String` ON EVERY `push` / `push_str`, SO BUILDING A STRING ONE CHARACTER AT A TIME IS QUADRATIC -- 50,000 `s.push('x')`… | 4c789647b |
 | B-2026-10-05-16 | interp | high | `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` RUNS THE BODY ONCE UNDER `--interp`, WITH THE ITERATOR ITSELF BOUND TO `v` -- de… | 3a7995069 |
 | B-2026-10-05-17 | codegen | medium | `karac build` CANNOT LOWER `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` -- design.md's `CountUp` in a `for` loop fails `for-l… | bc0b729dd |
