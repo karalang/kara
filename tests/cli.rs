@@ -295,6 +295,46 @@ fn a_parse_error_beside_a_multi_assign_is_reported_not_a_crash() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// B-2026-10-05-47 — `(a, b) = (b, a)` is refused with the advice to drop
+/// the parentheses, and `karac fix` now applies it: both sides lose their
+/// parentheses in one edit, and the result runs.
+#[test]
+fn fix_drops_the_parentheses_from_a_tuple_assignment() {
+    let tmp = scratch_dir("tupfix");
+    std::fs::write(
+        tmp.join("t.kara"),
+        "fn main() {\n    let mut v = vec![1, 2, 3];\n    let mut a = 10;\n    \
+         let mut b = 20;\n    (v[0], v[2]) = (v[2], v[0]);\n    (a, b) = (b, a + 1);\n    \
+         println(f\"{v[0]} {v[2]} {a} {b}\");\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["fix", "t.kara"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got = std::fs::read_to_string(tmp.join("t.kara")).unwrap();
+    assert!(got.contains("    v[0], v[2] = v[2], v[0];\n"), "{got}");
+    assert!(got.contains("    a, b = b, a + 1;\n"), "{got}");
+    let run = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "t.kara"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "3 1 20 11\n",
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // ── karac debug (crash-report renderer) ─────────────────────────
 
 const CRASH_FIXTURE: &str = concat!(

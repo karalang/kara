@@ -3886,7 +3886,7 @@ impl<'a> super::TypeChecker<'a> {
     /// mechanical repair, the `*` that design.md § Deref as a place
     /// expression makes the assignable form (explicit assignment targets do
     /// not auto-deref), and it carries that as the fix-it.
-    pub(super) fn check_assignment_target_is_place(&mut self, target: &Expr) {
+    pub(super) fn check_assignment_target_is_place(&mut self, target: &Expr, value: Option<&Expr>) {
         match &target.kind {
             ExprKind::Identifier(_)
             | ExprKind::SelfValue
@@ -3919,11 +3919,11 @@ impl<'a> super::TypeChecker<'a> {
                     replacement: "*".to_string(),
                 }),
             )
-        } else if matches!(target.kind, ExprKind::Tuple(_)) {
+        } else if let ExprKind::Tuple(places) = &target.kind {
             (
                 "a parenthesized tuple is a value, not a place; to assign several places at \
                  once, drop the parentheses (`a, b = b, a`)",
-                None,
+                Self::unparenthesized_multi_assign_fix(target, places, value),
             )
         } else {
             (
@@ -6212,7 +6212,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.assigning_lhs = true;
                 let target_ty = self.infer_expr(target);
                 self.assigning_lhs = saved;
-                self.check_assignment_target_is_place(target);
+                self.check_assignment_target_is_place(target, Some(value));
                 // B-2026-09-23-11 — the RHS is walked twice, once by the
                 // value-position checks above and once here against the
                 // target's type, so a fault INSIDE it (`s = s + y` with
@@ -6244,12 +6244,57 @@ impl<'a> super::TypeChecker<'a> {
                 // accepted, including a `mut ref` operand on either side.
                 let binop = Self::compound_op_binop(op);
                 self.infer_binary(&binop, target, value, &stmt.span);
-                self.check_assignment_target_is_place(target);
+                self.check_assignment_target_is_place(target, None);
             }
             // Handled by the early return above; kept for exhaustiveness.
             StmtKind::Expr(_) => {}
         }
         Type::Unit
+    }
+
+    /// The edit for `(a, b) = (c, d)`: drop the parentheses on BOTH sides.
+    ///
+    /// Both, because the half-edit is not a fix — `a, b = (c, d)` is a parse
+    /// error (two targets, one value), so a fix-it that unwrapped only the
+    /// target would hand `karac fix` a program that no longer parses. That is
+    /// also why it is offered only when the value is a parenthesized tuple of
+    /// the SAME arity: `(a, b) = pair` has no multi-assign spelling (the
+    /// statement form takes as many values as targets), and a mismatched
+    /// count is a different mistake that dropping parentheses cannot repair.
+    ///
+    /// The replacement is rendered from the AST rather than sliced from the
+    /// source, which the typechecker does not see; each element comes back in
+    /// the formatter's canonical spelling, which is what `karac fmt` would
+    /// give it anyway.
+    fn unparenthesized_multi_assign_fix(
+        target: &Expr,
+        places: &[Expr],
+        value: Option<&Expr>,
+    ) -> Option<super::FixIt> {
+        let value = value?;
+        let ExprKind::Tuple(values) = &value.kind else {
+            return None;
+        };
+        if places.len() != values.len() || places.len() < 2 {
+            return None;
+        }
+        let end = value.span.offset + value.span.length;
+        if end <= target.span.offset {
+            return None;
+        }
+        let join = |es: &[Expr]| {
+            es.iter()
+                .map(crate::formatter::render_expr)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        Some(super::FixIt {
+            span: Span {
+                length: end - target.span.offset,
+                ..target.span
+            },
+            replacement: format!("{} = {}", join(places), join(values)),
+        })
     }
 
     /// `impl Trait` slice 4 — walk `return_ty` for every `TypeKind::ImplTrait`

@@ -52408,6 +52408,60 @@ fn index_move_rejects_a_consuming_unwrap_on_an_indexed_element() {
     }
 }
 
+/// B-2026-10-05-47 — the parenthesized-tuple target names its repair,
+/// and `karac fix` must be able to apply it. The fix-it drops the parentheses
+/// on BOTH sides, since `a, b = (c, d)` does not parse (two targets, one
+/// value); applied, the statement type-checks. A tuple-valued RHS that is not
+/// itself a parenthesized tuple of the same arity, and the compound form, have
+/// no multi-assign spelling, so they keep the advice and carry no edit.
+#[test]
+fn parenthesized_tuple_assignment_carries_a_fix_it_that_type_checks() {
+    for (stmt, fixed) in [
+        ("(a, b) = (b, a);", "a, b = b, a;"),
+        ("(s[0], s[2]) = (s[2], s[0]);", "s[0], s[2] = s[2], s[0];"),
+        ("(a, b, c) = (c, a + 1, b);", "a, b, c = c, a + 1, b;"),
+    ] {
+        let src = format!(
+            "fn main() {{\n    let mut a = 1;\n    let mut b = 2;\n    let mut c = 3;\n    \
+             let mut s: Vec[char] = vec!['x', 'y', 'z'];\n    {stmt}\n    \
+             println(f\"{{a}} {{b}} {{c}} {{s[0]}}\");\n}}\n"
+        );
+        let errs = typecheck_errors(&src);
+        let fix = errs
+            .iter()
+            .filter(|e| e.message.contains("E_ASSIGN_TARGET_NOT_PLACE"))
+            .find_map(|e| e.fix_it.clone())
+            .unwrap_or_else(|| panic!("`{stmt}` carries a fix-it: {errs:?}"));
+        let mut applied = src.clone();
+        applied.replace_range(
+            fix.span.offset..fix.span.offset + fix.span.length,
+            &fix.replacement,
+        );
+        assert!(applied.contains(fixed), "`{stmt}` fixed to:\n{applied}");
+        // The applied form is a multi-assign, which only the desugar pass
+        // turns into something the resolver accepts, as `karac check` does.
+        typecheck_ok_desugared(&applied);
+    }
+    for stmt in [
+        "let pair = (1, 2); (a, b) = pair;",
+        "(a, b) = (1, 2, 3);",
+        "(a, b) += (1, 2);",
+    ] {
+        let src = format!("fn main() {{ let mut a = 1; let mut b = 2; {stmt} }}\n");
+        let errs = typecheck_errors(&src);
+        let hit: Vec<_> = errs
+            .iter()
+            .filter(|e| e.message.contains("E_ASSIGN_TARGET_NOT_PLACE"))
+            .collect();
+        assert_eq!(hit.len(), 1, "one place error for `{stmt}`: {errs:?}");
+        assert!(
+            hit[0].fix_it.is_none(),
+            "`{stmt}` has no edit: {:?}",
+            hit[0]
+        );
+    }
+}
+
 /// B-2026-10-04-61 — an assignment target must be a place. `(a, b) = (b, a)`,
 /// `a + 1 = 3`, `one() = 3` and `s.clone() += "y"` all type-checked; the
 /// interpreter then panicked at its "should be caught by parser/typechecker"
