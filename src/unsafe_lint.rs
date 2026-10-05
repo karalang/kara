@@ -360,9 +360,14 @@ fn walk_block(block: &Block, lines: &[&str], level: LintLevel, diags: &mut Vec<L
 
 fn walk_stmt(stmt: &Stmt, lines: &[&str], level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
     match &stmt.kind {
-        StmtKind::MultiAssign { .. } => unreachable!(
-            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
-        ),
+        // B-2026-10-05-46 — a syntactic lint also runs on a program that
+        // failed to PARSE, to report alongside the parse errors, and that tree
+        // never reached the desugar pass, so a multi-assign is still here.
+        StmtKind::MultiAssign { targets, values } => {
+            for e in targets.iter().chain(values) {
+                walk_expr(e, lines, level, diags);
+            }
+        }
         StmtKind::Let { value, .. } => walk_expr(value, lines, level, diags),
         StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {
@@ -748,9 +753,12 @@ impl OpWalker<'_> {
 
     fn walk_stmt(&mut self, stmt: &Stmt, in_unsafe: bool) {
         match &stmt.kind {
-            StmtKind::MultiAssign { .. } => unreachable!(
-                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
-            ),
+            // B-2026-10-05-46 — see `walk_stmt` above.
+            StmtKind::MultiAssign { targets, values } => {
+                for e in targets.iter().chain(values) {
+                    self.walk_expr(e, in_unsafe);
+                }
+            }
             StmtKind::Let { value, .. } => self.walk_expr(value, in_unsafe),
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {

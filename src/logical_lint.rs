@@ -90,9 +90,14 @@ fn walk_block(block: &Block, level: LintLevel, diags: &mut Vec<LintDiagnostic>) 
 
 fn walk_stmt(stmt: &Stmt, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
     match &stmt.kind {
-        StmtKind::MultiAssign { .. } => unreachable!(
-            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
-        ),
+        // B-2026-10-05-46 — a syntactic lint also runs on a program that
+        // failed to PARSE, to report alongside the parse errors, and that tree
+        // never reached the desugar pass, so a multi-assign is still here.
+        StmtKind::MultiAssign { targets, values } => {
+            for e in targets.iter().chain(values) {
+                walk_expr(e, level, diags);
+            }
+        }
         StmtKind::Let { value, .. } => walk_expr(value, level, diags),
         StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {

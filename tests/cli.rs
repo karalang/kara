@@ -248,6 +248,53 @@ fn fix_inside_an_fstring_interpolation_edits_only_the_marker() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+fn scratch_dir(tag: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+/// B-2026-10-05-46 — a file holding a multi-assign (`a, b = b, a`) and
+/// ANY parse error crashed `karac check`, `check --output=json` and `run` with
+/// `unreachable!: StmtKind::MultiAssign is removed by the desugar pass`. The
+/// syntactic lints (`undocumented_unsafe`, `ffi_float_eq`,
+/// `ambiguous_not_comparison`) also run on a tree that failed to parse, to
+/// report beside the parse errors, and that tree never reached desugar. The
+/// parse error the author needed was never printed; only `karac fix` worked.
+#[test]
+fn a_parse_error_beside_a_multi_assign_is_reported_not_a_crash() {
+    let tmp = scratch_dir("multiparse");
+    let src = "fn main() {\n    let mut a = 1;\n    let mut b = 2;\n    a, b = b, a;\n    \
+               if !true { println(\"x\"); }\n    println(f\"{a} {b}\");\n}\n";
+    std::fs::write(tmp.join("m.kara"), src).unwrap();
+    for args in [
+        &["check", "m.kara"][..],
+        &["check", "--output=json", "m.kara"][..],
+        &["run", "--interp", "m.kara"][..],
+    ] {
+        let out = karac_bin().current_dir(&tmp).args(args).output().unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(!text.contains("panicked"), "{args:?} crashed:\n{text}");
+        assert!(
+            text.contains("the `!` operator is not used"),
+            "{args:?} must report the parse error:\n{text}"
+        );
+        assert!(!out.status.success(), "{args:?} must fail: {text}");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 // ── karac debug (crash-report renderer) ─────────────────────────
 
 const CRASH_FIXTURE: &str = concat!(
