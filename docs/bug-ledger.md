@@ -96,10 +96,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 591 |
 | leak | 572 |
 | double-free | 419 |
-| codegen-gap | 225 |
+| codegen-gap | 227 |
 | missing-feature | 217 |
 | other | 168 |
-| diagnostics | 144 |
+| diagnostics | 145 |
 | perf | 143 |
 | false-positive | 120 |
 | crash | 112 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2734 |
+| codegen | 2736 |
 | interp | 850 |
-| typecheck | 331 |
+| typecheck | 332 |
 | other | 113 |
 | ownership | 80 |
 | cli | 74 |
@@ -534,9 +534,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-28 | 2026-10-05 | codegen | medium | A `Map` UNWRAPPED STRAIGHT INTO A BY-VALUE PARAMETER LEAKS THE WHOLE MAP, BY `?` AND BY `.unwrap()` ALIKE -- `fn cnt(m: Map[String, i64]) -> i64 { m.len() }`, `cnt(mk(k)?)` and `cnt(mk(k).unwrap())` over `fn mk(k: i64) -> Option[Map[String, i64]]` print the right count and lose 72 B definitely + 553 B indirectly per call at -O0; binding first (`let x = mk(k)?; cnt(x)`) is clean | — |
 | B-2026-10-05-41 | 2026-10-05 | codegen | medium | WHOLE-VALUE ASSIGNMENT THROUGH A `mut ref` PARAM OR `mut ref self` LEAKS THE DISPLACED VALUE FOR A GENERIC STRUCT AND FOR A `shared` STRUCT -- `fn re2[T](g: mut ref G[T], x: T) { g = G { v: x, k: g.k + 1 }; }` at `T = String` loses the old `v` (1 B per call) and `fn re3(s: mut ref S) { s = S { n: 77 }; }` over `shared struct S { n: i64 }` loses 16 B; output is right on every surface, and the concrete-struct spelling (`Q { v: String, k: i64 }`) is clean | — |
 | B-2026-10-05-42 | 2026-10-05 | interp | medium | `--interp` RUNS NO `Drop` BODY FOR THE VALUE DISPLACED BY `self = v` IN A `mut ref self` METHOD, where every compiled surface runs it at the assignment and the free-function `h: mut ref H` spelling runs it interpreted too -- `impl H { fn swap_in(mut ref self, id: i64) { self = H { r: R { id: id, .. }, n: self.n + 1 }; } }` prints `2 t2 1` interpreted and `drop 1` then `2 t2 1` compiled | — |
-| B-2026-10-05-43 | 2026-10-05 | typecheck | medium | A METHOD FROM `impl[T: Clone] G[T]` IS REJECTED ON A `G[String]` RECEIVER WITH "trait bound `T: Clone` is not satisfied; `String` does not implement `Clone`" -- `struct G[T] { v: T }; impl[T: Clone] G[T] { fn get(ref self) -> T { self.v.clone() } }` then `G { v: "x".to_string() }.get()` fails check, annotated or not; a `for` loop over an `impl[T: Clone] Iterator for Rep[T]` at `T = String` is accepted | — |
 | B-2026-10-05-45 | 2026-10-05 | interp+codegen | medium | A GENERIC CALLEE THAT REBINDS ONE BY-VALUE PARAM'S NAME TO ANOTHER PARAM (`fn g5[T](s: T, o: T) -> T { let s = o; s }`) RUNS THE RETURNED PARAM'S `Drop` BODY TWICE ON EVERY SURFACE -- `let r = g5(R { id: 26 }, R { id: 27 })` prints `d27 d26 k27 d27`; the non-generic twin and the generic `let t = o; t` are correct | — |
 | B-2026-10-05-71 | 2026-10-05 | codegen | medium | A TUPLE DESTRUCTURED STRAIGHT OUT OF A `match` OR `if` EXPRESSION NEVER DROPS ITS LEAVES COMPILED -- `let (v, n) = match 1 { 1 => (x.clone(), 1), _ => (x.clone(), 2) }; println(f"{v} {n}")` leaks `v`'s buffer (3 B) and an `R` leaf with a `Drop` body prints `1 1` compiled against `1 1` then `drop 1` interpreted, while binding the tuple first (`let t = match ..; let (v, n) = t;`) and a tuple-literal RHS are clean | — |
+| B-2026-10-05-73 | 2026-10-05 | codegen | medium | `x.clone()` ON A TYPE PARAMETER MONOMORPHIZED TO AN `Option` FAILS TO BUILD -- "no handler for method 'clone' on variable 'x'" -- while the same clone on a concrete `Option` builds and `karac run --interp` runs both | — |
+| B-2026-10-05-74 | 2026-10-05 | codegen | medium | `x.clone()` ON A TYPE PARAMETER MONOMORPHIZED TO A TUPLE EMITS INVALID IR -- "Function return type does not match operand type of return inst!" (`ret { i64, { ptr, i64, i64 } }` from a function typed `i64`) | — |
 
 ### Relocated
 
@@ -3745,11 +3746,13 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-29 | interp+codegen | medium | A GENERIC CALLEE THAT SHADOWS ITS BY-VALUE PARAM WITH AN UNRELATED VALUE LOSES THE ARGUMENT'S `Drop` BODY ON EVERY SURFACE -- `fn g1[T](s: T, n: i64)… | 117da5075 |
 | B-2026-10-05-30 | autopar | high | AUTO-PAR FANS OUT A SUMMING LOOP WHOSE BODY PRINTS, AND THE PRINTED LINES COME OUT IN A DIFFERENT ORDER ON EVERY RUN -- the reduction lane never asks… | cc0766f52 |
 | B-2026-10-05-40 | codegen | high | `self = v` IN A `mut ref self` METHOD DOES NOTHING UNDER `karac build`: the method returns with the receiver unchanged and the new value leaks, while… | 9903a4f6c |
+| B-2026-10-05-43 | typecheck | medium | A METHOD FROM `impl[T: Clone] G[T]` IS REJECTED ON A `G[String]` RECEIVER WITH "trait bound `T: Clone` is not satisfied; `String` does not implement… | 9a5d04429 |
 | B-2026-10-05-44 | codegen | medium | `.clone()` ON A BINDING FROM A DESTRUCTURING `let` INSIDE A GENERIC FUNCTION FAILS `karac build` AT `T = String` -- `fn f[T: Clone](x: ref T) -> T {… | 51917d08e |
 | B-2026-10-05-46 | cli | medium | A PARSE ERROR IN A FILE THAT ALSO HOLDS A MULTI-ASSIGN (`a, b = b, a`) CRASHES `karac check`, `check --output=json`, `run` AND `build` -- `unreachabl… | fe7c86471 |
 | B-2026-10-05-47 | typecheck | low | `(s[i], s[j]) = (s[j], s[i])` IS REFUSED WITH THE RIGHT ADVICE AND NO EDIT -- E_ASSIGN_TARGET_NOT_PLACE says to drop the parentheses but carries no f… | 14d09a2ad |
 | B-2026-10-05-48 | parser | low | `{x:?}` IN AN F-STRING IS REJECTED AS "unsupported type `?`", WHICH READS AS A MISTYPED FORMAT TYPE -- it is Debug formatting, reserved by the design… | a6dec2fc2 |
 | B-2026-10-05-70 | codegen | high | A FRESH `String` OR `Vec` TEMPORARY PASSED TO A GENERIC `ref T` / `mut ref` PARAMETER IS FREED TWICE UNDER `karac build` -- `fn f[T](x: ref T) -> i64… | 215a356e2 |
+| B-2026-10-05-72 | typecheck | low | `char.from_u32(n)`, `i64.max_value()` AND `u8.min_value()` ARE REFUSED WITH A BARE "no associated function 'from_u32' on type 'char'" -- the Kāra spe… | 4e276b6a8 |
 
 </details>
 
