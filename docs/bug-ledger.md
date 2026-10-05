@@ -93,9 +93,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 692 |
-| run-vs-build | 591 |
-| leak | 572 |
-| double-free | 419 |
+| run-vs-build | 592 |
+| leak | 575 |
+| double-free | 420 |
 | codegen-gap | 227 |
 | missing-feature | 217 |
 | other | 168 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2739 |
-| interp | 851 |
+| codegen | 2743 |
+| interp | 852 |
 | typecheck | 333 |
 | other | 113 |
 | ownership | 80 |
@@ -322,7 +322,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-23 | 2026-09-29 | codegen+interp | high | REMAINDER OF B-2026-09-19-22/-23: A BOXED GENERIC ENUM PARAM THE CALLEE MAY HAND BACK STILL MISBEHAVES WHEN THE CALLEE TOUCHES IT ON THE OTHER LEG -- a fresh temp handed to `fn pk[T](g: G1[T], c: bool) -> G1[T] { if c { return g } eat(g); return G1.N }` double-frees at -O0; a callee that `match`es the param on that leg loses the payload body compiled; `--interp` loses the body of a param forwarded to `eat`; a `G1[Sh]` (`shared struct`) payload leaks 49 B compiled; a box returned inside `H[T] { g: G1[T] }` runs no body and leaks | — |
 | B-2026-09-29-24 | 2026-09-29 | codegen+interp | medium | REMAINDER OF B-2026-09-19-38 / B-2026-09-28-62: A FRESH `shared enum` STILL HAS NO OWNER AS AN ASSOCIATED-FN RESULT ARGUMENT, A GENERIC `T` ARGUMENT, AN `if let` SCRUTINEE, OR A DISCARDED / SCRUTINISED STRUCT-VARIANT CONSTRUCTOR -- `take(Obj.mk(1))`, `gn(mkf())` and `if let U.A = mkf()` run no `Drop` body and leak 16 B per evaluation compiled where `--interp` runs it; `Hd.Y { r: R { id: 3 } };` and a `match` over the same constructor diverge on both backends | — |
 | B-2026-09-29-26 | 2026-09-29 | codegen | medium | A TUPLE ENUM PAYLOAD WHOSE ELEMENT IS AN ENUM OR AN `Option` LEAKS ITS PAYLOAD BOX ON EVERY COMPILED SURFACE -- `enum He { P((Mono, i64)), Q }` leaks 57 B and `enum Ho { P((Option[S1], i64)), Q }` 81 B per value at -O0 (valgrind), bodies right; struct-element tuples are clean | — |
-| B-2026-09-29-33 | 2026-09-29 | codegen | medium | A USER ENUM'S `Option` / `Result` PAYLOAD LEAKS ITS HEAP ON EVERY COMPILED SURFACE -- `enum Hs { P(Option[String]), Q }` loses the String buffer (9 B), `P(Option[Vec[i64]])` 24 B, `P(Result[String, i64])` 9 B and `P(Option[S1])` with a Drop-bodied `S1` 41 B per value at -O0, in every position (let, ctor field, fn result, struct field, match arm), bodies right | — |
 | B-2026-09-29-34 | 2026-09-29 | codegen+interp | low | AN `Option` MATCH-ARM BINDING HANDED BY VALUE TO A CALLEE RUNS NO `Drop` BODY ON ANY BACKEND -- `match h { Ho.P(b) => tako(b) }` over `enum Ho { P(Option[S1]), Q }` and `match h { Option.Some(o) => tako(o) }` over `Option[Option[S1]]` print `n1` and no `dS` on all four surfaces, where a local (`let a = Some(s(1)); tako(a)`) and a fresh temp run it | — |
 | B-2026-09-29-35 | 2026-09-29 | codegen | medium | A `Vec` MATCH-ARM BINDING HANDED BY VALUE TO A CALLEE LOSES ITS ELEMENTS' `Drop` BODIES COMPILED WHILE `--interp` RUNS THEM -- `match h { Hv.P(v) => takv(v) }` over `enum Hv { P(Vec[S1]), Q }` prints `n1 dS1` under `--interp` and `n1` on jit, -O0 and -O2 | — |
 | B-2026-09-29-36 | 2026-09-29 | codegen | medium | A LOCAL `Array[W, N]` WHOSE ELEMENT STRUCT HOLDS A `shared` FIELD LEAKS EVERY ELEMENT'S RC BOX AT SCOPE EXIT, GENERIC OR NOT -- `let a: Array[W, 2] = [W { u: mk(1) }, W { u: mk(3) }]` (`struct W { u: S2 }`) prints the right bodies on every surface and loses 32 B in 2 blocks at -O0; `Array[Q[S2], 2]` and `Array[T[Sh], 1]` (`T[U] { u: U, id: i64 }`) lose the same per element | — |
@@ -506,7 +505,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-66 | 2026-10-04 | interp+codegen | medium | REASSIGNING A TUPLE LOCAL NEVER RELEASES THE DISPLACED TUPLE'S HEAP ELEMENTS -- `let mut p = mks(1); p = mks(2)` prints `y2 end dH2` with no `dH1` and loses 16 B, and the `(String, i64)` spelling loses the old string; `--interp` also prints no `dH1`, so the displaced handle's body runs on NO surface | — |
 | B-2026-10-04-67 | 2026-10-04 | codegen | medium | A USER ENUM (PLAIN OR `shared`) WHOSE VARIANT HOLDS A TUPLE WITH AN `Option[shared]` ELEMENT LEAKS THE 40 B PAYLOAD BOX AND THE HANDLE, AND AN `unwrap` READ IN THE ARM RUNS THE BODY BEFORE THE READ -- `enum Et { A((Option[H], i64)), B }`, `let e = Et.A(mk(1)); println("x")` prints `x end` and loses 40 B against `--interp`'s `x end dH1` | — |
 | B-2026-10-04-68 | 2026-10-04 | interp | low | `--interp` LOSES THE `Drop` BODY OF AN `Option[shared]` HANDLE IN A TUPLE CAPTURED BY A CLOSURE, AND OF ONE DISPLACED BY A TUPLE-ELEMENT STORE -- `fn cap(i: i64) { let p = mk(i); let f = || p.1; println(f"c{f()}") }` then `cap(1)` prints `c1 end` interpreted against compiled `c1 dH1 end` | — |
-| B-2026-10-04-75 | 2026-10-04 | codegen | medium | A USER ENUM WHOSE PAYLOAD IS AN `Option[shared]` NEVER RELEASES THE HANDLE, SO ITS `Drop` BODY RUNS ON NO COMPILED SURFACE -- `enum Hn { N(Option[Nd]), E }`, `{ let h = Hn.N(Some(Nd { v: 1 })); println("a") }` prints `a end` and loses 16 B at -O0 against `--interp`'s `a dN1 end` | — |
 | B-2026-10-04-78 | 2026-10-04 | codegen | low | MOVING A `for` BINDING OUT TWICE IN ONE ITERATION (`out.push(p); let q = p;`) LEAKS ONE COPY PER ITERATION, over a `Vec` and an `Array` alike -- 4 B in 2 blocks at -O0 for a two-element `Vec[P]` with a one-`String` `P`, where each move alone is clean | — |
 | B-2026-10-04-79 | 2026-10-04 | codegen+runtime | medium | AFTER B-2026-10-04-56 KATA 340'S `Map[char, i64]` BENCH STILL RUNS 1.85x RUST AT EQUAL HASHING (399 ms vs 216): each hash costs 92 instructions against Rust's ~74, the erased `remove` path hashes a key the `get` before it already hashed, and the mono insert costs ~70 instructions a call beyond its hash | — |
 | B-2026-10-04-80 | 2026-10-04 | codegen | low | `hs[idx(0)].t.1[0] = 4` -- AN INDEX STORE THROUGH A TUPLE FIELD OF AN ELEMENT WHOSE SUBSCRIPT IS A CALL -- FAILS TO COMPILE with `Index assignment target must be a variable`; the same store with an identifier subscript (`hs[i].t.1[0] = 4`) compiles and prints 4, and `--interp` accepts both | — |
@@ -539,6 +537,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-74 | 2026-10-05 | codegen | medium | `x.clone()` ON A TYPE PARAMETER MONOMORPHIZED TO A TUPLE EMITS INVALID IR -- "Function return type does not match operand type of return inst!" (`ret { i64, { ptr, i64, i64 } }` from a function typed `i64`) | — |
 | B-2026-10-05-77 | 2026-10-05 | interp+codegen | medium | A GENERIC CALLEE THAT READS A BY-VALUE PARAM AND ONLY THEN REBINDS ITS NAME TO ANOTHER PARAM (`fn g3[T](s: T, o: T, c: bool) -> T { if c { return s } let s = o; s }`) RUNS `o`'S `Drop` BODY TWICE AND LOSES `s`'S ON THE LEG THAT REACHES THE REBIND -- `g3(R { id: 24 }, R { id: 25 }, false)` prints `d25 k25 d25` on every surface; the non-generic twin is correct | — |
 | B-2026-10-05-79 | 2026-10-05 | codegen | medium | A VecDeque held in a STRUCT FIELD still memmoves the whole window on every `pop_front` -- B-2026-07-30-5's O(1) head-index lowering covers only `let mut` locals, so the natural sliding-window struct (kata 346's `MovingAverage { window: VecDeque[i64], .. }`) runs 17x slower than the same loop over a local deque and 20x slower than Rust | — |
+| B-2026-10-05-80 | 2026-10-05 | codegen | high | A BY-VALUE PARAM OF A USER ENUM WHOSE PAYLOAD IS AN `Option`/`Result` (`EnumDropKind::BoxedOptRes`), RETURNED WHOLE, IS FREED TWICE -- `fn back(h: Hs) -> Hs { h }` over `enum Hs { P(Option[String]), Q }`, `let g = back(h)` aborts with `free(): double free` at -O0 where `--interp` prints the value; the plain `enum Hp { P(String), Q }` spelling is clean | — |
+| B-2026-10-05-81 | 2026-10-05 | codegen | low | A NESTED `Some(Hs.P(Some(s)))` ARM OVER AN `Option` OF A USER ENUM WITH A BOXED `Option` PAYLOAD LEAKS THE 32 B BOX -- `let x = v.pop(); match x { Some(Hs.P(Some(s))) => .. }` over `enum Hs { P(Option[String]), Q }` prints right and loses 32 B at -O0 (41 B before B-2026-09-29-33's fix) | — |
+| B-2026-10-05-82 | 2026-10-05 | codegen | medium | A GENERIC ENUM WHOSE PAYLOAD IS AN `Option[S1]` LEAKS THE `S1` BOX AND ITS STRING WHEN AN ARM ONLY READS THE PAYLOAD -- `let g = G.X(Option.Some(s(9))); match g { G.X(o) => { println("  in") } G.Y => {} }` over `enum G[T] { X(T), Y }` prints `gread in dS9` on every surface, agreeing, and loses 41 B (32 direct, 9 indirect) compiled | — |
+| B-2026-10-05-83 | 2026-10-05 | codegen | low | A WHOLE `Option[String]` PAYLOAD VIEW OF A USER ENUM MOVED INTO A TUPLE LITERAL LEAKS THE STRING -- `match h { Hs.P(o) => { let t = (o, 1); println("  in") } Hs.Q => {} }` over `enum Hs { P(Option[String]), Q }` prints `in end` on every surface and loses 10 B compiled | — |
+| B-2026-10-05-84 | 2026-10-05 | interp | low | `--interp` LOSES THE `Drop` BODY OF A USER ENUM'S `Option[S1]` PAYLOAD WHEN THE ARM MOVES IT ONLY ON A BRANCH NOT TAKEN -- `match h { Ho.P(o) => { let c = false; if c { let u = o; println("  a") } else { println("  b") } } Ho.Q => {} }` prints `b end` interpreted against `b dS9 end` compiled | — |
 
 ### Relocated
 
@@ -3498,6 +3501,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-29-22 | interp+codegen | high | ASSIGNING TO AN `Option[S]` FIELD NEVER RUNS THE DISPLACED `Some` PAYLOAD'S `Drop` BODY ON ANY BACKEND, THE INTERPRETER INCLUDED -- `let mut o = O {… | 265d7e29e |
 | B-2026-09-29-18 | codegen+interp | medium | REMAINDER OF B-2026-09-29-10: A PROJECTION OFF A LOCAL VIEW OF A BY-VALUE PARAM (`let O { w, k } = o;` or `let w = o.w;`, then `xs.push(w.r)`) RUNS T… | 69cc50035 |
 | B-2026-09-29-25 | codegen | high | MOVING A `match` ARM BINDING (`Hr.P(t) => { let u = t; . | 8653eb6e1 |
+| B-2026-09-29-33 | codegen | medium | A USER ENUM'S `Option` / `Result` PAYLOAD LEAKS ITS HEAP ON EVERY COMPILED SURFACE -- `enum Hs { P(Option[String]), Q }` loses the String buffer (9 B… | 999e3e887 |
 | B-2026-09-29-27 | interp+codegen | high | A BY-VALUE `Option` PARAM STORED WHOLE ON ONE PATH AND ITS PAYLOAD TAKEN ON ANOTHER DOUBLE-FREES COMPILED WHEN THE PAYLOAD IS BOXED, AND A THIRD PATH… | 01ab10f45 |
 | B-2026-09-29-29 | codegen | high | A TAKE THAT REBINDS THE PARAM'S OWN NAME (`let t = match t { . | 2d1219d49 |
 | B-2026-09-29-40 | interp+codegen | high | `let t = t.unwrap()` THAT REBINDS A BY-VALUE `Option` PARAM'S OWN NAME RUNS THE PAYLOAD'S BODY TWICE UNDER `--interp` AND DOUBLE-FREES COMPILED -- `f… | 258a377eb |
@@ -3725,6 +3729,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-72 | codegen | high | A NAMED STRUCT, USER-ENUM OR `Option` SOURCE MOVED INTO A TUPLE ELEMENT (`t.1 = n`) IS OWNED TWICE COMPILED -- with a heap field the element and `n`… | 85b81ca3c |
 | B-2026-10-04-73 | codegen+interp | medium | REASSIGNING A TUPLE ELEMENT THAT HAS MOVED OUT NEVER RUNS THE NEW VALUE'S `Drop` BODY, ON EVERY SURFACE -- `let x = t.0; t.0 = mk(6);` prints `x5 dR5… | 23e26459d |
 | B-2026-10-04-74 | codegen+interp | medium | A NAMED LOCAL MOVED INTO A FIELD, `Vec` ELEMENT OR TUPLE ELEMENT ON ONE PATH ONLY IS LOST ON THE OTHER PATH COMPILED AND DROPPED TWICE ON THE MOVING… | e4f5c6438 |
+| B-2026-10-04-75 | codegen | medium | A USER ENUM WHOSE PAYLOAD IS AN `Option[shared]` NEVER RELEASES THE HANDLE, SO ITS `Drop` BODY RUNS ON NO COMPILED SURFACE -- `enum Hn { N(Option[Nd]… | 999e3e887 |
 | B-2026-10-04-77 | codegen | high | A `for` BINDING OVER A FIXED `Array` IS NOT REGISTERED LIKE A `Vec` LOOP'S: a method on a `String` / `Vec` element (`for x in ss { x.len() }` over `A… | c8d492da7 |
 | B-2026-10-04-81 | codegen | medium | A FRESH `Some([..])` TEMPORARY HANDED TO A BY-VALUE `Option[Array[R, 2]]` PARAM THAT THE CALLEE RETURNS LEAKS EVERY ELEMENT'S HEAP COMPILED -- `let r… | cc45f9a23 |
 | B-2026-10-04-82 | codegen | medium | `let mut h = x; h = None;` OVER A BY-VALUE `Option[Array[R, 2]]` PARAM LEAKS EVERY ELEMENT'S HEAP COMPILED -- the displaced value's box is freed with… | e1b812d1c |
