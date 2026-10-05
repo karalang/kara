@@ -99,8 +99,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 227 |
 | missing-feature | 217 |
 | other | 168 |
-| diagnostics | 146 |
-| perf | 143 |
+| diagnostics | 147 |
+| perf | 144 |
 | false-positive | 120 |
 | crash | 112 |
 | soundness | 98 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2738 |
+| codegen | 2739 |
 | interp | 851 |
 | typecheck | 333 |
 | other | 113 |
@@ -118,7 +118,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 74 |
 | autopar | 59 |
 | runtime | 54 |
-| parser | 53 |
+| parser | 54 |
 | effect | 30 |
 | resolver | 29 |
 | lexer | 11 |
@@ -538,6 +538,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-73 | 2026-10-05 | codegen | medium | `x.clone()` ON A TYPE PARAMETER MONOMORPHIZED TO AN `Option` FAILS TO BUILD -- "no handler for method 'clone' on variable 'x'" -- while the same clone on a concrete `Option` builds and `karac run --interp` runs both | — |
 | B-2026-10-05-74 | 2026-10-05 | codegen | medium | `x.clone()` ON A TYPE PARAMETER MONOMORPHIZED TO A TUPLE EMITS INVALID IR -- "Function return type does not match operand type of return inst!" (`ret { i64, { ptr, i64, i64 } }` from a function typed `i64`) | — |
 | B-2026-10-05-77 | 2026-10-05 | interp+codegen | medium | A GENERIC CALLEE THAT READS A BY-VALUE PARAM AND ONLY THEN REBINDS ITS NAME TO ANOTHER PARAM (`fn g3[T](s: T, o: T, c: bool) -> T { if c { return s } let s = o; s }`) RUNS `o`'S `Drop` BODY TWICE AND LOSES `s`'S ON THE LEG THAT REACHES THE REBIND -- `g3(R { id: 24 }, R { id: 25 }, false)` prints `d25 k25 d25` on every surface; the non-generic twin is correct | — |
+| B-2026-10-05-79 | 2026-10-05 | codegen | medium | A VecDeque held in a STRUCT FIELD still memmoves the whole window on every `pop_front` -- B-2026-07-30-5's O(1) head-index lowering covers only `let mut` locals, so the natural sliding-window struct (kata 346's `MovingAverage { window: VecDeque[i64], .. }`) runs 17x slower than the same loop over a local deque and 20x slower than Rust | — |
 
 ### Relocated
 
@@ -3756,6 +3757,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-72 | typecheck | low | `char.from_u32(n)`, `i64.max_value()` AND `u8.min_value()` ARE REFUSED WITH A BARE "no associated function 'from_u32' on type 'char'" -- the Kāra spe… | 4e276b6a8 |
 | B-2026-10-05-75 | typecheck | low | AN ITERATOR METHOD CALLED DIRECTLY ON A `Slice` GETS NO `.iter()` HINT -- `s.bytes().collect()` says only "no method 'collect' on type 'Slice'", and… | 78675ddb1 |
 | B-2026-10-05-76 | codegen | medium | A DISCARDED CALL TO A GENERIC CALLEE THAT HANDS ITS BY-VALUE PARAM BACK LOSES A STRUCT-LITERAL ARGUMENT'S `Drop` BODY COMPILED -- `g(R { id: 82 });`… | 8566e7660 |
+| B-2026-10-05-78 | parser | low | A CLOSURE WRITTEN WITH A RUST-STYLE RETURN TYPE, `\|val: i64\| -> f64 { . | 06a832e18 |
 
 </details>
 
