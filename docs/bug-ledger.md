@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 695 |
 | run-vs-build | 592 |
-| leak | 578 |
+| leak | 579 |
 | double-free | 421 |
 | codegen-gap | 228 |
 | missing-feature | 217 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2751 |
+| codegen | 2752 |
 | interp | 854 |
 | typecheck | 335 |
 | other | 113 |
@@ -500,7 +500,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-64 | 2026-10-04 | codegen+interp | medium | A `for` LOOP OVER A FRESH `Vec` RUNS NO ELEMENT `Drop` BODY ON ANY BACKEND -- `for item in mk() { k += item.n; }` over `fn mk() -> Vec[D]` with `impl Drop for D` prints `k 15` and never `drop 7` / `drop 8` on `--interp`, -O0 or -O2 (valgrind clean, so the memory is freed and only the bodies are skipped); over `Vec[E]` with a `match item { Many(xs) => count(xs), .. }` arm, `--interp` alone runs them (at each arm's end) and the compiled builds still run none | — |
 | B-2026-10-04-65 | 2026-10-04 | codegen | medium | DESTRUCTURING A TUPLE WHOSE ELEMENT IS AN `Option[shared]` OR A BARE `shared` HANDLE, OR NESTING ONE IN A TUPLE LITERAL, LEAKS THE HANDLE AND LOSES ITS `Drop` BODY COMPILED -- `let (a, b) = mk(1); println(f"g{a.unwrap().id} {b}")` prints `g1 1 end` and loses 16 B against `--interp`'s `g1 1 end dH1` | — |
 | B-2026-10-04-66 | 2026-10-04 | interp+codegen | medium | REASSIGNING A TUPLE LOCAL NEVER RELEASES THE DISPLACED TUPLE'S HEAP ELEMENTS -- `let mut p = mks(1); p = mks(2)` prints `y2 end dH2` with no `dH1` and loses 16 B, and the `(String, i64)` spelling loses the old string; `--interp` also prints no `dH1`, so the displaced handle's body runs on NO surface | — |
-| B-2026-10-04-67 | 2026-10-04 | codegen | medium | A USER ENUM (PLAIN OR `shared`) WHOSE VARIANT HOLDS A TUPLE WITH AN `Option[shared]` ELEMENT LEAKS THE 40 B PAYLOAD BOX AND THE HANDLE, AND AN `unwrap` READ IN THE ARM RUNS THE BODY BEFORE THE READ -- `enum Et { A((Option[H], i64)), B }`, `let e = Et.A(mk(1)); println("x")` prints `x end` and loses 40 B against `--interp`'s `x end dH1` | — |
 | B-2026-10-04-68 | 2026-10-04 | interp | low | `--interp` LOSES THE `Drop` BODY OF AN `Option[shared]` HANDLE IN A TUPLE CAPTURED BY A CLOSURE, AND OF ONE DISPLACED BY A TUPLE-ELEMENT STORE -- `fn cap(i: i64) { let p = mk(i); let f = || p.1; println(f"c{f()}") }` then `cap(1)` prints `c1 end` interpreted against compiled `c1 dH1 end` | — |
 | B-2026-10-04-78 | 2026-10-04 | codegen | low | MOVING A `for` BINDING OUT TWICE IN ONE ITERATION (`out.push(p); let q = p;`) LEAKS ONE COPY PER ITERATION, over a `Vec` and an `Array` alike -- 4 B in 2 blocks at -O0 for a two-element `Vec[P]` with a one-`String` `P`, where each move alone is clean | — |
 | B-2026-10-04-79 | 2026-10-04 | codegen+runtime | medium | AFTER B-2026-10-04-56 KATA 340'S `Map[char, i64]` BENCH STILL RUNS 1.85x RUST AT EQUAL HASHING (399 ms vs 216): each hash costs 92 instructions against Rust's ~74, the erased `remove` path hashes a key the `get` before it already hashed, and the mono insert costs ~70 instructions a call beyond its hash | — |
@@ -541,6 +540,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-93 | 2026-10-05 | codegen+interp | medium | A DISCARDED `Array` LITERAL OF `Option` ELEMENTS WITH A BARE `None` ITEM RUNS NO PAYLOAD `Drop` BODY ON ANY BACKEND AND LEAKS THE `Some` BOX COMPILED -- `let _ = Array[Some(mk(3)), None];` prints `end` on --interp, -O0 and -O2 (due: `dW1_3 end`), 32 B definitely lost | — |
 | B-2026-10-05-94 | 2026-10-05 | codegen+interp | low | AN UNANNOTATED `Array` LITERAL OF `shared enum` ELEMENTS RUNS ITS PAYLOAD `Drop` BODY AT SCOPE EXIT COMPILED BUT AT THE BINDING ON --interp -- `let a = Array[H.A(mk(3)), H.B]; println("mid");` prints `mid end dW1_3` compiled against `dW1_3 mid end` | — |
 | B-2026-10-05-97 | 2026-10-05 | codegen | high | A STRUCT LITERAL WHOSE FIELDS ARE WRITTEN OUT OF DECLARATION ORDER STORES EACH VALUE IN THE WRONG FIELD COMPILED -- `struct F { a: i64, b: i64 }; let f = F { b: 3, a: 5 }` prints `a=3 b=5` under `karac run` and `build` and `a=5 b=3` under `--interp`; with fields of different types the module fails verification, and with a nested struct field the binary prints garbage | — |
+| B-2026-10-05-98 | 2026-10-05 | codegen | medium | REMAINDER OF B-2026-10-04-67: A PLAIN USER ENUM WHOSE VARIANT HOLDS A TUPLE WITH AN `Option[shared]` ELEMENT STILL LEAKS THE 40 B PAYLOAD BOX AND THE HANDLE AND LOSES ITS `Drop` BODY COMPILED -- `let e = Et.A(mk(1)); println("x")` over `enum Et { A((Option[H], i64)), B }` prints `x end` against `--interp`'s `x dH1 end`, and an `unwrap` read in the arm runs the body before the read (`dH4 x4`); the `shared enum` spelling is fixed | — |
 
 ### Relocated
 
@@ -3725,6 +3725,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-58 | codegen | low | A `for` LOOP OVER AN `Array` HELD IN A TUPLE ELEMENT FAILS THE BUILD -- `for p in a.0 { . | a2e480b43 |
 | B-2026-10-04-59 | codegen | low | A FIELD STORE THROUGH A NESTED INDEX FAILS THE BUILD -- `v[0][0].n = 9` over `Vec[Vec[P]]` stops `karac build` with `assignment to field 'n' through… | e66223d02 |
 | B-2026-10-04-63 | interp+codegen | medium | A PAYLOAD OR FIELD OF A BY-VALUE PARAM HANDED TO A METHOD ON A BORROWED RECEIVER STILL READS AS STORED INTO THAT RECEIVER, SO ITS `Drop` BODY RUNS NO… | a19190a5e |
+| B-2026-10-04-67 | codegen | medium | [SPLIT 2026-10-05: the `shared enum` spelling is fixed here; the PLAIN enum spelling still leaks and loses its bodies and is B-2026-10-05-98] A USER… | 227a30008 |
 | B-2026-10-04-69 | codegen | medium | A PAYLOAD OF A BY-VALUE `Option`/`Result` PARAM HANDED TO A METHOD ON A LOCAL RECEIVER RUNS ITS `Drop` BODY NOWHERE COMPILED -- `fn lo(o: Option[S])… | ec60c375c |
 | B-2026-10-04-70 | codegen | low | A FIELD STORE THROUGH A `Map` VALUE, A `Map` HELD IN A `Vec`, OR A CONTAINER HELD IN AN INDEXED TUPLE STILL FAILS THE BUILD -- `m[1].n = 9` over `Map… | ebae224a9 |
 | B-2026-10-04-71 | interp | medium | `--interp` EVALUATES A NESTED INDEX STORE'S SUBSCRIPTS MORE THAN ONCE -- `w[idx(0)][idx(0)] = 5` calls `idx` four times and `u[idx(0)][idx(0)].n = 5`… | 9cef17320 |
