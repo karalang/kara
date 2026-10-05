@@ -106,7 +106,26 @@ impl<'a> super::TypeChecker<'a> {
             &object.kind,
             ExprKind::PrefixCollectionLiteral { .. } | ExprKind::ArrayLiteral(_)
         );
-        if recv_is_call || recv_is_coll_lit {
+        // B-2026-09-30-80 — a value-position BLOCK or BRANCH receiver
+        // (`{ mk(3) }.contains(3)`, `(match c { .. }).contains(3)`) is as
+        // name-less as a call, and a collection literal is as name-less for the
+        // read methods as it is for `iter`. Neither was recorded for the read
+        // methods, so codegen had no element type and every such call stopped
+        // at "no handler for method 'contains' on non-identifier receiver"
+        // while `--interp` ran it. They record for the read-method arm only;
+        // the `iter` / `len` arms keep their receiver sets.
+        let recv_is_wrapper = matches!(
+            &object.kind,
+            ExprKind::Block(_)
+                | ExprKind::Seq(_)
+                | ExprKind::Unsafe(_)
+                | ExprKind::LabeledBlock { .. }
+                | ExprKind::If { .. }
+                | ExprKind::IfLet { .. }
+                | ExprKind::Match { .. }
+        );
+        let recv_reads = recv_is_call || recv_is_coll_lit || recv_is_wrapper;
+        if recv_is_call || recv_is_coll_lit || recv_is_wrapper {
             let elem = match obj_ty {
                 Type::Named { name, args }
                     if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
@@ -192,7 +211,7 @@ impl<'a> super::TypeChecker<'a> {
                 // that released none of the references the temp's clone took
                 // (B-2026-08-15-14).
                 let is_shared_agg = matches!(&resolved, Type::Shared(_));
-                let record = (recv_is_call
+                let record = (recv_reads
                     && ((is_scalar
                         && matches!(
                             method,
@@ -214,11 +233,8 @@ impl<'a> super::TypeChecker<'a> {
                     // element shape above is supported (scalar/String/POD-Vec/user
                     // struct/user enum) — the for-loop reuses the read-method
                     // cleanup threading verbatim.
-                    || ((is_scalar
-                        || is_string
-                        || is_pod_vec
-                        || is_user_struct
-                        || is_user_enum)
+                    || ((recv_is_call || recv_is_coll_lit)
+                        && (is_scalar || is_string || is_pod_vec || is_user_struct || is_user_enum)
                         && matches!(method, "iter" | "into_iter"));
                 if record {
                     let te = Self::type_to_type_expr(&resolved);

@@ -11569,16 +11569,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the known stdlib collections so a user type's owned-return
                     // `.get` is untouched.
                     if let ExprKind::MethodCall { object, method, .. } = &value.kind {
+                        // B-2026-09-30-80: a NAME-LESS receiver (`mk().first()`,
+                        // `{ mk() }.get(1)`, `[a, b].last()`) has no type for
+                        // `inferred_receiver_type` to find; the typechecker's
+                        // fresh-temp record at this call's span is what says
+                        // it is a `Vec` / `VecDeque`.
+                        let temp_vec_recv = self
+                            .span_tables
+                            .temp_recv_elem_types
+                            .contains_key(&(value.span.offset, value.span.length));
                         if matches!(method.as_str(), "get" | "first" | "last")
-                            && matches!(
-                                self.inferred_receiver_type(object).as_deref(),
-                                Some("Map")
-                                    | Some("SortedMap")
-                                    | Some("Vec")
-                                    | Some("Slice")
-                                    | Some("Array")
-                                    | Some("VecDeque")
-                            )
+                            && (temp_vec_recv
+                                || matches!(
+                                    self.inferred_receiver_type(object).as_deref(),
+                                    Some("Map")
+                                        | Some("SortedMap")
+                                        | Some("Vec")
+                                        | Some("Slice")
+                                        | Some("Array")
+                                        | Some("VecDeque")
+                                ))
                         {
                             if let Some(te) = self
                                 .type_decls

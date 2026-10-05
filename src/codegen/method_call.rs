@@ -12139,7 +12139,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // outer buffer — the inline vec-struct recursion only reaches elements
         // that are *themselves* Vec/String. Scalar/String/nested-Vec elements
         // return `None` here (not in `struct_types`) and keep the plain path.
-        if self.expr_yields_fresh_owned_temp(object) {
+        // B-2026-09-30-80: a collection literal and a block or branch whose
+        // every tail mints a fresh temp are owned by nobody else either; a
+        // wrapper that hands back an outer binding is not tracked, since that
+        // binding still owns its buffer.
+        let fresh_recv = self.expr_yields_fresh_owned_temp(object)
+            || self.expr_is_fresh_owned_branch_tail(object)
+            || matches!(
+                &object.kind,
+                ExprKind::ArrayLiteral(_) | ExprKind::PrefixCollectionLiteral { .. }
+            );
+        if fresh_recv {
             if let Some(agg_drop) = self.vec_elem_agg_drop_for_type_expr(&elem_te) {
                 self.track_vec_of_aggs_var(slot, elem_llvm, agg_drop);
             } else {
