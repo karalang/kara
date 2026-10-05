@@ -9095,8 +9095,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .mapset
             .temp_recv_mapset_types
             .contains_key(&(call_span.offset, call_span.length));
+        // B-2026-10-04-90 — a map or set held in a tuple that is itself an
+        // indexed element (`a[0].0.len()`): compiling it here as a VALUE
+        // deep-clones the container, and when the value turns out not to be a
+        // `Vec` this arm declines with the clone already emitted and never
+        // freed (72 bytes per call, measured). The tuple-element receiver
+        // path below answers it in place.
+        let indexed_tuple_mapset_recv = match &object.kind {
+            ExprKind::TupleIndex { object: tup, index } => self
+                .indexed_tuple_elem_type_expr(tup, *index)
+                .is_some_and(|te| {
+                    super::helpers::map_kv_type_exprs(&te).is_some()
+                        || matches!(&te.kind, TypeKind::Path(p)
+                            if matches!(p.segments.last().map(String::as_str),
+                                Some("Set") | Some("SortedSet")))
+                }),
+            _ => false,
+        };
         if !user_method_for_len_family
             && !freshtemp_mapset_recv
+            && !indexed_tuple_mapset_recv
             && (!matches!(&object.kind, ExprKind::Identifier(_)) || borrow_local_recv)
             && matches!(method, "len" | "is_empty" | "count")
         {
@@ -10455,47 +10473,57 @@ impl<'ctx> super::Codegen<'ctx> {
             // (`a.0.push(x)` over `a: mut ref (Vec[i64], i64)`): the synth then
             // sits on the caller's element, which is where a `mut ref`
             // method's write belongs.
-            if let (Some(te), Some(elem_ptr), Some(tuple_ty)) = (
+            let chained = match (
                 elem_te,
                 self.place_chain_ptr_through_borrow(object),
                 self.place_chain_aggregate_llvm_type_through_borrow(tup_obj),
             ) {
-                if let Some(elem_ll) = tuple_ty.get_field_type_at_index(*index as u32) {
-                    let synth = format!("__field_elem_{}", self.indexed_elem_counter);
-                    self.indexed_elem_counter += 1;
-                    self.variables.insert(
-                        synth.clone(),
-                        super::state::VarSlot {
-                            ptr: elem_ptr,
-                            ty: elem_ll,
-                        },
-                    );
-                    self.register_var_from_type_expr(&synth, &te);
-                    let synth_expr = Expr {
-                        kind: ExprKind::Identifier(synth.clone()),
-                        span: object.span,
-                    };
-                    let out = self.compile_method_call(
-                        &synth_expr,
-                        method,
-                        args,
-                        call_span,
-                        args_close_span,
-                    );
-                    self.variables.remove(&synth);
-                    self.var_types.vec_elem_types.remove(&synth);
-                    self.var_types.slice_elem_types.remove(&synth);
-                    self.var_types.var_elem_type_exprs.remove(&synth);
-                    self.var_types.var_type_names.remove(&synth);
-                    self.mapset.map_key_types.remove(&synth);
-                    self.mapset.map_val_types.remove(&synth);
-                    self.mapset.map_key_type_names.remove(&synth);
-                    self.mapset.map_key_type_exprs.remove(&synth);
-                    self.mapset.set_elem_types.remove(&synth);
-                    self.mapset.set_elem_type_names.remove(&synth);
-                    self.mapset.set_elem_type_exprs.remove(&synth);
-                    return out;
+                (Some(te), Some(elem_ptr), Some(tuple_ty)) => tuple_ty
+                    .get_field_type_at_index(*index as u32)
+                    .map(|elem_ll| (elem_ptr, elem_ll, te)),
+                _ => None,
+            };
+            // B-2026-10-04-90 — a tuple that is itself an indexed element or a
+            // map value (`mm[1].0.push(p)`, `a[0].0.insert(1, p)`), which the
+            // place chain does not reach: placed and typed by the store
+            // resolvers, so the method acts on the container's own element.
+            let placed = match chained {
+                Some(c) => Some(c),
+                None if self.indexed_tuple_elem_type_expr(tup_obj, *index).is_some() => {
+                    self.indexed_tuple_elem_place(tup_obj, *index)
                 }
+                None => None,
+            };
+            if let Some((elem_ptr, elem_ll, te)) = placed {
+                let synth = format!("__field_elem_{}", self.indexed_elem_counter);
+                self.indexed_elem_counter += 1;
+                self.variables.insert(
+                    synth.clone(),
+                    super::state::VarSlot {
+                        ptr: elem_ptr,
+                        ty: elem_ll,
+                    },
+                );
+                self.register_var_from_type_expr(&synth, &te);
+                let synth_expr = Expr {
+                    kind: ExprKind::Identifier(synth.clone()),
+                    span: object.span,
+                };
+                let out =
+                    self.compile_method_call(&synth_expr, method, args, call_span, args_close_span);
+                self.variables.remove(&synth);
+                self.var_types.vec_elem_types.remove(&synth);
+                self.var_types.slice_elem_types.remove(&synth);
+                self.var_types.var_elem_type_exprs.remove(&synth);
+                self.var_types.var_type_names.remove(&synth);
+                self.mapset.map_key_types.remove(&synth);
+                self.mapset.map_val_types.remove(&synth);
+                self.mapset.map_key_type_names.remove(&synth);
+                self.mapset.map_key_type_exprs.remove(&synth);
+                self.mapset.set_elem_types.remove(&synth);
+                self.mapset.set_elem_type_names.remove(&synth);
+                self.mapset.set_elem_type_exprs.remove(&synth);
+                return out;
             }
             return Err(format!(
                 "codegen: no handler for method '{method}' on this tuple-element receiver — \
