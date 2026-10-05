@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 689 |
+| miscompile | 690 |
 | run-vs-build | 591 |
 | leak | 571 |
 | double-free | 418 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2731 |
-| interp | 849 |
+| codegen | 2732 |
+| interp | 850 |
 | typecheck | 330 |
 | other | 113 |
 | ownership | 80 |
@@ -534,11 +534,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-26 | 2026-10-05 | codegen | low | A READ-ONLY CONSUMER OF AN `if` WHOSE ARM TAIL IS AN INDEXED NON-`Copy` ELEMENT OF AN OUTER CONTAINER LEAKS THE ELEMENT'S COPY -- `let m = mkv("q"); println(if true { m[1] } else { "n" })` over `m: Vec[String]` prints `q-b` and loses 4 B in 1 block at -O0 under valgrind; `let s = if true { m[1] } else { "n" }` is clean | — |
 | B-2026-10-05-27 | 2026-10-05 | codegen | medium | REMAINDER OF B-2026-10-03-35: A GENERIC `shared enum` INSTANTIATED AT `Option` OF A `shared` TYPE STILL LEAKS THE INNER BOX -- `let h: G[Option[M]] = G.Y(Some(M.My(mkv("q"))))` over `shared enum G[T] { Y(T), N }` and `shared enum M { My(Vec[String]), N }` prints correctly and loses 40 B definitely + 102 B indirectly at -O0; `G.Y(None)` is clean | — |
 | B-2026-10-05-28 | 2026-10-05 | codegen | medium | A `Map` UNWRAPPED STRAIGHT INTO A BY-VALUE PARAMETER LEAKS THE WHOLE MAP, BY `?` AND BY `.unwrap()` ALIKE -- `fn cnt(m: Map[String, i64]) -> i64 { m.len() }`, `cnt(mk(k)?)` and `cnt(mk(k).unwrap())` over `fn mk(k: i64) -> Option[Map[String, i64]]` print the right count and lose 72 B definitely + 553 B indirectly per call at -O0; binding first (`let x = mk(k)?; cnt(x)`) is clean | — |
-| B-2026-10-05-29 | 2026-10-05 | interp+codegen | medium | A GENERIC CALLEE THAT SHADOWS ITS BY-VALUE PARAM WITH AN UNRELATED VALUE LOSES THE ARGUMENT'S `Drop` BODY ON EVERY SURFACE -- `fn g1[T](s: T, n: i64) -> i64 { let s = n; s }` called `g1(R { id: 13 }, 4)` prints `k4` with no `d13` on `--interp` and compiled, temporary and named argument alike; the same callee binding `let t = n; t` runs the body | — |
 | B-2026-10-05-41 | 2026-10-05 | codegen | medium | WHOLE-VALUE ASSIGNMENT THROUGH A `mut ref` PARAM OR `mut ref self` LEAKS THE DISPLACED VALUE FOR A GENERIC STRUCT AND FOR A `shared` STRUCT -- `fn re2[T](g: mut ref G[T], x: T) { g = G { v: x, k: g.k + 1 }; }` at `T = String` loses the old `v` (1 B per call) and `fn re3(s: mut ref S) { s = S { n: 77 }; }` over `shared struct S { n: i64 }` loses 16 B; output is right on every surface, and the concrete-struct spelling (`Q { v: String, k: i64 }`) is clean | — |
 | B-2026-10-05-42 | 2026-10-05 | interp | medium | `--interp` RUNS NO `Drop` BODY FOR THE VALUE DISPLACED BY `self = v` IN A `mut ref self` METHOD, where every compiled surface runs it at the assignment and the free-function `h: mut ref H` spelling runs it interpreted too -- `impl H { fn swap_in(mut ref self, id: i64) { self = H { r: R { id: id, .. }, n: self.n + 1 }; } }` prints `2 t2 1` interpreted and `drop 1` then `2 t2 1` compiled | — |
 | B-2026-10-05-43 | 2026-10-05 | typecheck | medium | A METHOD FROM `impl[T: Clone] G[T]` IS REJECTED ON A `G[String]` RECEIVER WITH "trait bound `T: Clone` is not satisfied; `String` does not implement `Clone`" -- `struct G[T] { v: T }; impl[T: Clone] G[T] { fn get(ref self) -> T { self.v.clone() } }` then `G { v: "x".to_string() }.get()` fails check, annotated or not; a `for` loop over an `impl[T: Clone] Iterator for Rep[T]` at `T = String` is accepted | — |
 | B-2026-10-05-44 | 2026-10-05 | codegen | medium | `.clone()` ON A BINDING FROM A DESTRUCTURING `let` INSIDE A GENERIC FUNCTION FAILS `karac build` AT `T = String` -- `fn f[T: Clone](x: ref T) -> T { let (v, n) = (x.clone(), 1); v.clone() }` called as `f("ab".to_string())` dies with "no handler for method 'clone' on variable 'v'" while `--interp` prints `ab` | — |
+| B-2026-10-05-45 | 2026-10-05 | interp+codegen | medium | A GENERIC CALLEE THAT REBINDS ONE BY-VALUE PARAM'S NAME TO ANOTHER PARAM (`fn g5[T](s: T, o: T) -> T { let s = o; s }`) RUNS THE RETURNED PARAM'S `Drop` BODY TWICE ON EVERY SURFACE -- `let r = g5(R { id: 26 }, R { id: 27 })` prints `d27 d26 k27 d27`; the non-generic twin and the generic `let t = o; t` are correct | — |
 
 ### Relocated
 
@@ -3742,6 +3742,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-17 | codegen | medium | `karac build` CANNOT LOWER `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` -- design.md's `CountUp` in a `for` loop fails `for-l… | bc0b729dd |
 | B-2026-10-05-23 | interp | medium | `--interp` RE-DERIVES TYPE-LEVEL DROP FACTS FOR EVERY VALUE IT MATCHES OR BINDS, RE-SCANNING THE PROGRAM'S ITEMS EACH TIME -- kata 341's bench kernel… | 40ecccbe6 |
 | B-2026-10-05-25 | typecheck | low | `n.is_power_of_two()` ON A SIGNED INTEGER SAYS ONLY "no method 'is_power_of_two' on type 'i32'", which reads as if the method did not exist; it is un… | 7dcf9ef77 |
+| B-2026-10-05-29 | interp+codegen | medium | A GENERIC CALLEE THAT SHADOWS ITS BY-VALUE PARAM WITH AN UNRELATED VALUE LOSES THE ARGUMENT'S `Drop` BODY ON EVERY SURFACE -- `fn g1[T](s: T, n: i64)… | 117da5075 |
 | B-2026-10-05-30 | autopar | high | AUTO-PAR FANS OUT A SUMMING LOOP WHOSE BODY PRINTS, AND THE PRINTED LINES COME OUT IN A DIFFERENT ORDER ON EVERY RUN -- the reduction lane never asks… | cc0766f52 |
 | B-2026-10-05-40 | codegen | high | `self = v` IN A `mut ref self` METHOD DOES NOTHING UNDER `karac build`: the method returns with the receiver unchanged and the new value leaks, while… | 9903a4f6c |
 
