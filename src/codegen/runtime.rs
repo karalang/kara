@@ -18340,6 +18340,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// conditional now, in
     /// [`Self::emit_user_drop_bodies_call_field_view_selected`], which reads the
     /// same flag against the same slot.
+    /// B-2026-10-05-86 — the per-path flag of an `Option`/`Result` place whose
+    /// payload an arm may have bound out, when its walk is still in the frame:
+    /// the one case [`Self::has_armed_container_elem_bodies`] answers FALSE
+    /// for while the place can still own a payload at runtime. A reassignment
+    /// reads it twice: to fire the DISPLACED payload's walk only on the paths
+    /// no arm took it, and to re-arm the flag for the value it stores.
+    pub(super) fn flagged_container_elem_bodies(&self, name: &str) -> Option<PointerValue<'ctx>> {
+        let place = self.variables.get(name)?.ptr;
+        let flag = self
+            .drop_rc
+            .optres_payload_bodies_flags
+            .get(&(name.to_string(), place))
+            .copied()?;
+        let armed = self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|a| {
+                matches!(a, CleanupAction::UserDrop { binding_name, binding_ptr, kind, .. }
+                    if binding_name == name
+                        && *binding_ptr == place
+                        && *kind == UserDropKind::ContainerElemBodies)
+            })
+        });
+        armed.then_some(flag)
+    }
+
     pub(super) fn has_armed_container_elem_bodies(&self, name: &str) -> bool {
         if self.variables.get(name).is_some_and(|s| {
             self.drop_rc

@@ -16018,6 +16018,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // stored one is whole, so its scope-exit walk
                                 // goes back to the forward order.
                                 self.restore_forward_container_elem_bodies(name.as_str());
+                            } else if let Some(flag) =
+                                self.flagged_container_elem_bodies(name.as_str())
+                            {
+                                // B-2026-10-05-86 — an arm bound the payload
+                                // out on SOME path: the displaced value still
+                                // owns it wherever the flag is `true`, so the
+                                // walk fires there and nowhere else.
+                                if let Some(bodies) = self
+                                    .armed_reversed_container_elem_bodies(name.as_str())
+                                    .or_else(|| self.emit_optres_payload_user_drop_bodies_fn(&te))
+                                {
+                                    let g = self.open_guard_on_flag(flag);
+                                    self.call_displaced_walk_on_handoff_paths(
+                                        name.as_str(),
+                                        bodies,
+                                        slot.ptr,
+                                    );
+                                    self.close_cond_move_guard(g);
+                                }
+                                self.restore_forward_container_elem_bodies(name.as_str());
                             }
                         }
                         // B-2026-08-29-1 — the MEMORY sibling of the bodies
@@ -16384,6 +16404,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         // B-2026-09-02-1 auto-par repro, where it never fires.
                         let bool_t = self.context.bool_type();
                         let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
+                    }
+                    // B-2026-10-05-86 — the same re-arm for the per-path
+                    // payload-BODIES flag of an `Option`/`Result` place. An arm
+                    // that bound the payload out stored `false`, and nothing
+                    // stored `true` again when the place received a fresh value,
+                    // so both the NLL live-range fire and the scope-exit walk
+                    // read the stale bit and silently skipped the NEW payload's
+                    // body: `match h { Some(a) => .. } h = Some(mk(37));` lost
+                    // `dR37` against the interpreter. Ordered after the store
+                    // and the displacement fire above, which read the old bit.
+                    if !rhs_is_param_view && !rhs_is_self_alias {
+                        if let Some(flag) = self.flagged_container_elem_bodies(name.as_str()) {
+                            let bool_t = self.context.bool_type();
+                            let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
+                        }
                     }
                     // Tensor move (`w = other`, an owned tensor binding moved
                     // into `w`): after the store both slots hold the same block
