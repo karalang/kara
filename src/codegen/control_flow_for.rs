@@ -162,6 +162,15 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // B-2026-10-05-17: `for v in it` where `it` is a value of a USER type
+        // with `impl Iterator for T` (design.md § Iterator Traits). No storage
+        // path below can iterate it, so lower it the way the language defines
+        // it: hold the iterator in a fresh local and pull `next()` until
+        // `None` — the `while let` spelling, which already builds.
+        if let Some(desugared) = self.user_iterator_for_desugar(label, pattern, iterable, body) {
+            return self.compile_expr(&desugared);
+        }
+
         // `for x in v[a..b]` / `for x in v[a..b].iter()` — a RANGE SLICE as the
         // source. `let s = v[a..b]; for x in s` always lowered; written inline,
         // the bare form fell through to the unlowered-source error and the
@@ -5912,6 +5921,119 @@ impl<'ctx> super::Codegen<'ctx> {
             span: *span,
         };
         Ok(Some(self.compile_expr(&outer_for)?))
+    }
+
+    /// B-2026-10-05-17 — the `while let` desugaring of a `for` over a value of
+    /// a user type that implements `Iterator`, or `None` when `iterable` is not
+    /// one. The type comes from the typechecker (`expr_struct_type_names`), so
+    /// every spelling of the source qualifies alike: a binding, a struct
+    /// literal, a call. The `Iterator` impl is looked up by name in the
+    /// program, the same test the interpreter's lazy `for` makes.
+    ///
+    /// ```text
+    /// { let mut __uit_N = <iterable>;
+    ///   <label>: while let Some(<pattern>) = __uit_N.next() { <body> } }
+    /// ```
+    ///
+    /// The synthetic receiver and call carry a ZERO-LENGTH span at the
+    /// iterable's offset: a `MethodCall`'s span is its receiver's, so reusing
+    /// the iterable's own span would make the typechecker's per-span answers
+    /// for the SOURCE (a call's type substitutions, say) read as answers for
+    /// `.next()`.
+    fn user_iterator_for_desugar(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        iterable: &Expr,
+        body: &Block,
+    ) -> Option<Expr> {
+        let type_name = self
+            .span_tables
+            .expr_struct_type_names
+            .get(&(iterable.span.offset, iterable.span.length))?
+            .clone();
+        let program = self.program_snapshot.as_deref()?;
+        let implements_iterator = program.items.iter().any(|item| match item {
+            Item::ImplBlock(imp) => {
+                matches!(&imp.target_type.kind, TypeKind::Path(p)
+                    if p.segments.last() == Some(&type_name))
+                    && imp
+                        .trait_name
+                        .as_ref()
+                        .and_then(|t| t.segments.last())
+                        .is_some_and(|t| t == "Iterator")
+            }
+            _ => false,
+        });
+        if !implements_iterator {
+            return None;
+        }
+        self.indexed_elem_counter += 1;
+        let it_var = format!("__uit_{}", self.indexed_elem_counter);
+        let span = iterable.span;
+        let synth = crate::token::Span { length: 0, ..span };
+        // The typechecker types a `let` binding at its PATTERN's span, and the
+        // synthetic pattern has none of its own; without the surface name an
+        // enum iterator built in place (`for v in Steps.Up(1)`) reaches
+        // `.next()` with no receiver type to dispatch on.
+        self.pattern_state
+            .pattern_binding_types
+            .entry((synth.offset, synth.length))
+            .or_insert(type_name);
+        let next_call = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(Expr {
+                    kind: ExprKind::Identifier(it_var.clone()),
+                    span: synth,
+                }),
+                method: "next".to_string(),
+                turbofish: None,
+                args: Vec::new(),
+                args_close_span: synth,
+            },
+            span: synth,
+        };
+        let pull = Expr {
+            kind: ExprKind::WhileLet {
+                label: label.map(str::to_string),
+                pattern: Pattern {
+                    kind: PatternKind::TupleVariant {
+                        path: vec!["Some".to_string()],
+                        patterns: vec![pattern.clone()],
+                    },
+                    span: pattern.span,
+                },
+                value: Box::new(next_call),
+                body: body.clone(),
+                attributes: Vec::new(),
+            },
+            span: synth,
+        };
+        Some(Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![
+                    Stmt {
+                        kind: StmtKind::Let {
+                            is_mut: true,
+                            pattern: Pattern {
+                                kind: PatternKind::Binding(it_var),
+                                span: synth,
+                            },
+                            ty: None,
+                            value: iterable.clone(),
+                        },
+                        span: synth,
+                    },
+                    Stmt {
+                        kind: StmtKind::Expr(pull),
+                        span: synth,
+                    },
+                ],
+                final_expr: None,
+                span: synth,
+            }),
+            span: synth,
+        })
     }
 }
 
