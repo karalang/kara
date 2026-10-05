@@ -2006,6 +2006,56 @@ impl<'ctx> super::Codegen<'ctx> {
         head_ok.then_some((tp, te))
     }
 
+    /// B-2026-10-05-44 — the BORROW sibling of
+    /// [`Self::whole_param_frame_container_te`]: the typechecker's concrete
+    /// `Vec`/`VecDeque` binding for a `x: ref T` / `x: mut ref T` param.
+    ///
+    /// The side-table resolver reads the element off a NAMED argument only, so
+    /// `rc(mkv())` over `fn rc[T: Clone](x: ref T) -> T { x.clone() }` left the
+    /// monomorph's `x` with no element, and `x.clone()` had no handler while
+    /// `rc(v)` built. A borrow param owns nothing in the callee, so the
+    /// ownership convention the by-value helper is careful about does not
+    /// arise: this only supplies the type the body needs to lower.
+    fn borrow_param_frame_container_te(
+        &self,
+        generic_fn: &Function,
+        idx: usize,
+        call_span: &crate::token::Span,
+    ) -> Option<(String, TypeExpr)> {
+        let (TypeKind::Ref(inner) | TypeKind::MutRef(inner)) = &generic_fn.params.get(idx)?.ty.kind
+        else {
+            return None;
+        };
+        let TypeKind::Path(path) = &inner.kind else {
+            return None;
+        };
+        if path.generic_args.is_some() || path.segments.len() != 1 {
+            return None;
+        }
+        let tp = path.segments[0].clone();
+        if !generic_fn
+            .generic_params
+            .as_ref()
+            .is_some_and(|gp| gp.params.iter().any(|p| !p.is_const && p.name == tp))
+        {
+            return None;
+        }
+        let te = self
+            .span_tables
+            .call_type_subs_te
+            .get(&(call_span.offset, call_span.length))?
+            .get(&tp)?;
+        let te = self.subst_monomorph_type_params(te);
+        let TypeKind::Path(cp) = &te.kind else {
+            return None;
+        };
+        let head_ok = matches!(
+            cp.segments.last().map(|s| s.as_str()),
+            Some("Vec") | Some("VecDeque")
+        ) && cp.generic_args.as_ref().is_some_and(|a| !a.is_empty());
+        head_ok.then_some((tp, te))
+    }
+
     /// B-2026-08-15-7 — the CONTAINER sibling of
     /// [`Self::generic_param_is_bare_type_param`]: a by-value param whose type
     /// is written out (`v: Vec[T]`, `v: Vec[i64]`) rather than as a bare type
@@ -3797,7 +3847,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // ownership convention no longer depends on its first caller's
         // argument spelling. `or_insert`, so a resolver's entry still wins.
         for i in 0..generic_fn.params.len() {
-            if let Some((tp, te)) = self.whole_param_frame_container_te(&generic_fn, i, call_span) {
+            if let Some((tp, te)) = self
+                .whole_param_frame_container_te(&generic_fn, i, call_span)
+                .or_else(|| self.borrow_param_frame_container_te(&generic_fn, i, call_span))
+            {
                 if let TypeKind::Path(cp) = &te.kind {
                     if let Some(head) = cp.segments.last() {
                         subst_names

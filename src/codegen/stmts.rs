@@ -17877,9 +17877,52 @@ impl<'ctx> super::Codegen<'ctx> {
     /// arm and is already registered by the main handler) is unaffected.
     fn register_pattern_leaf_dispatch(&mut self, name: &str, span: &crate::token::Span) {
         let key = (span.offset, span.length);
-        let Some(type_name) = self.pattern_state.pattern_binding_types.get(&key).cloned() else {
+        let Some(mut type_name) = self.pattern_state.pattern_binding_types.get(&key).cloned()
+        else {
             return;
         };
+        // B-2026-10-05-44 — inside a monomorph the typechecker recorded the
+        // leaf's GENERIC type (`T`), which named no shape here, so
+        // `let (v, n) = (x.clone(), 1); v.clone()` had no handler at
+        // `T = String`. Resolve it through the active substitution: a binding
+        // with an element (`Vec[i64]`) goes through the shared registrar, a
+        // bare head (`String`) takes the arms below.
+        if self.mono_state.type_subst_names.contains_key(&type_name)
+            || self
+                .mono_state
+                .type_subst_type_exprs
+                .contains_key(&type_name)
+        {
+            let probe = TypeExpr {
+                kind: TypeKind::Path(crate::ast::PathExpr {
+                    segments: vec![type_name.clone()],
+                    generic_args: None,
+                    span: *span,
+                }),
+                span: *span,
+            };
+            let full = self.subst_monomorph_type_params(&probe);
+            if let TypeKind::Path(fp) = &full.kind {
+                if fp.generic_args.is_some() {
+                    self.register_var_from_type_expr(name, &full);
+                    return;
+                }
+                // The head-name map first: it is what the rest of the
+                // monomorph dispatches on, and the per-call frame can spell a
+                // `String` binding as `str` (measured: `f(c)` with
+                // `c = Cnt.More("ab".to_string(), 2)`), which no arm below
+                // registers.
+                if let Some(head) = self
+                    .mono_state
+                    .type_subst_names
+                    .get(&type_name)
+                    .cloned()
+                    .or_else(|| fp.segments.last().cloned())
+                {
+                    type_name = head;
+                }
+            }
+        }
         match type_name.as_str() {
             // String layout matches `Vec[u8]` (`{ptr,len,cap}`); register both
             // the element type and the `string_vars` flag the String method
