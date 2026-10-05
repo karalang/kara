@@ -94,9 +94,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 686 |
 | run-vs-build | 589 |
-| leak | 563 |
-| double-free | 417 |
-| codegen-gap | 222 |
+| leak | 565 |
+| double-free | 418 |
+| codegen-gap | 223 |
 | missing-feature | 216 |
 | other | 168 |
 | diagnostics | 141 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2714 |
-| interp | 839 |
+| codegen | 2718 |
+| interp | 841 |
 | typecheck | 327 |
 | other | 113 |
 | ownership | 80 |
@@ -309,7 +309,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-70 | 2026-09-28 | interp+codegen | medium | REMAINDER OF B-2026-09-28-53: NESTED-ENVELOPE SHAPES STILL LEAK COMPILED WITH OUTPUT RIGHT -- `Some(Ok(mk(1)));` 29 B (also inside `fn c(x: S)`), `m.remove(1)` / `v.pop()` of an `Option[S]` element 32 B, a discarded `Result[Option[S], i64]` 32 B (also a `let o: Result[Option[S], i64] = Ok(Some(x))` on the exit that does not return it), `E.A(Some(x))` 32 B -- AND A USER VARIANT OVER A NEST (`let e = E.A(Some(x)); e`, or `E.A(Some(mk(1)))` matched with `E.A(Some(s))`) LOSES OR DOUBLES ITS BODY: `--interp` runs none, compiled runs it (twice when a param is returned through it) | — |
 | B-2026-09-28-71 | 2026-09-28 | codegen | medium | A DISCARDED GENERIC HAND-BACK OF A NAMED BOXED GENERIC-ENUM LOCAL, AND THE DIES-INSIDE LEG OF A BOUND ONE, LOSE THE PAYLOAD'S `Drop` BODY ON EVERY COMPILED SURFACE -- `{ let d = mk(21); idg(d); println("a") }` prints `a end` on the JIT, -O0 and -O2 where `--interp` prints `dR21 a end`; `mid(d, true);`, `{ idg(d) };`, a discarded `if c { idg(d) } else { mk(14) };` and `let d2 = mid(d, false); show(d2)` (the leg where `d` dies inside `mid`) all lose the body the same way, with no leak | — |
 | B-2026-09-28-72 | 2026-09-28 | codegen+interp | medium | A DISCARDED OWNED-RECEIVER HAND-BACK OF A BOXED GENERIC ENUM LOSES THE PAYLOAD'S `Drop` BODY ON ALL FOUR SURFACES AND LEAKS 1 B COMPILED -- `{ let d = mk(22); d.id(); println("a") }` over `impl[T] G[T] { fn id(self) -> Self { return self; } }` prints `a end` everywhere, with no `dR22`, and valgrind reports `definitely lost: 1 bytes in 1 blocks` at -O0 | — |
-| B-2026-09-28-73 | 2026-09-28 | typecheck | low | INSIDE `impl[T] G[T]` THE TYPECHECKER DOES NOT UNIFY `Self`, `G` AND `G[T]` -- `fn id2(self) -> G[T] { return self; }` fails `expected 'G[T]', found 'G'`, returning a `Self`-typed param from `-> Self` fails `expected 'G', found 'Self'`, and `return G.Y` from `-> Self` fails `expected 'G', found 'G[T]'` | — |
 | B-2026-09-28-75 | 2026-09-28 | interp+codegen | high | REMAINDER OF B-2026-09-28-74: FIVE NEIGHBOURS OF AN ENUM MOVED BY AN ASSIGNMENT STILL LOSE A BODY OR FREE TWICE -- a not-taken `if false { h.e = s; }` loses the payload's `Drop` body compiled, `self.e = s` from a by-value param double-frees, a `G[R2]` field runs no body and leaks, and a displaced `Option[R2]` field / `shared struct` field loses its body | — |
 | B-2026-09-28-76 | 2026-09-28 | interp+codegen | low | REMAINDER OF B-2026-09-19-18 (plus a dead `Map` holder, item 3): A DESTRUCTURED HOLDER OF A `shared enum` STILL RELEASES AT SCOPE EXIT COMPILED AND AT THE VIEWS' LAST USE UNDER `--interp`, and a plain holder of a `shared STRUCT` is left where it was: a struct FIELD holder still diverges (`--interp` at the holder's last use, compiled at scope exit), and a `Vec` or tuple holder releases at scope exit on every surface, against design.md's live-range rule | — |
 | B-2026-09-28-77 | 2026-09-28 | interp+codegen | medium | AN `Option` ARM THAT REBINDS ITS PAYLOAD INTO A LOCAL AND THEN PUSHES OR REBINDS IT AGAIN RUNS A `Drop` BODY TWICE -- `fn g(x: Option[S], v: mut ref Vec[S]) { match x { Some(y) => { let z = y; v.push(z) }, None => println("n") } }` prints `d2 n2 d1 d2 end` compiled (the named argument's body doubled) and `d1 d2 n2 d1 d2 end` under `--interp` (the temporary's doubled too) for `g(Some(mk(1)), mut v); let b = Some(mk(2)); g(b, mut v)`, owing `n2 d1 d2 end` | — |
@@ -530,6 +529,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-6 | 2026-10-05 | codegen | medium | A `let mut` REBIND OF A BY-VALUE `Option` PARAM THAT IS MATCHED ON AND THEN REASSIGNED RUNS NO BODY FOR THE PARAM'S VALUE COMPILED -- `fn q1(x: Option[Array[R, 2]]) { let mut h = x; match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } h = None; println("q1"); }` prints `m11 q1 dR11 dR12` on `--interp` against `m11 q1` compiled, leaking 2 blocks; `Option[R]` loses `dR41` too (no leak), and reassigning to a fresh `Some` loses both values' bodies | — |
 | B-2026-10-05-8 | 2026-10-05 | codegen+interp | low | REMAINDER OF B-2026-10-05-7: TWO HAND-OFF SPELLINGS STILL RUN THE BINDING'S `Drop` BODY LATE ON EVERY SURFACE -- an owned-`self` method on an arm binding (`Some(r) => { r.gone(); println("after") }` prints `after dR11`) and a DESTRUCTURED local tuple (`match t { (a, b) => { eat(a); println("mid"); eat(b); .. } }` prints `mid after dR38 dR39` where `dR38 mid dR39 after` is due) | — |
 | B-2026-10-05-9 | 2026-10-05 | codegen+interp | medium | A BY-VALUE PARAM PROJECTED TO A SCALAR AND THEN SHADOWED (`fn c1(s: S) -> i64 { let s = s.r.id; s }`) LOSES THE CALLER'S `Drop` BODY, ON A DIFFERENT ARGUMENT SPELLING PER BACKEND -- compiled, a TEMPORARY argument runs no `d3` (`c1(mks(3))`); interpreted, a NAMED one runs no `d6` (`let a = mks(6); c1(a)`). Each backend gets the other spelling right; B-2026-09-29-61's close claimed c1 was fixed and its own fixture pin had lost `d3` | — |
+| B-2026-10-05-10 | 2026-10-05 | codegen+interp | high | THE HAND-BACK OF AN OWNED-`self` GENERIC-ENUM METHOD USED WITHOUT BINDING IT CRASHES COMPILED -- `show(mk(9).id())`, `show(d.id())`, `match mk(9).id() { .. }` and `f(mk(9).id())` over `impl[T] G[T] { fn id(self) -> Self { return self; } }` at `G[R]` segfault or abort `free(): double free` at -O0 and -O2, while `let e = mk(9).id(); show(e)` is correct; `--interp` also loses the payload's `Drop` body in the call-argument spellings | — |
+| B-2026-10-05-11 | 2026-10-05 | codegen+interp | medium | AN OWNED-`self` GENERIC-ENUM METHOD THAT RETURNS SOMETHING OTHER THAN `self` NEVER RUNS THE RECEIVER PAYLOAD'S `Drop` BODY ON ANY SURFACE AND LEAKS IT COMPILED -- `fn other(self, o: G[T]) -> G[T] { return o; }` and `fn fresh(self) -> G[T] { return G.Y; }` over `impl[T] G[T]` at `G[R]` print `x3s3 dR3 end` / `y end` with no `dR2` / `dR1` under `--interp`, -O0 and -O2, 2 B definitely lost; the non-generic `impl E` twin and the free-function twin are correct | — |
+| B-2026-10-05-12 | 2026-10-05 | codegen | medium | AN OWNED-`self` GENERIC-ENUM METHOD THAT RETURNS `self` ON ONE PATH AND A `Self` PARAMETER ON ANOTHER LOSES THE PARAMETER'S `Drop` BODY COMPILED WHEN IT RETURNS `self` -- `d.pick(true, mk(7))` over `fn pick(self, c: bool, o: Self) -> Self { if c { return self; } return o; }` prints `x6s6 dR6 end` at -O0 and -O2 where `--interp` prints `dR7 x6s6 dR6 end`, 34 B definitely lost; reachable since B-2026-09-28-73 | — |
+| B-2026-10-05-13 | 2026-10-05 | codegen | medium | A `Self`-TYPED PARAMETER IN A CONCRETE IMPL OVER A GENERIC ENUM FAILS MODULE VERIFICATION -- `impl G[R] { fn cself(self, o: Self) -> i64 { 1 } }` called as `d.cself(mk(5))` fails `Call parameter type does not match function signature` (`call { i64, i64 } @mk(i64 5)`) under `karac build`, while `--interp` prints `dR5 1 dR4 end`; the generic-struct twin is B-2026-09-27-116 | — |
 
 ### Relocated
 
@@ -3468,6 +3471,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-28-64 | codegen | high | A TUPLE, ENUM, `Option` OR `Array` BOUND OUT OF A GENERIC `shared enum`'s BOXED PAYLOAD AND HANDED ON IS FREED TWICE ON EVERY COMPILED BACKEND -- `ma… | 01aebe5ee |
 | B-2026-09-28-67 | codegen | high | A BOXED `Option[S]` PARAM STORED INTO A `Vec` ON ONLY SOME PATHS CRASHES WITH NO OUTPUT ON EVERY COMPILED SURFACE -- `fn cp(t: Option[S], v: mut ref… | 5a9ea3ca0 |
 | B-2026-09-28-69 | interp+codegen | medium | REMAINDER OF B-2026-09-28-63: A TUPLE DESTRUCTURE OR PROJECTION OF A BY-VALUE PARAM, A TWO-STEP STRUCT DESTRUCTURE THROUGH A LOCAL, AND A `self` RECE… | 5d38fee7c |
+| B-2026-09-28-73 | typecheck | low | INSIDE `impl[T] G[T]` THE TYPECHECKER DOES NOT UNIFY `Self`, `G` AND `G[T]` -- `fn id2(self) -> G[T] { return self; }` fails `expected 'G[T]', found… | 92260601d |
 | B-2026-09-28-74 | codegen | high | AN ENUM BINDING MOVED BY AN ASSIGNMENT KEEPS ITS DROP ARMED ON EVERY COMPILED SURFACE -- `let s = Pl.P(f".."); let mut k = Pl.Q; k = s;` over `enum P… | 14407631f |
 | B-2026-09-28-79 | codegen | high | A PAYLOAD THAT DECLARES ITS OWN `Drop`, REBOUND WHOLE INTO A READING LOCAL IN AN `Option` / `Result` ARM, IS FREED TWICE AT `-O0` ON EVERY COMPILED S… | e27077edc |
 | B-2026-09-28-80 | interp+codegen | high | A BY-VALUE PARAM HANDED TO A STORING FUNCTION FROM INSIDE A BRANCH LOSES ITS `Drop` BODY ON THE PATH THAT SKIPS THE CALL, ON EVERY SURFACE, AND A BOX… | 0fe540aaf |
