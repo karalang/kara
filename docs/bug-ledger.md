@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 687 |
 | run-vs-build | 589 |
-| leak | 565 |
+| leak | 566 |
 | double-free | 418 |
 | codegen-gap | 224 |
 | missing-feature | 217 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2722 |
+| codegen | 2723 |
 | interp | 845 |
 | typecheck | 328 |
 | other | 113 |
@@ -499,7 +499,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-47 | 2026-10-04 | codegen | medium | A `shared` HANDLE HELD IN A FIELD OF A NAMED STRUCT PASSED BY VALUE IS RELEASED AT THE CALLER'S SCOPE END ON EVERY COMPILED SURFACE, WHERE design.md AND `--interp` RELEASE IT AT THE END OF THE CALL -- `let w = W { o: Some(H { id: 6 }), n: 7 }; cw2(w); println("after1")` prints `w7 after1 .. end dH6` at -O0 and -O2 against `--interp`'s `w7 dH6 after1`, and the same for a by-value `self` and for a bare `shared` field | — |
 | B-2026-10-04-48 | 2026-10-04 | interp | medium | `--interp` RUNS THE `Drop` BODY OF A `shared` FIELD LATE OR NOT AT ALL WHEN ITS HOLDER IS HANDED TO A CALLEE THAT TAKES IT OVER -- a fresh `Hs { q: Q2 { id: 1 }, r: mk(2) }` pushed into the callee's own `Vec` prints `d2 in k5` on `--interp` and `d2 in dq1 k5` compiled, and the same call made inside `println(f"k{f(h)}")` prints `dq1` after `k5` on `--interp` only | — |
 | B-2026-10-04-49 | 2026-10-04 | interp+codegen | medium | B-2026-09-27-50'S REASSIGNED `let mut` REBIND OF A STRUCT HOLDING A `shared` FIELD LOSES BODIES ON EVERY SURFACE AND LEAKS COMPILED -- `fn f(a: Hs) -> i64 { let mut c = a; c = Hs { q: Q2 { id: 5 }, r: mk(9) }; println("in"); 5 }` prints `dq1 in k5` compiled (no `d2`, no `d9`, no `dq5`, valgrind 1) and `d2 d9 dq5 in k5` on `--interp` (no `dq1`) | — |
-| B-2026-10-04-50 | 2026-10-04 | interp+codegen | medium | A `let mut` REBIND OF A BY-VALUE PARAM REASSIGNED INSIDE A BRANCH RUNS THE DISPLACED BODY TWICE ON `--interp` AND, FOR AN ENUM, LOSES THE NEW VALUE'S BODY COMPILED -- `fn f(a: R, b: bool) -> i64 { let mut c = a; if b { c = mk(9); } println("in"); 5 }` prints `d1 d9 in d1` for `f(mk(1), true)` on `--interp` against `d9 in d1` compiled, and the `enum E { A(R), N }` spelling `if b { c = E.N; }` prints `dE d1 dE in dE d1` against `in dE d1` | — |
 | B-2026-10-04-51 | 2026-10-04 | interp+codegen | medium | AN INDEX STORE INTO A `let mut` REBIND OF A BY-VALUE `Array` OR `Map` PARAM RUNS THE WRONG BODIES -- `fn f(a: Array[R, 2]) -> i64 { let mut c = a; c[0] = mk(9); println("in"); 5 }` prints `d1 in d1 d2` on every surface (`d1` twice, `d9` never), and on `--interp` the `Map[i64, R]` spelling `c[2] = mk(9)` prints `in d1`, losing `d9`, where the compiled backends print both bodies | — |
 | B-2026-10-04-52 | 2026-10-04 | codegen | medium | REMAINDER OF B-2026-10-04-24: A FRESH `Option` OF A USER ENUM WHOSE ARM ONLY READS THE BINDING STILL LEAKS THE PAYLOAD'S HEAP COMPILED -- `if let Some(item) = mk() { if item.is_list() { total += 1; } }` over `fn mk() -> Option[Nested]` (`enum Nested { Int(i64), List(Vec[Nested]) }`) prints `1` everywhere and loses the inner `Vec`'s 128 B; the same for `look(item)` with a `ref` param, a `match` arm, and an inner `if let Nested.Int(n) = item`. | — |
 | B-2026-10-04-53 | 2026-10-04 | codegen | medium | A DISCARDED FRESH `Option` OF A USER ENUM LEAKS BOTH THE BOX AND THE PAYLOAD'S HEAP COMPILED -- `let _ = mk();`, the bare statement `mk();` and `if mk().is_some() { .. }` over `fn mk() -> Option[Nested]` lose 160 B (32 B box + 128 B inner `Vec`), and over `enum E { A(i64), B(Vec[i64]) }` 64 B; output right everywhere. | — |
@@ -536,6 +535,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-18 | 2026-10-05 | typecheck+interp+codegen | medium | THE ITERATOR ADAPTORS ARE NOT AVAILABLE ON A USER TYPE THAT IMPLEMENTS `Iterator` -- `CountUp { .. }.collect()` and `.sum()` fail `no method 'collect' on type 'CountUp'` / `no method 'sum' on type 'CountUp'`, where design.md § Iterator Adaptors defines them as extension methods on every `Iterator` | — |
 | B-2026-10-05-19 | 2026-10-05 | codegen | medium | `let mut rest = items;` OVER A BY-VALUE `Vec` PARAMETER DEEP-COPIES THE WHOLE VEC, ELEMENTS INCLUDED, ON EVERY CALL -- kata 341's `push_reversed(mut ref self, items: Vec[Nested])` clones each list's entire subtree once per level above it, and its bench runs 0.55 s against 0.34 s with the same loop written inline (310M against 214M instructions; Rust 137M) | — |
 | B-2026-10-05-20 | 2026-10-05 | codegen | medium | `Vec[T].pop()` FOR AN ELEMENT WIDER THAN THREE WORDS HEAP-ALLOCATES A BOX FOR THE `Some` PAYLOAD ON EVERY CALL, EVEN WHEN `while let Some(x) = v.pop()` UNPACKS IT AT ONCE -- a four-word enum, struct or tuple element pays a `malloc` and a `free` per pop (kata 341's stack iterator: about two per tree node), a three-word one pays nothing | — |
+| B-2026-10-05-21 | 2026-10-05 | codegen | low | REASSIGNING A HEAP `String` LOCAL TO A STRING LITERAL LEAKS THE DISPLACED BUFFER COMPILED -- `fn f() { let mut c = f"s{1}"; c = "zz"; println(f"in{c}"); }` prints `inzz` on every surface and loses 2 bytes in 1 block at -O0 under valgrind; reassigning it to another heap string is clean | — |
 
 ### Relocated
 
@@ -3704,6 +3704,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-39 | codegen | low | AN INDEX STORE INTO A TUPLE-HELD CONTAINER THROUGH `mut ref self` FAILS THE BUILD -- `self.t.0[0] = s` in `fn set(mut ref self, s: String)` over `str… | 3787f7857 |
 | B-2026-10-04-40 | codegen | medium | A TUPLE HOLDING A NESTED `Array[Array[String, N], M]` LEAKS EVERY INNER STRING AT SCOPE EXIT -- `let t: (Array[Array[String, 2], 2], i64) = ([[..], [… | 64fcfec3e |
 | B-2026-10-04-46 | codegen | high | AN `Option[shared]` TUPLE ELEMENT IS NEVER RELEASED BY THE TUPLE'S DROP, SO `p.0.unwrap().id` READ TWICE IS A USE-AFTER-FREE AND A TUPLE NOBODY UNWRA… | 2f3d44b06 |
+| B-2026-10-04-50 | interp+codegen | medium | A `let mut` REBIND OF A BY-VALUE PARAM REASSIGNED INSIDE A BRANCH RUNS THE DISPLACED BODY TWICE ON `--interp` AND, FOR AN ENUM, LOSES THE NEW VALUE'S… | 8c99931fe |
 | B-2026-10-04-54 | codegen | medium | `.clone()` ON A TUPLE ELEMENT REACHED THROUGH AN INDEX OR A `ref` PARAM FAILS `karac build` -- `v[0].0.clone()` over `Vec[(String, i64)]` and `p.0.cl… | 65a9ccee8 |
 | B-2026-10-04-56 | codegen | medium | A STEADY SMALL `Map[char, i64]` RUNS 2.2x RUST'S `HashMap` AT EQUAL HASHING on kata 340's sliding-window bench (0.47 s vs 0.21 s), and the hash alone… | 4944add14 |
 | B-2026-10-04-60 | parser | low | A KEYWORD USED AS A NAME CASCADES AND `karac fix` APPLIES NOTHING -- a local named `distinct` (reserved) reports 5 of its 7 uses, then `return distin… | 360f29517 |
