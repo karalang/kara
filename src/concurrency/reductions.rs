@@ -762,6 +762,30 @@ worker would write",
                     );
                     continue;
                 }
+                // B-2026-10-05-30: the same two gates the disjoint-write
+                // lane applies (`classify_disjoint_write_loop`), for the same
+                // reason. `karac_par_reduce` has no per-branch output capture
+                // (that is `karac_par_run`'s), so a body that prints, directly
+                // or through a callee, interleaved its lines across workers:
+                // kata 343's `for n in 2..59 { let p = f(n); println(..);
+                // sum += p; }` printed a different permutation on each run.
+                // Ordered resource effects reorder the same way.
+                if self.loop_body_emits_output(body) {
+                    note_decline(
+                        declined,
+                        "the body writes to the console (directly or through a call), and \
+reduction workers write straight through, so the lines would interleave",
+                    );
+                    continue;
+                }
+                if self.loop_body_has_effects(body) {
+                    note_decline(
+                        declined,
+                        "the body performs an ordered resource effect, which concurrent \
+iterations would reorder",
+                    );
+                    continue;
+                }
                 // A reduction whose per-iteration delta recurses into the
                 // enclosing function (e.g. a backtracking counter
                 // `if legal { total = total + count(...deeper...) }`) is

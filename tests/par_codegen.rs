@@ -2067,6 +2067,56 @@ fn main() {
         );
     }
 
+    /// B-2026-10-05-30: the REDUCTION lane had no output gate. The
+    /// disjoint-write lane above declines a printing body, but a scalar
+    /// reduction (`sum += p`) whose body also printed was handed to
+    /// `karac_par_reduce`, which has no output capture, and its lines came out
+    /// in a different interleaving on each run (kata 343's `for n in 2..59 {
+    /// let p = f(n); println(..); sum += p; }`). The control loop, the same
+    /// body without the print, must still fan out, or the two declines below
+    /// would prove nothing.
+    #[test]
+    fn printing_reduction_loop_body_declines_to_fan_out() {
+        let program = |body_line: &str| {
+            format!(
+                concat!(
+                    "fn heavy(v: i64) -> i64 {{\n",
+                    "    let mut acc = v % 1000003;\n",
+                    "    let mut t = 0;\n",
+                    "    while t < 20000 {{ acc = (acc * 1103515245 + 12345) % 2147483647; t += 1; }}\n",
+                    "    return acc;\n",
+                    "}}\n",
+                    "fn note(v: i64) {{ eprintln(f\"{{v}}\"); }}\n",
+                    "fn main() {{\n",
+                    "    let mut sum = 0;\n",
+                    "    for n in 0..200 {{\n",
+                    "        let p = heavy(n);\n",
+                    "{}",
+                    "        sum += p % 1000;\n",
+                    "    }}\n",
+                    "    println(f\"sum {{sum}}\");\n",
+                    "}}\n",
+                ),
+                body_line
+            )
+        };
+        let control = ir_for_analyzed(&program(""));
+        assert!(
+            control.contains("call void @karac_par_reduce"),
+            "control: the non-printing reduction must fan out:\n{control}"
+        );
+        for (label, line) in [
+            ("direct println", "        println(f\"{n} -> {p}\");\n"),
+            ("eprintln through a helper", "        note(n);\n"),
+        ] {
+            let ir = ir_for_analyzed(&program(line));
+            assert!(
+                !ir.contains("call void @karac_par_reduce"),
+                "{label}: a reduction whose body prints must not fan out:\n{ir}"
+            );
+        }
+    }
+
     #[test]
     fn nested_loop_sharing_its_parents_line_does_not_get_the_parents_tag() {
         // `for y in .. { for x in .. { out[y*w] = f(x); } }` written on ONE
