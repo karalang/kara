@@ -2749,6 +2749,110 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// The hidden binding a user `Iterator` lives in while a `for` loop pulls
+    /// it, so its `mut ref self` `next` writes its state back between pulls.
+    const USER_ITER_SLOT: &'static str = "__kara_for_user_iter";
+
+    /// `for` over a value of a user type with an `Iterator` impl: the
+    /// `next()` call to evaluate per pull, against [`Self::USER_ITER_SLOT`].
+    /// `None` for anything else, including a type with an unrelated `next`.
+    fn user_iterator_next_call(&self, v: &Value, iterable: &Expr) -> Option<Expr> {
+        if !matches!(
+            v,
+            Value::Struct { .. } | Value::SharedStruct(_) | Value::EnumVariant { .. }
+        ) {
+            return None;
+        }
+        let type_name = self.value_type_name(v);
+        if !self.impls_trait_named(&type_name, "Iterator") {
+            return None;
+        }
+        self.env.get(&format!("{type_name}.next"))?;
+        Some(Expr {
+            span: iterable.span,
+            kind: ExprKind::MethodCall {
+                object: Box::new(Expr {
+                    span: iterable.span,
+                    kind: ExprKind::Identifier(Self::USER_ITER_SLOT.to_string()),
+                }),
+                method: "next".to_string(),
+                turbofish: None,
+                args: Vec::new(),
+                args_close_span: iterable.span,
+            },
+        })
+    }
+
+    /// Does the program declare `impl <trait_name> for <type_name>`?
+    fn impls_trait_named(&self, type_name: &str, trait_name: &str) -> bool {
+        self.program.items.iter().any(|item| match item {
+            Item::ImplBlock(imp) => {
+                let target = match &imp.target_type.kind {
+                    TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                    _ => None,
+                };
+                target == Some(type_name)
+                    && imp
+                        .trait_name
+                        .as_ref()
+                        .and_then(|t| t.segments.last())
+                        .is_some_and(|t| t == trait_name)
+            }
+            _ => false,
+        })
+    }
+
+    /// The body of a lazily pulled `for` loop: `step` yields each item (`None`
+    /// ends the loop), interleaved with the body, with the usual
+    /// break / continue / label handling.
+    fn run_lazy_for_loop(
+        &mut self,
+        pattern: &crate::ast::Pattern,
+        body: &crate::ast::Block,
+        label: &Option<String>,
+        view_names: &[String],
+        step: &mut dyn FnMut(&mut Self) -> Option<Value>,
+    ) -> Value {
+        loop {
+            let Some(item) = step(self) else {
+                return Value::Unit;
+            };
+            self.env.push_scope();
+            self.mark_loop_borrowed_elem_names(view_names);
+            self.bind_pattern(pattern, item);
+            match self.eval_block_inner(body) {
+                Ok(_) => {}
+                Err(ControlFlow::Break {
+                    label: ref bl,
+                    value: ref v,
+                }) => {
+                    self.env.pop_scope();
+                    if bl.is_none() || bl.as_deref() == label.as_deref() {
+                        return v.clone().unwrap_or(Value::Unit);
+                    } else {
+                        return self.set_cf(ControlFlow::Break {
+                            label: bl.clone(),
+                            value: v.clone(),
+                        });
+                    }
+                }
+                Err(ControlFlow::Continue { label: ref cl }) => {
+                    self.env.pop_scope();
+                    if cl.is_none() || cl.as_deref() == label.as_deref() {
+                        continue;
+                    } else {
+                        return self.set_cf(ControlFlow::Continue { label: cl.clone() });
+                    }
+                }
+                Err(cf) => {
+                    self.env.pop_scope();
+                    return self.set_cf(cf);
+                }
+            }
+            self.env.pop_scope();
+        }
+    }
+
     /// The `for` loop proper, split out of `eval_expr_inner_unwrapped` so the
     /// caller can restore the loop-borrowed element names on every exit path
     /// (B-2026-09-29-109).
@@ -2810,44 +2914,34 @@ impl<'a> super::Interpreter<'a> {
             // handling as the materialized walk below.
             if matches!(iter_val, Value::Iterator { .. }) {
                 let mut it = iter_val;
-                loop {
-                    let Some(item) = self.iterator_step(&mut it) else {
-                        return Value::Unit;
-                    };
-                    self.env.push_scope();
-                    self.mark_loop_borrowed_elem_names(view_names);
-                    self.bind_pattern(pattern, item);
-                    match self.eval_block_inner(body) {
-                        Ok(_) => {}
-                        Err(ControlFlow::Break {
-                            label: ref bl,
-                            value: ref v,
-                        }) => {
-                            self.env.pop_scope();
-                            if bl.is_none() || bl.as_deref() == label.as_deref() {
-                                return v.clone().unwrap_or(Value::Unit);
-                            } else {
-                                return self.set_cf(ControlFlow::Break {
-                                    label: bl.clone(),
-                                    value: v.clone(),
-                                });
-                            }
+                return self.run_lazy_for_loop(pattern, body, label, view_names, &mut |s| {
+                    s.iterator_step(&mut it)
+                });
+            }
+            // A value whose type implements `Iterator` (design.md § Iterator,
+            // the `impl Iterator for CountUp` example) is pulled through its
+            // own `next` the same lazy way. B-2026-10-05-16: it used to fall
+            // to the catch-all below and run the body ONCE with the iterator
+            // itself bound to the loop variable.
+            if let Some(next_call) = self.user_iterator_next_call(&iter_val, iterable) {
+                self.env.push_scope();
+                self.env.define(Self::USER_ITER_SLOT.to_string(), iter_val);
+                let out =
+                    self.run_lazy_for_loop(pattern, body, label, view_names, &mut |s| match s
+                        .eval_expr_inner(&next_call)
+                    {
+                        Value::EnumVariant {
+                            enum_name,
+                            variant,
+                            data: EnumData::Tuple(mut payload),
+                            ..
+                        } if enum_name == "Option" && variant == "Some" && payload.len() == 1 => {
+                            payload.pop()
                         }
-                        Err(ControlFlow::Continue { label: ref cl }) => {
-                            self.env.pop_scope();
-                            if cl.is_none() || cl.as_deref() == label.as_deref() {
-                                continue;
-                            } else {
-                                return self.set_cf(ControlFlow::Continue { label: cl.clone() });
-                            }
-                        }
-                        Err(cf) => {
-                            self.env.pop_scope();
-                            return self.set_cf(cf);
-                        }
-                    }
-                    self.env.pop_scope();
-                }
+                        _ => None,
+                    });
+                self.env.pop_scope();
+                return out;
             }
             match iter_val {
                 Value::Array(rc) => match Arc::try_unwrap(rc) {
