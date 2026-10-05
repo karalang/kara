@@ -4773,6 +4773,14 @@ impl<'a> super::Interpreter<'a> {
                 .unwrap_or_default()
         };
         self.whole_param_alias_stack.push(whole_aliases);
+        let mut_rebinds = if is_closure {
+            std::collections::HashSet::new()
+        } else {
+            self.callee_fn_for_param_ownership_of(fn_name, assoc_owner)
+                .map(crate::ast::fn_param_mut_rebind_locals)
+                .unwrap_or_default()
+        };
+        self.param_mut_rebind_stack.push(mut_rebinds);
         // B-2026-09-14-7 — the frame-entry half of the
         // consumed-part channel. Computed HERE, by the caller, from
         // the same predicate the caller's own mask reads, so the
@@ -4946,6 +4954,7 @@ impl<'a> super::Interpreter<'a> {
             .map(|f| f.escapes)
             .unwrap_or_default();
         self.whole_param_alias_stack.pop();
+        self.param_mut_rebind_stack.pop();
         self.consumed_payload_local_names_stack.pop();
         self.callee_owned_payload_elems_stack.pop();
         self.owned_param_frame_is_method.pop();

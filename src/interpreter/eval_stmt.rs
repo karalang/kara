@@ -1719,6 +1719,15 @@ impl<'a> super::Interpreter<'a> {
         if self.moved_out_container_bodies_bindings.contains(name) {
             return true;
         }
+        self.run_container_items_user_drops(name, elems);
+        true
+    }
+
+    /// The element walk of [`Self::run_array_element_user_drops`], over
+    /// `elems` as `name` holds them, with `name`'s per-element move-out masks
+    /// applied. B-2026-10-04-66 — split out so a reassignment can run it on
+    /// the DISPLACED tuple's elements after the store.
+    fn run_container_items_user_drops(&mut self, name: &str, elems: Vec<Value>) {
         // B-2026-08-03-3 — per-ELEMENT move-outs (`let x = t.0`). Only the
         // moved indices are skipped; the tuple's other elements still die here.
         // Empty for every array binding (only a tuple index can be moved out
@@ -1848,7 +1857,6 @@ impl<'a> super::Interpreter<'a> {
                 self.drop_user_drop_fields_of_value(&e);
             }
         }
-        true
     }
 
     /// B-2026-09-04-13 — does this `shared` / `par` struct hold a field whose
@@ -12524,6 +12532,11 @@ impl<'a> super::Interpreter<'a> {
                 // `x = consume(x)` hands the old value to the callee, whose
                 // own drop discipline covers it (uncertain ⇒ silent, which is
                 // today's behavior, never a double body).
+                //
+                // B-2026-10-04-66 — a displaced TUPLE's elements, taken here and
+                // walked only AFTER the store: a `shared` element fires at its
+                // last reference, and until the store the binding is one.
+                let mut displaced_tuple: Option<Vec<Value>> = None;
                 if let ExprKind::Identifier(t) = &target.kind {
                     if !self.moved_out_user_drop_bindings.contains(t.as_str())
                         && !crate::deque_head::expr_mentions_name_deep(value, t)
@@ -12608,6 +12621,28 @@ impl<'a> super::Interpreter<'a> {
                                     for e in elems {
                                         self.run_discarded_value_user_drops(e);
                                     }
+                                }
+                                // B-2026-10-04-66 — the tuple sibling. Taken
+                                // here and walked after the store (below), with
+                                // the scope-exit walk's own masks: a whole
+                                // move-out runs nothing.
+                                // A `let mut` rebind of a by-value param is
+                                // dropped by the param's frame-end channel on
+                                // the compiled backends, which never sees a
+                                // store, so they run no displaced body for it
+                                // (an agreed gap, filed separately); run none
+                                // here either rather than split the backends.
+                                Value::Tuple(_)
+                                    if self
+                                        .param_mut_rebind_stack
+                                        .last()
+                                        .is_some_and(|s| s.contains(t.as_str())) => {}
+                                Value::Tuple(items)
+                                    if !self
+                                        .moved_out_container_bodies_bindings
+                                        .contains(t.as_str()) =>
+                                {
+                                    displaced_tuple = Some(items.clone());
                                 }
                                 _ => {}
                             }
@@ -13096,6 +13131,30 @@ impl<'a> super::Interpreter<'a> {
                         "unsupported assignment target at {}:{}; should be caught by parser/typechecker",
                         stmt.span.line, stmt.span.column
                     );
+                }
+                // B-2026-10-04-66 — the displaced tuple's elements, now that the
+                // binding no longer holds them, and BEFORE the re-arm below
+                // clears the masks this walk reads.
+                if let (Some(items), ExprKind::Identifier(t)) = (displaced_tuple, &target.kind) {
+                    let moved: Vec<usize> = self
+                        .moved_out_tuple_elem_bodies
+                        .iter()
+                        .filter(|(n, _)| n == t)
+                        .map(|(_, i)| *i)
+                        .collect();
+                    // The scope exit's two halves, in its order: the element
+                    // walk (plain bodies; it reaches a `shared` value only
+                    // through a clone, so it fires none), then the release of
+                    // every `shared` value the tuple holds, at its last
+                    // reference — which the store just made this one.
+                    let mut items = items;
+                    for i in moved {
+                        if let Some(slot) = items.get_mut(i) {
+                            *slot = Value::Unit;
+                        }
+                    }
+                    self.run_container_items_user_drops(t, items.clone());
+                    self.run_value_held_shared_user_drops(&Value::Tuple(items));
                 }
                 // The target holds a fresh value now — a stale move-out
                 // record from its previous value must not silence it.

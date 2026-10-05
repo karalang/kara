@@ -3106,6 +3106,34 @@ pub fn param_rebound_into_local(f: &Function, param_name: &str) -> bool {
         .any(|(_, y)| aliases.iter().any(|a| a == y))
 }
 
+/// B-2026-10-04-66 — the `let mut` locals of `f` that rebind one of its
+/// by-value parameters (or an immutable alias of one): the `mut_rebinds` half
+/// of [`param_rebound_into_local`], collected by LOCAL name over every
+/// by-value parameter.
+pub fn fn_param_mut_rebind_locals(f: &Function) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let w = rebind_walk(f);
+    for p in &f.params {
+        if matches!(
+            p.ty.kind,
+            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+        ) {
+            continue;
+        }
+        let Some(name) = p.name() else { continue };
+        if param_shadowed_before_use(f, name) {
+            continue;
+        }
+        let aliases = close_rebind_aliases(&w, name);
+        for (x, y) in &w.mut_rebinds {
+            if aliases.iter().any(|a| a == y) {
+                out.insert(x.clone());
+            }
+        }
+    }
+    out
+}
+
 /// B-2026-09-24-20 — does `f` rebind `param_name` (or an immutable alias of
 /// it) into a `let MUT` local? The `mut_rebinds` half of
 /// [`param_rebound_into_local`] alone. A caller that keeps the box of a boxed

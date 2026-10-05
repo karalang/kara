@@ -781,6 +781,11 @@ impl<'a> super::Interpreter<'a> {
                     .map(|f| crate::ast::fn_whole_param_aliases(self.program, f))
                     .unwrap_or_default();
                 self.whole_param_alias_stack.push(whole_aliases);
+                let mut_rebinds = self
+                    .impl_method_ast(&type_name, method)
+                    .map(crate::ast::fn_param_mut_rebind_locals)
+                    .unwrap_or_default();
+                self.param_mut_rebind_stack.push(mut_rebinds);
                 // B-2026-09-14-7 — the frame-entry half of the
                 // consumed-part channel; see the free-fn twin in `eval_call`.
                 // A method frame already registers these slots (the
@@ -1164,6 +1169,7 @@ impl<'a> super::Interpreter<'a> {
                     .map(|f| f.escapes)
                     .unwrap_or_default();
                 self.whole_param_alias_stack.pop();
+                self.param_mut_rebind_stack.pop();
                 self.consumed_payload_local_names_stack.pop();
                 self.callee_owned_payload_elems_stack.pop();
                 self.owned_param_frame_is_method.pop();

@@ -18466,6 +18466,49 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-10-04-66 — the element-bodies walk armed on `name`'s slot `ptr`,
+    /// exactly as the scope exit will run it (a walk a partial move masked is
+    /// returned masked).
+    pub(super) fn armed_container_elem_bodies_on(
+        &self,
+        name: &str,
+        ptr: PointerValue<'ctx>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if !self.has_armed_container_elem_bodies(name) {
+            return None;
+        }
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flat_map(|frame| frame.iter())
+            .find_map(|action| match action {
+                CleanupAction::UserDrop {
+                    binding_name,
+                    binding_ptr,
+                    kind: UserDropKind::ContainerElemBodies,
+                    drop_fn,
+                    ..
+                } if binding_name == name && *binding_ptr == ptr => Some(*drop_fn),
+                _ => None,
+            })
+    }
+
+    /// B-2026-10-04-66 — the memory walk the scope exit runs on the aggregate
+    /// slot `ptr`, if one is registered.
+    pub(super) fn struct_drop_fn_on(&self, ptr: PointerValue<'ctx>) -> Option<FunctionValue<'ctx>> {
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flat_map(|frame| frame.iter())
+            .find_map(|action| match action {
+                CleanupAction::StructDrop {
+                    struct_alloca,
+                    drop_fn,
+                } if *struct_alloca == ptr => Some(*drop_fn),
+                _ => None,
+            })
+    }
+
     /// Own-wrapper-specific sibling of [`Self::has_armed_user_drop`]: a
     /// `UserDrop` action for `name` that is NOT a `__karac_dropelems_*`
     /// walker — i.e. the binding's own `karac_drop_<T>` body is still armed.

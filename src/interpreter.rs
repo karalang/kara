@@ -815,6 +815,12 @@ pub struct Interpreter<'a> {
     /// hand-over the caller's part channel already stands down for. Empty for
     /// a closure frame.
     pub(crate) whole_param_alias_stack: Vec<HashSet<String>>,
+    /// B-2026-10-04-66 — parallel to `whole_param_alias_stack`: the frame's
+    /// `let mut` locals rebinding a by-value parameter
+    /// (`crate::ast::fn_param_mut_rebind_locals`). Codegen drops such a local
+    /// through the parameter's frame-end channel, which never sees a store, so
+    /// a reassignment of a TUPLE one runs no displaced body on either backend.
+    pub(crate) param_mut_rebind_stack: Vec<HashSet<String>>,
     /// B-2026-09-14-7 — parallel to `owned_param_names_stack`, one entry per
     /// frame: the LOCAL NAMES this frame binds by moving a part out of a
     /// by-value `Option`/`Result` parameter's payload and then letting it die
@@ -1534,6 +1540,7 @@ impl<'a> Interpreter<'a> {
             callee_owned_payload_elems_stack: Vec::new(),
             moved_out_optres_payload_bodies: HashSet::new(),
             whole_param_alias_stack: Vec::new(),
+            param_mut_rebind_stack: Vec::new(),
             owned_param_frame_is_method: Vec::new(),
             method_frame_caller_retains_args: Vec::new(),
             method_frame_sole_owned: Vec::new(),

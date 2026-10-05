@@ -15853,6 +15853,44 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-10-04-66 — the TUPLE sibling of the struct leg above.
+                    // `p = mks(2)` over a tuple local ran no drop on the old
+                    // aggregate: the scope exit reads the slot AFTER the store, so
+                    // it covers the new value only, and the displaced one lost its
+                    // element bodies and leaked its heap (`(H, i64)` 16 B,
+                    // `(String, i64)` the old string). Run what the scope exit
+                    // would have run, on the old contents, before the store: the
+                    // armed element-bodies walk (none when the value was moved out,
+                    // masked when part of it was) and then the registered memory
+                    // walk (a moved-out slot has its caps zeroed, so it no-ops).
+                    // Roundtrips are excluded with the rest of the RHS-mentions-LHS
+                    // family, as the struct and Option legs exclude them.
+                    if !rhs_is_self_alias
+                        && !rhs_mentions_lhs
+                        && self
+                            .var_types
+                            .var_type_names
+                            .get(name.as_str())
+                            .is_none_or(|tn| tn == "Tuple")
+                        && self.tuple_var_elem_tes(name.as_str()).is_some()
+                    {
+                        if let Some(slot) = self.variables.get(name).copied() {
+                            if let Some(bodies) =
+                                self.armed_container_elem_bodies_on(name.as_str(), slot.ptr)
+                            {
+                                self.call_displaced_walk_on_handoff_paths(
+                                    name.as_str(),
+                                    bodies,
+                                    slot.ptr,
+                                );
+                            }
+                            if let Some(mem) = self.struct_drop_fn_on(slot.ptr) {
+                                self.builder
+                                    .build_call(mem, &[slot.ptr.into()], "")
+                                    .unwrap();
+                            }
+                        }
+                    }
                     // B-2026-07-30-11 (enum-assign displacement) — the ENUM
                     // sibling of the struct leg above: `b = Box2.Empty;` over
                     // `Full(Res{..})` silently discarded the payload's Drop
