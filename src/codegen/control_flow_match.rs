@@ -17777,6 +17777,61 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // B-2026-10-03-39 — a plain user enum payload bound WHOLE (`H4.Z(e)`,
+        // `H7.Z { e, k }`). The box owns that payload now
+        // (`shared_box_owns_value_enum_payload`), and the binding is a view of
+        // it, so a binding that moved on (`H4.Z(e) => e`) freed it a second
+        // time. Make the binding an owned deep copy instead, the rule a struct
+        // payload binding already follows: it frees its copy, or hands the copy
+        // to whoever it moves into, and the box frees the original.
+        if !self.pattern_state.pattern_binding_is_borrow {
+            let bound: Vec<(usize, String)> = match &pattern.kind {
+                PatternKind::TupleVariant { patterns, .. } => patterns
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| match &p.kind {
+                        PatternKind::Binding(n) => Some((i, n.clone())),
+                        _ => None,
+                    })
+                    .collect(),
+                PatternKind::Struct { fields, .. } => {
+                    let names = self
+                        .enum_variant_struct_field_names(enum_name, variant_name)
+                        .unwrap_or_default();
+                    fields
+                        .iter()
+                        .filter_map(|f| {
+                            let n = match &f.pattern {
+                                None => f.name.clone(),
+                                Some(p) => match &p.kind {
+                                    PatternKind::Binding(n) => n.clone(),
+                                    _ => return None,
+                                },
+                            };
+                            names.iter().position(|x| x == &f.name).map(|i| (i, n))
+                        })
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+            for (pos, bname) in bound {
+                let Some(TypeKind::Path(tp)) = payload_tes.get(pos).map(|t| &t.kind) else {
+                    continue;
+                };
+                let Some(en) = tp.segments.last().cloned() else {
+                    continue;
+                };
+                if tp.generic_args.is_some() || !self.shared_box_owns_value_enum_payload(&en) {
+                    continue;
+                }
+                let Some(slot) = self.variables.get(bname.as_str()).map(|v| v.ptr) else {
+                    continue;
+                };
+                let layout = self.type_decls.enum_layouts[&en].clone();
+                self.deep_copy_enum_heap_payload_in_place(&en, slot, &layout);
+                self.track_enum_var(&en, slot);
+            }
+        }
         // B-2026-10-03-36 — a consumed field that is itself a SHARED enum,
         // matched by a nested variant pattern (`H.Z(M.My(x))`), hands its
         // own payload to the leaf binding exactly as a top-level `M.My(x)`
@@ -17814,6 +17869,19 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(inner_en) = self.variant_pattern_enum_name(sub) else {
                 continue;
             };
+            // B-2026-10-03-39 — a plain user enum payload the box now owns
+            // (`H4.Z(E.A(x))`): its leaf takes the box's original, so the box
+            // gets a copy, exactly as a top-level `H4`-payload leaf does above.
+            if self.shared_box_owns_value_enum_payload(&inner_en)
+                && payload_names_enum(payload_tes.get(pos), &inner_en)
+            {
+                if let Some(&(start_word, num_words)) = offsets.get(pos) {
+                    self.suppress_shared_box_value_enum_move_out(
+                        heap_type, box_ptr, start_word, num_words, &inner_en, sub,
+                    );
+                }
+                continue;
+            }
             if !self
                 .type_decls
                 .shared_types
@@ -18053,6 +18121,142 @@ impl<'ctx> super::Codegen<'ctx> {
     /// binding exactly as a top-level `M.My(x)` would. The value-enum
     /// suppressors never reach into that box, so `x` and the box's release
     /// both freed the `Vec`. The handle itself stays with `V`.
+    /// B-2026-10-03-39 — the arm half of a `shared enum` box owning a plain
+    /// user enum payload (`Synth::shared_box_owns_value_enum_payload`). A
+    /// nested pattern (`H4.Z(E.A(x))`) binds `x` to the payload's own buffer,
+    /// and `x` frees it, so the box is given a copy of each consumed
+    /// `Vec`/`String` leaf: the binding keeps the original, the box's release
+    /// frees the copy, and another handle to the box still reads its payload
+    /// (B-2026-09-28-59's rule for a top-level leaf). A leaf the copy does not
+    /// cover is taken instead (its words zeroed).
+    fn suppress_shared_box_value_enum_move_out(
+        &mut self,
+        heap_type: StructType<'ctx>,
+        box_ptr: PointerValue<'ctx>,
+        start_word: usize,
+        num_words: usize,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) {
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name).cloned() else {
+            return;
+        };
+        let variant_name = match &pattern.kind {
+            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                match path.last() {
+                    Some(n) => n.clone(),
+                    None => return,
+                }
+            }
+            _ => return,
+        };
+        let (Some(drop_kinds), Some(offsets)) = (
+            layout.field_drop_kinds.get(&variant_name).cloned(),
+            layout.field_word_offsets.get(&variant_name).cloned(),
+        ) else {
+            return;
+        };
+        let consumed: Vec<usize> = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns
+                .iter()
+                .enumerate()
+                .filter(|(_, sub)| pattern_consumes_field(sub))
+                .map(|(i, _)| i)
+                .collect(),
+            PatternKind::Struct { fields, .. } => {
+                let Some(names) = self.enum_variant_struct_field_names(enum_name, &variant_name)
+                else {
+                    return;
+                };
+                fields
+                    .iter()
+                    .filter(|fp| fp.pattern.as_ref().is_none_or(pattern_consumes_field))
+                    .filter_map(|fp| names.iter().position(|n| n == &fp.name))
+                    .collect()
+            }
+            _ => return,
+        };
+        if !consumed.iter().any(|&i| {
+            matches!(
+                drop_kinds.get(i),
+                Some(super::state::EnumDropKind::VecOrString)
+            )
+        }) {
+            return;
+        }
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let Ok(word_ptr) = self.builder.build_struct_gep(
+            heap_type,
+            box_ptr,
+            (start_word + 2) as u32,
+            "match.sh.venum.wp",
+        ) else {
+            return;
+        };
+        // The enum lives in its own box when wider than its area, the
+        // constructor's `coerce_to_payload_words` rule; inline otherwise.
+        let enum_ptr = if Self::llvm_type_word_count(layout.llvm_type.into()) > num_words {
+            let w = self
+                .builder
+                .build_load(i64_t, word_ptr, "match.sh.venum.w")
+                .unwrap()
+                .into_int_value();
+            self.builder
+                .build_int_to_ptr(w, ptr_ty, "match.sh.venum.p")
+                .unwrap()
+        } else {
+            word_ptr
+        };
+        let tes: Vec<TypeExpr> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, n, _)| n == &variant_name)
+            .map(|(_, _, t)| t)
+            .unwrap_or_default();
+        for &pos in &consumed {
+            if !matches!(
+                drop_kinds.get(pos),
+                Some(super::state::EnumDropKind::VecOrString)
+            ) {
+                continue;
+            }
+            let Some(&(sw, nw)) = offsets.get(pos) else {
+                continue;
+            };
+            let Ok(fp) = self.builder.build_struct_gep(
+                layout.llvm_type,
+                enum_ptr,
+                (sw + 1) as u32,
+                "match.sh.venum.fp",
+            ) else {
+                continue;
+            };
+            if let Some(te) = tes.get(pos) {
+                let is_string = self.is_string_type_expr(te);
+                let elem = vec_inner_type_expr(te);
+                if (is_string || elem.is_some())
+                    && self.refill_shared_payload_vecstr_with_copy(
+                        fp,
+                        if is_string { None } else { elem.as_ref() },
+                    )
+                {
+                    continue;
+                }
+            }
+            for w in 0..nw {
+                if let Ok(p) = self.builder.build_struct_gep(
+                    layout.llvm_type,
+                    enum_ptr,
+                    (sw + 1 + w) as u32,
+                    "match.sh.venum.z",
+                ) {
+                    let _ = self.builder.build_store(p, i64_t.const_int(0, false));
+                }
+            }
+        }
+    }
+
     pub(super) fn suppress_value_enum_nested_shared_move_out(
         &mut self,
         scrut: BasicValueEnum<'ctx>,
@@ -28799,4 +29003,12 @@ enum NestedPayloadSrc<'ctx> {
         StructType<'ctx>,
         String,
     ),
+}
+
+/// B-2026-10-03-39 — is a `shared enum` field declared as exactly the plain
+/// enum `en`? A generic outer's field is its parameter (`G[T] { Y(T) }`), and
+/// that payload belongs to the erased-payload walk instead.
+fn payload_names_enum(te: Option<&TypeExpr>, en: &str) -> bool {
+    matches!(te.map(|t| &t.kind), Some(TypeKind::Path(p))
+        if p.generic_args.is_none() && p.segments.last().map(String::as_str) == Some(en))
 }

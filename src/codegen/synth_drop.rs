@@ -8399,6 +8399,68 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // B-2026-10-03-39 — a plain user ENUM payload the box owns
+        // (`shared enum H4 { Z(E), N }`). Nothing walked it, so its heap leaked
+        // on every release and, when it is wider than its area (an enum payload
+        // area is one word), so did the box the constructor malloc'd for it.
+        // Boxed: deref the word, drop the enum in the box, free the box. Inline:
+        // drop the enum in place. The drop switch is resolved BEFORE any GEP,
+        // as the arms around this one do.
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(en) = p.segments.last().cloned() {
+                if p.generic_args.is_none() && self.shared_box_owns_value_enum_payload(&en) {
+                    let enum_ty = self.type_decls.enum_layouts[&en].llvm_type;
+                    let enum_drop = self.emit_enum_drop_switch(&en);
+                    let boxed = Self::llvm_type_word_count(enum_ty.into()) > num_words;
+                    let wp = self
+                        .builder
+                        .build_struct_gep(
+                            enum_heap,
+                            p_arg,
+                            word_idx as u32,
+                            &format!("{label}.venum.wp"),
+                        )
+                        .unwrap();
+                    if boxed {
+                        let w = self
+                            .builder
+                            .build_load(i64_t, wp, &format!("{label}.venum.box.w"))
+                            .unwrap()
+                            .into_int_value();
+                        let box_ptr = self
+                            .builder
+                            .build_int_to_ptr(w, ptr_ty, &format!("{label}.venum.box.p"))
+                            .unwrap();
+                        let is_null = self
+                            .builder
+                            .build_is_null(box_ptr, &format!("{label}.venum.box.isnull"))
+                            .unwrap();
+                        let do_bb = self
+                            .context
+                            .append_basic_block(drop_fn, &format!("{label}.venum.box.do"));
+                        let skip_bb = self
+                            .context
+                            .append_basic_block(drop_fn, &format!("{label}.venum.box.skip"));
+                        self.builder
+                            .build_conditional_branch(is_null, skip_bb, do_bb)
+                            .unwrap();
+                        self.builder.position_at_end(do_bb);
+                        if let Some(f) = enum_drop {
+                            self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
+                        }
+                        self.builder
+                            .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
+                            .unwrap();
+                        self.builder.build_unconditional_branch(skip_bb).unwrap();
+                        self.builder.position_at_end(skip_bb);
+                    } else if let Some(f) = enum_drop {
+                        self.builder.build_call(f, &[wp.into()], "").unwrap();
+                    }
+                    return true;
+                }
+            }
+        }
+
         // B-2026-06-14-28 — a plain (non-shared) user struct payload that
         // transitively owns `shared` fields: the AST-port operand-wrapper
         // shape `Add(BinOp)` + `struct BinOp { left: Expr, right: Expr }`
@@ -8792,6 +8854,69 @@ impl<'ctx> super::Codegen<'ctx> {
     /// non-shared user enum, which is exactly what
     /// [`Self::emit_struct_user_drop_bodies_only_fn`] walks: the type's own
     /// `Drop` body plus its fields' and nested enum payloads', and no frees.
+    /// B-2026-10-03-39 — does a `shared enum`'s box OWN this payload, when the
+    /// payload is a plain (non-shared, non-generic) user enum? The box's
+    /// release used to walk no value-enum payload at all, so the payload's
+    /// heap AND, for a payload wider than its area, the box the constructor
+    /// malloc'd for it leaked on every release.
+    ///
+    /// Answered yes only where every arm that takes the payload, or a leaf of
+    /// it, can be given its own copy: the payload's heap is plain `Vec` /
+    /// `String` buffers (`deep_copy_enum_heap_payload_in_place` and
+    /// `refill_shared_payload_vecstr_with_copy` duplicate exactly those), and
+    /// no `Drop` body runs anywhere in it. Any other payload keeps the old
+    /// answer, a leak, rather than becoming a double free at the arms that
+    /// cannot copy it.
+    pub(super) fn shared_box_owns_value_enum_payload(&self, enum_name: &str) -> bool {
+        if matches!(enum_name, "Option" | "Result" | "Json") {
+            return false;
+        }
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name) else {
+            return false;
+        };
+        if layout.is_shared || self.type_decls.shared_types.contains_key(enum_name) {
+            return false;
+        }
+        let generic = self.program_snapshot.as_deref().is_none_or(|p| {
+            !p.items.iter().any(|it| {
+                matches!(it, Item::EnumDef(e) if e.name == enum_name && e.generic_params.is_none())
+            })
+        });
+        if generic {
+            return false;
+        }
+        if !layout
+            .field_drop_kinds
+            .values()
+            .flatten()
+            .all(|k| matches!(k, EnumDropKind::None | EnumDropKind::VecOrString))
+            || self.type_runs_user_drop(enum_name, &mut Vec::new())
+        {
+            return false;
+        }
+        // A `Vec` payload's elements must be scalars or `String`s: the copies
+        // above duplicate the buffer and, for `String` elements, each one.
+        let plain = |te: &TypeExpr| -> bool {
+            matches!(&te.kind, TypeKind::Path(p) if p.generic_args.is_none()
+                && p.segments.len() == 1
+                && matches!(p.segments[0].as_str(),
+                    "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
+                    | "isize" | "usize" | "f32" | "f64" | "bool" | "char" | "String" | "str"))
+        };
+        self.enum_variant_field_type_exprs(enum_name)
+            .iter()
+            .flat_map(|(_, _, tes)| tes.iter())
+            .all(|te| match &te.kind {
+                TypeKind::Path(p) if p.segments.last().map(String::as_str) == Some("Vec") => {
+                    match p.generic_args.as_deref() {
+                        Some([GenericArg::Type(e)]) => plain(e),
+                        _ => false,
+                    }
+                }
+                _ => plain(te),
+            })
+    }
+
     fn shared_payload_bodies_only_fn(&mut self, te: &TypeExpr) -> Option<FunctionValue<'ctx>> {
         let TypeKind::Path(p) = &te.kind else {
             return None;
@@ -8849,6 +8974,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let field_is_walkable = |slf: &Self, te: &TypeExpr| -> bool {
             if slf.option_inner_shared_type_for_type_expr(te).is_some() {
                 return true;
+            }
+            // B-2026-10-03-39 — a plain user enum payload the box owns.
+            if let TypeKind::Path(p) = &te.kind {
+                if p.generic_args.is_none()
+                    && p.segments
+                        .last()
+                        .is_some_and(|s| slf.shared_box_owns_value_enum_payload(s))
+                {
+                    return true;
+                }
             }
             if let TypeKind::Path(p) = &te.kind {
                 if let Some(seg) = p.segments.last() {
