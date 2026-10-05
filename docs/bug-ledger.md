@@ -95,8 +95,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 698 |
 | run-vs-build | 592 |
 | leak | 580 |
-| double-free | 421 |
-| codegen-gap | 228 |
+| double-free | 422 |
+| codegen-gap | 229 |
 | missing-feature | 217 |
 | other | 168 |
 | diagnostics | 147 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2756 |
+| codegen | 2758 |
 | interp | 857 |
 | typecheck | 335 |
 | other | 113 |
@@ -543,6 +543,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-105 | 2026-10-05 | codegen+interp | medium | AN `Option` LEAF OF A TUPLE DESTRUCTURED FROM A `match` (`let (o, n) = match 1 { 1 => (Some(mk(40)), 1), _ => (None, 2) };`) RUNS NO PAYLOAD `Drop` BODY ON ANY BACKEND AND LEAKS THE BOX COMPILED (62 B), while the tuple-literal RHS `let (o, n) = (Some(mk(40)), 1)` prints `drop40 o1 end` everywhere | — |
 | B-2026-10-05-106 | 2026-10-05 | codegen | medium | A BLOCK-LOCAL STRUCT MOVED INTO A BLOCK-TAIL TUPLE THAT IS DESTRUCTURED (`let (a, b) = { let z = mk(70); (z, mk(71)) };`) RUNS `z`'S `Drop` BODY AT THE BLOCK'S END COMPILED, BEFORE `a` IS READ, AND LEAKS BOTH LEAVES -- `drop70 blk 70 71 end` against --interp's `blk 70 71 drop71 drop70 end`, 60 B lost | — |
 | B-2026-10-05-107 | 2026-10-05 | codegen+interp | high | A GENERIC FN THAT DESTRUCTURES `if c { (a, 1) } else { (b, 2) }` OVER ITS TWO BY-VALUE `T` PARAMS AND RETURNS THE LEAF RUNS THE RETURNED VALUE'S `Drop` BODY TWICE ON EVERY BACKEND -- `fn gsel[T](a: T, b: T, c: bool) -> T { let (v, n) = if c { (a, 1) } else { (b, 2) }; v }`, `gsel(mk(80), mk(81), true)` prints `drop81 drop80 g80 drop80 end` | — |
+| B-2026-10-05-109 | 2026-10-05 | codegen | high | LOOPING BY VALUE OVER A `Vec.filled(n, s)` TEMPORARY OF STRINGS DOUBLE-FREES COMPILED -- `for s in Vec.filled(2, base.clone()) { r.push(s); }` aborts with "double free detected in tcache 2" under `karac build` and `karac run`, prints `[x7, x7]` under `--interp`; the same Vec bound to a `let` first is clean | — |
 
 ### Relocated
 
@@ -3778,6 +3779,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-85 | codegen | high | A NAMED `Option[R]` ARGUMENT PASSED BY VALUE INTO A CALLEE THAT REASSIGNS ITS `let mut` REBIND ON ONLY SOME PATHS DOUBLE-FREES COMPILED -- `let o = S… | f46a720a8 |
 | B-2026-10-05-95 | codegen | medium | A `for` LOOP OVER AN UNNAMED SortedSet OR SortedMap FAILS THE BUILD -- `for v in a.intersection(b)` over two SortedSets, `for v in make_sorted_set()`… | a37653ccc |
 | B-2026-10-05-96 | typecheck | medium | A GENERIC STRUCT LITERAL NESTED IN ANOTHER IS REFUSED WITH "cannot infer type parameter" -- `W { inner: Bx { v: 5, n: 0 }, tag: 3 }` over `struct Bx[… | 08ddf5263 |
+| B-2026-10-05-108 | codegen | medium | A `flat_map` WITH A DESTRUCTURING CLOSURE PARAM OR A MAPPED INNER FAILS THE BUILD -- `sm.iter().flat_map(\|(k, n)\| (0..n).map(\|_\| k)).collect()` over… | e1f8650e9 |
 
 </details>
 
