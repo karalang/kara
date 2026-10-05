@@ -1554,7 +1554,15 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Path(p) => p.segments.last().map(|s| s.as_str()),
             _ => None,
         };
-        if !matches!(head, Some("Map") | Some("Set")) {
+        // B-2026-10-05-95 — `SortedMap`/`SortedSet` share the KaracMap
+        // handle, and `register_var_from_type_expr` below marks the synth as
+        // sorted, so the recursed loop walks keys in order. Excluding them
+        // here left `for v in a.intersection(b)` on two SortedSets, or
+        // `for v in make_sorted_set()`, at the unlowered-source error.
+        if !matches!(
+            head,
+            Some("Map") | Some("Set") | Some("SortedMap") | Some("SortedSet")
+        ) {
             return Ok(None);
         }
         let val = self.compile_expr(iterable)?;
@@ -1602,6 +1610,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.set_elem_types.remove(&synth);
         self.mapset.set_elem_type_names.remove(&synth);
         self.mapset.set_elem_type_exprs.remove(&synth);
+        self.mapset.sorted_collection_vars.remove(&synth);
         self.var_types.var_elem_type_exprs.remove(&synth);
         self.var_types.var_type_names.remove(&synth);
         result.map(Some)
