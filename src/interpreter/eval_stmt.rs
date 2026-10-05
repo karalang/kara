@@ -6169,6 +6169,10 @@ impl<'a> super::Interpreter<'a> {
             Value::Array(_) | Value::Tuple(_) => {
                 self.run_discarded_value_user_drops(old.clone());
             }
+            // B-2026-10-04-86 — an `Option` / `Result` element.
+            Value::EnumVariant { .. } => {
+                self.run_discarded_value_user_drops(old);
+            }
             _ => {}
         }
     }
@@ -12878,6 +12882,14 @@ impl<'a> super::Interpreter<'a> {
                                     Value::Array(_) | Value::Tuple(_) => {
                                         self.run_discarded_value_user_drops(old.clone());
                                     }
+                                    // B-2026-10-04-86 — an `Option` / `Result`
+                                    // element: its payload's bodies ran
+                                    // nowhere. Codegen twin: the `Option` /
+                                    // `Result` arm of
+                                    // `emit_displaced_index_elem_drop`.
+                                    Value::EnumVariant { .. } => {
+                                        self.run_discarded_value_user_drops(old.clone());
+                                    }
                                     _ => {}
                                 }
                             }
@@ -12959,6 +12971,14 @@ impl<'a> super::Interpreter<'a> {
                                     // which gain their bodies call in the same
                                     // commit.
                                     Value::Array(_) | Value::Tuple(_) => {
+                                        self.run_discarded_value_user_drops(old.clone());
+                                    }
+                                    // B-2026-10-04-86 — an `Option` / `Result`
+                                    // element: its payload's bodies ran
+                                    // nowhere. Codegen twin: the `Option` /
+                                    // `Result` arm of
+                                    // `emit_displaced_index_elem_drop`.
+                                    Value::EnumVariant { .. } => {
                                         self.run_discarded_value_user_drops(old.clone());
                                     }
                                     _ => {}

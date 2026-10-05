@@ -2421,10 +2421,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Array[Array[String, 2], 2]` asked both about its `Array[String, 2]`
         // element, was told it owns no heap, and emitted no walk -- so every
         // `String` in the nest leaked, 36 B in 4 blocks at `-O0`.
+        // B-2026-10-04-86 — an `Option` / `Result` element. Neither gate below
+        // answers yes for it and `emit_drop_fn_for_type_expr` is a no-op for
+        // one, so `let a: Array[Option[R], 1] = [Some(mk(5))]` freed no
+        // payload (61 B at `-O0`), nor `Array[Option[String], 1]` its string.
+        // Take the element drain a `Vec` of the same element uses.
+        let optres_drain = match &elem_te.kind {
+            crate::ast::TypeKind::Path(p)
+                if matches!(
+                    p.segments.last().map(String::as_str),
+                    Some("Option") | Some("Result")
+                ) && !self.optres_te_has_shared_payload(elem_te) =>
+            {
+                if n == 0 {
+                    return None;
+                }
+                Some(self.vec_element_drain_fn(elem_te)?)
+            }
+            _ => None,
+        };
         if n == 0
-            || !(self.type_expr_has_drop_heap(elem_te)
-                || self.tuple_elem_needs_deep_drop(elem_te)
-                || self.nested_array_needs_drop(elem_te))
+            || (optres_drain.is_none()
+                && !(self.type_expr_has_drop_heap(elem_te)
+                    || self.tuple_elem_needs_deep_drop(elem_te)
+                    || self.nested_array_needs_drop(elem_te)))
         {
             return None;
         }
@@ -2436,7 +2456,10 @@ impl<'ctx> super::Codegen<'ctx> {
             return Some(f);
         }
         // Recurse-first: the child emitter may switch the builder's insert block.
-        let child = self.emit_drop_fn_for_type_expr(elem_te);
+        let child = match optres_drain {
+            Some(f) => f,
+            None => self.emit_drop_fn_for_type_expr(elem_te),
+        };
         let arr_ty = elem_ty.array_type(n);
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i32_t = self.context.i32_type();

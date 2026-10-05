@@ -11204,6 +11204,29 @@ impl<'ctx> super::Codegen<'ctx> {
                                                 value,
                                                 super::param_own::ArrayMoveDest::AggregateField,
                                             );
+                                            // B-2026-10-04-86 — an `Option` /
+                                            // `Result` element array owns its
+                                            // payloads since this row, so a
+                                            // named local moved into its
+                                            // literal (`let v: Array[Option[R],
+                                            // 1] = [o]`) stands down, the
+                                            // other half of
+                                            // `compile_vec_prefix_literal`'s
+                                            // trio (B-2026-09-10-24).
+                                            if let ExprKind::ArrayLiteral(items) = &value.kind {
+                                                if matches!(&elem_te.kind, TypeKind::Path(p)
+                                                    if matches!(p.segments.last().map(String::as_str), Some("Option") | Some("Result")))
+                                                {
+                                                    for e in items {
+                                                        if matches!(e.kind, ExprKind::Identifier(_))
+                                                        {
+                                                            self.suppress_inline_option_payload_cleanup_for_moved_arg(e);
+                                                            self.suppress_inline_result_payload_cleanup_for_moved_arg(e);
+                                                            self.suppress_boxed_enum_payload_cleanup_for_moved_arg(e);
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -17079,6 +17102,19 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // B-2026-10-04-74 — per path when nested.
                                     self.suppress_user_drop_for_var(src);
                                 }
+                            } else if container_owns
+                                && !uam_copied
+                                && self
+                                    .vec_index_elem_type_expr(object)
+                                    .or_else(|| self.array_index_target_elem_type_expr(object))
+                                    .is_some_and(|te| self.is_owned_value_enum_type_expr(&te))
+                            {
+                                // B-2026-10-04-85 — the ENUM / `Option` /
+                                // `Result` element: the struct leg above only
+                                // matched a struct, so `v[0] = n` over a named
+                                // user enum left `n`'s `EnumDrop` armed beside
+                                // the element and both freed the payload.
+                                self.suppress_named_enum_moved_into_element(src, value);
                             }
                         }
                     }
@@ -17165,33 +17201,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 },
                             ) {
                                 // The ENUM / `Option` / `Result` spelling of the
-                                // same move (`t.1 = e`, `u.0 = o`): the whole-
-                                // assign `x = n` path's suppressors, which are
-                                // each self-gated on the source's registration.
-                                self.suppress_boxed_enum_payload_cleanup_for_moved_arg(value);
-                                self.suppress_inline_option_result_binding_move(value);
-                                self.suppress_nested_boxed_payload_move(value);
-                                // An inline user enum's `EnumDrop` is a queued
-                                // action on the source's slot, retracted the way
-                                // `move_declined_copy_enum_arg` retracts it for a
-                                // by-value call argument.
-                                if let Some(src_ptr) = self.variables.get(src).map(|s| s.ptr) {
-                                    for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
-                                        frame.retain(|action| {
-                                            !matches!(
-                                                action,
-                                                super::state::CleanupAction::EnumDrop {
-                                                    enum_alloca,
-                                                    ..
-                                                } if *enum_alloca == src_ptr
-                                            )
-                                        });
-                                    }
-                                }
-                                // B-2026-10-04-74 — per path when nested.
-                                if !self.guard_user_drop_for_nested_return(src) {
-                                    self.suppress_user_drop_for_var(src);
-                                }
+                                // same move (`t.1 = e`, `u.0 = o`).
+                                self.suppress_named_enum_moved_into_element(src, value);
                             }
                         }
                     }
@@ -27194,6 +27205,43 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return;
         }
+        // B-2026-10-04-86 — an `Option` / `Result` element. The Path arm below
+        // admits only a user struct or enum, so `v[0] = Some(..)` over a
+        // `Vec[Option[R]]` or `Array[Option[R], N]` returned there: the old
+        // payload's `Drop` body never ran and its box leaked (61 B for an `R`
+        // with a `String` at `-O0`). Bodies through the `Option`/`Result`
+        // payload walker, memory through the drain a `Vec` of that element uses, bodies
+        // first as in the struct arm below.
+        if let TypeKind::Path(p) = &elem_te.kind {
+            if matches!(
+                p.segments.last().map(String::as_str),
+                Some("Option") | Some("Result")
+            ) && !self.optres_te_has_shared_payload(&elem_te)
+            {
+                let bodies_fn = if run_bodies {
+                    self.emit_optres_payload_user_drop_bodies_fn(&elem_te)
+                } else {
+                    None
+                };
+                let mem_fn = self.vec_element_drain_fn(&elem_te);
+                if bodies_fn.is_none() && mem_fn.is_none() {
+                    return;
+                }
+                let container = container.clone();
+                let Some(elem_ptr) =
+                    self.lower_displaced_elem_ptr(&container, container_is_array, index)
+                else {
+                    return;
+                };
+                if let Some(bf) = bodies_fn {
+                    self.builder.build_call(bf, &[elem_ptr.into()], "").unwrap();
+                }
+                if let Some(f) = mem_fn {
+                    self.builder.build_call(f, &[elem_ptr.into()], "").unwrap();
+                }
+                return;
+            }
+        }
         let TypeKind::Path(p) = &elem_te.kind else {
             return;
         };
@@ -27332,6 +27380,73 @@ impl<'ctx> super::Codegen<'ctx> {
     /// or removed it (B-2026-07-29-39's disarm — firing would read
     /// cap-zeroed bits), and a param-view base had it retracted
     /// (B-2026-08-01-19 — the caller fires instead).
+    /// B-2026-10-04-85 — whether `te` names a value (non-`shared`) user enum,
+    /// `Option` or `Result`: the element types whose named source a store
+    /// into a container element must stand down.
+    fn is_owned_value_enum_type_expr(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Path(p) => p.segments.last().is_some_and(|n| {
+                matches!(n.as_str(), "Option" | "Result")
+                    || (self.type_decls.enum_layouts.contains_key(n.as_str())
+                        && !self.type_decls.shared_types.contains_key(n.as_str()))
+            }),
+            _ => false,
+        }
+    }
+
+    /// B-2026-10-04-86 — whether an `Option` / `Result` type carries a
+    /// `shared` payload. Those elements are released through their own
+    /// refcount channel (the store's displaced-element release and the
+    /// container's rc-dec walk), so the new `Option` / `Result` arms decline
+    /// them; taking them as well released the handle twice.
+    pub(super) fn optres_te_has_shared_payload(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        p.generic_args.as_ref().is_some_and(|args| {
+            args.iter().any(|a| match a {
+                GenericArg::Type(t) => {
+                    self.shared_heap_type_for_type_expr(t).is_some()
+                        || matches!(&t.kind, TypeKind::Path(q)
+                        if q.segments.last().is_some_and(|n| {
+                            self.type_decls.shared_type_names.contains(n.as_str())
+                                || self.type_decls.shared_types.contains_key(n.as_str())
+                        }))
+                }
+                _ => false,
+            })
+        })
+    }
+
+    /// A named enum / `Option` / `Result` local `src` moved into a container
+    /// element or a tuple element (`t.1 = e`, `v[0] = e`): the element now
+    /// owns the value, so the source's cleanup stands down. The whole-assign
+    /// `x = n` path's suppressors, each self-gated on the source's
+    /// registration, then the inline enum's queued `EnumDrop` (retracted the
+    /// way `move_declined_copy_enum_arg` retracts it for a by-value call
+    /// argument), then the `Drop` body, per path when the store is nested
+    /// (B-2026-10-04-74). Shared by the tuple-element leg (B-2026-10-04-72)
+    /// and the index-store leg (B-2026-10-04-85).
+    fn suppress_named_enum_moved_into_element(&mut self, src: &str, value: &Expr) {
+        self.suppress_boxed_enum_payload_cleanup_for_moved_arg(value);
+        self.suppress_inline_option_result_binding_move(value);
+        self.suppress_nested_boxed_payload_move(value);
+        if let Some(src_ptr) = self.variables.get(src).map(|s| s.ptr) {
+            for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+                frame.retain(|action| {
+                    !matches!(
+                        action,
+                        super::state::CleanupAction::EnumDrop { enum_alloca, .. }
+                            if *enum_alloca == src_ptr
+                    )
+                });
+            }
+        }
+        if !self.guard_user_drop_for_nested_return(src) {
+            self.suppress_user_drop_for_var(src);
+        }
+    }
+
     /// B-2026-10-04-57 — `t.0 = <new>` displaces the old element, whose
     /// `Drop` bodies ran nowhere: `compile_tuple_index_store` frees its memory
     /// through the memory-only drop, while the local (`x = ..`) and field

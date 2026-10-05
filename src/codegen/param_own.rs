@@ -881,6 +881,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 if p.segments.last().is_some_and(|n| {
                     self.type_decls.shared_type_names.contains(n.as_str())
                 }))
+            // B-2026-10-04-86 — an `Option` / `Result` element whose payload
+            // owns heap or runs a body. `type_expr_has_drop_heap` answers no
+            // for one, so `let a: Array[Option[R], 1] = [Some(mk(5))]`
+            // registered no scope-exit drop and every payload box leaked.
+            // `synthesize_array_drop_fn_te` declines when the element drain
+            // has nothing to do, so this admits nothing it cannot walk.
+            || matches!(&elem_te.kind, TypeKind::Path(p)
+                if matches!(p.segments.last().map(String::as_str), Some("Option") | Some("Result"))
+                    && p.generic_args.as_ref().is_some_and(|args| args.iter().any(|a| {
+                        matches!(a, GenericArg::Type(t) if self.te_owns_heap_below_buffer(t))
+                    }))
+                    && !self.optres_te_has_shared_payload(elem_te))
     }
 
     /// B-2026-09-14-25 — the PARAM-ONLY half of
