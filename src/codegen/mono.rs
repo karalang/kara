@@ -2682,7 +2682,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     || self
                         .whole_param_frame_container_te(&generic_fn, i, call_span)
                         .is_some());
-            if is_fresh_string_temp || is_fresh_vec_temp_for_owned_param {
+            // B-2026-10-05-70 — not for a `ref` / `mut ref` param. The
+            // argument loop below hands such a param a pointer, and for a
+            // fresh temp `materialize_rvalue_for_ref_arg` mints that slot and
+            // queues its buffer's free there, so registering the temp here as
+            // well gave it two caller-side owners: `f("ab".to_string())` over
+            // `fn f[T](x: ref T)` freed the buffer twice at `T = String`.
+            let param_is_borrow = generic_fn
+                .params
+                .get(i)
+                .is_some_and(|p| matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)));
+            if (is_fresh_string_temp || is_fresh_vec_temp_for_owned_param) && !param_is_borrow {
                 self.materialize_owned_temp(val, arg_key);
             }
             // B-2026-09-28-54 — a fresh `shared` handle passed to a CONCRETE
