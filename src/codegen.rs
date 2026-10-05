@@ -2346,6 +2346,15 @@ pub(super) struct Codegen<'ctx> {
     /// header, and the drain frees it again. Measured as a double free on
     /// `while i < 3 { let t = mkB(i); if i > 0 { mkA(n) } else { t }.len(); }`.
     pub(crate) arm_tail_owner_ctx: Option<((usize, usize), bool, BasicBlock<'ctx>)>,
+    /// B-2026-10-04-76 — names an ARM's pattern bound, handed to the arm's
+    /// block body so it can treat them like its own `let` bindings: their
+    /// cleanup drains with the arm, before the arm-level tail copy runs. One-shot,
+    /// `take`n at `compile_block_with_frame`'s entry like `arm_tail_owner_ctx`.
+    pub(crate) tail_local_roots: Option<Vec<String>>,
+    /// B-2026-10-04-76 — tail spans of `v[i]` element reads already deep-copied
+    /// BEFORE the frame owning `v` drained, so the after-drain branch-tail copy
+    /// (`deepcopy_owned_param_branch_tail`) does not copy them a second time.
+    pub(crate) precloned_tail_spans: FxHashSet<(usize, usize)>,
     /// B-2026-08-30-2 — an ARM block's answer travelling back the other way:
     /// `(element type, the frame the source's cleanup lived in)`, or `None` when
     /// this arm's tail left nothing for an owner to replace.
@@ -7004,6 +7013,8 @@ impl<'ctx> Codegen<'ctx> {
             vecstr_source_disarmed: None,
             block_tail_binding_unowned: None,
             arm_tail_owner_ctx: None,
+            tail_local_roots: None,
+            precloned_tail_spans: FxHashSet::default(),
             arm_pending_tail_owner: None,
             freshtemp_field_access_slot: None,
             freshtemp_field_access_inst: None,

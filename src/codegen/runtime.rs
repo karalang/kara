@@ -7948,9 +7948,130 @@ impl<'ctx> super::Codegen<'ctx> {
             // is the filter — it returns `val` untouched for every shape that is
             // not one of those two, and for every element type that cannot be
             // aliased — so nothing else needs enumerating here.
-            _ if own_value => self.clone_owned_vec_index_element(tail, val),
+            // B-2026-10-04-76 — unless the tail was already copied before the
+            // frame owning its container drained (`preclone_local_index_tail`).
+            _ if own_value
+                && !self
+                    .precloned_tail_spans
+                    .contains(&(tail.span.offset, tail.span.length)) =>
+            {
+                self.clone_owned_vec_index_element(tail, val)
+            }
             _ => Ok(val),
         }
+    }
+
+    /// B-2026-10-04-76 — deep-copy a `v[i]` / `v.get_unchecked(i)` tail whose
+    /// container `v` is one of `local_roots`: a binding the frame about to
+    /// drain owns. Call it BEFORE that drain.
+    ///
+    /// The after-drain copy in [`Self::deepcopy_owned_param_branch_tail`] is
+    /// right for a container that outlives the branch (`if c { m[1] } ..`),
+    /// and too late for one that does not. `{ let x = m; x[1] }` and the
+    /// `shared enum` arm `M.My(x) => x[1]` (whose payload the arm moved out of
+    /// the box) handed the element out as an alias, the drain then freed `x`
+    /// with its elements, and the consumer read and freed the element again:
+    /// invalid reads and an invalid free, while `--interp` copies. A tail read
+    /// of a non-`Copy` element is a deep copy (the rule the typechecker's
+    /// `index_move_rejects_where_a_borrow_is_available_and_permits_where_it_is_not`
+    /// pins), so copying here is the semantics, not a workaround.
+    ///
+    /// Records the span when it copied, so the after-drain copy skips it.
+    pub(super) fn preclone_local_index_tail(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+        local_roots: &[String],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let Some(root) = Self::index_tail_root(tail) else {
+            return Ok(val);
+        };
+        if !local_roots.iter().any(|r| r == root) {
+            return Ok(val);
+        }
+        let out = self.clone_owned_vec_index_element(tail, val)?;
+        if out != val {
+            self.precloned_tail_spans
+                .insert((tail.span.offset, tail.span.length));
+        }
+        Ok(out)
+    }
+
+    /// B-2026-10-04-76 — `let s = { m[1] }`: the `let` deep-copies a DIRECT
+    /// `m[1]` initializer, and a block wrapping the same read handed the
+    /// element out as an alias that `s` and `m` both freed. Peel the wrappers
+    /// to the tail and copy it here, after the blocks drained, which is safe
+    /// because `m` outlives them. A tail rooted at a `let` of one of the
+    /// wrappers was already copied before its block drained
+    /// ([`Self::preclone_local_index_tail`]) and is left alone, as is any tail
+    /// that is not an element read.
+    pub(super) fn clone_wrapped_outer_index_tail(
+        &mut self,
+        value: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let mut leaf = value;
+        let mut inner_lets: Vec<String> = Vec::new();
+        while let ExprKind::Block(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::LabeledBlock { body: b, .. } = &leaf.kind
+        {
+            let Some(t) = b.final_expr.as_deref() else {
+                return Ok(val);
+            };
+            inner_lets.extend(Self::block_let_bound_names(b));
+            leaf = t;
+        }
+        if std::ptr::eq(leaf, value)
+            || self
+                .precloned_tail_spans
+                .contains(&(leaf.span.offset, leaf.span.length))
+        {
+            return Ok(val);
+        }
+        match Self::index_tail_root(leaf) {
+            Some(root) if !inner_lets.iter().any(|n| n == root) => {
+                self.clone_owned_vec_index_element(leaf, val)
+            }
+            _ => Ok(val),
+        }
+    }
+
+    /// The binding a `v[i]` / `v[i][j]` / `v.get_unchecked(i)` read is rooted
+    /// at, or `None` for any other expression (a range slice included: it
+    /// already returns a fresh buffer).
+    pub(super) fn index_tail_root(e: &Expr) -> Option<&str> {
+        let mut obj = match &e.kind {
+            ExprKind::Index { object, index } if !matches!(index.kind, ExprKind::Range { .. }) => {
+                object
+            }
+            ExprKind::MethodCall { object, method, .. } if method == "get_unchecked" => object,
+            _ => return None,
+        };
+        loop {
+            match &obj.kind {
+                ExprKind::Identifier(n) => return Some(n.as_str()),
+                ExprKind::Index { object, index }
+                    if !matches!(index.kind, ExprKind::Range { .. }) =>
+                {
+                    obj = object
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// The names a block's own `let`s bind: the containers whose cleanup lives
+    /// in the block's frame (B-2026-10-04-76).
+    pub(super) fn block_let_bound_names(b: &crate::ast::Block) -> Vec<String> {
+        let mut out = Vec::new();
+        for st in &b.stmts {
+            if let crate::ast::StmtKind::Let { pattern, .. } = &st.kind {
+                out.extend(pattern.binding_names());
+            }
+        }
+        out
     }
 
     /// B-2026-08-28-44 — give a branch's merged value an OWNER when one of its

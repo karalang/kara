@@ -1647,7 +1647,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // arm's own basic block. A block body is a no-op for this call and
             // is disarmed by its own tail instead.
             self.arm_conditional_store_flag_for_tail(&arm.body);
+            // B-2026-10-04-76 — a block body copies a `v[i]` tail over one of
+            // the pattern's bindings before its frame drains.
+            if own_value && body_is_block {
+                self.tail_local_roots = Some(arm.pattern.binding_names());
+            }
             let mut arm_val = self.compile_tail_final_expr(&arm.body, tail)?;
+            self.tail_local_roots = None;
             self.arm_tail_owner_ctx = None;
             // B-2026-09-01-10 — one-shot, like the context above: the block
             // compiler `take`s it, and an arm whose body never reached that
@@ -2007,6 +2013,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.track_discarded_array_elem_bodies(owned_tail, arm_val);
                         self.track_discarded_fixed_array_literal(owned_tail, arm_val, false);
                     }
+                }
+                // B-2026-10-04-76 — the bare-body sibling of the block hook:
+                // `M.My(x) => x[1]` over a `shared enum` moved `x` out of the
+                // box, so the drain below frees `x` and its elements. Copy the
+                // element while `x` is live.
+                if own_value && !body_is_block {
+                    arm_val = self.preclone_local_index_tail(
+                        &arm.body,
+                        arm_val,
+                        &arm.pattern.binding_names(),
+                    )?;
                 }
                 self.drain_top_frame_with_emit();
                 // Deep-copy an owned-param arm tail (the caller retains the

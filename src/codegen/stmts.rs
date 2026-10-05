@@ -1171,6 +1171,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // inside an arm is not that arm, and must answer both questions for
         // itself. `None` means "standalone block", which can.
         let arm_owner_ctx = std::mem::take(&mut self.arm_tail_owner_ctx);
+        // B-2026-10-04-76 — one-shot for the same reason.
+        let arm_tail_roots = self.tail_local_roots.take();
         // B-2026-08-26-12 — is the FUNCTION-TAIL `Option[shared]` compensator
         // already armed for this block's tail? Read it BEFORE `compile_block`
         // `take()`s it. When it is armed, `compile_tail_final_expr` incs the
@@ -1207,7 +1209,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let result = self.compile_block(block);
         self.discarded_arm_tail_span = saved_discarded_tail;
-        let result = result?;
+        let mut result = result?;
         let body_has_terminator = self
             .builder
             .get_insert_block()
@@ -1226,6 +1228,17 @@ impl<'ctx> super::Codegen<'ctx> {
             // the move-aware tail handling `compile_function` applies to a
             // function's tail return.
             if let Some(tail) = block.final_expr.as_deref() {
+                // B-2026-10-04-76 — a `v[i]` tail over a container this
+                // frame owns (a `let` of this block, or the enclosing arm's
+                // pattern binding) is copied NOW, while `v` is still live; the
+                // drain below frees it with its elements.
+                if !arm_value_discarded {
+                    if let Some(v) = result {
+                        let mut roots = Self::block_let_bound_names(block);
+                        roots.extend(arm_tail_roots.iter().flatten().cloned());
+                        result = Some(self.preclone_local_index_tail(tail, v, &roots)?);
+                    }
+                }
                 // B-2026-08-28-51 — the CONDITIONAL-MOVE half of the
                 // suppression below, and the case that family structurally
                 // cannot reach. A bare identifier at the tail of a branch ARM
@@ -7160,6 +7173,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     self.clone_owned_vec_index_element(value, val)?
                 };
+                let val = self.clone_wrapped_outer_index_tail(value, val)?;
                 // Owned String/Vec PARAM moved into a local binding
                 // (`let mut work = lists;` where `lists` is a bare
                 // by-value param): under the owned-param ABI the CALLER
@@ -25075,6 +25089,17 @@ impl<'ctx> super::Codegen<'ctx> {
             // can never by itself make a construct qualify.
             ExprKind::StringLit(..) | ExprKind::MultiStringLit(..) => BranchTailClass::InertLiteral,
             _ => {
+                // B-2026-10-04-76 — a bare arm tail `x[1]` over the arm's own
+                // binding was deep-copied before the arm's frame drained
+                // (`preclone_local_index_tail`), the bare twin of the block
+                // clause in `block_tail_class`.
+                if block_local_tail_ok
+                    && self
+                        .precloned_tail_spans
+                        .contains(&(e.span.offset, e.span.length))
+                {
+                    return BranchTailClass::Mints;
+                }
                 if self.expr_yields_fresh_owned_temp(e)
                     || (block_local_tail_ok && self.arg_producer_mints_fresh_owned_temp(e))
                     || (block_local_tail_ok && self.scalar_collection_literal_mints(e))
@@ -25108,6 +25133,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let direct = self.branch_tail_class(tail, block_local_tail_ok);
         if direct != BranchTailClass::No {
             return direct;
+        }
+        // B-2026-10-04-76 — a `v[i]` tail over a container the block owned
+        // was deep-copied before the block's frame drained, so it is as fresh
+        // as a call's result and nobody else owns it.
+        if block_local_tail_ok
+            && self
+                .precloned_tail_spans
+                .contains(&(tail.span.offset, tail.span.length))
+        {
+            return BranchTailClass::Mints;
         }
         if block_local_tail_ok {
             if let Some(rhs) = self.block_local_binding_tail_rhs(b, tail) {

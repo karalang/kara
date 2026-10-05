@@ -972,6 +972,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-10-04-76 — a `v[i]` tail over the pattern's binding or a
+            // `let` of this block is copied before the drain below frees `v`.
+            if own_value {
+                if let (Some(fe), Some(v)) = (then_block.final_expr.as_deref(), then_val) {
+                    let mut roots = pattern.binding_names();
+                    roots.extend(Self::block_let_bound_names(then_block));
+                    then_val = Some(self.preclone_local_index_tail(fe, v, &roots)?);
+                }
+            }
             self.drain_top_frame_with_emit();
             // Deep-copy an owned-param then-tail (caller retains the param's
             // buffer) so the if-let value owns an independent buffer — the
