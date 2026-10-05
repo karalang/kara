@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 224 |
 | missing-feature | 217 |
 | other | 168 |
-| perf | 141 |
+| perf | 143 |
 | diagnostics | 141 |
 | false-positive | 119 |
 | crash | 111 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2724 |
-| interp | 845 |
+| interp | 847 |
 | typecheck | 328 |
 | other | 113 |
 | ownership | 80 |
@@ -536,6 +536,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-20 | 2026-10-05 | codegen | medium | `Vec[T].pop()` FOR AN ELEMENT WIDER THAN THREE WORDS HEAP-ALLOCATES A BOX FOR THE `Some` PAYLOAD ON EVERY CALL, EVEN WHEN `while let Some(x) = v.pop()` UNPACKS IT AT ONCE -- a four-word enum, struct or tuple element pays a `malloc` and a `free` per pop (kata 341's stack iterator: about two per tree node), a three-word one pays nothing | — |
 | B-2026-10-05-21 | 2026-10-05 | codegen | low | REASSIGNING A HEAP `String` LOCAL TO A STRING LITERAL LEAKS THE DISPLACED BUFFER COMPILED -- `fn f() { let mut c = f"s{1}"; c = "zz"; println(f"in{c}"); }` prints `inzz` on every surface and loses 2 bytes in 1 block at -O0 under valgrind; reassigning it to another heap string is clean | — |
 | B-2026-10-05-22 | 2026-10-05 | codegen | low | A LET-BOUND `first()` / `get()` OF A `Vec` WHOSE STRUCT ELEMENT IS WIDER THAN `Option`'S PAYLOAD AREA LEAKS 32 BYTES -- `let p = v.first(); match p { Some(q) => .. }` over `Vec[P]` with `struct P { n: i64, s: String }` loses one 32-byte block at -O0, named receiver or call receiver alike, while a two-word `P { n, m }` and the direct `match v.first() { .. }` spelling are clean | — |
+| B-2026-10-05-24 | 2026-10-05 | interp | low | REMAINDER OF B-2026-10-05-23: `--interp` RUNS STATIC AST ANALYSES AT EXECUTION TIME, PER STATEMENT AND PER CALL -- `deque_head::expr_mentions_name_deep` on every assignment's right-hand side, `binding_use::binding_only_read_through_block`, `outliving_store::with_root_calls` and `param_mutated_rebind_local` together cost about 10% of kata 341's bench kernel, and their answers depend only on the AST | — |
 
 ### Relocated
 
@@ -3731,6 +3732,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-7 | codegen+interp | medium | A BINDING THE BLOCK DOES NOT DECLARE, PASSED BY VALUE TO A CALLEE THAT HANDS IT BACK ON NO EXIT, RUNS ITS `Drop` BODY AT THE END OF THE ENCLOSING ARM… | d476f99eb |
 | B-2026-10-05-14 | interp | medium | `--interp` COPIES THE WHOLE `String` ON EVERY `push` / `push_str`, SO BUILDING A STRING ONE CHARACTER AT A TIME IS QUADRATIC -- 50,000 `s.push('x')`… | 4c789647b |
 | B-2026-10-05-16 | interp | high | `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` RUNS THE BODY ONCE UNDER `--interp`, WITH THE ITERATOR ITSELF BOUND TO `v` -- de… | 3a7995069 |
+| B-2026-10-05-23 | interp | medium | `--interp` RE-DERIVES TYPE-LEVEL DROP FACTS FOR EVERY VALUE IT MATCHES OR BINDS, RE-SCANNING THE PROGRAM'S ITEMS EACH TIME -- kata 341's bench kernel… | 40ecccbe6 |
 
 </details>
 
