@@ -1,0 +1,39 @@
+//! B-2026-10-05-2 -- `.clone()` on a tuple element of a `Vec` element whose
+//! subscript is an expression (`cases[i + 1].0.clone()`) failed `karac build`
+//! with "Vec/String method 'clone' is not yet supported" while `--interp` ran it.
+
+use super::*;
+
+/// A `String` and a `Vec` element cloned through `i + 1` / `i * 1`
+/// subscripts, a subscript with a side effect evaluated once (`k=1`), and the
+/// `Array` and `Map` spellings beside them.
+#[test]
+fn e2e_clone_tuple_element_at_expression_subscript() {
+    let src = r#"fn idx(k: mut ref i64) -> i64 { k += 1; return k; }
+fn main() {
+    let cases: Vec[(String, i64)] = [("ab".to_string(), 1), ("cd".to_string(), 2)];
+    let i = 0;
+    let u = cases[i + 1].0.clone();
+    println(f"a:{u} {cases[i].0}");
+    let vv: Vec[(Vec[i64], String)] = [([1, 2], f"x{1}"), ([3], f"y{2}")];
+    let w = vv[i + 1].0.clone();
+    let s = vv[i * 1].1.clone();
+    println(f"b:{w.len()} {w[0]} {s}");
+    let mut k = 0;
+    let z = cases[idx(mut k) - 1].0.clone();
+    println(f"c:{z} k={k}");
+    let ar: Array[(String, i64), 2] = [(f"p{1}", 1), (f"q{2}", 2)];
+    let t = ar[i + 1].0.clone();
+    println(f"d:{t}");
+    let mut m: Map[i64, (String, i64)] = Map.new();
+    m.insert(2, (f"m{2}", 5));
+    let mv = m[i + 2].0.clone();
+    println(f"e:{mv}");
+}
+"#;
+    let want = "a:cd ab\nb:1 3 x1\nc:ab k=1\nd:q2\ne:m2\n";
+    let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
+    assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
+    assert_eq!(interp_out.join(""), want, "interpreter");
+    assert_eq!(run_program(src).as_deref(), Some(want), "AOT");
+}

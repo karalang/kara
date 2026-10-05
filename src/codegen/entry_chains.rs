@@ -220,18 +220,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 let Some(elem_ll) = tuple_ty.get_field_type_at_index(*index as u32) else {
                     return Ok(None);
                 };
-                let Some(tup_ptr) = self.array_place_elem_ptr(arr, aidx) else {
-                    return Ok(None);
-                };
-                let Ok(elem_ptr) = self.builder.build_struct_gep(
-                    tuple_ty,
-                    tup_ptr,
-                    *index as u32,
-                    "tup.clone.arr.p",
-                ) else {
-                    return Ok(None);
-                };
-                (elem_ptr, elem_ll)
+                if let Some(tup_ptr) = self.array_place_elem_ptr(arr, aidx) {
+                    let Ok(elem_ptr) = self.builder.build_struct_gep(
+                        tuple_ty,
+                        tup_ptr,
+                        *index as u32,
+                        "tup.clone.arr.p",
+                    ) else {
+                        return Ok(None);
+                    };
+                    (elem_ptr, elem_ll)
+                } else {
+                    // B-2026-10-05-2 — a `Vec` element whose subscript is an
+                    // expression (`cases[i + 1].0`): the place chain takes an
+                    // identifier or literal subscript only, and the array GEP
+                    // above declines a `Vec`. The store resolver evaluates the
+                    // subscript once and places the element in the buffer.
+                    let Some((elem_ptr, _, _)) = self.indexed_tuple_elem_place(tup, *index) else {
+                        return Ok(None);
+                    };
+                    (elem_ptr, elem_ll)
+                }
             }
         };
         let synth = format!("__tup_clone_{}", self.indexed_elem_counter);
