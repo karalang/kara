@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 688 |
-| run-vs-build | 589 |
+| run-vs-build | 590 |
 | leak | 570 |
 | double-free | 418 |
 | codegen-gap | 224 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 113 |
 | ownership | 80 |
 | cli | 73 |
-| autopar | 58 |
+| autopar | 59 |
 | runtime | 54 |
 | parser | 52 |
 | effect | 30 |
@@ -3738,6 +3738,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-16 | interp | high | `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` RUNS THE BODY ONCE UNDER `--interp`, WITH THE ITERATOR ITSELF BOUND TO `v` -- de… | 3a7995069 |
 | B-2026-10-05-23 | interp | medium | `--interp` RE-DERIVES TYPE-LEVEL DROP FACTS FOR EVERY VALUE IT MATCHES OR BINDS, RE-SCANNING THE PROGRAM'S ITEMS EACH TIME -- kata 341's bench kernel… | 40ecccbe6 |
 | B-2026-10-05-25 | typecheck | low | `n.is_power_of_two()` ON A SIGNED INTEGER SAYS ONLY "no method 'is_power_of_two' on type 'i32'", which reads as if the method did not exist; it is un… | 7dcf9ef77 |
+| B-2026-10-05-30 | autopar | high | AUTO-PAR FANS OUT A SUMMING LOOP WHOSE BODY PRINTS, AND THE PRINTED LINES COME OUT IN A DIFFERENT ORDER ON EVERY RUN -- the reduction lane never asks… | cc0766f52 |
 
 </details>
 
