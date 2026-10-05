@@ -3506,6 +3506,27 @@ impl<'a> super::Interpreter<'a> {
     }
 
     pub(crate) fn type_name_runs_user_drop(&self, name: &str, seen: &mut Vec<String>) -> bool {
+        // B-2026-10-05-23 — every `true` below bottoms out in a
+        // `drop_method_keys` hit, so a program with no `Drop` impl answers
+        // false for every name; and a top-level query (nothing on the cycle
+        // stack yet) is a pure function of the program, so it is memoized.
+        if self.program.drop_method_keys.is_empty() {
+            return false;
+        }
+        if !seen.is_empty() {
+            return self.type_name_runs_user_drop_uncached(name, seen);
+        }
+        if let Some(&known) = self.drop_type_memo.borrow().get(name) {
+            return known;
+        }
+        let answer = self.type_name_runs_user_drop_uncached(name, seen);
+        self.drop_type_memo
+            .borrow_mut()
+            .insert(name.to_string(), answer);
+        answer
+    }
+
+    fn type_name_runs_user_drop_uncached(&self, name: &str, seen: &mut Vec<String>) -> bool {
         if self.program.drop_method_keys.contains_key(name) {
             return true;
         }

@@ -3552,24 +3552,37 @@ impl<'a> super::Interpreter<'a> {
     /// [`Self::variant_payload_decls`] scans, so the declared payload types it
     /// returns and the parameter names checked against them come from one
     /// declaration. Empty for a non-generic or unknown enum. B-2026-09-10-2.
-    pub(crate) fn enum_generic_param_names(&self, enum_name: &str) -> Vec<String> {
-        fn scan(items: &[Item], enum_name: &str) -> Option<Vec<String>> {
-            items.iter().find_map(|item| match item {
-                Item::EnumDef(e) if e.name == enum_name => Some(
-                    e.generic_params
-                        .as_ref()
-                        .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
-                        .unwrap_or_default(),
-                ),
-                _ => None,
-            })
-        }
-        scan(&self.program.items, enum_name)
-            .or_else(|| {
-                crate::prelude::STDLIB_PROGRAMS
+    /// B-2026-10-05-23 — the declarations of the enum named `enum_name`, the
+    /// program's own before the stdlib's. These lookups used to scan the
+    /// program's items and then every stdlib program on each call, and the
+    /// match and drop paths make several calls per value.
+    fn enum_defs_named(&self, enum_name: &str) -> &[&'a EnumDef] {
+        self.enum_index
+            .get_or_init(|| {
+                let mut index: rustc_hash::FxHashMap<&'a str, Vec<&'a EnumDef>> =
+                    rustc_hash::FxHashMap::default();
+                let stdlib: &'static [(&'static str, Program)] = &crate::prelude::STDLIB_PROGRAMS;
+                let items = self
+                    .program
+                    .items
                     .iter()
-                    .find_map(|(_, p)| scan(&p.items, enum_name))
+                    .chain(stdlib.iter().flat_map(|(_, p)| p.items.iter()));
+                for item in items {
+                    if let Item::EnumDef(e) = item {
+                        index.entry(e.name.as_str()).or_default().push(e);
+                    }
+                }
+                index
             })
+            .get(enum_name)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    pub(crate) fn enum_generic_param_names(&self, enum_name: &str) -> Vec<String> {
+        self.enum_defs_named(enum_name)
+            .first()
+            .and_then(|e| e.generic_params.as_ref())
+            .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
             .unwrap_or_default()
     }
 
@@ -3579,19 +3592,9 @@ impl<'a> super::Interpreter<'a> {
     /// other). Same two sources — user program, then baked stdlib — as
     /// `variant_payload_decls` and `enum_generic_param_names` beside it.
     pub(crate) fn enum_variant_names(&self, enum_name: &str) -> Option<Vec<String>> {
-        fn scan(items: &[Item], enum_name: &str) -> Option<Vec<String>> {
-            items.iter().find_map(|item| match item {
-                Item::EnumDef(e) if e.name == enum_name => {
-                    Some(e.variants.iter().map(|v| v.name.clone()).collect())
-                }
-                _ => None,
-            })
-        }
-        scan(&self.program.items, enum_name).or_else(|| {
-            crate::prelude::STDLIB_PROGRAMS
-                .iter()
-                .find_map(|(_, p)| scan(&p.items, enum_name))
-        })
+        self.enum_defs_named(enum_name)
+            .first()
+            .map(|e| e.variants.iter().map(|v| v.name.clone()).collect())
     }
 
     /// `(field name, declared type)` for each payload position of
@@ -3603,44 +3606,21 @@ impl<'a> super::Interpreter<'a> {
         enum_name: &str,
         variant: &str,
     ) -> Option<Vec<(Option<String>, TypeExpr)>> {
-        fn scan(
-            items: &[Item],
-            enum_name: &str,
-            variant: &str,
-        ) -> Option<Vec<(Option<String>, TypeExpr)>> {
-            items.iter().find_map(|item| match item {
-                Item::EnumDef(e) if e.name == enum_name => e
-                    .variants
-                    .iter()
-                    .find(|v| v.name == variant)
-                    .map(|v| match &v.kind {
-                        VariantKind::Unit => Vec::new(),
-                        VariantKind::Tuple(tys) => tys.iter().map(|t| (None, t.clone())).collect(),
-                        VariantKind::Struct(fs) => fs
-                            .iter()
-                            .map(|f| (Some(f.name.clone()), f.ty.clone()))
-                            .collect(),
-                    }),
-                _ => None,
-            })
-        }
-        scan(&self.program.items, enum_name, variant).or_else(|| {
-            crate::prelude::STDLIB_PROGRAMS
+        self.enum_defs_named(enum_name).iter().find_map(|e| {
+            e.variants
                 .iter()
-                .find_map(|(_, p)| scan(&p.items, enum_name, variant))
+                .find(|v| v.name == variant)
+                .map(|v| match &v.kind {
+                    VariantKind::Unit => Vec::new(),
+                    VariantKind::Tuple(tys) => tys.iter().map(|t| (None, t.clone())).collect(),
+                    VariantKind::Struct(fs) => fs
+                        .iter()
+                        .map(|f| (Some(f.name.clone()), f.ty.clone()))
+                        .collect(),
+                })
         })
     }
 
-    /// B-2026-07-29-39 — record that a `let x = <src>.<field>;` moved a
-    /// Drop-bearing field out of `<src>`, so `<src>`'s field walk skips it and
-    /// only the destination binding runs the body.
-    ///
-    /// Coarse, exactly like codegen's
-    /// `emit_user_drop_wrapper_without_field_bodies`: it disarms the source's
-    /// WHOLE field walk, not just the moved field. For the common
-    /// single-Drop-field aggregate that is exact; for a multi-field one it
-    /// under-drops, which is the safe side of the trade — the two backends stay
-    /// in step either way, which is what the parity gate pins.
     fn suppress_moved_out_drop_field(&mut self, stmt: &Stmt) {
         let StmtKind::Let { value, .. } = &stmt.kind else {
             return;

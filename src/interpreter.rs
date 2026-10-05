@@ -1041,6 +1041,16 @@ pub struct Interpreter<'a> {
     /// owner from a view that has no slot anywhere.
     pub(crate) block_slot_names: Vec<(bool, Vec<String>)>,
     pub(crate) dying_in_callee_memo: FxHashMap<LastUseKey, std::rc::Rc<Vec<(String, usize)>>>,
+    /// B-2026-10-05-23 — `type_name_runs_user_drop` for a top-level query,
+    /// by type name. The answer is a pure function of the program this
+    /// interpreter holds by shared reference, and the match, call and binding
+    /// paths asked it afresh for every value, each time re-scanning the
+    /// program's items and every field type under them.
+    pub(crate) drop_type_memo: std::cell::RefCell<FxHashMap<String, bool>>,
+    /// B-2026-10-05-23 — every enum declaration by name, the program's own
+    /// first and then the stdlib's, in the order the item scans it replaces
+    /// searched them. Built on first use.
+    pub(crate) enum_index: std::cell::OnceCell<FxHashMap<&'a str, Vec<&'a EnumDef>>>,
     /// B-2026-08-30-33 — the parameters a call adopted a per-path body drop
     /// for, kept for the whole callee frame so any statement that hands the
     /// value to a new owner can disarm it.
@@ -1534,6 +1544,8 @@ impl<'a> Interpreter<'a> {
             pending_param_drop_bindings: Vec::new(),
             last_use_memo: FxHashMap::default(),
             dying_in_callee_memo: FxHashMap::default(),
+            drop_type_memo: std::cell::RefCell::new(FxHashMap::default()),
+            enum_index: std::cell::OnceCell::new(),
             block_slot_names: Vec::new(),
             pending_fn_body_late_drops: Vec::new(),
             own_body_only_view_bindings: std::collections::HashMap::new(),
