@@ -378,7 +378,14 @@ pub fn param_use_counts(func: &Function, name: &str) -> (u32, u32, u32) {
 /// terminal consumer's dec stays the only one. Borrowed (`ref`) params are the
 /// caller's to drop; the codegen param site excludes them by type separately.
 pub fn nonescaping_param_names(func: &Function) -> HashSet<String> {
+    // B-2026-10-05-29 — a use of a param's name after a `let` shadows it is
+    // the new binding's, not the param's, as the seeded walks already read it.
     let mut acc = Acc::default();
+    for p in &func.params {
+        if let crate::ast::PatternKind::Binding(name) = &p.pattern.kind {
+            acc.shadow_params.insert(name.as_str());
+        }
+    }
     walk_block(&func.body, &mut acc);
     func.params
         .iter()

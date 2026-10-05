@@ -1406,6 +1406,7 @@ fn fn_returns_param_with_uncached(
     arg_index: usize,
 ) -> bool {
     let legacy = fn_returns_param_with_legacy(program, f, arg_index);
+
     crate::param_fate::audit::check("returns_param", program, f, arg_index, legacy, |x| {
         x.returned_whole() != crate::param_fate::Coverage::Never
     })
@@ -1577,11 +1578,28 @@ fn fn_returns_param_with_legacy(
         wraps: &[(String, ParamPath)],
         program: Option<&crate::Program>,
     ) -> bool {
-        b.stmts.iter().any(|st| match &st.kind {
-            StmtKind::Expr(e) => walk_expr(e, name, wraps, program),
-            _ => false,
-        }) || b.final_expr.as_deref().is_some_and(|fe| {
-            expr_is_ident(fe, name, wraps, program) || walk_expr(fe, name, wraps, program)
+        // B-2026-10-05-29 — a `let` that rebinds the param's name to a value
+        // that does not mention it (`let s = n;`) ends the param's reach by
+        // name for the rest of this block: a later bare `s` is that local.
+        // The per-param fate answers this for a non-generic callee whose
+        // caller has the program (B-2026-10-05-9); this is the program-less
+        // and generic spelling of the same fact, narrowed to a value that
+        // cannot carry any of the param.
+        let mut cur = name;
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Expr(e) if walk_expr(e, cur, wraps, program) => return true,
+                StmtKind::Let { pattern, value, .. }
+                    if matches!(&pattern.kind, PatternKind::Binding(n) if n == name)
+                        && !crate::deque_head::expr_mentions_name_deep(value, name) =>
+                {
+                    cur = "";
+                }
+                _ => {}
+            }
+        }
+        b.final_expr.as_deref().is_some_and(|fe| {
+            expr_is_ident(fe, cur, wraps, program) || walk_expr(fe, cur, wraps, program)
         })
     }
     walk_block(&f.body, param_name, wraps, program)
@@ -4563,6 +4581,15 @@ fn fn_always_returns_param_ex_uncached(
     // constructor cannot reach.
     let (unwraps, dead) = seeded_unwrap_aliases(program, f, &aliases);
     aliases.extend(unwraps);
+    // B-2026-10-05-29 — a top-level `let` that rebinds the param's own name to
+    // a value that does not mention it (`let s = n;`) leaves the bare name
+    // naming that local at the tail, so the name stops being an alias. Every
+    // exit after it is that local's; a `return s` before it now reads as not
+    // handing the param back, which keeps the caller's body, the direction
+    // this predicate's "no" already means.
+    if param_name_shadowed_by_unrelated_let(f, name) {
+        aliases.retain(|a| a != name);
+    }
     let dead: &[*const Expr] = &dead;
     // B-2026-09-26-27 — an ALL-paths question, so an enum-constructor wrap
     // counts (`let o = Some(r); return o`).
@@ -4900,6 +4927,19 @@ fn fn_always_returns_param_ex_uncached(
             .iter()
             .any(|o| o.is_some_and(|x| yields(x, name, wraps, program, via)));
     !any_bad_return && any_good
+}
+
+/// B-2026-10-05-29 — does a TOP-LEVEL `let` of `f` rebind parameter `name`'s
+/// own name to a value that does not mention it (`let s = n;`, `let s = 5;`)?
+/// After it the bare name is that local, which carries nothing of the param.
+fn param_name_shadowed_by_unrelated_let(f: &Function, name: &str) -> bool {
+    f.body.stmts.iter().any(|st| match &st.kind {
+        StmtKind::Let { pattern, value, .. } => {
+            matches!(&pattern.kind, PatternKind::Binding(n) if n == name)
+                && !crate::deque_head::expr_mentions_name_deep(value, name)
+        }
+        _ => false,
+    })
 }
 
 /// B-2026-08-31-46 — is `e` an `Option`/`Result` CONSTRUCTOR around exactly one
