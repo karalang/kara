@@ -2008,7 +2008,8 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// B-2026-10-05-44 — the BORROW sibling of
     /// [`Self::whole_param_frame_container_te`]: the typechecker's concrete
-    /// `Vec`/`VecDeque` binding for a `x: ref T` / `x: mut ref T` param.
+    /// `Vec`/`VecDeque` binding for a `x: ref T` / `x: mut ref T` param, and
+    /// (B-2026-10-05-73/-74) an `Option`, `Result` or tuple one.
     ///
     /// The side-table resolver reads the element off a NAMED argument only, so
     /// `rc(mkv())` over `fn rc[T: Clone](x: ref T) -> T { x.clone() }` left the
@@ -2046,13 +2047,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(&(call_span.offset, call_span.length))?
             .get(&tp)?;
         let te = self.subst_monomorph_type_params(te);
-        let TypeKind::Path(cp) = &te.kind else {
-            return None;
+        let head_ok = match &te.kind {
+            TypeKind::Path(cp) => {
+                matches!(
+                    cp.segments.last().map(|s| s.as_str()),
+                    Some("Vec") | Some("VecDeque") | Some("Option") | Some("Result")
+                ) && cp.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+            }
+            TypeKind::Tuple(elems) => !elems.is_empty(),
+            _ => false,
         };
-        let head_ok = matches!(
-            cp.segments.last().map(|s| s.as_str()),
-            Some("Vec") | Some("VecDeque")
-        ) && cp.generic_args.as_ref().is_some_and(|a| !a.is_empty());
         head_ok.then_some((tp, te))
     }
 
@@ -3754,6 +3758,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             structural_type_args
                                 .push((param.name.clone(), self.subst_monomorph_type_params(t)));
                         }
+                        // B-2026-10-05-73 — the receiver-supplied `Option` /
+                        // `Result` argument of a generic impl method
+                        // (`impl[T: Clone] G[T]` called on `G[Option[i64]]`).
+                        // The name channel keeps only `Option`, so `self.v`
+                        // reached the body as an elementless `Option` and
+                        // `self.v.clone()` had no dispatch arm.
+                        if matches!(&t.kind, TypeKind::Path(tp)
+                            if tp.segments.len() == 1
+                                && matches!(tp.segments[0].as_str(), "Option" | "Result")
+                                && tp.generic_args.as_ref().is_some_and(|a| !a.is_empty()))
+                        {
+                            structural_type_args
+                                .push((param.name.clone(), self.subst_monomorph_type_params(t)));
+                        }
                     }
                     GenericArg::Const(e) => {
                         if let Some(cv) = const_value_from_literal_expr(e) {
@@ -3846,11 +3864,33 @@ impl<'ctx> super::Codegen<'ctx> {
         // binding the side-table resolver above can read, so the monomorph's
         // ownership convention no longer depends on its first caller's
         // argument spelling. `or_insert`, so a resolver's entry still wins.
+        //
+        // B-2026-10-05-73/-74 — a BORROWED bare `T` bound to an `Option`,
+        // `Result` or tuple. `infer_type_args` cannot bind it (it does not peel
+        // `ref`), and the head-name frame resolves `Option` to its erased
+        // layout and a tuple to the `i64` fallback, so `x.clone()` had no
+        // dispatch arm for the first and returned into an `i64`-typed signature
+        // for the second. The frame's full `TypeExpr` names the real type, so
+        // its LLVM lowering replaces the name-derived guess; and because
+        // `Option[String]` and `Option[Vec[String]]` share an LLVM layout and a
+        // head name, each such param also gets its own mangle token below.
+        let mut borrow_frame_aggregate_params: Vec<(String, TypeExpr)> = Vec::new();
         for i in 0..generic_fn.params.len() {
-            if let Some((tp, te)) = self
-                .whole_param_frame_container_te(&generic_fn, i, call_span)
-                .or_else(|| self.borrow_param_frame_container_te(&generic_fn, i, call_span))
+            let whole = self.whole_param_frame_container_te(&generic_fn, i, call_span);
+            let from_borrow = whole.is_none();
+            if let Some((tp, te)) =
+                whole.or_else(|| self.borrow_param_frame_container_te(&generic_fn, i, call_span))
             {
+                if from_borrow
+                    && !matches!(&te.kind, TypeKind::Path(cp)
+                        if matches!(cp.segments.last().map(|s| s.as_str()), Some("Vec") | Some("VecDeque")))
+                {
+                    let llvm = self.llvm_type_for_type_expr(&te);
+                    subst.insert(tp.clone(), llvm);
+                    if matches!(&te.kind, TypeKind::Path(_)) {
+                        borrow_frame_aggregate_params.push((tp.clone(), te.clone()));
+                    }
+                }
                 if let TypeKind::Path(cp) = &te.kind {
                     if let Some(head) = cp.segments.last() {
                         subst_names
@@ -4036,6 +4076,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // instantiation (`Box[Box[i64]]` vs `Box[Box[String]]`) mangles only
         // its HEAD above, so every `Box[Box[..]]` collided on one symbol.
         let mangled = self.append_nested_instantiation_mangle(mangled, &generic_fn, args);
+        // B-2026-10-05-73 — the borrowed `Option`/`Result` bindings recorded
+        // above. A tuple needs nothing here: it is in `subst_type_exprs`, which
+        // the structural axis already spells.
+        let mangled = borrow_frame_aggregate_params
+            .iter()
+            .fold(mangled, |mut m, (tp, te)| {
+                m.push_str(&format!(
+                    "${tp}_br_{}",
+                    Self::mono_mangle_token_for_type_expr(te)
+                ));
+                m
+            });
         // B-2026-09-10-34 — the array twin of `mono_handle_param_infos`, and
         // for the same reason: a monomorph of `fn passthru[T](x: T)` declares
         // `T`, so its param loop cannot see that THIS instantiation is an
@@ -6906,6 +6958,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 let resolved_registration_te = self.subst_monomorph_type_params(registration_te);
                 let registration_te = &resolved_registration_te;
                 self.register_var_from_type_expr(&param_name, registration_te);
+                // B-2026-10-05-73 — a BORROWED bare `T` bound to a `Result` (or
+                // `Option`) records its instantiation, as a `let` of the same
+                // type does at its own site. The registrar above keeps only the
+                // head name for a `Result`, so `x.clone()` picked the
+                // element-erased `karac_clone_Result` -- a shallow copy that the
+                // caller's binding and the clone then both freed. Borrow-only:
+                // the callee owns nothing, so no drop decision reads this.
+                let borrowed_bare_type_param = match &param.ty.kind {
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => {
+                        matches!(&inner.kind, TypeKind::Path(ip)
+                        if ip.generic_args.is_none()
+                            && ip.segments.len() == 1
+                            && func.generic_params.as_ref().is_some_and(|gp| {
+                                gp.params.iter().any(|g| !g.is_const && g.name == ip.segments[0])
+                            }))
+                    }
+                    _ => false,
+                };
+                if borrowed_bare_type_param
+                    && matches!(&registration_te.kind, TypeKind::Path(rp)
+                        if matches!(rp.segments.last().map(|s| s.as_str()), Some("Result") | Some("Option"))
+                            && rp.generic_args.as_ref().is_some_and(|a| !a.is_empty()))
+                {
+                    self.type_decls
+                        .enum_inst_var_types
+                        .insert(param_name.clone(), registration_te.clone());
+                }
                 // A bare-type-param param bound to a handle-backed builtin
                 // (Column/Tensor) registers from the call site's recorded
                 // arg type — the declared te is just `C`, which the
