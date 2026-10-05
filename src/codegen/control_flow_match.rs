@@ -12125,95 +12125,106 @@ impl<'ctx> super::Codegen<'ctx> {
             // the scalar path (which would `insertvalue` a bare `i64` into a
             // `{i64}` slot → "Invalid InsertValueInst operands"). Exclude struct
             // field types from the scalar branch so they fall through.
-            let field_val: BasicValueEnum<'ctx> =
-                if n == 1 && !matches!(field_ty, BasicTypeEnum::StructType(_)) {
-                    let word = slice
-                        .first()
-                        .copied()
-                        .unwrap_or_else(|| i64_t.const_int(0, false));
-                    match field_ty {
-                        BasicTypeEnum::IntType(it) => {
-                            if it.get_bit_width() == 64 {
-                                word.into()
-                            } else if it.get_bit_width() < 64 {
-                                self.builder
-                                    .build_int_truncate(word, it, "pl.tr")
-                                    .unwrap()
-                                    .into()
-                            } else {
-                                self.builder
-                                    .build_int_z_extend(word, it, "pl.zx")
-                                    .unwrap()
-                                    .into()
-                            }
-                        }
-                        BasicTypeEnum::FloatType(ft) => {
-                            // f64 bitcasts directly; a narrower float unpacks
-                            // from the word's low bits at its exact width
-                            // (B-2026-07-20-11 f32, B-2026-07-20-12 f16/bf16).
-                            let bits_ty = self.float_bits_int_type(ft);
-                            if bits_ty.get_bit_width() == 64 {
-                                self.builder.build_bit_cast(word, ft, "pl.fc").unwrap()
-                            } else {
-                                let lo = self
-                                    .builder
-                                    .build_int_truncate(word, bits_ty, "pl.fb.tr")
-                                    .unwrap();
-                                self.builder.build_bit_cast(lo, ft, "pl.fb.bc").unwrap()
-                            }
-                        }
-                        BasicTypeEnum::PointerType(_) => self
-                            .builder
-                            .build_int_to_ptr(word, ptr_ty, "pl.itop")
-                            .unwrap()
-                            .into(),
-                        _ => word.into(),
-                    }
-                } else if matches!(
+            //
+            // B-2026-10-05-5: a one-word ARRAY or VECTOR field (`[1 x i64]`) has
+            // `n == 1` as well, and the scalar path's `_ => word.into()` put a
+            // bare `i64` into that slot, failing module verification for
+            // `Some(S { a: Array[5], b: 7 })`. It rebuilds through the
+            // array/vector branch below instead, which owns every width.
+            let field_val: BasicValueEnum<'ctx> = if n == 1
+                && !matches!(
                     field_ty,
-                    BasicTypeEnum::ArrayType(_) | BasicTypeEnum::VectorType(_)
-                ) || matches!(field_ty, BasicTypeEnum::IntType(it) if it.get_bit_width() > 64)
-                {
-                    // B-2026-09-29-97 — an `i128`/`u128` FIELD spans two words
-                    // too, so it reached the "multi-word non-struct" fallback
-                    // below and `insertvalue`d word 0 into the `i128` slot:
-                    // `enum E { Int(Lit) }` over `struct Lit { value: i128, .. }`
-                    // failed module verification. The shared rebuilder rejoins
-                    // the little-endian word pair, as it does for a bare
-                    // `Option[i128]` payload.
-                    //
-                    // An `Array[T, N]` / `Vector[T, N]` FIELD spans N element
-                    // words. Before B-2026-08-31-18 taught `llvm_type_word_count`
-                    // about vectors, such a field reported one word and fell to
-                    // the scalar branch above; with the true width it reached the
-                    // "unexpected multi-word non-struct" fallback below, which
-                    // keeps word 0 and `insertvalue`s a bare `i64` into a
-                    // `<4 x i64>` slot — invalid IR that fails module
-                    // verification. Delegate to the shared rebuilder, which owns
-                    // both shapes.
-                    self.rebuild_value_from_payload_word_slice(field_ty, slice)?
-                } else if let BasicTypeEnum::StructType(inner_st) = field_ty {
-                    // Nested struct field — rebuild via the recursive,
-                    // word-correct helper. #44 (phase-12 parser slice 2a): the
-                    // prior inline walk assumed every sub-field was a SINGLE
-                    // word (`slice[j]`) and `insertvalue`d a bare `i64` into a
-                    // multi-word struct sub-field (`Vec {ptr,i64,i64}` /
-                    // `Option {4×i64}` / `Span {4×i64}` inside the parser's
-                    // `Block` payload struct, reached through `IfExpr.then_block:
-                    // Block`) → "Invalid InsertValueInst operands". The helper
-                    // walks sub-fields by their true `llvm_type_word_count` width
-                    // and recurses into nested structs.
-                    self.reconstruct_struct_from_words(inner_st, slice)?.into()
-                } else {
-                    // Unexpected: a multi-word non-struct field. Fall back to
-                    // dropping all but the first word — same shape as the
-                    // legacy single-word path so we don't crash the build.
-                    let word = slice
-                        .first()
-                        .copied()
-                        .unwrap_or_else(|| i64_t.const_int(0, false));
-                    word.into()
-                };
+                    BasicTypeEnum::StructType(_)
+                        | BasicTypeEnum::ArrayType(_)
+                        | BasicTypeEnum::VectorType(_)
+                ) {
+                let word = slice
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| i64_t.const_int(0, false));
+                match field_ty {
+                    BasicTypeEnum::IntType(it) => {
+                        if it.get_bit_width() == 64 {
+                            word.into()
+                        } else if it.get_bit_width() < 64 {
+                            self.builder
+                                .build_int_truncate(word, it, "pl.tr")
+                                .unwrap()
+                                .into()
+                        } else {
+                            self.builder
+                                .build_int_z_extend(word, it, "pl.zx")
+                                .unwrap()
+                                .into()
+                        }
+                    }
+                    BasicTypeEnum::FloatType(ft) => {
+                        // f64 bitcasts directly; a narrower float unpacks
+                        // from the word's low bits at its exact width
+                        // (B-2026-07-20-11 f32, B-2026-07-20-12 f16/bf16).
+                        let bits_ty = self.float_bits_int_type(ft);
+                        if bits_ty.get_bit_width() == 64 {
+                            self.builder.build_bit_cast(word, ft, "pl.fc").unwrap()
+                        } else {
+                            let lo = self
+                                .builder
+                                .build_int_truncate(word, bits_ty, "pl.fb.tr")
+                                .unwrap();
+                            self.builder.build_bit_cast(lo, ft, "pl.fb.bc").unwrap()
+                        }
+                    }
+                    BasicTypeEnum::PointerType(_) => self
+                        .builder
+                        .build_int_to_ptr(word, ptr_ty, "pl.itop")
+                        .unwrap()
+                        .into(),
+                    _ => word.into(),
+                }
+            } else if matches!(
+                field_ty,
+                BasicTypeEnum::ArrayType(_) | BasicTypeEnum::VectorType(_)
+            ) || matches!(field_ty, BasicTypeEnum::IntType(it) if it.get_bit_width() > 64)
+            {
+                // B-2026-09-29-97 — an `i128`/`u128` FIELD spans two words
+                // too, so it reached the "multi-word non-struct" fallback
+                // below and `insertvalue`d word 0 into the `i128` slot:
+                // `enum E { Int(Lit) }` over `struct Lit { value: i128, .. }`
+                // failed module verification. The shared rebuilder rejoins
+                // the little-endian word pair, as it does for a bare
+                // `Option[i128]` payload.
+                //
+                // An `Array[T, N]` / `Vector[T, N]` FIELD spans N element
+                // words. Before B-2026-08-31-18 taught `llvm_type_word_count`
+                // about vectors, such a field reported one word and fell to
+                // the scalar branch above; with the true width it reached the
+                // "unexpected multi-word non-struct" fallback below, which
+                // keeps word 0 and `insertvalue`s a bare `i64` into a
+                // `<4 x i64>` slot — invalid IR that fails module
+                // verification. Delegate to the shared rebuilder, which owns
+                // both shapes.
+                self.rebuild_value_from_payload_word_slice(field_ty, slice)?
+            } else if let BasicTypeEnum::StructType(inner_st) = field_ty {
+                // Nested struct field — rebuild via the recursive,
+                // word-correct helper. #44 (phase-12 parser slice 2a): the
+                // prior inline walk assumed every sub-field was a SINGLE
+                // word (`slice[j]`) and `insertvalue`d a bare `i64` into a
+                // multi-word struct sub-field (`Vec {ptr,i64,i64}` /
+                // `Option {4×i64}` / `Span {4×i64}` inside the parser's
+                // `Block` payload struct, reached through `IfExpr.then_block:
+                // Block`) → "Invalid InsertValueInst operands". The helper
+                // walks sub-fields by their true `llvm_type_word_count` width
+                // and recurses into nested structs.
+                self.reconstruct_struct_from_words(inner_st, slice)?.into()
+            } else {
+                // Unexpected: a multi-word non-struct field. Fall back to
+                // dropping all but the first word — same shape as the
+                // legacy single-word path so we don't crash the build.
+                let word = slice
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| i64_t.const_int(0, false));
+                word.into()
+            };
             agg = self
                 .builder
                 .build_insert_value(agg, field_val, i as u32, "pl.iv")

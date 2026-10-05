@@ -22856,6 +22856,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 self.coerce_to_i64(field)
             }
+            // B-2026-10-05-5 — a ONE-element array or vector is one word too,
+            // and collapses to its element exactly as a one-field struct
+            // collapses to its field. Without this arm it took the zero
+            // default below, and it is reached for every one-word array that
+            // sits INSIDE an aggregate payload: the per-field and per-element
+            // walks in `coerce_to_payload_words` send any one-word piece here,
+            // so `Some((Array[5], 7))` stored `{1, 0, 7}`, and so did a one-word
+            // array two struct levels down (`S { i: I { a: Array[5] }, .. }`).
+            // Every reader then correctly read the 0 that had been stored.
+            BasicValueEnum::ArrayValue(av) if av.get_type().len() == 1 => {
+                let elem = self.builder.build_extract_value(av, 0, "arr.e0").unwrap();
+                self.coerce_to_i64(elem)
+            }
+            BasicValueEnum::VectorValue(vv) if vv.get_type().get_size() == 1 => {
+                let lane = self
+                    .builder
+                    .build_extract_element(vv, self.context.i32_type().const_zero(), "vec.l0")
+                    .unwrap();
+                self.coerce_to_i64(lane)
+            }
             _ => Ok(i64_t.const_int(0, false)),
         }
     }
