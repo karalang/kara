@@ -369,8 +369,9 @@ impl<'ctx> super::Codegen<'ctx> {
         heap_type: StructType<'ctx>,
         obj: PointerValue<'ctx>,
         boxed_words: &[(u32, Option<FunctionValue<'ctx>>)],
+        rc_words: &[(u32, StructType<'ctx>)],
     ) {
-        if boxed_words.is_empty() {
+        if boxed_words.is_empty() && rc_words.is_empty() {
             return;
         }
         let Some(&idx) = self.type_decls.shared_genum_drop_word.get(enum_name) else {
@@ -384,7 +385,19 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .collect::<Vec<_>>()
             .join("_");
-        let fn_name = format!("__karac_shgenum_release_{enum_name}_{words}");
+        // B-2026-10-03-35 — and the shared handles it holds, by heap type.
+        let rc = rc_words
+            .iter()
+            .map(|(w, ht)| {
+                format!(
+                    "_rc{w}{}",
+                    ht.get_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                )
+            })
+            .collect::<String>();
+        let fn_name = format!("__karac_shgenum_release_{enum_name}_{words}{rc}");
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let rel_fn = match self.module.get_function(&fn_name) {
             Some(f) => f,
@@ -433,6 +446,37 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_call(self.runtime_fns.free_fn, &[bp.into()], "")
                         .unwrap();
                     self.builder.build_store(wp, i64_t.const_zero()).unwrap();
+                    self.builder.build_unconditional_branch(skip_bb).unwrap();
+                    self.builder.position_at_end(skip_bb);
+                }
+                // B-2026-10-03-35 — a payload instantiated at a `shared` type
+                // is a one-word RC handle, not a box: the constructor took a
+                // reference for it, so the box's last release gives it back.
+                // Without this `G[M]` (`shared enum G[T] { Y(T), N }` over a
+                // `shared enum M`) lost `M`'s box and everything behind it.
+                for &(w, ht) in rc_words {
+                    let wp = self
+                        .builder
+                        .build_struct_gep(heap_type, o, w, "rel.rc.p")
+                        .unwrap();
+                    let raw = self
+                        .builder
+                        .build_load(i64_t, wp, "rel.rc")
+                        .unwrap()
+                        .into_int_value();
+                    let hp = self
+                        .builder
+                        .build_int_to_ptr(raw, ptr_ty, "rel.rc.h")
+                        .unwrap();
+                    let is_null = self.builder.build_is_null(hp, "rel.rc.isnull").unwrap();
+                    let do_bb = self.context.append_basic_block(f, "rel.rc.do");
+                    let skip_bb = self.context.append_basic_block(f, "rel.rc.skip");
+                    self.builder
+                        .build_conditional_branch(is_null, skip_bb, do_bb)
+                        .unwrap();
+                    self.builder.position_at_end(do_bb);
+                    self.builder.build_store(wp, i64_t.const_zero()).unwrap();
+                    self.emit_rc_dec(ht, hp);
                     self.builder.build_unconditional_branch(skip_bb).unwrap();
                     self.builder.position_at_end(skip_bb);
                 }

@@ -15430,6 +15430,29 @@ impl<'ctx> super::Codegen<'ctx> {
     /// B-2026-09-19-53 — the INSTANTIATED type of field `i` of a generic
     /// enum's `variant`, from the constructor site's recorded instantiation.
     /// `None` when the site recorded none or the arity does not line up.
+    /// B-2026-10-03-35 — the heap type of a generic shared enum payload whose
+    /// type argument is a `shared` struct or enum: a one-word handle the box
+    /// holds a reference through. Makes that type's RC drop fn on the way,
+    /// because `emit_rc_dec` dispatches only to one that already exists.
+    /// (`Option[shared T]` is wider than the erased word, so it is BOXED and
+    /// never reaches here.)
+    pub(super) fn shared_genum_rc_payload_heap(
+        &mut self,
+        te: &TypeExpr,
+    ) -> Option<inkwell::types::StructType<'ctx>> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let name = p.segments.last()?.clone();
+        let info = self.type_decls.shared_types.get(name.as_str())?.clone();
+        if info.is_enum {
+            self.emit_shared_enum_rc_drop_fn(&name);
+        } else {
+            self.emit_shared_struct_rc_drop_fn(&name);
+        }
+        Some(info.heap_type)
+    }
+
     pub(super) fn shared_genum_payload_te(
         &self,
         enum_name: &str,
@@ -15633,6 +15656,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .cloned()
                 .unwrap_or_default();
             let mut shgen_boxed_words: Vec<(u32, Option<FunctionValue<'ctx>>)> = Vec::new();
+            let mut shgen_rc_words: Vec<(u32, inkwell::types::StructType<'ctx>)> = Vec::new();
             for (i, arg) in args.iter().enumerate() {
                 let val = self.compile_expr(&arg.value)?;
                 // B-2026-09-15-16 — a WHOLE non-shared struct moved into a variant
@@ -15768,6 +15792,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     shgen_boxed_words.push(((start_word + 2) as u32, interior));
+                } else if num_words == 1
+                    && self.shared_genum_field_unclassified(&enum_name, name, i)
+                {
+                    // B-2026-10-03-35 — `T` instantiated at a `shared` type
+                    // stores the handle itself; the release fn gives back the
+                    // reference the payload holds.
+                    if let Some(ht) = self
+                        .shared_genum_payload_te(&enum_name, name, i, site_inst.as_ref())
+                        .and_then(|te| self.shared_genum_rc_payload_heap(&te))
+                    {
+                        shgen_rc_words.push(((start_word + 2) as u32, ht));
+                    }
                 }
                 for (j, w) in words.into_iter().enumerate() {
                     let word_ptr = self
@@ -15849,6 +15885,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 info.heap_type,
                 ptr,
                 &shgen_boxed_words,
+                &shgen_rc_words,
             );
             return Ok(Some(ptr.into()));
         }
@@ -16200,6 +16237,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_store(tag_ptr, i64_t.const_int(tag, false))
                 .unwrap();
             let mut shgen_boxed_words: Vec<(u32, Option<FunctionValue<'ctx>>)> = Vec::new();
+            let mut shgen_rc_words: Vec<(u32, inkwell::types::StructType<'ctx>)> = Vec::new();
             for (i, fname) in field_names.iter().enumerate() {
                 let init = fields.iter().find(|f| &f.name == fname).ok_or_else(|| {
                     format!("missing field `{fname}` in `{enum_name}.{variant}` construction")
@@ -16235,6 +16273,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     && self.shared_genum_field_unclassified(enum_name, variant, i)
                 {
                     shgen_boxed_words.push(((start_word + 2) as u32, None));
+                } else if num_words == 1
+                    && self.shared_genum_field_unclassified(enum_name, variant, i)
+                {
+                    // B-2026-10-03-35 — the struct-variant twin of the tuple
+                    // constructor's shared-handle word. No instantiation is
+                    // recorded for this site, so the payload's own type says.
+                    let te = self.type_name_of_expr(&init.value).map(|n| TypeExpr {
+                        kind: TypeKind::Path(crate::ast::PathExpr {
+                            segments: vec![n],
+                            generic_args: None,
+                            span: init.value.span,
+                        }),
+                        span: init.value.span,
+                    });
+                    if let Some(ht) = te.and_then(|te| self.shared_genum_rc_payload_heap(&te)) {
+                        shgen_rc_words.push(((start_word + 2) as u32, ht));
+                    }
                 }
                 for (j, w) in words.into_iter().enumerate() {
                     let word_ptr = self
@@ -16260,6 +16315,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 info.heap_type,
                 ptr,
                 &shgen_boxed_words,
+                &shgen_rc_words,
             );
             return Ok(ptr.into());
         }
