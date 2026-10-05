@@ -21,7 +21,7 @@ use crate::token::Span;
 
 use super::env::{FunctionSig, ImplInfo};
 use super::inference::substitute_type_params;
-use super::types::{method_callee_type_name, type_display, SubstValue, Type};
+use super::types::{method_callee_type_name, type_display, IntSize, SubstValue, Type};
 use super::TypeErrorKind;
 use crate::typechecker::type_to_concrete_or_param_name;
 use rustc_hash::FxHashMap;
@@ -373,6 +373,32 @@ impl<'a> super::TypeChecker<'a> {
                                         ": a `char`'s numeric value comes from the cast — \
                                          write `c as i64` (or `as u32`)",
                                     );
+                                }
+                                // `is_power_of_two` / `next_power_of_two` are
+                                // unsigned-only (method_numeric.rs), so on a
+                                // signed receiver the bare "no method" read as
+                                // if the method did not exist at all. Name the
+                                // unsigned sibling, and the sign test the cast
+                                // needs: `i32.MIN as u32` is 2^31, a power of
+                                // two (B-2026-10-05-25).
+                                if let Type::Int(size) = receiver_for_lookup {
+                                    if matches!(method, "is_power_of_two" | "next_power_of_two") {
+                                        let unsigned = match size {
+                                            IntSize::I8 => "u8",
+                                            IntSize::I16 => "u16",
+                                            IntSize::I32 => "u32",
+                                            IntSize::I64 => "u64",
+                                            IntSize::I128 => "u128",
+                                            IntSize::Isize => "usize",
+                                        };
+                                        msg.push_str(&format!(
+                                            ": `{method}` is defined on unsigned integers \
+                                             only; cast to `{unsigned}` (`n as {unsigned}`), \
+                                             after ruling out negative values, since a \
+                                             negative `{prim}` reinterprets as a large \
+                                             `{unsigned}`"
+                                        ));
+                                    }
                                 }
                                 // The `is_digit` hint that sat here (B-2026-08-11-2)
                                 // is gone because the method is no longer missing

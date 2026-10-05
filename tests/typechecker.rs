@@ -314,6 +314,46 @@ fn a_128bit_enum_payload_type_checks() {
     }
 }
 
+/// `is_power_of_two` / `next_power_of_two` are unsigned-only, and on a signed
+/// receiver the error now says so and names the cast, with the sign caveat
+/// (B-2026-10-05-25). The bare "no method 'is_power_of_two' on type
+/// 'i32'" read as if the method did not exist at all.
+#[test]
+fn power_of_two_methods_on_a_signed_receiver_name_the_unsigned_cast() {
+    for (src, ty, unsigned) in [
+        (
+            "fn f(n: i32) -> bool { return n.is_power_of_two(); } fn main() { }",
+            "i32",
+            "u32",
+        ),
+        (
+            "fn f(n: i64) -> i64 { return n.next_power_of_two(); } fn main() { }",
+            "i64",
+            "u64",
+        ),
+        (
+            "fn f(n: i8) -> bool { return n.is_power_of_two(); } fn main() { }",
+            "i8",
+            "u8",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert_eq!(errors.len(), 1, "{src}: {errors:?}");
+        let msg = errors[0].to_string();
+        assert!(msg.contains(&format!("on type '{ty}'")), "{msg}");
+        assert!(msg.contains("defined on unsigned integers only"), "{msg}");
+        assert!(msg.contains(&format!("`n as {unsigned}`")), "{msg}");
+        assert!(msg.contains("ruling out negative values"), "{msg}");
+    }
+    // The unsigned receiver is unaffected, and an unrelated missing method on
+    // a signed receiver gets no hint.
+    typecheck_ok("fn f(n: u32) -> bool { return n.is_power_of_two(); } fn main() { }");
+    let errors =
+        typecheck_errors("fn f(n: i32) -> bool { return n.is_power_of_three(); } fn main() { }");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(!errors[0].to_string().contains("unsigned"), "{}", errors[0]);
+}
+
 /// The upper half of `u128` is writable as a LITERAL, and `i128::MIN` too
 /// (B-2026-08-19-23). Both sit past `i128::MAX`, which is where the parser's
 /// positive-magnitude path runs out of room:
