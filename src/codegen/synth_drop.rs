@@ -7205,13 +7205,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `e2e_tuple_held_shared_struct_read_then_release_at_scope_exit` and its
     /// siblings), so moving it on this side alone would open the divergence
     /// this row closes.
-    pub(super) fn shared_type_is_drop_relevant(&self, n: &str) -> bool {
-        self.type_decls
+    ///
+    /// B-2026-10-04-47 — `structs` admits a `shared STRUCT` with an observable
+    /// release too. Only `nll_holder_binding` passes it, and only for a holder
+    /// handed by value to a callee that keeps it, where design.md rule 3 puts
+    /// the release at the call on both backends.
+    pub(super) fn shared_type_is_drop_relevant(&self, n: &str, structs: bool) -> bool {
+        let observable = self.drop_rc.user_drop_wrapper_fns.contains_key(n);
+        if self
+            .type_decls
             .enum_layouts
             .get(n)
             .is_some_and(|l| l.is_shared)
-            && (self.drop_rc.user_drop_wrapper_fns.contains_key(n)
-                || self.shared_enum_runs_payload_bodies(n))
+        {
+            return observable || self.shared_enum_runs_payload_bodies(n);
+        }
+        structs
+            && self.type_decls.shared_types.contains_key(n)
+            && (observable || self.shared_holder_runs_field_bodies(n))
     }
 
     /// B-2026-09-19-18 — does a value of type `te` HOLD a Drop-relevant
@@ -7221,7 +7232,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// shared value's 0-transition, so WHERE it is released is observable.
     /// A bare type parameter answers `false`: a conservative residual that
     /// leaves the release at scope exit, never a double fire.
-    pub(super) fn type_expr_holds_drop_relevant_shared(&self, te: &TypeExpr, depth: u32) -> bool {
+    pub(super) fn type_expr_holds_drop_relevant_shared(
+        &self,
+        te: &TypeExpr,
+        depth: u32,
+        structs: bool,
+    ) -> bool {
         if depth > 8 {
             return false;
         }
@@ -7230,18 +7246,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 p.generic_args.as_ref().is_some_and(|args| {
                     args.iter().any(|a| {
                         matches!(a, GenericArg::Type(t)
-                            if self.type_expr_holds_drop_relevant_shared(t, depth + 1))
+                            if self.type_expr_holds_drop_relevant_shared(t, depth + 1, structs))
                     })
                 }) || p
                     .segments
                     .last()
-                    .is_some_and(|n| self.type_name_holds_drop_relevant_shared(n, depth))
+                    .is_some_and(|n| self.type_name_holds_drop_relevant_shared(n, depth, structs))
             }
             TypeKind::Tuple(elems) => elems
                 .iter()
-                .any(|t| self.type_expr_holds_drop_relevant_shared(t, depth + 1)),
+                .any(|t| self.type_expr_holds_drop_relevant_shared(t, depth + 1, structs)),
             TypeKind::Array { element, .. } => {
-                self.type_expr_holds_drop_relevant_shared(element, depth + 1)
+                self.type_expr_holds_drop_relevant_shared(element, depth + 1, structs)
             }
             _ => false,
         }
@@ -7250,12 +7266,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// [`Self::type_expr_holds_drop_relevant_shared`] for a named type: the
     /// shared type itself, or a plain struct / enum whose fields or payloads
     /// hold one.
-    pub(super) fn type_name_holds_drop_relevant_shared(&self, n: &str, depth: u32) -> bool {
+    pub(super) fn type_name_holds_drop_relevant_shared(
+        &self,
+        n: &str,
+        depth: u32,
+        structs: bool,
+    ) -> bool {
         if depth > 8 {
             return false;
         }
         if self.type_decls.shared_types.contains_key(n) {
-            return self.shared_type_is_drop_relevant(n);
+            return self.shared_type_is_drop_relevant(n, structs);
         }
         let Some(prog) = self.program_snapshot.as_ref() else {
             return false;
@@ -7264,15 +7285,15 @@ impl<'ctx> super::Codegen<'ctx> {
             Item::StructDef(sd) if sd.name == n => sd
                 .fields
                 .iter()
-                .any(|f| self.type_expr_holds_drop_relevant_shared(&f.ty, depth + 1)),
+                .any(|f| self.type_expr_holds_drop_relevant_shared(&f.ty, depth + 1, structs)),
             Item::EnumDef(ed) if ed.name == n => ed.variants.iter().any(|v| match &v.kind {
                 VariantKind::Unit => false,
                 VariantKind::Tuple(tys) => tys
                     .iter()
-                    .any(|t| self.type_expr_holds_drop_relevant_shared(t, depth + 1)),
+                    .any(|t| self.type_expr_holds_drop_relevant_shared(t, depth + 1, structs)),
                 VariantKind::Struct(fields) => fields
                     .iter()
-                    .any(|f| self.type_expr_holds_drop_relevant_shared(&f.ty, depth + 1)),
+                    .any(|f| self.type_expr_holds_drop_relevant_shared(&f.ty, depth + 1, structs)),
             }),
             _ => false,
         })

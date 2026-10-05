@@ -1041,6 +1041,14 @@ pub struct Interpreter<'a> {
     /// owner from a view that has no slot anywhere.
     pub(crate) block_slot_names: Vec<(bool, Vec<String>)>,
     pub(crate) dying_in_callee_memo: FxHashMap<LastUseKey, std::rc::Rc<Vec<(String, usize)>>>,
+    /// B-2026-10-04-47 — `param_fate::declared_bindings_dying_in_callee` per
+    /// block, memoized like `dying_in_callee_memo`.
+    pub(crate) declared_dying_memo: FxHashMap<LastUseKey, std::rc::Rc<Vec<(String, usize)>>>,
+    /// B-2026-10-04-47 — the block-declared bindings the statement just run
+    /// handed by value to a callee keeping them. Set only around that
+    /// statement's `drain_due_shared_releases`, whose due test then admits
+    /// every holder shape for them rather than plain structs alone.
+    pub(crate) holders_dying_in_callee: Vec<String>,
     /// B-2026-10-05-23 — `type_name_runs_user_drop` for a top-level query,
     /// by type name. The answer is a pure function of the program this
     /// interpreter holds by shared reference, and the match, call and binding
@@ -1544,6 +1552,8 @@ impl<'a> Interpreter<'a> {
             pending_param_drop_bindings: Vec::new(),
             last_use_memo: FxHashMap::default(),
             dying_in_callee_memo: FxHashMap::default(),
+            declared_dying_memo: FxHashMap::default(),
+            holders_dying_in_callee: Vec::new(),
             drop_type_memo: std::cell::RefCell::new(FxHashMap::default()),
             enum_index: std::cell::OnceCell::new(),
             block_slot_names: Vec::new(),

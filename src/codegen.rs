@@ -6606,6 +6606,7 @@ impl<'ctx> Codegen<'ctx> {
             },
             drop_rc: DropRc {
                 shadowed_rc_names: 0,
+                holders_dying_in_callee: Vec::new(),
                 arm_selected_bodies_walker: HashMap::new(),
                 optres_payload_bodies_flags: HashMap::new(),
                 assign_ident_target: None,

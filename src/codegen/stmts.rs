@@ -661,6 +661,16 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Vec::new()
         };
+        // B-2026-10-04-47 — and the bindings it DOES declare that die the same
+        // way, for the holder releases NLL leaves at scope exit.
+        let declared_dying = if user_drop_last_use.is_some() {
+            crate::param_fate::declared_bindings_dying_in_callee(
+                self.program_snapshot.as_deref(),
+                block,
+            )
+        } else {
+            Vec::new()
+        };
         for (i, stmt) in block.stmts.iter().enumerate() {
             // Statement-end firing for fresh Drop-temps (B-2026-08-01-4):
             // snapshot the scope frame's length so the post-statement drain
@@ -709,7 +719,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // statement) exits above and its remaining entries drain via the
             // exit-path cleanup as before.
             if let Some(lu) = &user_drop_last_use {
-                self.fire_due_user_drops(lu, i);
+                self.fire_due_user_drops_for_stmt(lu, i, &declared_dying);
             }
             // B-2026-10-05-7 — and, as for a discard (`let _ = x;`), a binding
             // an ENCLOSING frame owns that this statement handed by value to a
@@ -1892,6 +1902,15 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Some(self.fn_body_last_use(body))
         };
+        // B-2026-10-04-47 — see `compile_block`'s `declared_dying`.
+        let auto_par_declared_dying = if auto_par_user_drop_last_use.is_some() {
+            crate::param_fate::declared_bindings_dying_in_callee(
+                self.program_snapshot.as_deref(),
+                body,
+            )
+        } else {
+            Vec::new()
+        };
 
         // Auto-par reduction diagnostic (slice 3a / 3b, 2026-05-19). When
         // the env var `KARAC_REDUCE_DEBUG=1` is set, print every
@@ -2457,7 +2476,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // scope exit as before). `fire_due_user_drops` self-guards on
                 // a terminated insert block.
                 if let Some(lu) = &auto_par_user_drop_last_use {
-                    self.fire_due_user_drops(lu, i);
+                    self.fire_due_user_drops_for_stmt(lu, i, &auto_par_declared_dying);
                 }
                 i += 1;
             }

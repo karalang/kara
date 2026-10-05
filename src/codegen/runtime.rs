@@ -15001,15 +15001,22 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let (name, _) = self.variables.iter().find(|(_, slot)| slot.ptr == ptr)?;
         let vt = &self.var_types;
+        // B-2026-10-04-47 — a holder this statement handed by value to a
+        // callee that keeps it releases a `shared struct` here too.
+        let structs = self
+            .drop_rc
+            .holders_dying_in_callee
+            .iter()
+            .any(|n| n == name);
         let holds = match a {
             CleanupAction::FreeVecBuffer { .. } => vt
                 .var_elem_type_exprs
                 .get(name)
-                .is_some_and(|te| self.type_expr_holds_drop_relevant_shared(te, 1)),
+                .is_some_and(|te| self.type_expr_holds_drop_relevant_shared(te, 1, structs)),
             CleanupAction::RcDecOption { .. } => vt
                 .var_option_payload_te
                 .get(name)
-                .is_some_and(|te| self.type_expr_holds_drop_relevant_shared(te, 1)),
+                .is_some_and(|te| self.type_expr_holds_drop_relevant_shared(te, 1, structs)),
             CleanupAction::StructDrop { .. } => {
                 let paired = self.drop_rc.scope_cleanup_actions.iter().any(|f| {
                     f.iter().any(|x| {
@@ -15020,12 +15027,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     && match vt.var_type_names.get(name).map(String::as_str) {
                         Some("Tuple") => vt.tuple_var_elem_tes.get(name).is_some_and(|tes| {
                             tes.iter()
-                                .any(|te| self.type_expr_holds_drop_relevant_shared(te, 1))
+                                .any(|te| self.type_expr_holds_drop_relevant_shared(te, 1, structs))
                         }),
                         Some(tn) => {
                             self.type_decls.struct_types.contains_key(tn)
                                 && !self.type_decls.shared_types.contains_key(tn)
-                                && self.type_name_holds_drop_relevant_shared(tn, 0)
+                                && self.type_name_holds_drop_relevant_shared(tn, 0, structs)
                         }
                         None => false,
                     }
@@ -15035,11 +15042,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     .enum_layouts
                     .get(tn.as_str())
                     .is_some_and(|l| !l.is_shared)
-                    && self.type_name_holds_drop_relevant_shared(tn, 0)
+                    && self.type_name_holds_drop_relevant_shared(tn, 0, structs)
             }),
             _ => false,
         };
         holds.then(|| name.clone())
+    }
+
+    /// [`Self::fire_due_user_drops`] for statement `stmt_idx` of a block whose
+    /// `declared_dying` (B-2026-10-04-47) names the bindings that statement
+    /// hands by value to a callee keeping them: for those, a holder's
+    /// `shared struct` release is due here as well.
+    pub(super) fn fire_due_user_drops_for_stmt(
+        &mut self,
+        last_use: &std::collections::HashMap<String, Vec<usize>>,
+        stmt_idx: usize,
+        declared_dying: &[(String, usize)],
+    ) {
+        self.drop_rc.holders_dying_in_callee = declared_dying
+            .iter()
+            .filter(|(_, at)| *at == stmt_idx)
+            .map(|(n, _)| n.clone())
+            .collect();
+        self.fire_due_user_drops(last_use, stmt_idx);
+        self.drop_rc.holders_dying_in_callee.clear();
     }
 
     pub(super) fn fire_due_user_drops(

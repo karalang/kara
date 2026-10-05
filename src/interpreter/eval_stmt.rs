@@ -222,6 +222,19 @@ impl<'a> super::Interpreter<'a> {
                 computed
             }
         };
+        // B-2026-10-04-47 — and the ones it DOES declare, for the holder
+        // releases `drain_due_shared_releases` otherwise reserves for plain
+        // structs.
+        let declared_dying = match self.declared_dying_memo.get(&key) {
+            Some(memo) => memo.clone(),
+            None => {
+                let computed = std::rc::Rc::new(
+                    crate::param_fate::declared_bindings_dying_in_callee(Some(self.program), block),
+                );
+                self.declared_dying_memo.insert(key, computed.clone());
+                computed
+            }
+        };
         // B-2026-09-27-95 — see `pending_fn_body_late_drops`.
         let last_use = if late_drops.iter().any(|n| last_use.contains_key(n)) {
             let mut m = (*last_use).clone();
@@ -570,7 +583,13 @@ impl<'a> super::Interpreter<'a> {
             // holder just became the last reference is due HERE, at the
             // binding's live-range end, not at lexical scope exit. After
             // `fire_due_drops` so that path's in-flight clone is already gone.
+            self.holders_dying_in_callee = declared_dying
+                .iter()
+                .filter(|(_, at)| *at == stmt_idx)
+                .map(|(n, _)| n.clone())
+                .collect();
             self.drain_due_shared_releases();
+            self.holders_dying_in_callee.clear();
             // B-2026-09-19-29 — and any `shared enum` whose last holder was
             // one of the slots `fire_due_drops` just released.
             self.drain_shared_enum_releases();
@@ -2366,7 +2385,14 @@ impl<'a> super::Interpreter<'a> {
         // the shared deviation: measured as `v1 dS1 one` interpreted against
         // `v1 one dS1` on all three compiled surfaces. The container shapes are
         // left to a follow-up that moves both backends together.
-        if !matches!(slot, Value::Struct { .. }) {
+        //
+        // B-2026-10-04-47 — except a holder this statement handed by value to
+        // a callee that keeps it. design.md rule 3 puts its release at the
+        // call, and codegen admits every holder shape for exactly those
+        // bindings (`DropRc::holders_dying_in_callee`), so both move together.
+        if !matches!(slot, Value::Struct { .. })
+            && !self.holders_dying_in_callee.iter().any(|n| n == name)
+        {
             return false;
         }
         let mut occurrences = Vec::new();

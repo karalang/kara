@@ -44,6 +44,14 @@ pub(crate) struct DropRc<'ctx> {
     /// B-2026-10-05-3 — a counter that makes each private name
     /// `pin_shadowed_rc_decs` hands a shadowed shared binding's `RcDec` unique.
     pub(crate) shadowed_rc_names: usize,
+    /// B-2026-10-04-47 — the block-declared bindings whose last use is the
+    /// statement just compiled, where they are handed by value to a callee
+    /// that keeps them (`param_fate::declared_bindings_dying_in_callee`).
+    /// Set only around that statement's `fire_due_user_drops`, and read by
+    /// `nll_holder_binding`: such a holder's release of a `shared struct` it
+    /// carries is due at the call (design.md rule 3), where a holder whose
+    /// last use is a read keeps it at scope exit.
+    pub(crate) holders_dying_in_callee: Vec<String>,
     /// B-2026-08-08-25 leg 1 — sources whose inline `Option`/`Result` payload a
     /// read-only match LEFT WITH THEM (`scrutinee_is_readonly_inline_optres_local`
     /// classified the match as a borrow, so no arm binding took ownership).

@@ -1,0 +1,44 @@
+//! B-2026-10-04-47: a shared value held in a by-value argument is released at the call
+
+use super::*;
+
+/// B-2026-10-04-47 — design.md rule 3: a by-value argument handed to a callee that
+/// keeps it is dropped when the call returns, before the caller's next statement.
+/// That includes a `shared` value it holds in a struct field, an `Option` or enum
+/// payload, a tuple or a `Vec`, which both backends used to release at the
+/// caller's scope exit for most of those shapes. A handed-back argument (`_7`) and
+/// one whose last use is a read (`_8`) still release at their own scope end.
+#[test]
+fn interp_shared_holder_moved_into_call_releases_at_the_call() {
+    let out = run(r#"shared struct H { id: i64 }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
+struct W { o: Option[H], n: i64 }
+struct X { h: H, n: i64 }
+enum E { A(H), B }
+fn cw(w: W) { println(f"w{w.n}") }
+fn cx(x: X) { println(f"x{x.n}") }
+fn co(o: Option[H]) { println("o") }
+fn ct(t: (H, i64)) { println(f"t{t.1}") }
+fn ce(e: E) { println("e") }
+fn cv(v: Vec[H]) { println(f"v{v.len()}") }
+fn keepw(w: W) -> W { w }
+fn main() {
+    let w = W { o: Some(H { id: 1 }), n: 7 }; cw(w); println("_1");
+    let x = X { h: H { id: 2 }, n: 2 }; cx(x); println("_2");
+    let o = Some(H { id: 3 }); co(o); println("_3");
+    let t = (H { id: 4 }, 1); ct(t); println("_4");
+    let e = E.A(H { id: 5 }); ce(e); println("_5");
+    let v = vec![H { id: 6 }]; cv(v); println("_6");
+    { let w7 = W { o: Some(H { id: 7 }), n: 8 }; let k = keepw(w7); println(f"_7 {k.n}"); }
+    println("_7b");
+    { let r = Some(H { id: 8 }); println(f"_8 {r.is_some()}"); }
+    println("_8b");
+    println("end")
+}
+"#);
+    assert_eq!(
+        out,
+        "w7\ndH1\n_1\nx2\ndH2\n_2\no\ndH3\n_3\nt1\ndH4\n_4\ne\ndH5\n_5\nv1\ndH6\n_6\n_7 8\ndH7\n_7b\n_8 true\ndH8\n_8b\nend\n",
+        "got:\n{out}"
+    );
+}

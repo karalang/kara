@@ -1552,6 +1552,30 @@ pub fn whole_param_leaves(program: Option<&Program>, f: &Function, idx: usize) -
 /// in the block or inside the statement shadows it, when a `defer` mentions
 /// it, or when the call sits in a closure.
 pub fn bindings_dying_in_callee(program: Option<&Program>, b: &Block) -> Vec<(String, usize)> {
+    dying_in_callee(program, b, false)
+}
+
+/// B-2026-10-04-47 — the twin of [`bindings_dying_in_callee`] for a binding
+/// the block DOES declare. Such a binding already dies at that statement
+/// through the block's NLL map, but only for the actions NLL admits: a
+/// holder's release of a `shared struct` it carries (a struct field, an
+/// `Option` or enum payload, a tuple or `Vec` element) stays at scope exit
+/// when the last use is a READ, and rule 3 moves it to the call when the last
+/// use hands the holder by value to a callee that keeps it. Same declines as
+/// the twin, plus a statement that rebinds the name itself (`let o = f(o)`),
+/// where the binding left alive at the statement's end is the new one.
+pub fn declared_bindings_dying_in_callee(
+    program: Option<&Program>,
+    b: &Block,
+) -> Vec<(String, usize)> {
+    dying_in_callee(program, b, true)
+}
+
+fn dying_in_callee(
+    program: Option<&Program>,
+    b: &Block,
+    declared_only: bool,
+) -> Vec<(String, usize)> {
     let Some(program) = program else {
         return Vec::new();
     };
@@ -1565,7 +1589,13 @@ pub fn bindings_dying_in_callee(program: Option<&Program>, b: &Block) -> Vec<(St
         let mut shadow: Vec<String> = Vec::new();
         stays_args_stmt(program, st, &mut found, &mut shadow);
         for n in found {
-            if declared.contains(&n) || shadow.contains(&n) || out.iter().any(|(m, _)| *m == n) {
+            if declared.contains(&n) != declared_only
+                || shadow.contains(&n)
+                || out.iter().any(|(m, _)| *m == n)
+            {
+                continue;
+            }
+            if declared_only && stmt_binds(st, &n) {
                 continue;
             }
             let mut here = Vec::new();
@@ -1597,6 +1627,17 @@ pub fn bindings_dying_in_callee(program: Option<&Program>, b: &Block) -> Vec<(St
         }
     }
     out
+}
+
+/// Does `st` itself bind `n` (a `let` whose pattern names it)?
+fn stmt_binds(st: &Stmt, n: &str) -> bool {
+    match &st.kind {
+        StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+            pattern_names(pattern).iter().any(|m| m == n)
+        }
+        StmtKind::LetUninit { name, .. } => name == n,
+        _ => false,
+    }
 }
 
 fn stays_args_stmt(

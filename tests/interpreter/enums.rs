@@ -6239,7 +6239,12 @@ fn main() {
     println("end")
 }
 "#);
-    assert_eq!(out, "G-bare\n  x\n  dSh1\nC-bare\n  x\n  dSh1\nG-round\n  x\n  dSh2\nC-round\n  x\n  dSh2\nG-arm\n  got3\n  dSh3\nC-arm\n  got3\n  dSh3\nG-temp\n  eaten\n  x\nC-temp\n  eaten\n  x\nG-named\n  eaten\n  x\n  dSh5\nC-named\n  eaten\n  x\n  dSh5\nG-alias\n  x\n  dSh6\nC-alias\n  x\n  dSh6\npar\n  x\n  dPa7\ntwoparam\n  x\n  dSh8\notherarm\n  x\nunit\n  x\nstring\n  x\nscalar\n  x\nplain\n  dPl13\n  x\nsharedenum\n  dPl14\n  x\nend\n", "got:\n{out}");
+    // B-2026-10-04-47 — `G-named` / `C-named` hand the holder by value to a
+    // callee that keeps it, so the payload's release is due at the call
+    // (design.md rule 3). This pin held the old scope-exit answer; the
+    // compiled twin (`e2e_generic_enum_shared_payload_is_rc_released`) already
+    // printed `eaten dSh5 x`, and the two now agree on those cells.
+    assert_eq!(out, "G-bare\n  x\n  dSh1\nC-bare\n  x\n  dSh1\nG-round\n  x\n  dSh2\nC-round\n  x\n  dSh2\nG-arm\n  got3\n  dSh3\nC-arm\n  got3\n  dSh3\nG-temp\n  eaten\n  x\nC-temp\n  eaten\n  x\nG-named\n  eaten\n  dSh5\n  x\nC-named\n  eaten\n  dSh5\n  x\nG-alias\n  x\n  dSh6\nC-alias\n  x\n  dSh6\npar\n  x\n  dPa7\ntwoparam\n  x\n  dSh8\notherarm\n  x\nunit\n  x\nstring\n  x\nscalar\n  x\nplain\n  dPl13\n  x\nsharedenum\n  dPl14\n  x\nend\n", "got:\n{out}");
 }
 
 /// B-2026-09-19-21 — a generic callee that hands its boxed payload back
