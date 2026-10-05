@@ -3601,6 +3601,22 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self.materialize_rvalue_for_ref_arg(v, idx))
     }
 
+    /// B-2026-10-05-97 — the DECLARED position of the field a struct literal
+    /// initializes. A literal may name its fields in any order
+    /// (`F { b: 3, a: 5 }`) and is evaluated in the order written, but every
+    /// GEP, `insertvalue` and field-type lookup in [`Self::compile_struct_init`]
+    /// is by declared index; using the written position stored each value in
+    /// the wrong field (a silent swap for same-typed fields, invalid IR for
+    /// differently typed ones). `pos` is the fallback for a field the table
+    /// does not name, which a typechecked program never reaches.
+    fn struct_literal_field_decl_index(&self, struct_name: &str, field: &str, pos: usize) -> usize {
+        self.type_decls
+            .struct_field_names
+            .get(struct_name)
+            .and_then(|names| names.iter().position(|n| n == field))
+            .unwrap_or(pos)
+    }
+
     pub(super) fn compile_struct_init(
         &mut self,
         name: &str,
@@ -3652,7 +3668,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     self.emit_rc_alloc(info.heap_type)
                 };
-                for (idx, field_init) in fields.iter().enumerate() {
+                for (pos, field_init) in fields.iter().enumerate() {
+                    // B-2026-10-05-97 — the DECLARED index, not the written one.
+                    let idx = self.struct_literal_field_decl_index(name, &field_init.name, pos);
                     // `Map`/`Set`-typed field initialized with `Map.new()` /
                     // `Set.new()` — derive the handle from the field's declared
                     // type (see the non-shared branch below for the full
@@ -3972,7 +3990,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // default) type (B-2026-07-03-23).
         if let Some(st) = mono_ty.or_else(|| self.type_decls.struct_types.get(name).copied()) {
             let mut agg = st.get_undef();
-            for (idx, field_init) in fields.iter().enumerate() {
+            for (pos, field_init) in fields.iter().enumerate() {
+                // B-2026-10-05-97 — the DECLARED index, not the written one.
+                let idx = self.struct_literal_field_decl_index(name, &field_init.name, pos);
                 // Borrowed-struct `ref` field (design.md Feature 4 Part 3):
                 // the field slot lowers to `ptr` and stores the BORROW
                 // pointer, not the dereferenced value. `get_data_ptr`
@@ -3980,10 +4000,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // binding's address — exactly ref-parameter argument passing.
                 // No move-suppression / defensive-copy: a borrow neither owns
                 // nor moves its source (the source keeps its drop; the field
-                // carries only a pointer). The field-init order is the
-                // declaration order (same assumption the `idx`-keyed insert
-                // below already relies on), so `idx` indexes the declared
-                // field types.
+                // carries only a pointer). `idx` is the declared index, so it
+                // indexes the declared field types.
                 let is_ref_field = self
                     .type_decls
                     .struct_field_type_exprs
