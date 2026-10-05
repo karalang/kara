@@ -6886,6 +6886,8 @@ impl<'ctx> Codegen<'ctx> {
                 type_subst_names: HashMap::new(),
                 type_subst_type_exprs: HashMap::new(),
                 type_subst_call_te: HashMap::new(),
+                concrete_impl_entry: false,
+                no_struct_param_rescue: false,
                 optres_entry_copy_frame: None,
                 const_subst: HashMap::new(),
                 layout_subst: HashMap::new(),

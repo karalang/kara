@@ -5802,7 +5802,9 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         let saved_call_te =
             std::mem::replace(&mut self.mono_state.type_subst_call_te, axes.subst_call_te);
+        self.mono_state.concrete_impl_entry = true;
         let result = self.compile_function(synth);
+        self.mono_state.concrete_impl_entry = false;
         self.mono_state.type_subst = saved_subst;
         self.mono_state.type_subst_names = saved_names;
         self.mono_state.type_subst_type_exprs = saved_type_exprs;

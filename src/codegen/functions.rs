@@ -1394,6 +1394,9 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn compile_function(&mut self, func: &Function) -> Result<(), String> {
+        // B-2026-10-05-90 — a method of a concrete impl over a generic struct
+        // (`compile_concrete_impl_method`); see the aggregate-param site.
+        let concrete_impl_entry = std::mem::take(&mut self.mono_state.concrete_impl_entry);
         // Heap-closure-env epic (B-2026-06-22-2): refuse to emit a function
         // whose closures escape in a shape the epic has not yet lowered — a
         // returned stack-env capture would read a freed frame, and a heap-env
@@ -2471,15 +2474,34 @@ impl<'ctx> super::Codegen<'ctx> {
                             .transfer_struct_params
                             .contains(&(func.name.clone(), i))
                             .then(|| param_name.clone());
-                        if matches!(&param.ty.kind, TypeKind::Path(_))
+                        // B-2026-10-05-90 — inside a concrete impl over a
+                        // generic struct (`impl P[String, Vec[i64]]`) the body
+                        // compiles under the substitution the target spells
+                        // out (B-2026-09-27-116), which is installed for `self`.
+                        // It also made the monomorph entry-copy rescue fire for
+                        // every OTHER by-value param whose struct shares the
+                        // target's param names, where no caller can see it:
+                        // the method-call site decides with no substitution
+                        // (`struct_param_owned_by_transfer(.., false)`), takes
+                        // the transfer arm, and retracts its own drop. The
+                        // callee then copied, dropped its copy, and the
+                        // original leaked. Such a param takes the transfer arm
+                        // here too, as it does in a free function; `self` keeps
+                        // the rescue, since its caller keeps its drop
+                        // (`move_owned_self_struct_receiver` leaves generic
+                        // structs alone).
+                        self.mono_state.no_struct_param_rescue =
+                            concrete_impl_entry && param_name != "self";
+                        let callee_owned = matches!(&param.ty.kind, TypeKind::Path(_))
                             && self.make_aggregate_param_callee_owned_transfer(
                                 type_name,
                                 alloca,
                                 param_inst,
                                 param_transfer.as_deref(),
                                 &param_name,
-                            )
-                        {
+                            );
+                        self.mono_state.no_struct_param_rescue = false;
+                        if callee_owned {
                             // #17 gap 1 — the param is now a callee-owned local:
                             // its heap fields are INDEPENDENT (entry-copied) and
                             // its scope-exit struct drop is registered. The

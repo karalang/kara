@@ -347,7 +347,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // it is offset-correct for any field count — unlike the base
                 // bare-`T`-reinterpret drop path (B-2026-07-15-11), which stays
                 // single-field-gated.
-                if self.try_make_generic_struct_param_callee_owned(type_name, slot) {
+                // B-2026-10-05-90 — not for a non-`self` param of a concrete
+                // impl method; see the prologue in `compile_function`.
+                if !self.mono_state.no_struct_param_rescue
+                    && self.try_make_generic_struct_param_callee_owned(type_name, slot)
+                {
                     return true;
                 }
                 // B-2026-08-05-33 — OWN BY TRANSFER when no copy is possible.

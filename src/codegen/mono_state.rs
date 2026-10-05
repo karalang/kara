@@ -133,6 +133,15 @@ pub(crate) struct MonoState<'ctx> {
     /// Saved/restored around `compile_mono_function` exactly like
     /// `type_subst_type_exprs`.
     pub(crate) type_subst_call_te: HashMap<String, crate::ast::TypeExpr>,
+    /// B-2026-10-05-90 — set by `compile_concrete_impl_method` for the one
+    /// `compile_function` it makes, and taken by that function's prologue
+    /// before anything else compiles, so a monomorph compiled from inside the
+    /// body never sees it.
+    pub(crate) concrete_impl_entry: bool,
+    /// B-2026-10-05-90 — while true, a by-value generic-struct param skips
+    /// the monomorph entry-copy rescue
+    /// (`try_make_generic_struct_param_callee_owned`); see the prologue site.
+    pub(crate) no_struct_param_rescue: bool,
     /// B-2026-09-24-33 — the active generic call's per-call type frame, as
     /// `callee_param_te_for_call` resolves it, so the mono prologue asks
     /// `mono_optres_param_entry_copied` about the SAME instantiated type the
