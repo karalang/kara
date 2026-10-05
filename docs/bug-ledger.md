@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 687 |
 | run-vs-build | 589 |
-| leak | 566 |
+| leak | 567 |
 | double-free | 418 |
 | codegen-gap | 224 |
 | missing-feature | 217 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2723 |
+| codegen | 2724 |
 | interp | 845 |
 | typecheck | 328 |
 | other | 113 |
@@ -400,7 +400,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-75 | 2026-09-30 | interp | low | `--interp` runs two UNUSED struct-pattern arm bindings' `Drop` bodies in declaration order over a named local, where every compiled surface and every other spelling runs them in reverse -- `let p = P6 { a: R { id: 5 }, b: R { id: 6 }, n: 1 }; match p { P6 { a, b, n } => n }` prints `d5 d6 1` interpreted and `d6 d5 1` compiled | — |
 | B-2026-09-30-79 | 2026-09-30 | codegen | medium | A `Drop`-bodied leaf bound out of a heap-BOXED enum payload that holds a GENERIC struct, by a by-value param, runs no body on any compiled surface, flat or nested -- `fn f(e: E[G[R]]) -> i64 { match e { E.A { x: G { v, n }, k } => v.id + n + k, E.B => 0 } }` over `enum E[T] { A { x: T, k: i64 }, B }` prints `7 after` where `--interp` prints `d4 7 after`, and the same nest over a NON-generic `enum F2 { A(G[R], i64), B }` also leaks its 40 B payload box | — |
 | B-2026-09-30-69 | 2026-09-30 | codegen | high | A NAMED `Vec` LOCAL MOVED INTO A TUPLE LITERAL WRITTEN AS A CALL ARGUMENT HAS ITS ELEMENT BODY RUN OVER A FREED BUFFER COMPILED -- `let q = [R { id: 5 }]; println(f2((q, 3)))` over `fn f2(g: (Vec[R], i64)) -> i64 { g.1 }` prints `3 d<garbage> after` on jit, -O0 and -O2 auto-par with one invalid read, against `--interp`'s `3 d5 after`; the bound spelling `let t = (q, 3); f2(t)` is right everywhere | — |
-| B-2026-09-30-80 | 2026-09-30 | codegen | medium | `Vec.contains` ON A COLLECTION-LITERAL, BLOCK OR BRANCH RECEIVER FAILS TO COMPILE -- `[1, 3].contains(3)`, `{ mk(3) }.contains(3)` and `(match c { true => mk(1), false => mk(3) }).contains(3)` each stop at `codegen: no handler for method 'contains' on non-identifier receiver` on jit, -O0 and -O2 auto-par, while `--interp` prints `true` and the call receiver `mk(3).contains(3)` compiles | — |
 | B-2026-09-30-81 | 2026-09-30 | codegen+interp | high | A BLOCK OR BRANCH ARGUMENT WHOSE VALUE IS A `Vec` OF `Drop` ELEMENTS RUNS NO ELEMENT BODY ON ANY SURFACE -- `tv(if c { mk1() } else { mk1() })` and `tv({ [mw(8)] })` over `fn tv(x: Vec[W]) -> i64` print `v5 w8 end` on all five surfaces where `d5` and `d8` are due after each call, while the direct literal `tv([mw(2), mw(3)])` prints `d2 d3` as it should; memory is clean | — |
 | B-2026-09-30-82 | 2026-09-30 | codegen | medium | REMAINDER OF B-2026-09-30-58: A BRANCH ARGUMENT WHERE ONE ARM'S COLLECTION LITERAL HOLDS A HEAP PLACE STILL LEAKS THE TAKEN ARM'S BUFFER ON EVERY COMPILED SURFACE -- `vs(if c { [s] } else { [ms(1)] })` over `fn vs(x: Vec[String])` loses 1 block at -O0 on the path that does not move `s`; output right everywhere | — |
 | B-2026-09-30-70 | 2026-09-30 | codegen | medium | A FRESH `Ok([..])` ARGUMENT TO A BY-VALUE `Result[Array[P, 1], E]` PARAM LEAKS THE ELEMENT'S `String` AT `-O0` -- `take(Ok([P2 { v: 42, tag: f"t{1}" }]))` loses 2 B in 1 block with no user `Drop` anywhere and whether or not the callee matches, while the `Option` twin, the boxed `Array[P, 2]` payload, a struct payload and the named-local `Ok(a)` spelling are all clean; stdout is correct, so only a leak gate sees it | — |
@@ -536,6 +535,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-19 | 2026-10-05 | codegen | medium | `let mut rest = items;` OVER A BY-VALUE `Vec` PARAMETER DEEP-COPIES THE WHOLE VEC, ELEMENTS INCLUDED, ON EVERY CALL -- kata 341's `push_reversed(mut ref self, items: Vec[Nested])` clones each list's entire subtree once per level above it, and its bench runs 0.55 s against 0.34 s with the same loop written inline (310M against 214M instructions; Rust 137M) | — |
 | B-2026-10-05-20 | 2026-10-05 | codegen | medium | `Vec[T].pop()` FOR AN ELEMENT WIDER THAN THREE WORDS HEAP-ALLOCATES A BOX FOR THE `Some` PAYLOAD ON EVERY CALL, EVEN WHEN `while let Some(x) = v.pop()` UNPACKS IT AT ONCE -- a four-word enum, struct or tuple element pays a `malloc` and a `free` per pop (kata 341's stack iterator: about two per tree node), a three-word one pays nothing | — |
 | B-2026-10-05-21 | 2026-10-05 | codegen | low | REASSIGNING A HEAP `String` LOCAL TO A STRING LITERAL LEAKS THE DISPLACED BUFFER COMPILED -- `fn f() { let mut c = f"s{1}"; c = "zz"; println(f"in{c}"); }` prints `inzz` on every surface and loses 2 bytes in 1 block at -O0 under valgrind; reassigning it to another heap string is clean | — |
+| B-2026-10-05-22 | 2026-10-05 | codegen | low | A LET-BOUND `first()` / `get()` OF A `Vec` WHOSE STRUCT ELEMENT IS WIDER THAN `Option`'S PAYLOAD AREA LEAKS 32 BYTES -- `let p = v.first(); match p { Some(q) => .. }` over `Vec[P]` with `struct P { n: i64, s: String }` loses one 32-byte block at -O0, named receiver or call receiver alike, while a two-word `P { n, m }` and the direct `match v.first() { .. }` spelling are clean | — |
 
 ### Relocated
 
@@ -3575,6 +3575,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-09-30-77 | codegen | medium | A GENERIC struct in a BOXED `Option` payload or a user-enum payload leaks its heap on every compiled surface, bound or not -- `let o = Option.Some(G… | d3477587e |
 | B-2026-09-30-78 | interp | low | `--interp` skips a leaf's `Drop` body for a nested generic struct pattern over a local `Option` -- `let o = Option.Some(G { v: R { id: 4, s: "hello"… | 0bfcff2e0 |
 | B-2026-09-30-85 | codegen | medium | A GENERIC struct inline in a `Result` payload leaks its heap -- `let r: Result[G[String], i64] = Result.Ok(G { v: mk(1), n: 10 })` over `struct G[T]… | 989ad012e |
+| B-2026-09-30-80 | codegen | medium | `Vec.contains` ON A COLLECTION-LITERAL, BLOCK OR BRANCH RECEIVER FAILS TO COMPILE -- `[1, 3].contains(3)`, `{ mk(3) }.contains(3)` and `(match c { tr… | 73be65bba |
 | B-2026-09-30-95 | codegen | high | A VALUE MOVED INTO A STRUCT, TUPLE OR ARRAY LITERAL BOUND INSIDE A BRANCH LOSES ITS `Drop` BODY AND LEAKS ITS HEAP ON THE PATH THAT NEVER BUILT THE L… | 472771516 |
 | B-2026-09-30-98 | codegen | high | AN `Option`/`Result` PAYLOAD BINDING MOVED INTO A TUPLE IS FREED TWICE -- `match o { Some(w) => { let _ = (w, 1); println("arm") }, None => {} }` abo… | 4f56fcb92 |
 | B-2026-09-30-86 | codegen | high | `r.unwrap()` ON A `Result` WHOSE INLINE PAYLOAD IS WIDER THAN THREE WORDS RETURNS A WRONG VALUE on every compiled surface -- over `struct S { v: Stri… | 33fe00f92 |
