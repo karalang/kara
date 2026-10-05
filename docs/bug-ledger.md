@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 690 |
 | run-vs-build | 591 |
-| leak | 571 |
-| double-free | 418 |
+| leak | 572 |
+| double-free | 419 |
 | codegen-gap | 225 |
 | missing-feature | 217 |
 | other | 168 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2732 |
+| codegen | 2734 |
 | interp | 850 |
 | typecheck | 331 |
 | other | 113 |
@@ -535,8 +535,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-41 | 2026-10-05 | codegen | medium | WHOLE-VALUE ASSIGNMENT THROUGH A `mut ref` PARAM OR `mut ref self` LEAKS THE DISPLACED VALUE FOR A GENERIC STRUCT AND FOR A `shared` STRUCT -- `fn re2[T](g: mut ref G[T], x: T) { g = G { v: x, k: g.k + 1 }; }` at `T = String` loses the old `v` (1 B per call) and `fn re3(s: mut ref S) { s = S { n: 77 }; }` over `shared struct S { n: i64 }` loses 16 B; output is right on every surface, and the concrete-struct spelling (`Q { v: String, k: i64 }`) is clean | — |
 | B-2026-10-05-42 | 2026-10-05 | interp | medium | `--interp` RUNS NO `Drop` BODY FOR THE VALUE DISPLACED BY `self = v` IN A `mut ref self` METHOD, where every compiled surface runs it at the assignment and the free-function `h: mut ref H` spelling runs it interpreted too -- `impl H { fn swap_in(mut ref self, id: i64) { self = H { r: R { id: id, .. }, n: self.n + 1 }; } }` prints `2 t2 1` interpreted and `drop 1` then `2 t2 1` compiled | — |
 | B-2026-10-05-43 | 2026-10-05 | typecheck | medium | A METHOD FROM `impl[T: Clone] G[T]` IS REJECTED ON A `G[String]` RECEIVER WITH "trait bound `T: Clone` is not satisfied; `String` does not implement `Clone`" -- `struct G[T] { v: T }; impl[T: Clone] G[T] { fn get(ref self) -> T { self.v.clone() } }` then `G { v: "x".to_string() }.get()` fails check, annotated or not; a `for` loop over an `impl[T: Clone] Iterator for Rep[T]` at `T = String` is accepted | — |
-| B-2026-10-05-44 | 2026-10-05 | codegen | medium | `.clone()` ON A BINDING FROM A DESTRUCTURING `let` INSIDE A GENERIC FUNCTION FAILS `karac build` AT `T = String` -- `fn f[T: Clone](x: ref T) -> T { let (v, n) = (x.clone(), 1); v.clone() }` called as `f("ab".to_string())` dies with "no handler for method 'clone' on variable 'v'" while `--interp` prints `ab` | — |
 | B-2026-10-05-45 | 2026-10-05 | interp+codegen | medium | A GENERIC CALLEE THAT REBINDS ONE BY-VALUE PARAM'S NAME TO ANOTHER PARAM (`fn g5[T](s: T, o: T) -> T { let s = o; s }`) RUNS THE RETURNED PARAM'S `Drop` BODY TWICE ON EVERY SURFACE -- `let r = g5(R { id: 26 }, R { id: 27 })` prints `d27 d26 k27 d27`; the non-generic twin and the generic `let t = o; t` are correct | — |
+| B-2026-10-05-71 | 2026-10-05 | codegen | medium | A TUPLE DESTRUCTURED STRAIGHT OUT OF A `match` OR `if` EXPRESSION NEVER DROPS ITS LEAVES COMPILED -- `let (v, n) = match 1 { 1 => (x.clone(), 1), _ => (x.clone(), 2) }; println(f"{v} {n}")` leaks `v`'s buffer (3 B) and an `R` leaf with a `Drop` body prints `1 1` compiled against `1 1` then `drop 1` interpreted, while binding the tuple first (`let t = match ..; let (v, n) = t;`) and a tuple-literal RHS are clean | — |
 
 ### Relocated
 
@@ -3745,9 +3745,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-29 | interp+codegen | medium | A GENERIC CALLEE THAT SHADOWS ITS BY-VALUE PARAM WITH AN UNRELATED VALUE LOSES THE ARGUMENT'S `Drop` BODY ON EVERY SURFACE -- `fn g1[T](s: T, n: i64)… | 117da5075 |
 | B-2026-10-05-30 | autopar | high | AUTO-PAR FANS OUT A SUMMING LOOP WHOSE BODY PRINTS, AND THE PRINTED LINES COME OUT IN A DIFFERENT ORDER ON EVERY RUN -- the reduction lane never asks… | cc0766f52 |
 | B-2026-10-05-40 | codegen | high | `self = v` IN A `mut ref self` METHOD DOES NOTHING UNDER `karac build`: the method returns with the receiver unchanged and the new value leaks, while… | 9903a4f6c |
+| B-2026-10-05-44 | codegen | medium | `.clone()` ON A BINDING FROM A DESTRUCTURING `let` INSIDE A GENERIC FUNCTION FAILS `karac build` AT `T = String` -- `fn f[T: Clone](x: ref T) -> T {… | 51917d08e |
 | B-2026-10-05-46 | cli | medium | A PARSE ERROR IN A FILE THAT ALSO HOLDS A MULTI-ASSIGN (`a, b = b, a`) CRASHES `karac check`, `check --output=json`, `run` AND `build` -- `unreachabl… | fe7c86471 |
 | B-2026-10-05-47 | typecheck | low | `(s[i], s[j]) = (s[j], s[i])` IS REFUSED WITH THE RIGHT ADVICE AND NO EDIT -- E_ASSIGN_TARGET_NOT_PLACE says to drop the parentheses but carries no f… | 14d09a2ad |
 | B-2026-10-05-48 | parser | low | `{x:?}` IN AN F-STRING IS REJECTED AS "unsupported type `?`", WHICH READS AS A MISTYPED FORMAT TYPE -- it is Debug formatting, reserved by the design… | a6dec2fc2 |
+| B-2026-10-05-70 | codegen | high | A FRESH `String` OR `Vec` TEMPORARY PASSED TO A GENERIC `ref T` / `mut ref` PARAMETER IS FREED TWICE UNDER `karac build` -- `fn f[T](x: ref T) -> i64… | 215a356e2 |
 
 </details>
 
