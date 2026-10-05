@@ -1811,15 +1811,14 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         let te = match self.fn_sig.fn_return_type_exprs.get(name.as_str()) {
-            Some(te) => te,
-            None => self
-                .mono_state
-                .generic_fns
-                .get(name.as_str())?
-                .return_type
-                .as_ref()?,
+            Some(te) => self.callee_param_te_for_call(te, &object.span),
+            None => match self.mono_state.generic_fns.get(name.as_str()) {
+                Some(f) => self.callee_param_te_for_call(f.return_type.as_ref()?, &object.span),
+                // B-2026-10-04-43 — a CLOSURE callee: its recorded `Fn(..) ->
+                // W[String]` type is already concrete at the call site.
+                None => self.subst_monomorph_type_params(&self.closure_call_return_te(callee)?),
+            },
         };
-        let te = self.callee_param_te_for_call(te, &object.span);
         match &te.kind {
             TypeKind::Path(p) if p.generic_args.as_ref().is_some_and(|a| !a.is_empty()) => Some(te),
             _ => None,
@@ -5544,6 +5543,37 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// The return type of a closure callee's recorded `Fn(..) -> R` type.
+    fn closure_call_return_te(&self, callee: &Expr) -> Option<TypeExpr> {
+        let TypeKind::FnType { return_type, .. } = &self
+            .span_tables
+            .fn_value_typed_exprs
+            .get(&(callee.span.offset, callee.span.length))?
+            .kind
+        else {
+            return None;
+        };
+        return_type.as_deref().cloned()
+    }
+
+    /// B-2026-10-04-43 — the user struct a CLOSURE call returns, read off the
+    /// callee's recorded `Fn(..) -> R` type (`fn_value_typed_exprs`, the table
+    /// `compile_closure_value_call` lowers the call from). A closure binding has
+    /// no `fn_return_type_names` entry, so `h(mk(47)).id` could not type its
+    /// receiver while `let r = h(mk(47)); r.id` could. Struct heads only: the
+    /// caller wants a field layout.
+    fn closure_call_return_struct_name(&self, callee: &Expr) -> Option<String> {
+        let ret = self.closure_call_return_te(callee)?;
+        let TypeKind::Path(p) = &ret.kind else {
+            return None;
+        };
+        let name = p.segments.last()?;
+        self.type_decls
+            .struct_field_names
+            .contains_key(name.as_str())
+            .then(|| name.clone())
+    }
+
     pub(super) fn field_index_for(&self, object: &Expr, field: &str) -> Option<u32> {
         // Try to resolve by walking the object expression to its
         // user-type name, then looking up `field` in that struct's
@@ -6292,7 +6322,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             .return_type
                             .as_ref()?;
                         self.call_tuple_elem_type_name(expr, ret)
-                    }),
+                    })
+                    .or_else(|| self.closure_call_return_struct_name(callee)),
                 ExprKind::Path { segments, .. } if segments.len() == 2 => self
                     .fn_sig
                     .fn_return_type_names
