@@ -7511,6 +7511,77 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(val)
     }
 
+    /// B-2026-10-04-80 — rewrite a field / tuple / index place chain so every
+    /// element subscript that is not an identifier or an integer literal reads
+    /// a fresh `i64` local holding its value, evaluated here exactly once and
+    /// in source order. `None` when the chain has no such subscript. The
+    /// locals' names are pushed to `hoisted` for the caller to drop.
+    fn hoist_place_chain_subscripts(
+        &mut self,
+        expr: &Expr,
+        hoisted: &mut Vec<String>,
+    ) -> Result<Option<Expr>, String> {
+        let rebuilt = match &expr.kind {
+            ExprKind::FieldAccess { object, field } => self
+                .hoist_place_chain_subscripts(object, hoisted)?
+                .map(|o| ExprKind::FieldAccess {
+                    object: Box::new(o),
+                    field: field.clone(),
+                }),
+            ExprKind::TupleIndex { object, index } => self
+                .hoist_place_chain_subscripts(object, hoisted)?
+                .map(|o| ExprKind::TupleIndex {
+                    object: Box::new(o),
+                    index: *index,
+                }),
+            ExprKind::Index { object, index } => {
+                if matches!(&index.kind, ExprKind::Range { .. }) {
+                    return Ok(None);
+                }
+                let inner = self.hoist_place_chain_subscripts(object, hoisted)?;
+                let pure = matches!(index.kind, ExprKind::Identifier(_) | ExprKind::Integer(..));
+                if inner.is_none() && pure {
+                    return Ok(None);
+                }
+                let new_index = if pure {
+                    (**index).clone()
+                } else {
+                    let raw = self.compile_expr(index)?;
+                    let v = self.coerce_to_i64(raw)?;
+                    let fn_val = self
+                        .current_fn
+                        .ok_or_else(|| "index store: no current function".to_string())?;
+                    let name = format!("__ix_hoist_{}", self.indexed_elem_counter);
+                    self.indexed_elem_counter += 1;
+                    let i64_t = self.context.i64_type();
+                    let slot = self.create_entry_alloca(fn_val, &name, i64_t.into());
+                    self.builder.build_store(slot, v).unwrap();
+                    self.variables.insert(
+                        name.clone(),
+                        super::state::VarSlot {
+                            ptr: slot,
+                            ty: i64_t.into(),
+                        },
+                    );
+                    hoisted.push(name.clone());
+                    Expr {
+                        kind: ExprKind::Identifier(name),
+                        span: index.span,
+                    }
+                };
+                Some(ExprKind::Index {
+                    object: Box::new(inner.unwrap_or_else(|| (**object).clone())),
+                    index: Box::new(new_index),
+                })
+            }
+            _ => None,
+        };
+        Ok(rebuilt.map(|kind| Expr {
+            kind,
+            span: expr.span,
+        }))
+    }
+
     pub(super) fn compile_index_store(
         &mut self,
         object: &Expr,
@@ -7859,6 +7930,21 @@ impl<'ctx> super::Codegen<'ctx> {
             index: tidx,
         } = &object.kind
         {
+            // B-2026-10-04-80 — a subscript with side effects under the tuple
+            // hop (`hs[idx(0)].t.1[0] = 4`). The place-chain resolvers below
+            // re-evaluate an element subscript to recompute its pointer, so
+            // they admit only an identifier or literal and the store fell to
+            // the "must be a variable" gate. Evaluate each such subscript once,
+            // left to right, into a local and retry on the rewritten chain.
+            let mut hoisted: Vec<String> = Vec::new();
+            if let Some(rewritten) = self.hoist_place_chain_subscripts(object, &mut hoisted)? {
+                let result =
+                    self.compile_index_store(&rewritten, index, val, rhs_is_fresh, rhs_src);
+                for h in &hoisted {
+                    self.variables.remove(h);
+                }
+                return result;
+            }
             // B-2026-09-30-88 — an `Array[T, N]` element (`a.0[0] = v` over
             // `(Array[P, 1], i64)`). The typechecker records only `Vec` /
             // `VecDeque` / slice elements in `temp_recv_elem_types`, so this
