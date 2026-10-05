@@ -13627,6 +13627,44 @@ fn rust_macro_in_value_position_is_recognized_too() {
     assert_eq!(&src[edit.offset..edit.offset + edit.length], "!");
 }
 
+/// B-2026-10-05-78: `|x: i64| -> f64 { .. }` is Rust's closure
+/// spelling. A Kāra closure declares no return type, and the arrow used to
+/// reach the body parser as "Expected expression, found Arrow" followed by a
+/// cascade. It is now one named error whose fix deletes the arrow and the type
+/// up to the body, and the repaired source parses clean, for a block body, an
+/// expression body and an `own` closure alike.
+#[test]
+fn closure_return_type_arrow_is_named_and_deleted() {
+    for (src, repaired) in [
+        (
+            "fn main() {\n let f = |x: i64| -> f64 { x as f64 / 2.0 };\n println(f\"{f(3)}\");\n}",
+            "let f = |x: i64| { x as f64 / 2.0 };",
+        ),
+        (
+            "fn main() {\n let f = |x: i64| -> i64 x + 1;\n println(f\"{f(3)}\");\n}",
+            "let f = |x: i64| x + 1;",
+        ),
+        (
+            "fn main() {\n let n = 2;\n let f = own || -> Vec[i64] { [n] };\n println(f\"{f().len()}\");\n}",
+            "let f = own || { [n] };",
+        ),
+    ] {
+        let result = karac::parse(src);
+        assert_eq!(result.errors.len(), 1, "one error, no cascade: {:?}", result.errors);
+        assert!(
+            result.errors[0]
+                .message
+                .contains("a closure does not declare its return type"),
+            "got: {}",
+            result.errors[0].message
+        );
+        assert_eq!(&src[result.errors[0].span.offset..][..2], "->");
+        let fixed = apply_parse_fixes(src, &result);
+        assert!(fixed.contains(repaired), "repaired: {fixed}");
+        assert!(karac::parse(&fixed).errors.is_empty(), "repaired source parses: {fixed}");
+    }
+}
+
 /// The guard on the macro recognition: an ordinary prefix negation must still
 /// become `not`, and must keep its separator.
 #[test]

@@ -1923,6 +1923,36 @@ impl super::Parser {
             self.expect(&Token::Pipe)?;
         }
 
+        // `|x: i64| -> f64 { .. }` is Rust's spelling. A Kāra closure has no
+        // return-type annotation (the type comes from the body), so the arrow
+        // used to fall through to the body parser and surface as "Expected
+        // expression, found Arrow" plus a cascade of follow-on errors
+        // (B-2026-10-05-78). Name it, consume the type so the body
+        // still parses, and offer the deletion as a fix: from the arrow up to
+        // the first token of the body, so `karac fix` leaves `|x: i64| {`.
+        if self.check(&Token::Arrow) {
+            let arrow_span = self.current_span();
+            self.advance();
+            let ty = self.parse_type()?;
+            let body_start = self.current_span().offset;
+            let ty_text = crate::formatter::render_type_expr(&ty);
+            self.error_at(
+                &format!(
+                    "a closure does not declare its return type; `|..| -> {ty_text}` is Rust \
+                     syntax -- remove `-> {ty_text}`, the type is inferred from the body"
+                ),
+                arrow_span,
+            );
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&arrow_span),
+                crate::resolver::TextEdit {
+                    offset: arrow_span.offset,
+                    length: body_start - arrow_span.offset,
+                    replacement: String::new(),
+                },
+            );
+        }
+
         let body = if self.check(&Token::LeftBrace) {
             let block = self.parse_block()?;
             Expr {
