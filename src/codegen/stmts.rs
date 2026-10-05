@@ -20948,6 +20948,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         // an inline buffer on `Err`, and the emitted drop
                         // dispatches on the live tag, so a both-sides gate would
                         // decline the common shape.
+                        //
+                        // B-2026-10-04-65 — an `Option[shared]` leaf is neither:
+                        // its payload is a refcounted box, which no tracker below
+                        // releases, so once the cap-zero handed the element away
+                        // the box leaked and its `Drop` body never ran. The leaf
+                        // takes the source's reference, as a plain `let` would.
+                        if leaf_name == "Option" {
+                            if let (Some((_, info)), Some(option_ty)) = (
+                                self.option_inner_shared_type_for_type_expr(&te),
+                                self.type_decls
+                                    .enum_layouts
+                                    .get("Option")
+                                    .map(|l| l.llvm_type),
+                            ) {
+                                self.track_rc_option_var(name, slot.ptr, option_ty, info.heap_type);
+                                self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, idx as u32, &te);
+                                continue;
+                            }
+                        }
                         let boxed_payload = if leaf_name == "Result" {
                             Self::result_payload_tes(&te).is_some_and(|(ok, err)| {
                                 self.option_payload_struct_or_enum_drop_ok(&ok)
@@ -21185,6 +21204,41 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-10-04-65 — a `shared` leaf, bare or inside an
+                    // `Option`. The fresh tuple handed this leaf the one
+                    // reference it held, and no registrar below names a
+                    // refcounted value (the struct arm of
+                    // `track_destructure_leaf_cleanup` skips `shared` types and
+                    // the optres arm walks boxed payloads), so the box was never
+                    // released: 16 B lost and the `Drop` body silent, where
+                    // `--interp` ran it. The same owners a plain `let` of the
+                    // value registers, with no inc: the reference is moved in.
+                    if let Some(te) = elem_tes.and_then(|tes| tes.get(idx)) {
+                        let te = &self.shared_leaf_call_te(source, te);
+                        if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                            if let Some(heap_type) = self.shared_heap_type_for_type_expr(te) {
+                                self.track_rc_var(name, slot.ptr, heap_type);
+                                continue;
+                            }
+                            if let Some((_, info)) = self.option_inner_shared_type_for_type_expr(te)
+                            {
+                                if let Some(option_ty) = self
+                                    .type_decls
+                                    .enum_layouts
+                                    .get("Option")
+                                    .map(|l| l.llvm_type)
+                                {
+                                    self.track_rc_option_var(
+                                        name,
+                                        slot.ptr,
+                                        option_ty,
+                                        info.heap_type,
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                    }
                     // B-2026-09-04-9 — an `Option[P]` leaf, the FRESH-source
                     // twin of the arm B-2026-09-03-15 added to
                     // `place_source_tuple_leaf_cleanups`. The call below is
@@ -21331,6 +21385,42 @@ impl<'ctx> super::Codegen<'ctx> {
                         .builder
                         .build_extract_value(sv, idx as u32, "tuple.discard")
                         .unwrap();
+                    // B-2026-10-04-65 — a discarded `shared` element, bare or
+                    // inside an `Option`: dead at once, so release its
+                    // reference HERE, on a one-shot frame, which is where
+                    // `--interp` runs the body. Nothing else owns it.
+                    if let Some(te) = elem_tes.and_then(|tes| tes.get(idx)) {
+                        let te = &self.shared_leaf_call_te(source, te);
+                        let bare = self.shared_heap_type_for_type_expr(te);
+                        let opt = self
+                            .option_inner_shared_type_for_type_expr(te)
+                            .map(|(_, info)| info.heap_type);
+                        let option_ty = self
+                            .type_decls
+                            .enum_layouts
+                            .get("Option")
+                            .map(|l| l.llvm_type);
+                        if let (Some(heap_type), BasicValueEnum::PointerValue(boxp)) = (bare, elem)
+                        {
+                            // `RcDec` reloads a NAMED slot; under a name no
+                            // scope binds it decs `ptr` as the box itself.
+                            self.drop_rc.scope_cleanup_actions.push(Vec::new());
+                            self.track_rc_var("__tuple_discard_rc", boxp, heap_type);
+                            self.drain_top_frame_with_emit();
+                            continue;
+                        }
+                        if let (Some(heap_type), Some(option_ty)) = (opt, option_ty) {
+                            let fn_val = self.current_fn.unwrap();
+                            let synth = format!("__tuple_discard_rc_{}", self.indexed_elem_counter);
+                            self.indexed_elem_counter += 1;
+                            let alloca = self.create_entry_alloca(fn_val, &synth, elem.get_type());
+                            self.builder.build_store(alloca, elem).unwrap();
+                            self.drop_rc.scope_cleanup_actions.push(Vec::new());
+                            self.track_rc_option_var(&synth, alloca, option_ty, heap_type);
+                            self.drain_top_frame_with_emit();
+                            continue;
+                        }
+                    }
                     // B-2026-09-22-13 — a discarded `Array[T, N]` element of a
                     // fresh tuple, the wildcard twin of the binding leaf's
                     // array arm: dead at once, so its element bodies run and
@@ -22530,6 +22620,34 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-10-04-65 — a fresh tuple's element type with the CALL's generic
+    /// parameters bound: a generic callee declares `(T, i64)`, and `T` names
+    /// no type here, so a `shared` element read as nothing to release.
+    fn shared_leaf_call_te(&self, source: &Expr, te: &TypeExpr) -> TypeExpr {
+        match self
+            .span_tables
+            .call_type_subs_te
+            .get(&(source.span.offset, source.span.length))
+        {
+            Some(subs) => self.subst_monomorph_type_params(
+                &super::helpers::subst_type_params_in_type_expr(te, subs),
+            ),
+            None => te.clone(),
+        }
+    }
+
+    /// B-2026-10-04-65 — does `te` hold a `shared` box at a tuple leaf: the
+    /// type itself, an `Option` of one, or a nested tuple containing either.
+    fn te_holds_shared_leaf(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(inner) => inner.iter().any(|t| self.te_holds_shared_leaf(t)),
+            _ => {
+                self.shared_heap_type_for_type_expr(te).is_some()
+                    || self.option_inner_shared_type_for_type_expr(te).is_some()
+            }
+        }
+    }
+
     pub(super) fn refined_tuple_literal_elem_te(&self, e: &Expr) -> Option<TypeExpr> {
         match &e.kind {
             // A collection BINDING: rebuild `<head>[<elem>]` from the two
@@ -22656,6 +22774,30 @@ impl<'ctx> super::Codegen<'ctx> {
                             kind: TypeKind::Tuple(tes.clone()),
                             span: e.span,
                         });
+                    }
+                }
+                // B-2026-10-04-65 — a TUPLE local holding a `shared` element
+                // (bare or in an `Option`), moved whole into the literal
+                // (`let p = mks(1); let r = ((p, 5), 6);`). Named only as the
+                // head `Tuple`, the element read as heapless, so the literal's
+                // binding registered no drop while the move had already
+                // emptied `p`'s slot: the box leaked and its `Drop` body never
+                // ran. Gated on the shared leaf, the one element kind the
+                // source's disarm (`suppress_source_vec_cleanup_for_arg`)
+                // already hands over and nothing downstream picks up. A
+                // parameter or a view of one is excluded: the caller owns
+                // those references.
+                if !self.fn_ctx.current_fn_param_names.contains(n.as_str())
+                    && !self.payload_vars.param_view_locals.contains(n.as_str())
+                    && !self.borrow_vars.ref_params.contains_key(n.as_str())
+                {
+                    if let Some(tes) = self.tuple_var_elem_tes(n.as_str()) {
+                        if tes.iter().any(|t| self.te_holds_shared_leaf(t)) {
+                            return Some(TypeExpr {
+                                kind: TypeKind::Tuple(tes),
+                                span: e.span,
+                            });
+                        }
                     }
                 }
                 // B-2026-09-26-54 — a NAMED `Array[T, N]` local or by-value

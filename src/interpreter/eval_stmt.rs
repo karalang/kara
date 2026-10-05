@@ -6122,6 +6122,44 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
         }
+        // B-2026-10-04-65 — a discarded `shared` leaf, bare or inside an
+        // `Option`. The walk above is handed CLONES, so its last-reference test
+        // always saw the extra count and declined: `let (_, b) = mks(1);` ran no
+        // body. Asked again here on the leaf IN PLACE, now that those clones
+        // are gone, so a value the source still holds (a named tuple) keeps
+        // declining and only a fresh tuple's element fires. Codegen's twin
+        // releases the same two leaf kinds on the wildcard arm of
+        // `track_tuple_destructure_leaf_cleanups`.
+        if let (PatternKind::Tuple(pats), Value::Tuple(items)) = (&pattern.kind, val) {
+            fn shared_leaves<'v>(pats: &[Pattern], items: &'v [Value], out: &mut Vec<&'v Value>) {
+                for (p, v) in pats.iter().zip(items.iter()) {
+                    match (&p.kind, v) {
+                        (PatternKind::Wildcard, Value::SharedStruct(_)) => out.push(v),
+                        (
+                            PatternKind::Wildcard,
+                            Value::EnumVariant {
+                                enum_name,
+                                data: EnumData::Tuple(vs),
+                                ..
+                            },
+                        ) if enum_name == "Option"
+                            && matches!(vs.first(), Some(Value::SharedStruct(_))) =>
+                        {
+                            out.push(v)
+                        }
+                        (PatternKind::Tuple(inner), Value::Tuple(inner_items)) => {
+                            shared_leaves(inner, inner_items, out);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let mut leaves = Vec::new();
+            shared_leaves(pats, items, &mut leaves);
+            for leaf in leaves {
+                self.run_value_held_shared_user_drops(leaf);
+            }
+        }
     }
 
     /// B-2026-09-20-27 — the root name of an index/field place chain
