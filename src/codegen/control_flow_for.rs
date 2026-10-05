@@ -5712,12 +5712,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
             return false;
         };
-        if params.len() != 1
-            || !matches!(
-                &params[0].pattern.kind,
-                PatternKind::Binding(_) | PatternKind::Wildcard
-            )
-        {
+        if params.len() != 1 || !Self::flat_map_param_pattern_ok(&params[0].pattern) {
             return false;
         }
         Self::flat_map_inner_iterable_ok(body)
@@ -5742,6 +5737,18 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         };
         method == "flatten" && args.is_empty() && Self::flat_map_inner_iterable_ok(object)
+    }
+
+    /// The closure-param shapes the flat_map desugar binds on its outer loop:
+    /// a name, `_`, or a tuple of those (`|(k, n)|`, `|(_, n)|`, nested), the
+    /// irrefutable patterns a `for` loop destructures without a match
+    /// (B-2026-10-05-108).
+    pub(super) fn flat_map_param_pattern_ok(p: &Pattern) -> bool {
+        match &p.kind {
+            PatternKind::Binding(_) | PatternKind::Wildcard => true,
+            PatternKind::Tuple(elems) => elems.iter().all(Self::flat_map_param_pattern_ok),
+            _ => false,
+        }
     }
 
     /// Inner-iterable whitelist for the flat_map desugar: shapes `compile_for`
@@ -5788,9 +5795,15 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.indexed_elem_counter += 1;
         let uid = self.indexed_elem_counter;
-        let p = match &params[0].pattern.kind {
-            PatternKind::Binding(n) => n.clone(),
-            PatternKind::Wildcard => format!("__fmp_{uid}"),
+        // B-2026-10-05-108 — a destructuring param (`|(k, n)|` over a
+        // `Map`/`SortedMap` walk or a Vec of pairs) binds on the outer loop
+        // exactly as `for (k, n) in <recv>` does.
+        let outer_pattern = match &params[0].pattern.kind {
+            PatternKind::Wildcard => Pattern {
+                kind: PatternKind::Binding(format!("__fmp_{uid}")),
+                span: *span,
+            },
+            _ if Self::flat_map_param_pattern_ok(&params[0].pattern) => params[0].pattern.clone(),
             _ => return Ok(None),
         };
         if !Self::flat_map_inner_iterable_ok(inner) {
@@ -5828,10 +5841,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let outer_for = Expr {
             kind: ExprKind::For {
                 label: Some(outer_label),
-                pattern: Pattern {
-                    kind: PatternKind::Binding(p),
-                    span: *span,
-                },
+                pattern: outer_pattern,
                 iterable: Box::new(recv.clone()),
                 attributes: Vec::new(),
                 body: Block {

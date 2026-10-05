@@ -1415,14 +1415,15 @@ fn e2e_for_unlowered_iter_adaptors_bail_loud() {
             // `flat_map` for-loops are now LOWERED via the nested-loop
             // desugar (test_e2e_for_flat_map) — INCLUDING labeled loops
             // (the label lands on the outer loop; labeled continues are
-            // renamed to the inner loop). The bail contract covers a shape
-            // the desugar still declines: a DESTRUCTURING closure param.
+            // renamed to the inner loop), and a DESTRUCTURING closure param
+            // (B-2026-10-05-108, e2e_flat_map_with_tuple_param_or_mapped_inner).
+            // The bail contract covers an inner the desugar still declines:
+            // a reversed range, which is off its proven-to-iterate list.
             // The interpreter handles it.
-            "flat_map (destructuring closure param)",
-            "let ps: Vec[(i64, i64)] = Vec[(1i64, 2i64), (3i64, 4i64)];\n\
-                 let vv: Vec[Vec[i64]] = Vec[Vec[1i64]];\n\
+            "flat_map (reversed-range inner)",
+            "let ps: Vec[i64] = Vec[1i64, 4i64];\n\
                  let mut s = 0i64;\n\
-                 for y in ps.iter().flat_map(|(a, b)| vv[0].iter()) { s = s + y; }\n\
+                 for y in ps.iter().flat_map(|x| (0..x).rev()) { s = s + y; }\n\
                  println(f\"{s}\");",
         ),
         (

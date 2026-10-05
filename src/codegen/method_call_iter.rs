@@ -647,6 +647,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-10-05-108 — every other flat_map the `for`
+                // desugar accepts (a mapped inner `|x| (0..x).map(..)`, a
+                // destructuring param `|(k, n)|` over a Map or SortedMap walk)
+                // reached the loud dispatch-fail while `--interp` ran it.
+                if !fallible && Self::for_loop_iterates_flat_map(collect_recv) {
+                    if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                        return self.try_compile_flat_map_nested_collect(
+                            object.as_ref(),
+                            &params[0].pattern,
+                            body,
+                            call_span,
+                        );
+                    }
+                }
             }
             // B-2026-07-15-10 (zip→map): `A.iter().zip(B.iter()).map(f).collect()`
             // — a `map` whose base iterable is a `zip`. The general adaptor walk
@@ -6499,6 +6513,160 @@ impl<'ctx> super::Codegen<'ctx> {
         let inner_loop = for_loop(&inner_var, inner.clone(), vec![push_inner]);
         // Outer: `for <param> in <outer> { <inner_loop> }`
         let outer_loop = for_loop(param, outer.clone(), vec![inner_loop]);
+
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_vec, outer_loop],
+                final_expr: Some(Box::new(ident(&vec_name))),
+                span: sp,
+            }),
+            span: sp,
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `<outer>.flat_map(|<pat>| <inner>).collect()` for the shapes
+    /// `try_compile_flat_map_collect` leaves out (B-2026-10-05-108): a
+    /// destructuring closure param and a MAPPED inner. The emitted block is
+    ///
+    /// ```text
+    /// { let mut __fmn: Vec[T] = Vec.new();
+    ///   for <pat> in <outer> {
+    ///     for <q> in <src> { __fmn.push(<body>); }   // inner = <src>.map(|<q>| <body>)
+    ///     for __fmx in <inner> { __fmn.push(__fmx); } // any other inner
+    ///   }
+    ///   __fmn }
+    /// ```
+    ///
+    /// A mapped inner pushes the map body itself rather than a synthesized
+    /// loop variable. A body that builds a fresh value (`f"{k}-{i}"`) is then
+    /// MOVED into the Vec by `push`, which knows it is a temporary; bound to a
+    /// synthesized variable first, the value was also freed at the end of the
+    /// iteration and the Vec held freed Strings (measured: a double free).
+    pub(super) fn try_compile_flat_map_nested_collect(
+        &mut self,
+        outer: &Expr,
+        pattern: &Pattern,
+        inner: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let vec_te = match self
+            .drop_rc
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        if !matches!(
+            &vec_te.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec")
+        ) {
+            return Ok(None);
+        }
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = *call_span;
+        let vec_name = format!("__fmn_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp,
+        };
+        let for_loop = |pattern: Pattern, iterable: Expr, body: Vec<Stmt>| Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern,
+                    iterable: Box::new(iterable),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: body,
+                        final_expr: None,
+                        span: sp,
+                    },
+                },
+                span: sp,
+            }),
+            span: sp,
+        };
+        let push = |value: Expr| Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(ident(&vec_name)),
+                    method: "push".to_string(),
+                    turbofish: None,
+                    args: vec![CallArg {
+                        label: None,
+                        mut_marker: false,
+                        mut_marker_span: None,
+                        value,
+                        span: sp,
+                    }],
+                    args_close_span: sp,
+                },
+                span: sp,
+            }),
+            span: sp,
+        };
+
+        let let_vec = Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(vec_name.clone()),
+                    span: sp,
+                },
+                ty: Some(vec_te),
+                value: Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(Expr {
+                            kind: ExprKind::Path {
+                                segments: vec!["Vec".to_string(), "new".to_string()],
+                                generic_args: None,
+                            },
+                            span: sp,
+                        }),
+                        args: vec![],
+                    },
+                    span: sp,
+                },
+            },
+            span: sp,
+        };
+
+        // A mapped inner pushes its body; anything else pushes the element.
+        let mapped = match &inner.kind {
+            ExprKind::MethodCall {
+                object: src,
+                method,
+                args,
+                ..
+            } if method == "map" && args.len() == 1 => match &args[0].value.kind {
+                ExprKind::Closure { params, body, .. }
+                    if params.len() == 1 && Self::flat_map_param_pattern_ok(&params[0].pattern) =>
+                {
+                    Some(((**src).clone(), params[0].pattern.clone(), (**body).clone()))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let inner_loop = match mapped {
+            Some((src, q, body)) => for_loop(q, src, vec![push(body)]),
+            None => {
+                let var = format!("__fmx_{}", uid);
+                for_loop(
+                    Pattern {
+                        kind: PatternKind::Binding(var.clone()),
+                        span: sp,
+                    },
+                    inner.clone(),
+                    vec![push(ident(&var))],
+                )
+            }
+        };
+        let outer_loop = for_loop(pattern.clone(), outer.clone(), vec![inner_loop]);
 
         let block = Expr {
             kind: ExprKind::Block(Block {
