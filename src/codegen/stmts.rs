@@ -19925,6 +19925,40 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-10-05-71 — for an `if` / `match` / block RHS, the first value
+    /// leaf when EVERY leaf is a tuple literal of fresh elements (the tuple
+    /// discard rule, `discard_tuple_elem_is_fresh_expr`), else `None`.
+    /// Fail-closed: a leaf that names a place, diverges or is not a tuple
+    /// literal declines the whole branch, because handing a named binding's
+    /// storage to a leaf would make two owners.
+    fn branch_leaves_mint_owned_tuples<'e>(&self, value: &'e Expr) -> Option<&'e ExprKind> {
+        if !matches!(
+            &value.kind,
+            ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Block(_)
+        ) {
+            return None;
+        }
+        if let ExprKind::If { else_branch, .. } = &value.kind {
+            else_branch.as_ref()?;
+        }
+        let mut leaves = Vec::new();
+        Self::branch_value_leaves(value, &mut leaves);
+        if leaves.is_empty() {
+            return None;
+        }
+        let all = leaves.iter().all(|l| match &l.kind {
+            ExprKind::Tuple(elems) => {
+                !elems.is_empty()
+                    && elems.iter().all(|e| {
+                        self.discard_tuple_elem_is_fresh_expr(e)
+                            || self.tuple_elem_is_movable_drop_struct_place(e)
+                    })
+            }
+            _ => false,
+        });
+        all.then(|| &leaves[0].kind)
+    }
+
     fn finish_owned_tuple_destructure(
         &mut self,
         pattern: &Pattern,
@@ -19953,9 +19987,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // holds a rodata element. This site's leaf frees are cap-guarded, so a
         // rodata element is a no-op here; that is a property of these drops, not
         // of every consumer.
+        // B-2026-10-05-71 — a BRANCH whose every value leaf is such a literal
+        // (`let (v, n) = match k { 1 => (x.clone(), 1), _ => (x.clone(), 2) }`,
+        // the `if` and block spellings too). Declined, the destructure took
+        // the place-source path, whose "source" is a merged temporary nothing
+        // frees: each leaf leaked and its `Drop` body never ran compiled.
+        let branch_tuple = self.branch_leaves_mint_owned_tuples(value);
         let fresh = self.expr_yields_fresh_owned_temp(value)
             || matches!(&value.kind, ExprKind::Tuple(_))
-            || self.par_join_mints_owned_tuple(value);
+            || self.par_join_mints_owned_tuple(value)
+            || branch_tuple.is_some();
         if !fresh {
             // #21 — a PLACE source (`let (t, n) = h.pe`): the source struct's
             // `NestedTuple` drop now frees the tuple's enum / nested-struct
@@ -20029,7 +20070,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
                     .collect::<Vec<_>>(),
             ),
-            _ => self.tuple_arg_elem_type_exprs(value),
+            _ => match branch_tuple {
+                // The element types of one leaf, refined as a literal's are;
+                // the typechecker unified every leaf with it.
+                Some(ExprKind::Tuple(elems)) => Some(
+                    elems
+                        .iter()
+                        .map(|e| {
+                            self.refined_tuple_literal_elem_te(e)
+                                .unwrap_or_else(|| self.infer_arg_elem_te(e))
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                _ => self.tuple_arg_elem_type_exprs(value),
+            },
         };
         self.track_tuple_destructure_leaf_cleanups(pats, sv, elem_tes.as_deref(), value);
         Ok(())

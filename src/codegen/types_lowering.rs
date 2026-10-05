@@ -1408,7 +1408,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// of an `if`, every arm of a `match`, recursively. Statements inside a
     /// block are not leaves (a `return` there leaves the function, it does not
     /// produce the value), and a block with no tail contributes nothing.
-    fn branch_value_leaves<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+    pub(super) fn branch_value_leaves<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
         match &e.kind {
             ExprKind::Block(b) => {
                 if let Some(fe) = &b.final_expr {
