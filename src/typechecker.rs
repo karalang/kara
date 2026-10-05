@@ -2332,6 +2332,13 @@ pub struct TypeChecker<'a> {
     /// returns + demands.
     pub(super) closure_return_types: Vec<ClosureReturnFrame>,
     pub(super) current_self_type: Option<Type>,
+    /// B-2026-09-28-73 — inside `impl[T] G[T]` the receiver is typed as the
+    /// ERASED `G` (see the fallback arm of `check_impl_block`'s `self_type`),
+    /// while `G[T]` written in a signature, and a constructor like `G.Y` in
+    /// the body, carry their args. This holds the impl target WITH its args,
+    /// set only while that erasure is in effect in a GENERIC impl, so `check_assignable` can
+    /// read the erased `G` as the `G[T]` it stands for.
+    pub(super) current_impl_target: Option<Type>,
     /// FE-3c — true while type-checking the body of a `#[gpu]` function, so
     /// the closure-capture hook (`closure_type_with_capture_inference`) can
     /// reject closures that capture host (non-`GpuSafe`) state. Saved/
@@ -2858,6 +2865,7 @@ impl<'a> TypeChecker<'a> {
             break_value_types: Vec::new(),
             closure_return_types: Vec::new(),
             current_self_type: None,
+            current_impl_target: None,
             in_defer: false,
             neg_validated_suffixed_literal: None,
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
@@ -5046,6 +5054,32 @@ impl<'a> TypeChecker<'a> {
         )
     }
 
+    /// B-2026-09-28-73 — one side is the erased receiver type `G` of the
+    /// enclosing `impl[..] G[..]` and the other is `G[args]` compatible with
+    /// that impl's target: the two spell the same type. Covers `return self`
+    /// from `-> G[T]` and `return G.Y` from `-> Self`. Only a generic impl
+    /// sets the target (see `check_impl_block`), so inside a concrete
+    /// `impl G[i64]` nothing changes.
+    fn erased_impl_self_matches(&self, expected: &Type, found: &Type) -> bool {
+        let Some(Type::Named {
+            name: target,
+            args: target_args,
+        }) = &self.current_impl_target
+        else {
+            return false;
+        };
+        let erased =
+            |t: &Type| matches!(t, Type::Named { name, args } if name == target && args.is_empty());
+        let full = |t: &Type| match t {
+            Type::Named { name, args } if name == target && args.len() == target_args.len() => args
+                .iter()
+                .zip(target_args)
+                .all(|(a, b)| types_compatible(a, b)),
+            _ => false,
+        };
+        (erased(expected) && full(found)) || (full(expected) && erased(found))
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
         // B-2026-08-20-13 — a FLOAT never flows implicitly into an INTEGER
         // slot. `types_compatible` treats any int/uint/float pair as
@@ -5111,6 +5145,9 @@ impl<'a> TypeChecker<'a> {
             // check can reject a multi-witness existential. No-op unless
             // `expected` IS that existential and `found` is concrete.
             self.note_return_impl_trait_witness(expected, found, &span);
+            return true;
+        }
+        if self.erased_impl_self_matches(expected, found) {
             return true;
         }
         if Self::is_once_into_fn_shape(expected, found) {

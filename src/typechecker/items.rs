@@ -1861,7 +1861,16 @@ impl<'a> super::TypeChecker<'a> {
 
         // Validate and bind parameters
         for param in &f.params {
-            let ty = self.lower_type_expr(&param.ty, &gp);
+            let mut ty = self.lower_type_expr(&param.ty, &gp);
+            // B-2026-09-28-73 — a `Self`-typed parameter names the impl
+            // target exactly as `self` and a `-> Self` return do (both
+            // resolved below), so `fn pick(self, o: Self) -> Self { o }`
+            // checks. A trait default body keeps `Self` abstract.
+            if let Some(st) = self_type {
+                if !Self::is_self_type(st) {
+                    ty = Self::resolve_self_in_type(ty, st);
+                }
+            }
             // `E_TYPE_VALUE_AT_RUNTIME` (substrate 2): a `Type` value is
             // first-class only at comptime, so a runtime function may not
             // declare a `Type` parameter. Legal only when the parameter is
@@ -3141,6 +3150,30 @@ impl<'a> super::TypeChecker<'a> {
             }
         };
 
+        // B-2026-09-28-73 — the target WITH its args, for as long as the
+        // fallback above erased them; see `current_impl_target`. Only for a
+        // GENERIC impl, whose args are all the impl's own params: a concrete
+        // `impl G[R]` keeps rejecting `return self` from `-> G[R]`, because
+        // codegen's receiver protocol for that spelling fails module
+        // verification (B-2026-09-27-115 withdrew the same widening).
+        let full_target = self.lower_type_expr(&imp.target_type, &gp);
+        let impl_target = match (&self_type, &full_target) {
+            (
+                Type::Named { name, args },
+                Type::Named {
+                    args: full_args, ..
+                },
+            ) if args.is_empty()
+                && !full_args.is_empty()
+                && full_args.iter().all(|a| matches!(a, Type::TypeParam(_)))
+                && name == &type_name =>
+            {
+                Some(full_target.clone())
+            }
+            _ => None,
+        };
+        let saved_impl_target = std::mem::replace(&mut self.current_impl_target, impl_target);
+
         self.validate_all_bounds(&imp.generic_params, &imp.where_clause, &gp);
 
         // Check that trait impls provide all required associated types,
@@ -3447,6 +3480,7 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         self.enclosing_bounds = saved_bounds;
+        self.current_impl_target = saved_impl_target;
         self.lint_override_stack.pop();
     }
 
