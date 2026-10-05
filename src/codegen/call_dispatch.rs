@@ -10138,6 +10138,309 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-10-05-118 — the struct a fresh by-value argument temp holds, when the
+    /// callee ENTRY-COPIES it and the copy leaves some enum field's payload
+    /// shared between the two frames.
+    ///
+    /// The fresh-temp twin of the named spelling's
+    /// [`Self::zero_uncopied_enum_fields_of_struct_arg`]: an entry-copied
+    /// struct's copy duplicates every enum payload except the kinds
+    /// [`Self::enum_payload_uncopied_by_entry_copy`] names, so for those the
+    /// callee's copy IS the caller's handle or box, and the callee's drop
+    /// releases it. A named binding has its field zeroed after the call; a
+    /// temp had nothing, so its own drop released the same payload again.
+    /// Measured on `ck(K { e: E.A(H { id: 13 }), n: 1 })` over `struct K { e:
+    /// E, n: i64 }`, `enum E { A(H), B }` and a `shared struct H`: one invalid
+    /// read and one invalid write per call at `-O0`, and a later allocation
+    /// aborting `malloc(): unaligned tcache chunk detected`.
+    ///
+    /// `None` unless the callee really entry-copies: a struct it takes by
+    /// TRANSFER is stood down whole elsewhere, a copy-UNSUPPORTED one is
+    /// caller-retained (the callee never releases anything), and a discarded
+    /// temp has no callee at all.
+    fn entry_copied_struct_temp_with_uncopied_enum(
+        &self,
+        arg: &Expr,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        callee_entry_copies_mono: bool,
+    ) -> Option<String> {
+        let name = self.owned_struct_temp_arg_name(arg).or_else(|| {
+            let key = match &arg.kind {
+                ExprKind::Call { callee, .. } => match &callee.kind {
+                    ExprKind::Identifier(n) => Some(n.clone()),
+                    ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                        Some(format!("{}.{}", segments[0], segments[1]))
+                    }
+                    _ => None,
+                },
+                ExprKind::MethodCall { object, method, .. }
+                    if !self.is_qualified_enum_variant_ctor(arg) =>
+                {
+                    self.type_name_of_expr(object)
+                        .map(|recv| format!("{recv}.{method}"))
+                }
+                _ => None,
+            }?;
+            self.fn_sig.fn_return_type_names.get(&key).cloned()
+        })?;
+        if self.type_decls.struct_types.get(name.as_str()) != Some(&agg_ty)
+            || self.type_decls.shared_types.contains_key(name.as_str())
+            || self
+                .type_decls
+                .struct_generic_params
+                .get(name.as_str())
+                .is_some_and(|g| !g.is_empty())
+            || !self.aggregate_param_copy_supported_struct(&name, &mut Vec::new())
+            || self.struct_param_owned_by_transfer(&name, callee_entry_copies_mono)
+            || !self.struct_has_uncopied_enum_payload(&name, &mut Vec::new())
+        {
+            return None;
+        }
+        Some(name)
+    }
+
+    /// Does `struct_name`, or a nested non-shared struct field it copies in
+    /// place, hold an enum field with a payload the entry copy leaves shared?
+    /// Pure: it decides whether any IR is emitted at all.
+    pub(super) fn struct_has_uncopied_enum_payload(
+        &self,
+        struct_name: &str,
+        stack: &mut Vec<String>,
+    ) -> bool {
+        if stack.iter().any(|s| s == struct_name) {
+            return false;
+        }
+        let Some(ftes) = self.type_decls.struct_field_type_exprs.get(struct_name) else {
+            return false;
+        };
+        stack.push(struct_name.to_string());
+        let found = ftes.iter().any(|fte| match self.uncopied_field_shape(fte) {
+            Some(UncopiedFieldShape::Enum(ename)) => {
+                !self.enum_payload_uncopied_by_entry_copy(&ename).is_empty()
+            }
+            Some(UncopiedFieldShape::Struct(sname)) => {
+                self.struct_has_uncopied_enum_payload(&sname, stack)
+            }
+            None => false,
+        });
+        stack.pop();
+        found
+    }
+
+    /// The two field shapes the walk follows: a concrete non-shared user enum
+    /// (`Option`/`Result` have their own copy machinery) and a concrete
+    /// non-shared user struct, which `deep_copy_struct_heap_fields_in_place`
+    /// recurses into. Anything generic is declined, since the declared field
+    /// type cannot be resolved here.
+    pub(super) fn uncopied_field_shape(&self, fte: &TypeExpr) -> Option<UncopiedFieldShape> {
+        let TypeKind::Path(p) = &fte.kind else {
+            return None;
+        };
+        if p.generic_args.as_ref().is_some_and(|g| !g.is_empty()) || p.segments.len() != 1 {
+            return None;
+        }
+        let head = p.segments[0].as_str();
+        if head == "Option" || head == "Result" || self.type_decls.shared_types.contains_key(head) {
+            return None;
+        }
+        if let Some(layout) = self.type_decls.enum_layouts.get(head) {
+            return (!layout.is_shared).then(|| UncopiedFieldShape::Enum(head.to_string()));
+        }
+        (self.type_decls.struct_types.contains_key(head)
+            && self
+                .type_decls
+                .struct_generic_params
+                .get(head)
+                .is_none_or(|g| g.is_empty()))
+        .then(|| UncopiedFieldShape::Struct(head.to_string()))
+    }
+
+    /// Per variant, the payload word ranges of `enum_name` that the entry copy
+    /// (`deep_copy_enum_heap_payload_in_place`) does NOT duplicate while the
+    /// enum's drop does release them — the kinds
+    /// [`Self::enum_param_owned_by_transfer`] answers true for, asked per
+    /// field so a variant the copy does duplicate is left alone.
+    pub(super) fn enum_payload_uncopied_by_entry_copy(
+        &self,
+        enum_name: &str,
+    ) -> Vec<(u64, Vec<(usize, usize)>)> {
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name) else {
+            return Vec::new();
+        };
+        let variant_tes: HashMap<String, Vec<TypeExpr>> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .map(|(_tag, name, tes)| (name, tes))
+            .collect();
+        let boxed_array_uncopied = !self.enum_boxed_array_payload_runs_user_drop(enum_name);
+        let mut out: Vec<(u64, Vec<(usize, usize)>)> = Vec::new();
+        for (vname, kinds) in &layout.field_drop_kinds {
+            let (Some(offsets), Some(tag)) =
+                (layout.field_word_offsets.get(vname), layout.tags.get(vname))
+            else {
+                continue;
+            };
+            let words: Vec<(usize, usize)> = kinds
+                .iter()
+                .zip(offsets.iter())
+                .enumerate()
+                .filter(|(fi, (kind, _))| match **kind {
+                    super::state::EnumDropKind::SharedRc => true,
+                    super::state::EnumDropKind::BoxedArray => boxed_array_uncopied,
+                    super::state::EnumDropKind::NestedOwnedStruct => variant_tes
+                        .get(vname)
+                        .and_then(|tes| tes.get(*fi))
+                        .and_then(|te| match &te.kind {
+                            TypeKind::Path(p) => p.segments.first().cloned(),
+                            _ => None,
+                        })
+                        .is_some_and(|sname| {
+                            !self.struct_is_self_referential(&sname)
+                                && self.enum_payload_struct_copy_declined(**kind, &sname)
+                        }),
+                    _ => false,
+                })
+                .map(|(_, (_, (start, n)))| (*start, *n))
+                .collect();
+            if !words.is_empty() {
+                out.push((*tag, words));
+            }
+        }
+        out.sort_by_key(|(t, _)| *t);
+        out
+    }
+
+    /// `val` with every uncopied enum payload (see
+    /// [`Self::enum_payload_uncopied_by_entry_copy`]) zeroed for its LIVE
+    /// variant, recursing through nested struct fields — the value the
+    /// caller's temp registrations then hold. The callee receives the
+    /// original `val`, so it alone releases those payloads. Zeroing only the
+    /// live variant's uncopied words leaves a payload the copy does duplicate
+    /// (a `String` in another variant of the same enum) armed for the
+    /// caller's own free.
+    fn zero_uncopied_enum_payloads_of_struct_temp(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        struct_name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        let Some(cur_fn) = self.current_fn else {
+            return val;
+        };
+        let scratch = self.create_entry_alloca(cur_fn, "uaf.tmp", agg_ty.into());
+        self.builder.build_store(scratch, val).unwrap();
+        self.zero_uncopied_enum_payloads_at(scratch, agg_ty, struct_name, &mut Vec::new());
+        self.builder
+            .build_load(agg_ty, scratch, "uaf.tmp.v")
+            .unwrap()
+    }
+
+    fn zero_uncopied_enum_payloads_at(
+        &mut self,
+        base_ptr: PointerValue<'ctx>,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        struct_name: &str,
+        stack: &mut Vec<String>,
+    ) {
+        if stack.iter().any(|s| s == struct_name) {
+            return;
+        }
+        let Some(ftes) = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name)
+            .cloned()
+        else {
+            return;
+        };
+        stack.push(struct_name.to_string());
+        for (idx, fte) in ftes.iter().enumerate() {
+            match self.uncopied_field_shape(fte) {
+                Some(UncopiedFieldShape::Enum(ename)) => {
+                    let plan = self.enum_payload_uncopied_by_entry_copy(&ename);
+                    let Some(layout) = self.type_decls.enum_layouts.get(ename.as_str()).cloned()
+                    else {
+                        continue;
+                    };
+                    if plan.is_empty() {
+                        continue;
+                    }
+                    let Ok(field_ptr) = self
+                        .builder
+                        .build_struct_gep(agg_ty, base_ptr, idx as u32, "uaf.ef")
+                    else {
+                        continue;
+                    };
+                    self.zero_live_enum_words(field_ptr, &layout, &plan);
+                }
+                Some(UncopiedFieldShape::Struct(sname)) => {
+                    let (Some(sty), true) = (
+                        self.type_decls.struct_types.get(sname.as_str()).copied(),
+                        self.struct_has_uncopied_enum_payload(&sname, &mut Vec::new()),
+                    ) else {
+                        continue;
+                    };
+                    let Ok(field_ptr) = self
+                        .builder
+                        .build_struct_gep(agg_ty, base_ptr, idx as u32, "uaf.sf")
+                    else {
+                        continue;
+                    };
+                    self.zero_uncopied_enum_payloads_at(field_ptr, sty, &sname, stack);
+                }
+                None => {}
+            }
+        }
+        stack.pop();
+    }
+
+    fn zero_live_enum_words(
+        &mut self,
+        enum_ptr: PointerValue<'ctx>,
+        layout: &super::state::EnumLayout<'ctx>,
+        plan: &[(u64, Vec<(usize, usize)>)],
+    ) {
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(layout.llvm_type, enum_ptr, 0, "uaf.tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "uaf.tag")
+            .unwrap()
+            .into_int_value();
+        let merge_bb = self.context.append_basic_block(fn_val, "uaf.merge");
+        let mut cases = Vec::new();
+        let mut bbs = Vec::new();
+        for (t, words) in plan {
+            let bb = self.context.append_basic_block(fn_val, "uaf.zero");
+            cases.push((i64_t.const_int(*t, false), bb));
+            bbs.push((bb, words.clone()));
+        }
+        self.builder.build_switch(tag, merge_bb, &cases).unwrap();
+        for (bb, words) in bbs {
+            self.builder.position_at_end(bb);
+            for (start, n) in words {
+                for w in 0..n {
+                    let wp = self
+                        .builder
+                        .build_struct_gep(
+                            layout.llvm_type,
+                            enum_ptr,
+                            (start + 1 + w) as u32,
+                            "uaf.wp",
+                        )
+                        .unwrap();
+                    self.builder.build_store(wp, i64_t.const_zero()).unwrap();
+                }
+            }
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+        self.builder.position_at_end(merge_bb);
+    }
+
     /// Register the caller-side drop for an inline owned-**aggregate** call
     /// argument — a fresh temp with no consuming binding that the callee owns
     /// by deep-copy (`make_aggregate_param_callee_owned`, the #14 model: the
@@ -11636,6 +11939,23 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             return;
         }
+        // B-2026-10-05-118 — every registration below holds `val`, and for an
+        // entry-copied struct whose copy leaves an enum payload shared, that
+        // payload is the callee's to release. Hand the registrations a `val`
+        // with those payloads zeroed; the callee keeps the original.
+        let val = match (!discarded_temp)
+            .then(|| {
+                self.entry_copied_struct_temp_with_uncopied_enum(
+                    arg,
+                    agg_ty,
+                    callee_entry_copies_mono,
+                )
+            })
+            .flatten()
+        {
+            Some(name) => self.zero_uncopied_enum_payloads_of_struct_temp(val, agg_ty, &name),
+            None => val,
+        };
         let cur_fn = self.current_fn.unwrap();
         // Fresh enum-variant temp shapes: `E.V(args)` / bare-ctor `V(args)`
         // (Call), unit variant `E.V` (Path), and struct variant `E.V { .. }`
@@ -23656,4 +23976,10 @@ fn collect_param_scrutinee_patterns(
         }
     }
     block(b, pname, each)
+}
+
+/// B-2026-10-05-118 — the field shapes `zero_uncopied_enum_payloads_at` walks.
+pub(super) enum UncopiedFieldShape {
+    Enum(String),
+    Struct(String),
 }

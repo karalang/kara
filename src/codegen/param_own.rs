@@ -3303,24 +3303,54 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        let Some(fields) = self
-            .type_decls
-            .struct_field_names
-            .get(type_name.as_str())
-            .cloned()
-        else {
+        self.zero_uncopied_enum_fields_under(arg, &type_name, &mut Vec::new());
+    }
+
+    /// B-2026-10-05-118 — the field walk of
+    /// [`Self::zero_uncopied_enum_fields_of_struct_arg`], recursing into a
+    /// nested struct field the entry copy recurses into
+    /// (`deep_copy_struct_heap_fields_in_place`). The copy leaves the same
+    /// payloads shared one level down, so `ck2(a)` over `struct K2 { k: K }`
+    /// with `struct K { e: E }` and `enum E { A(H), B }` released `a.k.e`'s
+    /// `shared` handle in both frames once the callee entry-copied (a fresh
+    /// temp at another call site is enough to make it do so).
+    fn zero_uncopied_enum_fields_under(
+        &mut self,
+        place: &Expr,
+        struct_name: &str,
+        stack: &mut Vec<String>,
+    ) {
+        if stack.iter().any(|s| s == struct_name) {
+            return;
+        }
+        let (Some(fields), Some(ftes)) = (
+            self.type_decls.struct_field_names.get(struct_name).cloned(),
+            self.type_decls
+                .struct_field_type_exprs
+                .get(struct_name)
+                .cloned(),
+        ) else {
             return;
         };
-        for field in fields {
+        stack.push(struct_name.to_string());
+        for (field, fte) in fields.into_iter().zip(ftes.iter()) {
             let fa = Expr {
                 kind: ExprKind::FieldAccess {
-                    object: Box::new(arg.clone()),
+                    object: Box::new(place.clone()),
                     field,
                 },
-                span: arg.span,
+                span: place.span,
             };
             self.zero_transfer_owned_enum_field_arg(&fa);
+            if let Some(super::call_dispatch::UncopiedFieldShape::Struct(sname)) =
+                self.uncopied_field_shape(fte)
+            {
+                if self.struct_has_uncopied_enum_payload(&sname, &mut Vec::new()) {
+                    self.zero_uncopied_enum_fields_under(&fa, &sname, stack);
+                }
+            }
         }
+        stack.pop();
     }
 
     /// B-2026-09-07-16 — does the entry copy DECLINE this enum payload field,
