@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 227 |
 | missing-feature | 217 |
 | other | 168 |
-| diagnostics | 145 |
+| diagnostics | 146 |
 | perf | 143 |
 | false-positive | 120 |
 | crash | 112 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2736 |
 | interp | 850 |
-| typecheck | 332 |
+| typecheck | 333 |
 | other | 113 |
 | ownership | 80 |
 | cli | 74 |
@@ -3753,6 +3753,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-48 | parser | low | `{x:?}` IN AN F-STRING IS REJECTED AS "unsupported type `?`", WHICH READS AS A MISTYPED FORMAT TYPE -- it is Debug formatting, reserved by the design… | a6dec2fc2 |
 | B-2026-10-05-70 | codegen | high | A FRESH `String` OR `Vec` TEMPORARY PASSED TO A GENERIC `ref T` / `mut ref` PARAMETER IS FREED TWICE UNDER `karac build` -- `fn f[T](x: ref T) -> i64… | 215a356e2 |
 | B-2026-10-05-72 | typecheck | low | `char.from_u32(n)`, `i64.max_value()` AND `u8.min_value()` ARE REFUSED WITH A BARE "no associated function 'from_u32' on type 'char'" -- the Kāra spe… | 4e276b6a8 |
+| B-2026-10-05-75 | typecheck | low | AN ITERATOR METHOD CALLED DIRECTLY ON A `Slice` GETS NO `.iter()` HINT -- `s.bytes().collect()` says only "no method 'collect' on type 'Slice'", and… | 78675ddb1 |
 
 </details>
 
