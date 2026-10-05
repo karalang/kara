@@ -50,6 +50,21 @@ impl<'a> super::TypeChecker<'a> {
             .any(|imp| imp.target_type == "Array" && imp.methods.contains_key(method))
     }
 
+    /// The receiver as the "write `{recv}.iter().{method}(...)`" hint shows
+    /// it: the source text when it is short and on one line, so the fix can
+    /// be copied as is (`s.bytes().iter()`), and a placeholder otherwise.
+    pub(super) fn iter_hint_receiver(object: &Expr) -> String {
+        if let ExprKind::Identifier(n) = &object.kind {
+            return n.clone();
+        }
+        let text = crate::formatter::render_expr(object);
+        if text.len() <= 40 && !text.contains('\n') {
+            text
+        } else {
+            "xs".to_string()
+        }
+    }
+
     pub(super) fn dispatch_user_impl_method(
         &mut self,
         object: &Expr,
@@ -433,10 +448,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     let mut msg = format!("no method '{}' on type 'Array'", method);
                     if Self::is_iterator_surface_method(method) {
-                        let recv = match &object.kind {
-                            ExprKind::Identifier(n) => n.clone(),
-                            _ => "xs".to_string(),
-                        };
+                        let recv = Self::iter_hint_receiver(object);
                         msg.push_str(&format!(
                             ": iterator adaptors/terminals require an explicit `.iter()` — write `{}.iter().{}(...)`",
                             recv, method
@@ -1056,10 +1068,7 @@ impl<'a> super::TypeChecker<'a> {
                     if matches!(type_name.as_str(), "Vec" | "VecDeque")
                         && Self::is_iterator_surface_method(method)
                     {
-                        let recv = match &object.kind {
-                            ExprKind::Identifier(n) => n.clone(),
-                            _ => "xs".to_string(),
-                        };
+                        let recv = Self::iter_hint_receiver(object);
                         msg.push_str(&format!(
                             ": iterator adaptors/terminals require an explicit `.iter()` — write `{}.iter().{}(...)`",
                             recv, method

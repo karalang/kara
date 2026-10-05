@@ -1647,7 +1647,7 @@ impl<'a> super::TypeChecker<'a> {
                     let elem = (**element).clone();
                     self.record_expr_type(args_close_span, &elem);
                 }
-                return self.infer_slice_method(element, *mutable, method, args, span);
+                return self.infer_slice_method(element, *mutable, object, method, args, span);
             }
         }
 

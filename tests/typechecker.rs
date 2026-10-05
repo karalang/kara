@@ -13824,6 +13824,46 @@ fn test_absent_fixed_array_methods_rejected_with_iter_hint() {
     typecheck_ok("fn main() { let a: Array[i64, 3] = [1, 2, 3]; let s: i64 = a.iter().map(|x| x * 2).sum(); println(f\"{s}\"); }");
 }
 
+/// B-2026-10-05-75: an iterator method called on a `Slice` gets the
+/// same `.iter()` hint as `Vec`, not an edit-distance neighbour (`map` used to
+/// suggest `swap`). The receiver is shown as written, for `Vec` too, so the
+/// suggested call can be copied, and each suggestion type-checks.
+#[test]
+fn iterator_methods_on_a_slice_name_the_iter_hop() {
+    for (prog, want) in [
+        (
+            "fn total(xs: Slice[i64]) -> i64 { return xs.sum(); }\nfn main() { }",
+            "write `xs.iter().sum(...)`",
+        ),
+        (
+            "fn main() { let s = \"hi\"; let bs: Vec[u8] = s.bytes().collect(); println(f\"{bs.len()}\"); }",
+            "write `s.bytes().iter().collect(...)`",
+        ),
+        (
+            "fn main() { let v: Vec[i64] = [1, 2]; let d: Vec[i64] = v.as_slice().map(|x| x * 2).collect(); println(f\"{d.len()}\"); }",
+            "write `v.as_slice().iter().map(...)`",
+        ),
+        // A `Vec` receiver that is a call used to print the placeholder `xs`.
+        (
+            "fn mk() -> Vec[i64] { return [1, 2]; }\nfn main() { let d: Vec[i64] = mk().map(|x| x * 2).collect(); println(f\"{d.len()}\"); }",
+            "write `mk().iter().map(...)`",
+        ),
+    ] {
+        let errors = typecheck_errors(prog);
+        let msg = errors
+            .iter()
+            .find(|e| e.kind == TypeErrorKind::NoMethodFound)
+            .map(|e| e.message.clone())
+            .unwrap_or_else(|| panic!("expected NoMethodFound in: {prog}, got {errors:?}"));
+        assert!(msg.contains(want), "expected `{want}`, got: {msg}");
+        assert!(!msg.contains("did you mean"), "no edit-distance guess, got: {msg}");
+    }
+    typecheck_ok("fn total(xs: Slice[i64]) -> i64 { return xs.iter().sum(); }\nfn main() { }");
+    typecheck_ok("fn main() { let s = \"hi\"; let bs: Vec[u8] = s.bytes().iter().collect(); println(f\"{bs.len()}\"); }");
+    typecheck_ok("fn main() { let v: Vec[i64] = [1, 2]; let d: Vec[i64] = v.as_slice().iter().map(|x| x * 2).collect(); println(f\"{d.len()}\"); }");
+    typecheck_ok("fn mk() -> Vec[i64] { return [1, 2]; }\nfn main() { let d: Vec[i64] = mk().iter().map(|x| x * 2).collect(); println(f\"{d.len()}\"); }");
+}
+
 // ── Method resolution: stdlib typo suggestions ──────────────────
 //
 // Each per-type `infer_*_method` arm in the typechecker now emits a

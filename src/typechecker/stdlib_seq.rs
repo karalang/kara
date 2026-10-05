@@ -1110,6 +1110,7 @@ impl<'a> super::TypeChecker<'a> {
         &mut self,
         element: &Type,
         mutable: bool,
+        object: &Expr,
         method: &str,
         args: &[CallArg],
         span: &Span,
@@ -1474,6 +1475,28 @@ impl<'a> super::TypeChecker<'a> {
                     name: "Iterator".to_string(),
                     args: vec![elem],
                 }
+            }
+            // An iterator adaptor or terminal called on the slice itself
+            // (`s.bytes().collect()`, `xs.map(...)`) gets the `.iter()` hint
+            // a `Vec` gets, rather than an edit-distance neighbour: `map`
+            // used to suggest `swap` (B-2026-10-05-75). Only names
+            // the slice surface below does not own reach this arm, so
+            // `chunks` keeps its own meaning.
+            _ if Self::is_iterator_surface_method(method) => {
+                let recv = Self::iter_hint_receiver(object);
+                self.type_error(
+                    format!(
+                        "no method '{}' on type 'Slice': iterator adaptors/terminals \
+                         require an explicit `.iter()` — write `{}.iter().{}(...)`",
+                        method, recv, method
+                    ),
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                );
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                Type::Error
             }
             _ => self.require_known_method(
                 "Slice",
