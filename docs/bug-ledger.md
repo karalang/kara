@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 687 |
+| miscompile | 688 |
 | run-vs-build | 589 |
 | leak | 570 |
 | double-free | 418 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2727 |
-| interp | 847 |
+| codegen | 2728 |
+| interp | 848 |
 | typecheck | 329 |
 | other | 113 |
 | ownership | 80 |
@@ -521,7 +521,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-4 | 2026-10-05 | codegen | medium | REMAINDER OF B-2026-10-03-39: A `shared enum` WHOSE PAYLOAD IS A PLAIN USER ENUM THE FIX DECLINES STILL LEAKS THAT PAYLOAD ON EVERY RELEASE -- `shared enum H { Z(V), N }` over `enum V { Z(M), N }` and `shared enum M { My(Vec[String]), N }`: `let s = H.Z(V.Z(M.N))` alone loses 16 B direct + 40 indirect at -O0 | — |
 | B-2026-10-05-6 | 2026-10-05 | codegen | medium | A `let mut` REBIND OF A BY-VALUE `Option` PARAM THAT IS MATCHED ON AND THEN REASSIGNED RUNS NO BODY FOR THE PARAM'S VALUE COMPILED -- `fn q1(x: Option[Array[R, 2]]) { let mut h = x; match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } h = None; println("q1"); }` prints `m11 q1 dR11 dR12` on `--interp` against `m11 q1` compiled, leaking 2 blocks; `Option[R]` loses `dR41` too (no leak), and reassigning to a fresh `Some` loses both values' bodies | — |
 | B-2026-10-05-8 | 2026-10-05 | codegen+interp | low | REMAINDER OF B-2026-10-05-7: TWO HAND-OFF SPELLINGS STILL RUN THE BINDING'S `Drop` BODY LATE ON EVERY SURFACE -- an owned-`self` method on an arm binding (`Some(r) => { r.gone(); println("after") }` prints `after dR11`) and a DESTRUCTURED local tuple (`match t { (a, b) => { eat(a); println("mid"); eat(b); .. } }` prints `mid after dR38 dR39` where `dR38 mid dR39 after` is due) | — |
-| B-2026-10-05-9 | 2026-10-05 | codegen+interp | medium | A BY-VALUE PARAM PROJECTED TO A SCALAR AND THEN SHADOWED (`fn c1(s: S) -> i64 { let s = s.r.id; s }`) LOSES THE CALLER'S `Drop` BODY, ON A DIFFERENT ARGUMENT SPELLING PER BACKEND -- compiled, a TEMPORARY argument runs no `d3` (`c1(mks(3))`); interpreted, a NAMED one runs no `d6` (`let a = mks(6); c1(a)`). Each backend gets the other spelling right; B-2026-09-29-61's close claimed c1 was fixed and its own fixture pin had lost `d3` | — |
 | B-2026-10-05-10 | 2026-10-05 | codegen+interp | high | THE HAND-BACK OF AN OWNED-`self` GENERIC-ENUM METHOD USED WITHOUT BINDING IT CRASHES COMPILED -- `show(mk(9).id())`, `show(d.id())`, `match mk(9).id() { .. }` and `f(mk(9).id())` over `impl[T] G[T] { fn id(self) -> Self { return self; } }` at `G[R]` segfault or abort `free(): double free` at -O0 and -O2, while `let e = mk(9).id(); show(e)` is correct; `--interp` also loses the payload's `Drop` body in the call-argument spellings | — |
 | B-2026-10-05-11 | 2026-10-05 | codegen+interp | medium | AN OWNED-`self` GENERIC-ENUM METHOD THAT RETURNS SOMETHING OTHER THAN `self` NEVER RUNS THE RECEIVER PAYLOAD'S `Drop` BODY ON ANY SURFACE AND LEAKS IT COMPILED -- `fn other(self, o: G[T]) -> G[T] { return o; }` and `fn fresh(self) -> G[T] { return G.Y; }` over `impl[T] G[T]` at `G[R]` print `x3s3 dR3 end` / `y end` with no `dR2` / `dR1` under `--interp`, -O0 and -O2, 2 B definitely lost; the non-generic `impl E` twin and the free-function twin are correct | — |
 | B-2026-10-05-12 | 2026-10-05 | codegen | medium | AN OWNED-`self` GENERIC-ENUM METHOD THAT RETURNS `self` ON ONE PATH AND A `Self` PARAMETER ON ANOTHER LOSES THE PARAMETER'S `Drop` BODY COMPILED WHEN IT RETURNS `self` -- `d.pick(true, mk(7))` over `fn pick(self, c: bool, o: Self) -> Self { if c { return self; } return o; }` prints `x6s6 dR6 end` at -O0 and -O2 where `--interp` prints `dR7 x6s6 dR6 end`, 34 B definitely lost; reachable since B-2026-09-28-73 | — |
@@ -537,6 +536,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-26 | 2026-10-05 | codegen | low | A READ-ONLY CONSUMER OF AN `if` WHOSE ARM TAIL IS AN INDEXED NON-`Copy` ELEMENT OF AN OUTER CONTAINER LEAKS THE ELEMENT'S COPY -- `let m = mkv("q"); println(if true { m[1] } else { "n" })` over `m: Vec[String]` prints `q-b` and loses 4 B in 1 block at -O0 under valgrind; `let s = if true { m[1] } else { "n" }` is clean | — |
 | B-2026-10-05-27 | 2026-10-05 | codegen | medium | REMAINDER OF B-2026-10-03-35: A GENERIC `shared enum` INSTANTIATED AT `Option` OF A `shared` TYPE STILL LEAKS THE INNER BOX -- `let h: G[Option[M]] = G.Y(Some(M.My(mkv("q"))))` over `shared enum G[T] { Y(T), N }` and `shared enum M { My(Vec[String]), N }` prints correctly and loses 40 B definitely + 102 B indirectly at -O0; `G.Y(None)` is clean | — |
 | B-2026-10-05-28 | 2026-10-05 | codegen | medium | A `Map` UNWRAPPED STRAIGHT INTO A BY-VALUE PARAMETER LEAKS THE WHOLE MAP, BY `?` AND BY `.unwrap()` ALIKE -- `fn cnt(m: Map[String, i64]) -> i64 { m.len() }`, `cnt(mk(k)?)` and `cnt(mk(k).unwrap())` over `fn mk(k: i64) -> Option[Map[String, i64]]` print the right count and lose 72 B definitely + 553 B indirectly per call at -O0; binding first (`let x = mk(k)?; cnt(x)`) is clean | — |
+| B-2026-10-05-29 | 2026-10-05 | interp+codegen | medium | A GENERIC CALLEE THAT SHADOWS ITS BY-VALUE PARAM WITH AN UNRELATED VALUE LOSES THE ARGUMENT'S `Drop` BODY ON EVERY SURFACE -- `fn g1[T](s: T, n: i64) -> i64 { let s = n; s }` called `g1(R { id: 13 }, 4)` prints `k4` with no `d13` on `--interp` and compiled, temporary and named argument alike; the same callee binding `let t = n; t` runs the body | — |
 
 ### Relocated
 
@@ -3733,6 +3733,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-3 | codegen | high | A `let` THAT SHADOWS A SHARED BINDING IN THE SAME SCOPE RELEASES THE NEW BOX TWICE AND THE OLD ONE NEVER -- `let p = P { s: hs(1) }; let p = P { s: h… | 65ba03f24 |
 | B-2026-10-05-5 | codegen | high | A ONE-WORD `Array` HELD AS A TUPLE OR STRUCT FIELD INSIDE AN ENUM PAYLOAD READS ITS ELEMENT AS 0 COMPILED -- `Some((Array[5], 7))` matched as `t` pri… | e2493dffa |
 | B-2026-10-05-7 | codegen+interp | medium | A BINDING THE BLOCK DOES NOT DECLARE, PASSED BY VALUE TO A CALLEE THAT HANDS IT BACK ON NO EXIT, RUNS ITS `Drop` BODY AT THE END OF THE ENCLOSING ARM… | d476f99eb |
+| B-2026-10-05-9 | codegen+interp | medium | A BY-VALUE PARAM PROJECTED TO A SCALAR AND THEN SHADOWED (`fn c1(s: S) -> i64 { let s = s.r.id; s }`) LOSES THE CALLER'S `Drop` BODY, ON A DIFFERENT… | c22ad1095 |
 | B-2026-10-05-14 | interp | medium | `--interp` COPIES THE WHOLE `String` ON EVERY `push` / `push_str`, SO BUILDING A STRING ONE CHARACTER AT A TIME IS QUADRATIC -- 50,000 `s.push('x')`… | 4c789647b |
 | B-2026-10-05-16 | interp | high | `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` RUNS THE BODY ONCE UNDER `--interp`, WITH THE ITERATOR ITSELF BOUND TO `v` -- de… | 3a7995069 |
 | B-2026-10-05-23 | interp | medium | `--interp` RE-DERIVES TYPE-LEVEL DROP FACTS FOR EVERY VALUE IT MATCHES OR BINDS, RE-SCANNING THE PROGRAM'S ITEMS EACH TIME -- kata 341's bench kernel… | 40ecccbe6 |
