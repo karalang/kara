@@ -17857,6 +17857,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let layout = self.type_decls.enum_layouts[&en].clone();
                 self.deep_copy_enum_heap_payload_in_place(&en, slot, &layout);
+                self.retain_value_enum_shared_words(&en, slot);
                 self.track_enum_var(&en, slot);
             }
         }
@@ -18204,12 +18205,56 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => return,
         };
-        if !consumed.iter().any(|&i| {
-            matches!(
-                drop_kinds.get(i),
-                Some(super::state::EnumDropKind::VecOrString)
-            )
-        }) {
+        // B-2026-10-05-4 — a `shared enum` handle in the payload, matched by
+        // a nested variant pattern (`H.Z(V.Z(M.My(x)))`), hands ITS box's
+        // payload to the leaf; the handle itself stays with the payload.
+        let subs_by_pos: Vec<Option<&Pattern>> = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns.iter().map(Some).collect(),
+            PatternKind::Struct { fields, .. } => self
+                .enum_variant_struct_field_names(enum_name, &variant_name)
+                .unwrap_or_default()
+                .iter()
+                .map(|n| {
+                    fields
+                        .iter()
+                        .find(|f| &f.name == n)
+                        .and_then(|f| f.pattern.as_ref())
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let nested_shared: Vec<(usize, String, &Pattern)> = consumed
+            .iter()
+            .filter(|&&i| {
+                matches!(
+                    drop_kinds.get(i),
+                    Some(super::state::EnumDropKind::SharedRc)
+                )
+            })
+            .filter_map(|&i| {
+                let sub = subs_by_pos.get(i).copied().flatten()?;
+                if !matches!(
+                    sub.kind,
+                    PatternKind::TupleVariant { .. } | PatternKind::Struct { .. }
+                ) {
+                    return None;
+                }
+                let en = self.variant_pattern_enum_name(sub)?;
+                self.type_decls
+                    .shared_types
+                    .get(&en)
+                    .is_some_and(|info| info.is_enum)
+                    .then_some((i, en, sub))
+            })
+            .collect();
+        if nested_shared.is_empty()
+            && !consumed.iter().any(|&i| {
+                matches!(
+                    drop_kinds.get(i),
+                    Some(super::state::EnumDropKind::VecOrString)
+                )
+            })
+        {
             return;
         }
         let i64_t = self.context.i64_type();
@@ -18242,6 +18287,25 @@ impl<'ctx> super::Codegen<'ctx> {
             .find(|(_, n, _)| n == &variant_name)
             .map(|(_, _, t)| t)
             .unwrap_or_default();
+        for (pos, inner_en, sub) in nested_shared {
+            let Some(&(sw, _)) = offsets.get(pos) else {
+                continue;
+            };
+            let Ok(fp) = self.builder.build_struct_gep(
+                layout.llvm_type,
+                enum_ptr,
+                (sw + 1) as u32,
+                "match.sh.venum.nested.wp",
+            ) else {
+                continue;
+            };
+            let inner_box = self
+                .builder
+                .build_load(ptr_ty, fp, "match.sh.venum.nested.box")
+                .unwrap()
+                .into_pointer_value();
+            self.suppress_shared_enum_payload_move_out(inner_box, &inner_en, sub);
+        }
         for &pos in &consumed {
             if !matches!(
                 drop_kinds.get(pos),
@@ -18283,6 +18347,101 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+    }
+
+    /// B-2026-10-05-4 — the `shared`-handle half of an owned copy of a value
+    /// enum the box owns (`Synth::shared_box_owns_value_enum_payload`). The
+    /// buffer copy (`deep_copy_enum_heap_payload_in_place`) leaves a `shared`
+    /// payload word pointing at the box's own object, and the copy's drop
+    /// rc-decs it, so the copy takes a reference of its own here: one rc-inc
+    /// per live, non-null handle word of the active variant.
+    pub(super) fn retain_value_enum_shared_words(
+        &mut self,
+        enum_name: &str,
+        enum_ptr: PointerValue<'ctx>,
+    ) {
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name).cloned() else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let tes_by_variant: Vec<(String, Vec<TypeExpr>)> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .map(|(_, n, t)| (n, t))
+            .collect();
+        let mut arms: Vec<(u64, Vec<(usize, StructType<'ctx>)>)> = Vec::new();
+        for (vname, tes) in &tes_by_variant {
+            let (Some(kinds), Some(offsets), Some(&tag)) = (
+                layout.field_drop_kinds.get(vname),
+                layout.field_word_offsets.get(vname),
+                layout.tags.get(vname),
+            ) else {
+                continue;
+            };
+            let words: Vec<(usize, StructType<'ctx>)> = kinds
+                .iter()
+                .zip(offsets.iter())
+                .zip(tes.iter())
+                .filter(|((k, _), _)| **k == super::state::EnumDropKind::SharedRc)
+                .filter_map(|((_, &(sw, _)), te)| {
+                    self.shared_heap_type_for_type_expr(te).map(|h| (sw + 1, h))
+                })
+                .collect();
+            if !words.is_empty() {
+                arms.push((tag, words));
+            }
+        }
+        if arms.is_empty() {
+            return;
+        }
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(layout.llvm_type, enum_ptr, 0, "venum.rt.tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "venum.rt.tag")
+            .unwrap()
+            .into_int_value();
+        let merge_bb = self.context.append_basic_block(fn_val, "venum.rt.merge");
+        let mut cases = Vec::new();
+        let mut bodies = Vec::new();
+        for (tag_v, words) in arms {
+            let bb = self.context.append_basic_block(fn_val, "venum.rt.arm");
+            cases.push((i64_t.const_int(tag_v, false), bb));
+            bodies.push((bb, words));
+        }
+        self.builder.build_switch(tag, merge_bb, &cases).unwrap();
+        for (bb, words) in bodies {
+            self.builder.position_at_end(bb);
+            for (idx, heap_ty) in words {
+                let wp = self
+                    .builder
+                    .build_struct_gep(layout.llvm_type, enum_ptr, idx as u32, "venum.rt.wp")
+                    .unwrap();
+                let h = self
+                    .builder
+                    .build_load(ptr_ty, wp, "venum.rt.h")
+                    .unwrap()
+                    .into_pointer_value();
+                let is_null = self.builder.build_is_null(h, "venum.rt.isnull").unwrap();
+                let inc_bb = self.context.append_basic_block(fn_val, "venum.rt.inc");
+                let next_bb = self.context.append_basic_block(fn_val, "venum.rt.next");
+                self.builder
+                    .build_conditional_branch(is_null, next_bb, inc_bb)
+                    .unwrap();
+                self.builder.position_at_end(inc_bb);
+                self.emit_rc_inc(heap_ty, h);
+                self.builder.build_unconditional_branch(next_bb).unwrap();
+                self.builder.position_at_end(next_bb);
+            }
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+        self.builder.position_at_end(merge_bb);
     }
 
     pub(super) fn suppress_value_enum_nested_shared_move_out(

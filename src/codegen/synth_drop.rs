@@ -8885,12 +8885,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if generic {
             return false;
         }
-        if !layout
-            .field_drop_kinds
-            .values()
-            .flatten()
-            .all(|k| matches!(k, EnumDropKind::None | EnumDropKind::VecOrString))
-            || self.type_runs_user_drop(enum_name, &mut Vec::new())
+        if !layout.field_drop_kinds.values().flatten().all(|k| {
+            matches!(
+                k,
+                EnumDropKind::None | EnumDropKind::VecOrString | EnumDropKind::SharedRc
+            )
+        }) || self.type_runs_user_drop(enum_name, &mut Vec::new())
         {
             return false;
         }
@@ -8903,10 +8903,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
                     | "isize" | "usize" | "f32" | "f64" | "bool" | "char" | "String" | "str"))
         };
+        // B-2026-10-05-4 — or a non-generic `shared` handle: the release
+        // rc-decs it (the payload's own drop switch, `SharedRc` arm) and an arm
+        // that takes it is given a reference rather than a copy
+        // (`retain_value_enum_shared_words`).
+        let shared_handle = |te: &TypeExpr| -> bool {
+            matches!(&te.kind, TypeKind::Path(p) if p.generic_args.is_none()
+                && p.segments.len() == 1
+                && self.type_decls.shared_types.contains_key(p.segments[0].as_str()))
+        };
         self.enum_variant_field_type_exprs(enum_name)
             .iter()
             .flat_map(|(_, _, tes)| tes.iter())
             .all(|te| match &te.kind {
+                _ if shared_handle(te) => true,
                 TypeKind::Path(p) if p.segments.last().map(String::as_str) == Some("Vec") => {
                     match p.generic_args.as_deref() {
                         Some([GenericArg::Type(e)]) => plain(e),
