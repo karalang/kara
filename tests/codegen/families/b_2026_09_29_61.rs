@@ -63,10 +63,8 @@ fn main() {
     let (interp_out, interp_errs, _, _) = karac::run_program_full_checked(src);
     assert!(interp_errs.is_empty(), "interp errored: {interp_errs:?}");
     assert_eq!(interp_out.join(""), want, "interpreter");
-    // PREDICTS B-2026-10-05-9: compiled, `c1(mks(3))` still runs no `d3` --
-    // codegen's temporary walk asks the legacy `fn_returns_param`, which reads
-    // the shadowing `let s = s.r.id; s` as handing the param back. This pin
-    // holds that wrong answer and must gain `d3` (before `k3`) with the fix.
-    let want_aot = want.replacen("d3\n", "", 1);
-    assert_eq!(run_program(src).as_deref(), Some(want_aot.as_str()), "AOT");
+    // B-2026-10-05-9 — compiled, `c1(mks(3))` used to run no `d3`: codegen's
+    // temporary walk asked the name-matching `fn_returns_param`, which read the
+    // shadowing `let s = s.r.id; s` as handing the param back.
+    assert_eq!(run_program(src).as_deref(), Some(want), "AOT");
 }

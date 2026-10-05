@@ -8020,7 +8020,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // spellings). A bare name matches only a free `Function` there, so
         // every caller passing one is answered exactly as before.
         super::declarations::find_function_ast(program, callee_name).is_some_and(|f| {
-            crate::ast::fn_returns_param(f, arg_index)
+            // B-2026-10-05-9 — the per-param fate, which (unlike the name-
+            // matching predicates below) sees a shadowing `let s = s.r.id; s`
+            // as a scalar read, settles "never handed back": the argument
+            // stays and the caller runs its body.
+            !crate::param_fate::whole_param_never_returned(Some(program), f, arg_index)
+                && (crate::ast::fn_returns_param(f, arg_index)
                     // B-2026-08-28-62 — the FORWARDING route: the callee
                     // hands the argument to another call whose result it
                     // returns. Asked here rather than inside
@@ -8113,7 +8118,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // with no `Drop` body (`Option[String]`), where the callee
                     // has nothing to register and only this caller-side
                     // stand-down was missing.
-                    || self.conditional_optres_handback_memory_with_caller(callee_name, arg_index)
+                    || self.conditional_optres_handback_memory_with_caller(callee_name, arg_index))
         })
     }
 

@@ -1365,6 +1365,19 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
     fn_returns_param_with(None, f, arg_index)
 }
 
+/// B-2026-10-05-9 — [`fn_returns_param`] for a caller that has the program:
+/// the per-param fate settles "never handed back" first. The name-matching
+/// walk reads a body that shadows the param (`fn c1(s: S) -> i64 { let s =
+/// s.r.id; s }`) as returning it, and with the declarations in hand the fate
+/// sees the shadowing `let` as a scalar read, so the argument stays and its
+/// `Drop` body runs at the end of the call (rule 3). Same union answer
+/// otherwise: the fact only ever turns a `true` into `false`, and only where it
+/// is exact.
+pub fn fn_returns_param_in(program: &crate::Program, f: &Function, arg_index: usize) -> bool {
+    !crate::param_fate::whole_param_never_returned(Some(program), f, arg_index)
+        && fn_returns_param(f, arg_index)
+}
+
 /// [`fn_returns_param`] with the declarations in hand, so a USER enum's
 /// variant constructor (`return Ho.Full(v)`) and the bare seeded spellings
 /// (`Some(v)`, `Ok(v)`, `Err(v)`) count as carrying the param out, as the

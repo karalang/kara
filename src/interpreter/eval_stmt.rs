@@ -7822,7 +7822,7 @@ impl<'a> super::Interpreter<'a> {
             return false;
         }
         is_array_param
-            && !crate::ast::fn_returns_param(f, i)
+            && !crate::ast::fn_returns_param_in(self.program, f, i)
             && !crate::ast::fn_returns_param_via_call(self.program, f, i)
             && crate::ast::fn_returns_param_owned_part_paths(Some(self.program), f, i).is_empty()
             && !crate::ast::fn_moves_param_into_outliving_place(Some(self.program), f, i)
@@ -10073,7 +10073,7 @@ impl<'a> super::Interpreter<'a> {
                     _ => None,
                 });
                 let is_passthrough = callee.is_some_and(|f| {
-                    crate::ast::fn_returns_param(f, i)
+                    crate::ast::fn_returns_param_in(self.program, f, i)
                         || crate::ast::fn_returns_param_payload_of(
                             self.program,
                             f,
@@ -10156,7 +10156,7 @@ impl<'a> super::Interpreter<'a> {
                     })
                     .filter(|(i, _)| {
                         let i = *i;
-                        crate::ast::fn_returns_param(f, i)
+                        crate::ast::fn_returns_param_in(self.program, f, i)
                             || crate::ast::fn_always_returns_param(Some(self.program), f, i)
                             || crate::ast::fn_conditionally_returns_param_bare(
                                 Some(self.program),

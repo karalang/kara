@@ -59,9 +59,11 @@ fn main() {
     println("end")
 }
 "#,
+        // B-2026-10-05-9 — `d3` before `k3`: the temporary handed to `c1`
+        // used to run no body here.
         &[
-            "d1", "k5", "k5", "d2", "k3", "d4", "k5", "d5", "k5", "k5", "d6", "d7", "i28", "d28",
-            "d28", "d8", "e", "d9", "j28", "d28", "d10", "gtrue", "d27", "end",
+            "d1", "k5", "k5", "d2", "d3", "k3", "d4", "k5", "d5", "k5", "k5", "d6", "d7", "i28",
+            "d28", "d28", "d8", "e", "d9", "j28", "d28", "d10", "gtrue", "d27", "end",
         ],
         "top_level_let_shadowing_a_param",
     );

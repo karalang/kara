@@ -3438,7 +3438,7 @@ impl<'a> super::Interpreter<'a> {
                     && !crate::ast::fn_always_returns_param(Some(self.program), f, i)
                     && !crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i);
                 if caller_fires
-                    || crate::ast::fn_returns_param(f, i)
+                    || crate::ast::fn_returns_param_in(self.program, f, i)
                     || crate::ast::fn_returns_param_payload(f, i)
                     || crate::ast::fn_moves_param_into_outliving_place(Some(self.program), f, i)
                     || crate::ast::fn_moves_param_into_outliving_place_via_call(self.program, f, i)
@@ -3593,7 +3593,7 @@ impl<'a> super::Interpreter<'a> {
                     Value::EnumVariant { variant, .. } => Some(variant),
                     _ => None,
                 });
-                let escapes = crate::ast::fn_returns_param(f, i)
+                let escapes = crate::ast::fn_returns_param_in(self.program, f, i)
                     || crate::ast::fn_returns_param_payload_of(
                         self.program,
                         f,
@@ -6213,7 +6213,7 @@ impl<'a> super::Interpreter<'a> {
         }
         self.callee_fn_for_ownership_guard_of(callee_name, method_owner)
             .is_some_and(|f| {
-                crate::ast::fn_returns_param(f, i)
+                crate::ast::fn_returns_param_in(self.program, f, i)
                     // B-2026-09-05-10 — an ALL-paths return of the param wrapped
                     // in an `Option`/`Result` ctor (`fn top(r) { return
                     // Option.Some(r); }`). `fn_returns_param` above is
@@ -7905,7 +7905,7 @@ impl super::Interpreter<'_> {
             return false;
         };
         (0..f.params.len()).any(|i| {
-            crate::ast::fn_returns_param(f, i)
+            crate::ast::fn_returns_param_in(self.program, f, i)
                 || crate::ast::fn_always_returns_param(Some(self.program), f, i)
                 || crate::ast::fn_conditionally_returns_param_bare(Some(self.program), f, i)
         })
