@@ -4480,7 +4480,11 @@ impl<'ctx> super::Codegen<'ctx> {
         depth: usize,
     ) -> bool {
         if crate::ast::fn_stores_param_whole_into_container(f, ast_i)
-            || crate::ast::fn_reassigns_param_rebind(f, ast_i)
+            // B-2026-10-05-85 — any `let mut` rebind that takes the param
+            // over, not only the one reassigned on every path: the one
+            // reassigned in a branch (B-2026-10-04-50) or mutated in place
+            // registers the box on the local just the same.
+            || crate::ast::fn_takes_over_param_rebind(f, ast_i)
             // B-2026-09-29-16 — or unwraps it on every path: the unwrap frees
             // the box in the callee (`enumbox.uw.free`) and the value it yields
             // owns the interior, so the caller keeping the box too freed it
