@@ -517,7 +517,7 @@ fn walk_stmt_children(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
 
 /// Names a pattern binds into arm scope. Exhaustive over `PatternKind` — a new
 /// pattern node breaks the build rather than silently dropping a payload binding.
-fn collect_pattern_bindings(pat: &Pattern, out: &mut HashSet<String>) {
+pub(crate) fn collect_pattern_bindings(pat: &Pattern, out: &mut HashSet<String>) {
     match &pat.kind {
         PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {}
         PatternKind::Binding(name) => {

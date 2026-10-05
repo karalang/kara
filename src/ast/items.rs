@@ -13181,6 +13181,48 @@ fn branch_rebind_block_ok(b: &Block, c: &str, ok: &mut bool) {
     }
 }
 
+/// B-2026-10-05-6 — is `name` mentioned in `e` only as the root of a READ: a
+/// place that ends in a field or tuple projection (`a.id`, `a[0].id`, `a.0`),
+/// with any index on the way checked in turn? A bare `name`, or a place that
+/// ends in an index (`a[0]`, which can move the element), answers no.
+fn binding_only_projected(e: &Expr, name: &str) -> bool {
+    fn root_is<'a>(e: &'a Expr, name: &str, idx: &mut Vec<&'a Expr>) -> bool {
+        match &e.kind {
+            ExprKind::Identifier(n) => n == name,
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                root_is(object, name, idx)
+            }
+            ExprKind::Index { object, index } => {
+                idx.push(index);
+                root_is(object, name, idx)
+            }
+            _ => false,
+        }
+    }
+    fn walk(e: &Expr, name: &str, ok: &mut bool) {
+        if !*ok {
+            return;
+        }
+        match &e.kind {
+            ExprKind::Identifier(n) if n == name => *ok = false,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                let mut idx = Vec::new();
+                if root_is(e, name, &mut idx) {
+                    for i in idx {
+                        walk(i, name, ok);
+                    }
+                } else {
+                    crate::rc_elide::walk_children_pub(&e.kind, &mut |sub| walk(sub, name, ok));
+                }
+            }
+            kind => crate::rc_elide::walk_children_pub(kind, &mut |sub| walk(sub, name, ok)),
+        }
+    }
+    let mut ok = true;
+    walk(e, name, &mut ok);
+    ok
+}
+
 fn branch_rebind_expr_ok(e: &Expr, c: &str, ok: &mut bool) {
     if !*ok {
         return;
@@ -13216,6 +13258,31 @@ fn branch_rebind_expr_ok(e: &Expr, c: &str, ok: &mut bool) {
         ExprKind::For { iterable, body, .. } => {
             branch_rebind_expr_ok(iterable, c, ok);
             branch_rebind_block_ok(body, c, ok);
+        }
+        // B-2026-10-05-6 — a `match` ON the local whose arms only READ what
+        // they bind (`Some(a) => println(f"m{a[0].id}")`) takes nothing out of
+        // it, as a projection read does not: the local still holds the value
+        // when it is reassigned or the call ends.
+        ExprKind::Match { scrutinee, arms } if is_c(scrutinee) => {
+            for arm in arms {
+                let mut bound = std::collections::HashSet::new();
+                crate::rc_elide::collect_pattern_bindings(&arm.pattern, &mut bound);
+                if bound.iter().any(|b| b == c)
+                    || !bound.iter().all(|b| {
+                        arm.guard
+                            .as_ref()
+                            .is_none_or(|g| binding_only_projected(g, b))
+                            && binding_only_projected(&arm.body, b)
+                    })
+                {
+                    *ok = false;
+                    return;
+                }
+                if let Some(g) = &arm.guard {
+                    branch_rebind_expr_ok(g, c, ok);
+                }
+                branch_rebind_expr_ok(&arm.body, c, ok);
+            }
         }
         ExprKind::Match { scrutinee, arms } => {
             branch_rebind_expr_ok(scrutinee, c, ok);
