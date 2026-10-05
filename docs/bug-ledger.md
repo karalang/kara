@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 682 |
 | run-vs-build | 589 |
-| leak | 562 |
-| double-free | 416 |
+| leak | 563 |
+| double-free | 417 |
 | codegen-gap | 221 |
 | missing-feature | 216 |
 | other | 168 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2707 |
+| codegen | 2709 |
 | interp | 836 |
 | typecheck | 327 |
 | other | 113 |
@@ -485,8 +485,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-45 | 2026-10-03 | codegen | high | Iterating a `shared struct`'s `mut` Vec field while pushing to it through the same handle reads a freed buffer on every compiled surface, where design.md § Part 5 says the write must panic: `for x in self.v.iter() { if self.v.len() < 64 { self.v.push(x + 1); } }` inside a `ref self` method of `shared struct Bag { mut v: Vec[i64] }` returns a garbage total under the JIT and both `karac build` modes, valgrind reports `Invalid read of size 8 ... inside a block of size 24 free'd` by `karac_realloc_or_panic`, and `--interp` prints `6 6` without the specified panic | — |
 | B-2026-10-03-46 | 2026-10-03 | codegen | low | A recursive function taking `ref Vec[T]` reloads the Vec's length and data pointer and repeats the bounds check after every recursive call, because a Freeze `ref` parameter carries LLVM `readonly` but not `noalias`: kata 337's bench runs 1.88 s where the same code taking `Slice[Node]` runs 1.76 s and Rust with overflow checks 1.77 s; adding `noalias` by hand removes the reloads, but it would be unsound today because a `shared struct` handle can still write the referent during the call | — |
 | B-2026-10-03-35 | 2026-10-03 | codegen | medium | A GENERIC `shared enum` INSTANTIATED AT ANOTHER `shared enum` LEAKS THE INNER ENUM'S BOX -- `shared enum G[T] { Y(T), N }` over `shared enum M { My(Vec[String]), N }`: `let h: G[M] = G.Y(M.My(mkv(..))); println("made")` loses 40 B direct + 151 B indirect at -O0, whether or not `h` is ever matched | — |
-| B-2026-10-03-38 | 2026-10-03 | codegen | high | A NESTED PATTERN THROUGH A VALUE ENUM'S `shared enum` PAYLOAD FREES THE MATCHED PAYLOAD TWICE -- over `enum V { Z(M), N }` and `shared enum M { My(Vec[String]), N }`, `match V.Z(M.My(mkv(..))) { V.Z(M.My(x)) => x.len(), _ => 0 }` prints `2` under `--interp` and nothing compiled (7 valgrind errors) | — |
-| B-2026-10-03-39 | 2026-10-03 | codegen | medium | A NESTED PATTERN THROUGH A `shared enum`'S VALUE-ENUM PAYLOAD LEAKS 32 B -- over `shared enum H4 { Z(E), N }` and `enum E { A(Vec[String]), B }`, `match H4.Z(E.A(mkv(..))) { H4.Z(E.A(x)) => x.len(), _ => 0 }` prints the right `2` and loses 32 B definitely | — |
 | B-2026-10-04-1 | 2026-10-04 | codegen | medium | AN INNER ARM THAT HANDS THE LEAF OF A `Result[Option[R], E]` ENVELOPE BINDING TO A BY-VALUE FREE FUNCTION LEAKS R'S HEAP COMPILED, AND A LOCAL ALSO LOSES R'S `Drop` BODY -- `Ok(o) => match o { Some(i) => eat(i), None => 0 }` with `fn eat(r: R) -> i64 { r.id }`: by-value param `dR1 1 end` everywhere with 29 B lost; local interp `dR2 2 end`, -O0/-O2 `2 end` with 29 B lost. | — |
 | B-2026-10-04-2 | 2026-10-04 | interp+codegen | low | WHEN A NESTED `match` THAT ONLY READS THE LEAF IS NOT THE OUTER ARM'S TAIL, THE INTERPRETER RUNS R'S `Drop` BODY AT THE INNER ARM AND THE COMPILED BACKENDS AT THE PLACE'S DEATH -- `if let Ok(o) = a { let k = match o { Some(i) => i.id, None => 0 }; println(k) }` over a local `Result[Option[R], E]` prints `dR7 7 end` interpreted and `7 dR7 end` at -O0 and -O2, memory clean. | — |
 | B-2026-10-04-3 | 2026-10-04 | interp+codegen | low | A NAMED `Result[Option[R], E]` LOCAL PASSED BY VALUE RUNS R'S `Drop` BODY INSIDE THE CALL COMPILED, BEFORE THE CALLER'S STATEMENT FINISHES, WHERE THE INTERPRETER RUNS IT AFTER -- `let a: Result[Option[R], i64] = Ok(Some(mk(1))); println(e(a))` over `fn e(r: Result[Option[R], i64]) -> i64 { 1 }` prints `dR1 1` at -O0 and -O2 against the interpreter's `1 dR1`; the `R` and `Option[R]` spellings print `1 dR1` everywhere. Since B-2026-10-03-34's fix the GENERIC callee does the same, so `res2`, `g5` and `g6` moved from agreeing to this order. | — |
@@ -532,6 +530,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-91 | 2026-10-04 | codegen | low | INDEXING A `Map` HELD IN AN UNANNOTATED TUPLE LOCAL FAILS THE BUILD -- `let mut t = (m, 1); ... t.0[1].n` stops `karac build` with `Index operator applied to non-array type` while `--interp` prints the value; the annotated `let t: (Map[i64, P], i64)` builds since B-2026-10-04-70 | — |
 | B-2026-10-05-1 | 2026-10-05 | interp | low | AFTER B-2026-10-03-21 AN INTERPRETED CALL OF A TWO-LINE SCALAR FUNCTION STILL COSTS ABOUT 37,000 INSTRUCTIONS (200,000 calls 0.86 s against 0.16 s inlined): call-frame setup re-derives per-callee ownership state on every call, and the AST and argument values are cloned per call | — |
 | B-2026-10-05-2 | 2026-10-05 | codegen | medium | AFTER B-2026-10-04-54, `.clone()` ON A TUPLE ELEMENT STILL FAILS `karac build` WHEN THE SUBSCRIPT IS AN EXPRESSION -- `cases[i + 1].0.clone()` over `Vec[(String, i64)]` bails with "Vec/String method 'clone' is not yet supported in codegen" while `cases[i]`, `cases[1]` and `cases[j]` (with `let j = i + 1`) all build; kata 340's differential is the program it blocks | — |
+| B-2026-10-05-4 | 2026-10-05 | codegen | medium | REMAINDER OF B-2026-10-03-39: A `shared enum` WHOSE PAYLOAD IS A PLAIN USER ENUM THE FIX DECLINES STILL LEAKS THAT PAYLOAD ON EVERY RELEASE -- `shared enum H { Z(V), N }` over `enum V { Z(M), N }` and `shared enum M { My(Vec[String]), N }`: `let s = H.Z(V.Z(M.N))` alone loses 16 B direct + 40 indirect at -O0 | — |
 
 ### Relocated
 
@@ -3670,6 +3669,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-48 | runtime | medium | PERF: a large Vec built and dropped in a loop re-faulted every page each round | 6057539e7 |
 | B-2026-10-03-36 | codegen | high | A NESTED VARIANT PATTERN THROUGH A NON-GENERIC `shared enum`'S `shared enum` PAYLOAD IGNORES THE INNER TAG AND FREES THE PAYLOAD TWICE -- over `share… | b3faf6fac |
 | B-2026-10-03-37 | codegen | high | A NESTED STRUCT-VARIANT PATTERN THROUGH A `shared enum`'S `shared enum` PAYLOAD SEGFAULTS WITH NO OUTPUT -- over `shared enum M2 { P { v: Vec[String]… | 3ff49308a |
+| B-2026-10-03-38 | codegen | high | A NESTED PATTERN THROUGH A VALUE ENUM'S `shared enum` PAYLOAD FREES THE MATCHED PAYLOAD TWICE -- over `enum V { Z(M), N }` and `shared enum M { My(Ve… | 4a35d4008 |
+| B-2026-10-03-39 | codegen | medium | A `shared enum` WHOSE PAYLOAD IS A PLAIN USER ENUM NEVER RELEASED THAT PAYLOAD OR THE BOX HOLDING IT, ON EVERY RELEASE AND WITH NO MATCH AT ALL (firs… | bb5e02554 |
 | B-2026-10-03-49 | interp | medium | UNDER `--interp`, A `let Some(Some(w)) = x else { .. | 19f2321fa |
 | B-2026-10-03-50 | codegen | medium | AN UNCALLED FUNCTION'S PARAM CHANGES HOW ANOTHER FUNCTION WITH A SAME-NAMED PARAM FREES ITS NESTED-ENVELOPE PAYLOAD: `fn ie(x: Option[Option[R]]) { i… | 92afc6d2b |
 | B-2026-10-03-26 | codegen | high | A `let` THAT TAKES A BY-VALUE `Option`/`Result` PARAM THROUGH A BRANCH (`let r = if c { a } else { None }`), WHERE THE PAYLOAD RUNS A `Drop` BODY AND… | 353363263 |
@@ -3711,6 +3712,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-73 | codegen+interp | medium | REASSIGNING A TUPLE ELEMENT THAT HAS MOVED OUT NEVER RUNS THE NEW VALUE'S `Drop` BODY, ON EVERY SURFACE -- `let x = t.0; t.0 = mk(6);` prints `x5 dR5… | 23e26459d |
 | B-2026-10-04-74 | codegen+interp | medium | A NAMED LOCAL MOVED INTO A FIELD, `Vec` ELEMENT OR TUPLE ELEMENT ON ONE PATH ONLY IS LOST ON THE OTHER PATH COMPILED AND DROPPED TWICE ON THE MOVING… | e4f5c6438 |
 | B-2026-10-04-77 | codegen | high | A `for` BINDING OVER A FIXED `Array` IS NOT REGISTERED LIKE A `Vec` LOOP'S: a method on a `String` / `Vec` element (`for x in ss { x.len() }` over `A… | c8d492da7 |
+| B-2026-10-05-3 | codegen | high | A `let` THAT SHADOWS A SHARED BINDING IN THE SAME SCOPE RELEASES THE NEW BOX TWICE AND THE OLD ONE NEVER -- `let p = P { s: hs(1) }; let p = P { s: h… | 65ba03f24 |
 
 </details>
 
