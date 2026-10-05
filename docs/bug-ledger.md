@@ -99,10 +99,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 225 |
 | missing-feature | 217 |
 | other | 168 |
+| diagnostics | 144 |
 | perf | 143 |
-| diagnostics | 142 |
 | false-positive | 120 |
-| crash | 111 |
+| crash | 112 |
 | soundness | 98 |
 | use-after-free | 82 |
 
@@ -112,13 +112,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2732 |
 | interp | 850 |
-| typecheck | 330 |
+| typecheck | 331 |
 | other | 113 |
 | ownership | 80 |
-| cli | 73 |
+| cli | 74 |
 | autopar | 59 |
 | runtime | 54 |
-| parser | 52 |
+| parser | 53 |
 | effect | 30 |
 | resolver | 29 |
 | lexer | 11 |
@@ -3745,6 +3745,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-29 | interp+codegen | medium | A GENERIC CALLEE THAT SHADOWS ITS BY-VALUE PARAM WITH AN UNRELATED VALUE LOSES THE ARGUMENT'S `Drop` BODY ON EVERY SURFACE -- `fn g1[T](s: T, n: i64)… | 117da5075 |
 | B-2026-10-05-30 | autopar | high | AUTO-PAR FANS OUT A SUMMING LOOP WHOSE BODY PRINTS, AND THE PRINTED LINES COME OUT IN A DIFFERENT ORDER ON EVERY RUN -- the reduction lane never asks… | cc0766f52 |
 | B-2026-10-05-40 | codegen | high | `self = v` IN A `mut ref self` METHOD DOES NOTHING UNDER `karac build`: the method returns with the receiver unchanged and the new value leaks, while… | 9903a4f6c |
+| B-2026-10-05-46 | cli | medium | A PARSE ERROR IN A FILE THAT ALSO HOLDS A MULTI-ASSIGN (`a, b = b, a`) CRASHES `karac check`, `check --output=json`, `run` AND `build` -- `unreachabl… | fe7c86471 |
+| B-2026-10-05-47 | typecheck | low | `(s[i], s[j]) = (s[j], s[i])` IS REFUSED WITH THE RIGHT ADVICE AND NO EDIT -- E_ASSIGN_TARGET_NOT_PLACE says to drop the parentheses but carries no f… | 14d09a2ad |
+| B-2026-10-05-48 | parser | low | `{x:?}` IN AN F-STRING IS REJECTED AS "unsupported type `?`", WHICH READS AS A MISTYPED FORMAT TYPE -- it is Debug formatting, reserved by the design… | a6dec2fc2 |
 
 </details>
 
