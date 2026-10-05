@@ -4484,10 +4484,51 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(index.kind, ExprKind::Range { .. }) {
             return None;
         }
-        match self.indexed_place_elem_type_expr(object)?.kind {
+        match self.indexed_value_type_expr(object)?.kind {
             TypeKind::Tuple(tes) => tes.get(hop as usize).cloned(),
             _ => None,
         }
+    }
+
+    /// The type of `container[..]`. [`Self::indexed_place_elem_type_expr`] peels
+    /// `Vec` / `Array` layers only, so a map that is itself an element
+    /// (`vm[0][4]` over `Vec[Map[i64, (i64, String)]]`) answered nothing;
+    /// B-2026-10-04-89 types the container and takes its map value.
+    pub(super) fn indexed_value_type_expr(&self, container: &Expr) -> Option<TypeExpr> {
+        if let Some(te) = self.indexed_place_elem_type_expr(container) {
+            return Some(te);
+        }
+        let ExprKind::Index { object, index } = &container.kind else {
+            return None;
+        };
+        if matches!(index.kind, ExprKind::Range { .. }) {
+            return None;
+        }
+        let container_te = self.indexed_place_elem_type_expr(object)?;
+        super::helpers::map_kv_type_exprs(&container_te).map(|(_, v)| v)
+    }
+
+    /// B-2026-10-04-89 — the storage and layout of a tuple that is a map value
+    /// (`m[1]` in `m[1].1 = 7`), placed by [`Self::nested_store_place_ptr`].
+    fn indexed_tuple_store_place(
+        &mut self,
+        tuple: &Expr,
+    ) -> Option<(PointerValue<'ctx>, StructType<'ctx>)> {
+        if !self.indexes_a_map(tuple) {
+            return None;
+        }
+        let ExprKind::Index { object, .. } = &tuple.kind else {
+            return None;
+        };
+        let tuple_te = self.indexed_value_type_expr(object)?;
+        if !matches!(tuple_te.kind, TypeKind::Tuple(_)) {
+            return None;
+        }
+        let BasicTypeEnum::StructType(agg) = self.llvm_type_for_type_expr(&tuple_te) else {
+            return None;
+        };
+        let p = self.nested_store_place_ptr(tuple)?;
+        Some((p, agg))
     }
 
     /// B-2026-10-04-70 — is `place` an index into a `Map` (`m[k]`, `v[0][k]`)?
@@ -4518,7 +4559,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Index { object, .. } = &tuple.kind else {
             return None;
         };
-        let tuple_te = self.indexed_place_elem_type_expr(object)?;
+        let tuple_te = self.indexed_value_type_expr(object)?;
         let BasicTypeEnum::StructType(agg) = self.llvm_type_for_type_expr(&tuple_te) else {
             return None;
         };
@@ -4716,12 +4757,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // `a: mut ref (P, i64)`): the store lands in the caller's tuple.
         let base_ptr = self.place_chain_ptr_through_borrow(object);
         let tuple_ty = self.place_chain_aggregate_llvm_type_through_borrow(object);
-        let (Some(base_ptr), Some(tuple_ty)) = (base_ptr, tuple_ty) else {
-            return Err(
-                "codegen: tuple-element assignment through this receiver shape is not yet \
-                 lowered; bind the tuple to a local first"
-                    .to_string(),
-            );
+        let (base_ptr, tuple_ty) = match (base_ptr, tuple_ty) {
+            (Some(p), Some(t)) => (p, t),
+            // B-2026-10-04-89 — a tuple that is a MAP VALUE (`m[1].1 = 7`),
+            // which the place chain does not reach: the entry's own slot, from
+            // the field store's resolver, so the write lands in the map.
+            _ => match self.indexed_tuple_store_place(object) {
+                Some(placed) => placed,
+                None => {
+                    return Err(
+                        "codegen: tuple-element assignment through this receiver shape is not \
+                         yet lowered; bind the tuple to a local first"
+                            .to_string(),
+                    )
+                }
+            },
         };
         let Ok(elem_ptr) =
             self.builder
@@ -4732,7 +4782,10 @@ impl<'ctx> super::Codegen<'ctx> {
                  receiver's layout"
             ));
         };
-        let elem_te = self.tuple_index_elem_type_expr(object, index);
+        let elem_te = self
+            .indexed_tuple_elem_type_expr(object, index)
+            .filter(|_| self.indexes_a_map(object))
+            .or_else(|| self.tuple_index_elem_type_expr(object, index));
         if let Some(te) = elem_te {
             if !super::vec_method::is_trivially_copyable_te(&te) {
                 let drop_fn = self.emit_drop_fn_for_type_expr(&te);
