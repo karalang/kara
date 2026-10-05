@@ -30191,6 +30191,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !elems.is_empty()
                     && (elems.iter().all(|e| {
                         self.discard_tuple_elem_is_fresh_expr(e)
+                            // B-2026-09-30-92 / -93 — a nested literal or an
+                            // enum constructor of fresh parts.
+                            || self.discarded_array_item_is_fresh(e)
                             || (allow_movable_place && self.array_item_is_movable_local(e))
                     }) || (allow_movable_place
                         && self.container_literal_elems_are_all_param_views(expr))) =>
@@ -30201,6 +30204,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !items.is_empty()
                     && (items.iter().all(|e| {
                         self.discard_tuple_elem_is_fresh_expr(e)
+                            || self.discarded_array_item_is_fresh(e)
                             || (allow_movable_place && self.array_item_is_movable_local(e))
                     }) || (allow_movable_place
                         && self.container_literal_elems_are_all_param_views(expr))) =>
@@ -30481,7 +30485,9 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             Some((te, te_n)) if te_n == n => te,
             Some(_) => return,
-            None => self.infer_arg_elem_te(&items[0]),
+            // B-2026-09-30-92 — through the discard resolver, which names a
+            // nested collection-literal item as well as a call.
+            None => self.infer_discard_elem_te(&items[0]),
         };
         let elem_ty = arr_ty.get_element_type();
         if self.llvm_type_for_type_expr(&elem_te) != elem_ty {
@@ -30544,6 +30550,29 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::StructLiteral { fields, .. } => fields
                 .iter()
                 .all(|f| self.discarded_array_item_is_fresh(&f.value)),
+            // B-2026-09-30-92 — a nested collection literal whose own items
+            // are fresh (`Array[Array[mk(4)], ..]`).
+            ExprKind::ArrayLiteral(items) => {
+                items.iter().all(|i| self.discarded_array_item_is_fresh(i))
+            }
+            ExprKind::PrefixCollectionLiteral { type_name, items }
+                if type_name == "Array" || type_name == "Vec" =>
+            {
+                items.iter().all(|i| self.discarded_array_item_is_fresh(i))
+            }
+            // B-2026-09-30-93 — a qualified user-enum variant constructor
+            // whose payload arguments are fresh (`E.A(mk(3))`), or a unit
+            // variant (`E.B`).
+            // A named Drop-bearing struct argument (`E.A(w)`) counts too: the
+            // constructor moves it and retracts `w`'s own drop, so this walk
+            // is its only owner, as the interpreter's walk already is.
+            ExprKind::Call { args, .. } if self.variant_ctor_enum_of_expr(e).is_some() => {
+                args.iter().all(|a| {
+                    self.discarded_array_item_is_fresh(&a.value)
+                        || self.tuple_elem_is_movable_drop_struct_place(&a.value)
+                })
+            }
+            ExprKind::Path { .. } if self.variant_ctor_enum_of_expr(e).is_some() => true,
             _ => self.expr_yields_fresh_owned_temp(e) || self.item_is_inert_scalar(e),
         }
     }
@@ -31276,6 +31305,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     .iter()
                     .all(|el| self.discard_tuple_elem_is_fresh_expr(el))
             }
+            // B-2026-09-30-93 — a qualified UNIT variant of a non-shared user
+            // enum (`E.B`) mints its value. Declined, one such item
+            // disqualified the whole `(E.A(mk(3)), E.B)` / `Array[..]` discard
+            // and no payload body ran. Interp twin: the `Path` arm of
+            // `discard_tuple_all_elems_safe`.
+            ExprKind::Path { segments, .. } => self
+                .variant_ctor_enum_of_expr(e)
+                .and_then(|en| self.type_decls.enum_layouts.get(&en))
+                .is_some_and(|l| {
+                    !l.is_shared && l.tags.contains_key(segments[segments.len() - 1].as_str())
+                }),
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Path { .. } => true,
                 // B-2026-09-10-25 — a BARE enum-variant constructor

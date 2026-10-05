@@ -1359,6 +1359,23 @@ impl<'ctx> super::Codegen<'ctx> {
             // and the shape stays as loud as before. When it answers, the entry
             // is the one the annotation would have written, so the unannotated
             // binding is registered exactly as the annotated one is.
+            // B-2026-09-30-92 / B-2026-09-30-93 — an `Array[..]` LITERAL
+            // (`let a = Array[mk(4), mk(5)];`). Lowering keeps the node an
+            // `ArrayLiteral` only when it is typed `Array[T, N]`, so the node
+            // kind already says "fixed array"; the element comes from the
+            // first item through `collection_literal_te`, the resolver the
+            // discard and argument routes use, so the bound spelling and the
+            // temporary agree. Without it the binding recorded no element
+            // type, registered no element walk at all, and both `Drop` bodies
+            // and heap were lost, while `let a: Array[W1, 2] = [..]` was right.
+            // An element the resolver cannot name (an empty path) declines.
+            ExprKind::ArrayLiteral(_) => self
+                .collection_literal_te(expr)
+                .and_then(|te| super::helpers::array_inner_type_expr(&te))
+                .filter(|te| match &te.kind {
+                    TypeKind::Path(p) => !p.segments.is_empty(),
+                    _ => true,
+                }),
             ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Block(_) => {
                 let mut leaves = Vec::new();
                 Self::branch_value_leaves(expr, &mut leaves);

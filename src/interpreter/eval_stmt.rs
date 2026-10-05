@@ -9433,6 +9433,35 @@ impl<'a> super::Interpreter<'a> {
             {
                 items.iter().all(|el| self.discard_tuple_elem_is_fresh(el))
             }
+            // B-2026-09-30-93 — a qualified UNIT variant (`E.B`, `Option.None`)
+            // mints its value, so nothing live aliases it. Declined, one such
+            // item disqualified a whole `Array[E.A(mk(3)), E.B]` discard or
+            // `(mk(6), Option.None)` argument and no sibling's body ran.
+            // Shared / `par` enums stay out, on `fresh_bare_variant_ctor_enum`'s
+            // terms, and the stdlib is scanned after the program for the same
+            // reason it is there. Codegen twin: the `Path` arm of
+            // `discard_tuple_elem_is_fresh_expr`.
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                fn owned_unit(items: &[Item], en: &str, vn: &str) -> Option<bool> {
+                    items.iter().find_map(|it| match it {
+                        Item::EnumDef(e) if e.name == en => Some(
+                            !e.is_shared
+                                && !e.is_par
+                                && e.variants
+                                    .iter()
+                                    .any(|v| v.name == vn && matches!(v.kind, VariantKind::Unit)),
+                        ),
+                        _ => None,
+                    })
+                }
+                owned_unit(&self.program.items, &segments[0], &segments[1])
+                    .or_else(|| {
+                        crate::prelude::STDLIB_PROGRAMS
+                            .iter()
+                            .find_map(|(_, p)| owned_unit(&p.items, &segments[0], &segments[1]))
+                    })
+                    .unwrap_or(false)
+            }
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Path { .. } => true,
                 // B-2026-09-10-25 — a BARE enum-variant constructor

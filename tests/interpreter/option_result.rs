@@ -2338,7 +2338,10 @@ end
 /// one in the shared `emit_tuple_elem_drops` optres leg — could not work: the
 /// owner is the caller's temp registration.
 ///
-/// `nonetemp` pins `Option.None` (nothing to run), `destr` the destructured
+/// `nonetemp` pins `Option.None` (nothing to run for the `None` itself;
+/// `mk(6)` beside it runs its body since B-2026-09-30-93, which admitted a
+/// qualified unit variant as a fresh tuple item -- before, that one item
+/// declined the whole tuple and `dR6` ran on no backend), `destr` the destructured
 /// spelling of the same call, `errtemp` a `Result` whose payload is a scalar.
 ///
 /// A `Result.Ok` element carrying a Drop payload is covered by
@@ -2398,6 +2401,7 @@ dR55/t55/1
 destr end
 nonetemp
   rd6
+dR6/t6/1
 nonetemp end
 localarg
   rd7
