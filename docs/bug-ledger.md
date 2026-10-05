@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 692 |
+| miscompile | 693 |
 | run-vs-build | 592 |
 | leak | 577 |
-| double-free | 420 |
+| double-free | 421 |
 | codegen-gap | 227 |
 | missing-feature | 217 |
 | other | 168 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2745 |
+| codegen | 2747 |
 | interp | 852 |
 | typecheck | 334 |
 | other | 113 |
@@ -512,7 +512,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-88 | 2026-10-04 | codegen | low | A TUPLE HOLDING A `Map` WHOSE VALUE IS A STRUCT WITH A HEAP FIELD LEAKS THAT FIELD AT DROP -- `let tm: (Map[i64, P], i64) = (m, 1)` with `struct P { s: String }` loses the `String` of every entry (2 B in 1 block for one entry at -O0); a `Map[i64, String]` in the same tuple, and the same map in a struct field, are clean | — |
 | B-2026-10-04-91 | 2026-10-04 | codegen | low | INDEXING A `Map` HELD IN AN UNANNOTATED TUPLE LOCAL FAILS THE BUILD -- `let mut t = (m, 1); ... t.0[1].n` stops `karac build` with `Index operator applied to non-array type` while `--interp` prints the value; the annotated `let t: (Map[i64, P], i64)` builds since B-2026-10-04-70 | — |
 | B-2026-10-05-1 | 2026-10-05 | interp | low | AFTER B-2026-10-03-21 AN INTERPRETED CALL OF A TWO-LINE SCALAR FUNCTION STILL COSTS ABOUT 37,000 INSTRUCTIONS (200,000 calls 0.86 s against 0.16 s inlined): call-frame setup re-derives per-callee ownership state on every call, and the AST and argument values are cloned per call | — |
-| B-2026-10-05-6 | 2026-10-05 | codegen | medium | A `let mut` REBIND OF A BY-VALUE `Option` PARAM THAT IS MATCHED ON AND THEN REASSIGNED RUNS NO BODY FOR THE PARAM'S VALUE COMPILED -- `fn q1(x: Option[Array[R, 2]]) { let mut h = x; match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } h = None; println("q1"); }` prints `m11 q1 dR11 dR12` on `--interp` against `m11 q1` compiled, leaking 2 blocks; `Option[R]` loses `dR41` too (no leak), and reassigning to a fresh `Some` loses both values' bodies | — |
 | B-2026-10-05-8 | 2026-10-05 | codegen+interp | low | REMAINDER OF B-2026-10-05-7: TWO HAND-OFF SPELLINGS STILL RUN THE BINDING'S `Drop` BODY LATE ON EVERY SURFACE -- an owned-`self` method on an arm binding (`Some(r) => { r.gone(); println("after") }` prints `after dR11`) and a DESTRUCTURED local tuple (`match t { (a, b) => { eat(a); println("mid"); eat(b); .. } }` prints `mid after dR38 dR39` where `dR38 mid dR39 after` is due) | — |
 | B-2026-10-05-10 | 2026-10-05 | codegen+interp | high | THE HAND-BACK OF AN OWNED-`self` GENERIC-ENUM METHOD USED WITHOUT BINDING IT CRASHES COMPILED -- `show(mk(9).id())`, `show(d.id())`, `match mk(9).id() { .. }` and `f(mk(9).id())` over `impl[T] G[T] { fn id(self) -> Self { return self; } }` at `G[R]` segfault or abort `free(): double free` at -O0 and -O2, while `let e = mk(9).id(); show(e)` is correct; `--interp` also loses the payload's `Drop` body in the call-argument spellings | — |
 | B-2026-10-05-11 | 2026-10-05 | codegen+interp | medium | AN OWNED-`self` GENERIC-ENUM METHOD THAT RETURNS SOMETHING OTHER THAN `self` NEVER RUNS THE RECEIVER PAYLOAD'S `Drop` BODY ON ANY SURFACE AND LEAKS IT COMPILED -- `fn other(self, o: G[T]) -> G[T] { return o; }` and `fn fresh(self) -> G[T] { return G.Y; }` over `impl[T] G[T]` at `G[R]` print `x3s3 dR3 end` / `y end` with no `dR2` / `dR1` under `--interp`, -O0 and -O2, 2 B definitely lost; the non-generic `impl E` twin and the free-function twin are correct | — |
@@ -542,6 +541,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-90 | 2026-10-05 | codegen | medium | A BY-VALUE PARAMETER OF A GENERIC-STRUCT TYPE ON A METHOD OF A CONCRETE IMPL OVER THAT STRUCT LEAKS THE ARGUMENT'S HEAP COMPILED -- `impl P[String, Vec[i64]] { fn eat(ref self, o: P[String, Vec[i64]]) -> i64 { 1 } }` called as `r.eat(s)` prints `1` everywhere and valgrind reports `s`'s String and Vec buffers definitely lost; the same parameter on a non-generic struct's impl (`impl H { fn eat(ref self, o: P[String, Vec[i64]]) }`) and on a free function are clean | — |
 | B-2026-10-05-91 | 2026-10-05 | typecheck | medium | A CONCRETE IMPL BLOCK OVER A GENERIC STRUCT TYPES `self`'S FIELDS AT THE BARE TYPE PARAMETER, SO ANY OPERATION ON ONE IS REFUSED -- `impl Bx[i64] { fn get(self) -> i64 { return self.v + self.n; } }` over `struct Bx[T] { v: T, n: i64 }` fails "type 'T' does not implement trait Add", and `impl Bx[String] { fn l(ref self) -> String { self.v.clone() } }` fails "no method 'clone' on type parameter 'T'"; the STRUCT twin of B-2026-09-27-115 | — |
 | B-2026-10-05-92 | 2026-10-05 | codegen | medium | AN `Option` PARAMETER OF A METHOD IN A CONCRETE IMPL OVER A GENERIC ENUM LOSES ITS PAYLOAD'S `Drop` BODY AND LEAKS IT COMPILED -- `impl G[R] { fn opt(ref self, o: Option[G[R]]) -> i64 { match o { Some(_) => 1, None => 0 } } }` called as `e.opt(Some(mk(8)))` prints `dR8` then `1` under `--interp` and only `1` on build and -O0, with the boxed payload and its String definitely lost | — |
+| B-2026-10-05-86 | 2026-10-05 | codegen | medium | AFTER A `match` OR `if let` MOVES THE PAYLOAD OUT OF A `let mut` `Option` LOCAL, REASSIGNING THE LOCAL TO A FRESH `Some` NEVER RUNS THE NEW VALUE'S `Drop` BODY COMPILED -- `let mut h: Option[R] = Some(mk(31)); match h { Some(a) => println(f"m{a.id}"), None => println("n") } h = Some(mk(37)); println("w4");` prints `m31 dR31 w4` where `--interp` prints `m31 dR31 dR37 w4`; valgrind clean, so only the body is missing | — |
 
 ### Relocated
 
@@ -3744,6 +3744,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-3 | codegen | high | A `let` THAT SHADOWS A SHARED BINDING IN THE SAME SCOPE RELEASES THE NEW BOX TWICE AND THE OLD ONE NEVER -- `let p = P { s: hs(1) }; let p = P { s: h… | 65ba03f24 |
 | B-2026-10-05-4 | codegen | medium | REMAINDER OF B-2026-10-03-39: A `shared enum` WHOSE PAYLOAD IS A PLAIN USER ENUM THE FIX DECLINES STILL LEAKS THAT PAYLOAD ON EVERY RELEASE -- `share… | 36316dac0 |
 | B-2026-10-05-5 | codegen | high | A ONE-WORD `Array` HELD AS A TUPLE OR STRUCT FIELD INSIDE AN ENUM PAYLOAD READS ITS ELEMENT AS 0 COMPILED -- `Some((Array[5], 7))` matched as `t` pri… | e2493dffa |
+| B-2026-10-05-6 | codegen | medium | A `let mut` REBIND OF A BY-VALUE `Option` PARAM THAT IS MATCHED ON AND THEN REASSIGNED RUNS NO BODY FOR THE PARAM'S VALUE COMPILED -- `fn q1(x: Optio… | a2d507639 |
 | B-2026-10-05-7 | codegen+interp | medium | A BINDING THE BLOCK DOES NOT DECLARE, PASSED BY VALUE TO A CALLEE THAT HANDS IT BACK ON NO EXIT, RUNS ITS `Drop` BODY AT THE END OF THE ENCLOSING ARM… | d476f99eb |
 | B-2026-10-05-9 | codegen+interp | medium | A BY-VALUE PARAM PROJECTED TO A SCALAR AND THEN SHADOWED (`fn c1(s: S) -> i64 { let s = s.r.id; s }`) LOSES THE CALLER'S `Drop` BODY, ON A DIFFERENT… | c22ad1095 |
 | B-2026-10-05-13 | codegen | medium | A `Self`-TYPED PARAMETER IN A CONCRETE IMPL OVER A GENERIC ENUM FAILS MODULE VERIFICATION -- `impl G[R] { fn cself(self, o: Self) -> i64 { 1 } }` cal… | f7b0abc3b |
@@ -3766,6 +3767,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-75 | typecheck | low | AN ITERATOR METHOD CALLED DIRECTLY ON A `Slice` GETS NO `.iter()` HINT -- `s.bytes().collect()` says only "no method 'collect' on type 'Slice'", and… | 78675ddb1 |
 | B-2026-10-05-76 | codegen | medium | A DISCARDED CALL TO A GENERIC CALLEE THAT HANDS ITS BY-VALUE PARAM BACK LOSES A STRUCT-LITERAL ARGUMENT'S `Drop` BODY COMPILED -- `g(R { id: 82 });`… | 8566e7660 |
 | B-2026-10-05-78 | parser | low | A CLOSURE WRITTEN WITH A RUST-STYLE RETURN TYPE, `\|val: i64\| -> f64 { . | 06a832e18 |
+| B-2026-10-05-85 | codegen | high | A NAMED `Option[R]` ARGUMENT PASSED BY VALUE INTO A CALLEE THAT REASSIGNS ITS `let mut` REBIND ON ONLY SOME PATHS DOUBLE-FREES COMPILED -- `let o = S… | f46a720a8 |
 
 </details>
 
