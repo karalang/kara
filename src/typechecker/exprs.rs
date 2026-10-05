@@ -536,6 +536,40 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-10-04-38 / B-2026-09-30-90 — does literal `e` need `slot` pushed
+    /// into it to type as written? A bare `[..]` (or `[x; n]`) synthesises
+    /// `Vec`, and only check mode coerces it to `Array[T, N]`, so an array
+    /// literal under an `Array` slot needs the slot, and so does a tuple
+    /// literal any of whose elements does, to any depth. A type-inferred
+    /// collection constructor (`Vec.new()`) inside a nested tuple needs its
+    /// slot for the same reason. Gated on the SLOT, so a `[1, 2]` under a
+    /// `Vec` slot keeps synthesis mode and its integer handling.
+    pub(super) fn literal_needs_array_slot(e: &Expr, slot: &Type) -> bool {
+        match (&e.kind, slot) {
+            (ExprKind::ArrayLiteral(_) | ExprKind::RepeatLiteral { .. }, Type::Array { .. }) => {
+                true
+            }
+            (ExprKind::Tuple(inner), Type::Tuple(inner_slots))
+                if inner.len() == inner_slots.len() =>
+            {
+                inner.iter().zip(inner_slots.iter()).any(|(ie, is)| {
+                    Self::literal_needs_array_slot(ie, is)
+                        || matches!(
+                            &ie.kind,
+                            ExprKind::Call { callee, args }
+                                if args.is_empty()
+                                    && matches!(
+                                        &callee.kind,
+                                        ExprKind::Path { segments, .. }
+                                            if segments.len() == 2 && segments[1] == "new"
+                                    )
+                        )
+                })
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         let ty = self.check_expr_inner(expr, expected);
         self.deny_for_element_drop_copy_in_literal(expr);
@@ -820,7 +854,16 @@ impl<'a> super::TypeChecker<'a> {
                     let payload_is_unsuffixed_int =
                         Self::unsuffixed_int_literal_value(&args[0].value).is_some();
                     if let Some(slot) = payload_slot {
-                        if payload_is_inferred_ctor || payload_is_unsuffixed_int {
+                        // B-2026-09-30-90 — and a payload literal that only
+                        // check mode can type as written: `Some(([4, 5], 7))`
+                        // against `Option[(Array[i64, 2], i64)]` synthesised
+                        // its tuple as `(Vec[i64], i64)`.
+                        let payload_needs_slot =
+                            Self::literal_needs_array_slot(&args[0].value, &slot);
+                        if payload_is_inferred_ctor
+                            || payload_is_unsuffixed_int
+                            || payload_needs_slot
+                        {
                             self.check_expr(&args[0].value, &slot);
                             self.record_expr_type(&expr.span, expected);
                             return expected.clone();
@@ -889,31 +932,9 @@ impl<'a> super::TypeChecker<'a> {
                 // checking the inner tuple against its slot re-enters this arm
                 // one level down, so the question recurses to any depth while
                 // staying gated on the same two leaf shapes.
-                fn elem_needs_expected(
-                    e: &Expr,
-                    slot: &Type,
-                    is_ctor: &dyn Fn(&Expr) -> bool,
-                ) -> bool {
-                    is_ctor(e)
-                        || matches!(
-                            (&e.kind, slot),
-                            (
-                                ExprKind::ArrayLiteral(_) | ExprKind::RepeatLiteral { .. },
-                                Type::Array { .. }
-                            )
-                        )
-                        || matches!(
-                            (&e.kind, slot),
-                            (ExprKind::Tuple(inner), Type::Tuple(inner_slots))
-                                if inner.len() == inner_slots.len()
-                                    && inner
-                                        .iter()
-                                        .zip(inner_slots.iter())
-                                        .any(|(ie, is)| elem_needs_expected(ie, is, is_ctor))
-                        )
-                }
-                let elem_needs_expected =
-                    |e: &Expr, slot: &Type| elem_needs_expected(e, slot, &elem_is_inferred_ctor);
+                let elem_needs_expected = |e: &Expr, slot: &Type| {
+                    elem_is_inferred_ctor(e) || Self::literal_needs_array_slot(e, slot)
+                };
                 if elems
                     .iter()
                     .zip(exp_elems.iter())
