@@ -9059,6 +9059,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                                 // constructor argument the
                                                 // callee hands back whole.
                                                 || self.call_hands_back_fresh_optres_ctor_arg(value)
+                                                // B-2026-10-04-82 — a REASSIGNED
+                                                // or mutated rebind of a by-value
+                                                // param, which owns the value
+                                                // outright (the caller stands
+                                                // down for it).
+                                                || self.let_is_reassigned_param_rebind(var_name, value)
                                                 || matches!(&value.kind, ExprKind::Identifier(src)
                                                     if src != var_name
                                                         && self.boxed_enum_drop_owns_interior(src)))
