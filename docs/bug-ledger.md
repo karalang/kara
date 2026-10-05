@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 592 |
 | leak | 578 |
 | double-free | 421 |
-| codegen-gap | 227 |
+| codegen-gap | 228 |
 | missing-feature | 217 |
 | other | 168 |
 | diagnostics | 147 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2749 |
+| codegen | 2750 |
 | interp | 854 |
 | typecheck | 334 |
 | other | 113 |
@@ -3770,6 +3770,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-76 | codegen | medium | A DISCARDED CALL TO A GENERIC CALLEE THAT HANDS ITS BY-VALUE PARAM BACK LOSES A STRUCT-LITERAL ARGUMENT'S `Drop` BODY COMPILED -- `g(R { id: 82 });`… | 8566e7660 |
 | B-2026-10-05-78 | parser | low | A CLOSURE WRITTEN WITH A RUST-STYLE RETURN TYPE, `\|val: i64\| -> f64 { . | 06a832e18 |
 | B-2026-10-05-85 | codegen | high | A NAMED `Option[R]` ARGUMENT PASSED BY VALUE INTO A CALLEE THAT REASSIGNS ITS `let mut` REBIND ON ONLY SOME PATHS DOUBLE-FREES COMPILED -- `let o = S… | f46a720a8 |
+| B-2026-10-05-95 | codegen | medium | A `for` LOOP OVER AN UNNAMED SortedSet OR SortedMap FAILS THE BUILD -- `for v in a.intersection(b)` over two SortedSets, `for v in make_sorted_set()`… | a37653ccc |
 
 </details>
 
