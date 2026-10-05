@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 217 |
 | other | 168 |
 | perf | 143 |
-| diagnostics | 141 |
+| diagnostics | 142 |
 | false-positive | 119 |
 | crash | 111 |
 | soundness | 98 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2724 |
 | interp | 847 |
-| typecheck | 328 |
+| typecheck | 329 |
 | other | 113 |
 | ownership | 80 |
 | cli | 73 |
@@ -3733,6 +3733,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-14 | interp | medium | `--interp` COPIES THE WHOLE `String` ON EVERY `push` / `push_str`, SO BUILDING A STRING ONE CHARACTER AT A TIME IS QUADRATIC -- 50,000 `s.push('x')`… | 4c789647b |
 | B-2026-10-05-16 | interp | high | `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` RUNS THE BODY ONCE UNDER `--interp`, WITH THE ITERATOR ITSELF BOUND TO `v` -- de… | 3a7995069 |
 | B-2026-10-05-23 | interp | medium | `--interp` RE-DERIVES TYPE-LEVEL DROP FACTS FOR EVERY VALUE IT MATCHES OR BINDS, RE-SCANNING THE PROGRAM'S ITEMS EACH TIME -- kata 341's bench kernel… | 40ecccbe6 |
+| B-2026-10-05-25 | typecheck | low | `n.is_power_of_two()` ON A SIGNED INTEGER SAYS ONLY "no method 'is_power_of_two' on type 'i32'", which reads as if the method did not exist; it is un… | 7dcf9ef77 |
 
 </details>
 
