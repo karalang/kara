@@ -998,6 +998,21 @@ fn generation_endpoints(
     out
 }
 
+/// B-2026-10-05-7 — the names `block`'s own statements bind with a `let`.
+pub(crate) fn block_slot_let_names(block: &Block) -> Vec<String> {
+    let mut out = Vec::new();
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                out.extend(pattern.binding_names())
+            }
+            StmtKind::LetUninit { name, .. } => out.push(name.clone()),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Does `name`'s drop slot fire at `stmt_idx`? The generation-aware replacement
 /// for the `last_use.get(name) == Some(stmt_idx)` test every consumer used when
 /// the map held one endpoint per name (B-2026-09-02-16).

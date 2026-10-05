@@ -725,7 +725,7 @@ fn e2e_if_let_moved_payload_runs_drop_body() {
     assert_eq!(
         out,
         "a\narm sees 33\ndrop 33\nb\narm sees 34\ndrop 34\nc\nempty\nd\n\
-             consumed 35\nafter move\ndrop 35\nend\n"
+             consumed 35\ndrop 35\nafter move\nend\n"
     );
 }
 
@@ -3989,13 +3989,13 @@ fn e2e_consuming_arm_handing_a_boxed_enum_payload_out_runs_one_body() {
             "fn main() { let o: Option[G] = Some(G.A(f\"z{9}\"));\n\
                  \x20            match o { Some(g) => { let n = sink(g); println(f\"n{n}\") }\n\
                  \x20                      None => { println(\"none\") } } }\n",
-            "sink\nn1\ndGz9\n",
+            "sink\ndGz9\nn1\n",
         ),
         (
             "if-let-into-call",
             "fn main() { let o: Option[G] = Some(G.A(f\"z{9}\"));\n\
                  \x20            if let Some(g) = o { let n = sink(g); println(f\"n{n}\") } }\n",
-            "sink\nn1\ndGz9\n",
+            "sink\ndGz9\nn1\n",
         ),
         (
             "rebind",
@@ -4262,7 +4262,7 @@ fn e2e_readthrough_arm_leaves_the_payload_with_its_enum() {
                 "free-fn-argument",
                 "let e = E.A(R { id: 5 });\n\
                  \x20 match e { E.A(r) => { let k = keep(r); println(f\"k{k}\") } E.B => {} }\n",
-                "k5\ndR5\ndE\npost\n",
+                "dR5\nk5\ndE\npost\n",
             ),
             (
                 "let-rebind",
@@ -4728,7 +4728,7 @@ fn e2e_materializing_arm_over_a_projection_owns_the_payload_once() {
                 "field-free-fn-argument",
                 "let s = S { e: E.A(R { id: 8 }) };\n\
                  \x20 match s.e { E.A(r) => { let k = take(r); println(f\"k{k}\") } E.B => {} }\n",
-                "k8\ndR8\ndE\npost\n",
+                "dR8\nk8\ndE\npost\n",
             ),
             (
                 // ONE body, the same count the `-let-rebind` sibling above

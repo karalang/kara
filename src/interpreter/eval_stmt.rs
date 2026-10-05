@@ -107,7 +107,12 @@ impl<'a> super::Interpreter<'a> {
         self.outer_shadow_moved_restore.push(Vec::new());
         self.outer_shadow_container_moved_restore.push(Vec::new());
         self.param_shadow_restore.push(Vec::new());
+        self.block_slot_names.push((
+            self.next_block_is_fn_body,
+            crate::interpreter::exec::block_slot_let_names(block),
+        ));
         let result = self.eval_block_scope(block);
+        self.block_slot_names.pop();
         for name in self.outer_shadow_moved_restore.pop().unwrap_or_default() {
             self.moved_out_user_drop_bindings.insert(name);
         }
@@ -164,6 +169,9 @@ impl<'a> super::Interpreter<'a> {
         // move-suppression hook (let-rebind, ctor args, `return`) apply
         // unchanged. Empty for every block that is not a match arm body.
         for name in std::mem::take(&mut self.pending_arm_drop_bindings) {
+            if let Some((_, names)) = self.block_slot_names.last_mut() {
+                names.push(name.clone());
+            }
             cleanup.push(CleanupAction::Drop { name });
         }
         // B-2026-08-28-22 — the same adoption for a conditionally-returned
@@ -198,6 +206,19 @@ impl<'a> super::Interpreter<'a> {
             None => {
                 let computed = std::rc::Rc::new(compute_block_last_use(block));
                 self.last_use_memo.insert(key, computed.clone());
+                computed
+            }
+        };
+        // B-2026-10-05-7 — bindings this block does not declare that die in a
+        // callee at one of its statements (design.md rule 3).
+        let dying = match self.dying_in_callee_memo.get(&key) {
+            Some(memo) => memo.clone(),
+            None => {
+                let computed = std::rc::Rc::new(crate::param_fate::bindings_dying_in_callee(
+                    Some(self.program),
+                    block,
+                ));
+                self.dying_in_callee_memo.insert(key, computed.clone());
                 computed
             }
         };
@@ -542,6 +563,9 @@ impl<'a> super::Interpreter<'a> {
             // here too — that's the "let _ = expensive(); …" case
             // where NLL says the value dies at its declaration.
             self.fire_due_drops(&mut cleanup, &last_use, stmt_idx);
+            if !dying.is_empty() {
+                self.fire_bindings_dying_in_callee(&mut cleanup, &dying, stmt_idx);
+            }
             // B-2026-09-04-32 — a parked field-held `shared` release whose
             // holder just became the last reference is due HERE, at the
             // binding's live-range end, not at lexical scope exit. After
@@ -1890,6 +1914,67 @@ impl<'a> super::Interpreter<'a> {
                 _ => None,
             })
             .unwrap_or_default()
+    }
+
+    /// B-2026-10-05-7 — a binding this block does not declare (a `match` arm's
+    /// or `if let`'s payload binding, an enclosing block's local) that
+    /// `stmt_idx` handed by value to a callee keeping it on no exit dies at the
+    /// end of that statement, design.md rule 3, as a `let` local of this block
+    /// does through `fire_due_drops`. An arm binding adopted into `cleanup`
+    /// fires through its slot; an enclosing block's binding fires here and is
+    /// recorded as moved, so its own slot runs nothing later. A by-value
+    /// param, or a view of one, is the caller's and is left alone.
+    fn enclosing_block_holds_slot(&self, name: &str) -> bool {
+        let n = self.block_slot_names.len();
+        for (fn_body, names) in self.block_slot_names[..n.saturating_sub(1)].iter().rev() {
+            if names.iter().any(|m| m == name) {
+                return true;
+            }
+            if *fn_body {
+                break;
+            }
+        }
+        false
+    }
+
+    fn fire_bindings_dying_in_callee(
+        &mut self,
+        cleanup: &mut Vec<CleanupAction>,
+        dying: &[(String, usize)],
+        stmt_idx: usize,
+    ) {
+        for (name, i) in dying {
+            if *i != stmt_idx || self.moved_out_user_drop_bindings.contains(name) {
+                continue;
+            }
+            if self
+                .owned_param_names_stack
+                .last()
+                .is_some_and(|top| top.contains(name.as_str()))
+            {
+                continue;
+            }
+            if cleanup
+                .iter()
+                .any(|a| matches!(a, CleanupAction::Drop { name: n } if n == name))
+            {
+                let mut m = HashMap::new();
+                m.insert(name.clone(), vec![stmt_idx]);
+                self.fire_due_drops(cleanup, &m, stmt_idx);
+                continue;
+            }
+            if self.env.get_in_current_scope(name).is_some() || self.env.get(name).is_none() {
+                continue;
+            }
+            // Only a binding an ENCLOSING block of this function holds a slot
+            // for: a destructured view (`(a, b) => ..` over a local tuple)
+            // has none, and its owner runs the body.
+            if !self.enclosing_block_holds_slot(name) {
+                continue;
+            }
+            self.invoke_user_drop_if_applicable(name);
+            self.moved_out_user_drop_bindings.insert(name.clone());
+        }
     }
 
     fn invoke_user_drop_if_applicable(&mut self, name: &str) {

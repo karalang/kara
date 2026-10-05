@@ -84,8 +84,8 @@ fn main() {
     println("end")
 }"#,
         &[
-            "stmt", "  dR1", "  x", "unit", "  x", "ret", "  dR2", "  x", "armpass", "  n1",
-            "  dR4", "armelem", "  in 5", "  dR5", "iflet", "  in", "  dR6", "vec", "  dR7", "  x",
+            "stmt", "  dR1", "  x", "unit", "  x", "ret", "  dR2", "  x", "armpass", "  dR4",
+            "  n1", "armelem", "  in 5", "  dR5", "iflet", "  in", "  dR6", "vec", "  dR7", "  x",
             "opt", "  dR8", "  x", "tup", "  dR9", "  x", "nested", "  dR10", "  x", "owndrop",
             "  dMd", "  dR11", "  x", "generic", "  dR13", "  x", "fieldmv", "  dR14", "  x",
             "end",

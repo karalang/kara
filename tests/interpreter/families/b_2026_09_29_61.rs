@@ -55,5 +55,5 @@ fn main() {
     println("end")
 }
 "#);
-    assert_eq!(out, "d1\nk5\nk5\nd2\nk3\nd4\nk5\nd5\nk5\nk5\nd6\nd7\ni28\nd28\nd28\nd8\ne\nd9\nj28\nd28\nd10\ngtrue\nd27\nend\n");
+    assert_eq!(out, "d1\nk5\nk5\nd2\nd3\nk3\nd4\nk5\nd5\nk5\nk5\nd6\nd7\ni28\nd28\nd28\nd8\ne\nd9\nj28\nd28\nd10\ngtrue\nd27\nend\n");
 }

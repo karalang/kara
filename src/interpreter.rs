@@ -1033,6 +1033,14 @@ pub struct Interpreter<'a> {
     /// an identity only while the AST it points into is alive, which this
     /// interpreter's run bounds.
     pub(crate) last_use_memo: FxHashMap<LastUseKey, std::rc::Rc<HashMap<String, Vec<usize>>>>,
+    /// B-2026-10-05-7 — `param_fate::bindings_dying_in_callee`, memoized on the
+    /// same key as `last_use_memo`.
+    /// B-2026-10-05-7 — per executing block, innermost last: whether it is a
+    /// function body, and the names it gives a `Drop` slot (its `let`s and the
+    /// match-arm bindings it adopted). Lets an inner block tell an enclosing
+    /// owner from a view that has no slot anywhere.
+    pub(crate) block_slot_names: Vec<(bool, Vec<String>)>,
+    pub(crate) dying_in_callee_memo: FxHashMap<LastUseKey, std::rc::Rc<Vec<(String, usize)>>>,
     /// B-2026-08-30-33 — the parameters a call adopted a per-path body drop
     /// for, kept for the whole callee frame so any statement that hands the
     /// value to a new owner can disarm it.
@@ -1525,6 +1533,8 @@ impl<'a> Interpreter<'a> {
             pending_arm_unbound_struct: None,
             pending_param_drop_bindings: Vec::new(),
             last_use_memo: FxHashMap::default(),
+            dying_in_callee_memo: FxHashMap::default(),
+            block_slot_names: Vec::new(),
             pending_fn_body_late_drops: Vec::new(),
             own_body_only_view_bindings: std::collections::HashMap::new(),
             cond_store_param_names: std::collections::HashSet::new(),

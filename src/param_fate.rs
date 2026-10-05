@@ -293,6 +293,7 @@ fn param_fate_depth_uncached(
         exits: Vec::new(),
         overflow: false,
         moved: false,
+        param_ty: Some(p.ty.clone()),
     };
     let mut s = PState::default();
     s.whole.insert(name.clone());
@@ -333,6 +334,22 @@ fn is_scalar_ty(t: &TypeExpr) -> bool {
         return false;
     };
     p.segments.len() == 1 && is_scalar_type_name(&p.segments[0])
+}
+
+/// The declared type of field `field` of the non-generic struct `t` names.
+fn field_ty<'p>(program: &'p Program, t: &TypeExpr, field: &str) -> Option<&'p TypeExpr> {
+    let TypeKind::Path(p) = &t.kind else {
+        return None;
+    };
+    if p.segments.len() != 1 || p.generic_args.is_some() {
+        return None;
+    }
+    program.items.iter().find_map(|item| match item {
+        Item::StructDef(sd) if sd.name == p.segments[0] && sd.generic_params.is_none() => {
+            sd.fields.iter().find(|f| f.name == field).map(|f| &f.ty)
+        }
+        _ => None,
+    })
 }
 
 fn is_borrow_ty(t: &TypeExpr) -> bool {
@@ -407,6 +424,8 @@ struct Walker<'p> {
     overflow: bool,
     /// Some exit's path set `PState::moved`.
     moved: bool,
+    /// The parameter's declared type, for [`Walker::scalar_param_projection`].
+    param_ty: Option<TypeExpr>,
 }
 
 fn dedup(mut v: Outs) -> Outs {
@@ -429,6 +448,33 @@ impl Walker<'_> {
             }
         };
         self.exits.push(fate);
+    }
+
+    /// Is `e` a field chain rooted at the parameter itself (`r.id`,
+    /// `w.r.id`) whose type is scalar?
+    fn scalar_param_projection(&self, e: &Expr, s: &PState) -> bool {
+        let (Some(program), Some(ty)) = (self.program, self.param_ty.as_ref()) else {
+            return false;
+        };
+        let mut fields = Vec::new();
+        let mut cur = e;
+        while let ExprKind::FieldAccess { object, field } = &cur.kind {
+            fields.push(field.as_str());
+            cur = object;
+        }
+        if !matches!(&cur.kind, ExprKind::Identifier(n)
+            if *n == self.param_name && s.whole.contains(n))
+        {
+            return false;
+        }
+        let mut t = ty;
+        for f in fields.iter().rev() {
+            match field_ty(program, t, f) {
+                Some(next) => t = next,
+                None => return false,
+            }
+        }
+        is_scalar_ty(t)
     }
 
     fn cap(&mut self, v: Outs) -> Outs {
@@ -625,6 +671,12 @@ impl Walker<'_> {
             ExprKind::SelfValue => {
                 let y = s.yield_of("self");
                 vec![(s, y)]
+            }
+            // B-2026-10-05-7 — a SCALAR field read straight off the parameter
+            // (`r.id`, `w.r.id`) copies a word and carries nothing of it, so
+            // `fn eat(r: R) -> i64 { r.id }` keeps `r` on every exit.
+            ExprKind::FieldAccess { .. } if self.scalar_param_projection(e, &s) => {
+                vec![(s, Yield::None)]
             }
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => self
                 .expr(object, s)
@@ -1481,6 +1533,192 @@ pub fn whole_param_leaves(program: Option<&Program>, f: &Function, idx: usize) -
         Some(false)
     } else {
         None
+    }
+}
+
+/// Slice 4 step 4 — design.md § Drop ordering rule 3 for a binding the block
+/// does NOT declare: a `match` arm's or `if let`'s payload binding, or an
+/// enclosing block's local used inside a nested block.
+///
+/// Returns `(name, i)` for each such binding whose LAST mention in `b` is
+/// `b.stmts[i]`, where it is passed bare, by value, to a callee whose fate
+/// keeps it on every exit (`whole_param_leaves` is `Some(false)`). The value
+/// then dies at the end of that statement, as a `let` local passed the same
+/// way does through the block's NLL map; without this both backends ran its
+/// body at the end of the enclosing arm or statement instead
+/// (B-2026-10-05-7).
+///
+/// Declined when the statement mentions the name anywhere else, when a `let`
+/// in the block or inside the statement shadows it, when a `defer` mentions
+/// it, or when the call sits in a closure.
+pub fn bindings_dying_in_callee(program: Option<&Program>, b: &Block) -> Vec<(String, usize)> {
+    let Some(program) = program else {
+        return Vec::new();
+    };
+    if !schedule_enabled() {
+        return Vec::new();
+    }
+    let declared = block_let_names(b);
+    let mut out: Vec<(String, usize)> = Vec::new();
+    for (i, st) in b.stmts.iter().enumerate() {
+        let mut found: Vec<String> = Vec::new();
+        let mut shadow: Vec<String> = Vec::new();
+        stays_args_stmt(program, st, &mut found, &mut shadow);
+        for n in found {
+            if declared.contains(&n) || shadow.contains(&n) || out.iter().any(|(m, _)| *m == n) {
+                continue;
+            }
+            let mut here = Vec::new();
+            collect_stmt_names(st, &mut here);
+            if here.iter().filter(|m| **m == n).count() != 1 {
+                continue;
+            }
+            let mut later = Vec::new();
+            for s in &b.stmts[i + 1..] {
+                collect_stmt_names(s, &mut later);
+            }
+            if let Some(e) = &b.final_expr {
+                collect_expr_names(e, &mut later);
+            }
+            if later.contains(&n) {
+                continue;
+            }
+            let deferred = b.stmts[..i].iter().any(|s| match &s.kind {
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    let mut ns = Vec::new();
+                    collect_block_names(body, &mut ns);
+                    ns.contains(&n)
+                }
+                _ => false,
+            });
+            if !deferred {
+                out.push((n, i));
+            }
+        }
+    }
+    out
+}
+
+fn stays_args_stmt(
+    program: &Program,
+    st: &Stmt,
+    found: &mut Vec<String>,
+    shadow: &mut Vec<String>,
+) {
+    match &st.kind {
+        StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+            stays_args_expr(program, value, found, shadow)
+        }
+        StmtKind::Assign { value, .. } => stays_args_expr(program, value, found, shadow),
+        StmtKind::Expr(e) => stays_args_expr(program, e, found, shadow),
+        _ => {}
+    }
+}
+
+fn stays_args_block(
+    program: &Program,
+    b: &Block,
+    found: &mut Vec<String>,
+    shadow: &mut Vec<String>,
+) {
+    shadow.extend(block_let_names(b));
+    for st in &b.stmts {
+        stays_args_stmt(program, st, found, shadow);
+    }
+    if let Some(e) = &b.final_expr {
+        stays_args_expr(program, e, found, shadow);
+    }
+}
+
+/// Bare identifiers handed by value to a resolved callee whose fate keeps
+/// them on every exit. Closures are not entered; any shape not named here
+/// contributes nothing, so its mentions fail the caller's count check.
+fn stays_args_expr(program: &Program, e: &Expr, found: &mut Vec<String>, shadow: &mut Vec<String>) {
+    let go = |x: &Expr, found: &mut Vec<String>, shadow: &mut Vec<String>| {
+        stays_args_expr(program, x, found, shadow)
+    };
+    match &e.kind {
+        ExprKind::Call { callee, args } => {
+            let key = match &callee.kind {
+                ExprKind::Identifier(n) => Some(n.clone()),
+                ExprKind::Path { segments, .. } => Some(segments.join(".")),
+                _ => None,
+            };
+            let target = key.as_deref().and_then(|k| resolve_fn(program, k));
+            for (j, a) in args.iter().enumerate() {
+                match (&a.value.kind, target) {
+                    (ExprKind::Identifier(n), Some(g))
+                        if whole_param_leaves(Some(program), g, j) == Some(false) =>
+                    {
+                        found.push(n.clone())
+                    }
+                    _ => go(&a.value, found, shadow),
+                }
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            go(object, found, shadow);
+            for a in args {
+                go(&a.value, found, shadow);
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            go(left, found, shadow);
+            go(right, found, shadow);
+        }
+        ExprKind::Unary { operand, .. } => go(operand, found, shadow),
+        ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => {
+            for x in es {
+                go(x, found, shadow);
+            }
+        }
+        ExprKind::StructLiteral { fields, .. } => {
+            for f in fields {
+                go(&f.value, found, shadow);
+            }
+        }
+        ExprKind::Block(b) => stays_args_block(program, b, found, shadow),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            go(condition, found, shadow);
+            stays_args_block(program, then_block, found, shadow);
+            if let Some(x) = else_branch {
+                go(x, found, shadow);
+            }
+        }
+        ExprKind::InterpolatedStringLit(parts) => {
+            for p in parts {
+                if let ParsedInterpolationPart::Expr(x, _) = p {
+                    go(x, found, shadow);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_stmt_names(st: &Stmt, out: &mut Vec<String>) {
+    match &st.kind {
+        StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+            collect_expr_names(value, out)
+        }
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            collect_expr_names(target, out);
+            collect_expr_names(value, out);
+        }
+        StmtKind::Expr(e) => collect_expr_names(e, out),
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            collect_block_names(body, out)
+        }
+        StmtKind::MultiAssign { targets, values } => {
+            for e in targets.iter().chain(values) {
+                collect_expr_names(e, out);
+            }
+        }
+        StmtKind::LetUninit { .. } => {}
     }
 }
 

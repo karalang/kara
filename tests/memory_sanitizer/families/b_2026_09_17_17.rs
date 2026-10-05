@@ -1,6 +1,6 @@
 //! B-2026-09-17-17 -- a whole TUPLE payload bound by an `Option`/`Result` arm
 //! and handed to a by-value free-fn param (`Some(t) => eat(t)`) runs its
-//! element `Drop` bodies once, at the arm's end.
+//! element `Drop` bodies once, at the call (B-2026-10-05-7; at the arm's end before it).
 
 use super::*;
 
@@ -35,11 +35,11 @@ fn main() {
 "#,
         &[
             "row", "  x", "  eat", "  hit7", "  dR1", "  dR2", "block", "  e3", "  dR3", "  dR4",
-            "  after", "expr", "  e5", "  dR5", "  dR6", "  after", "iflet", "  e7", "  i",
-            "  dR7", "  dR8", "  after", "whilet", "  e9", "  w", "  dR9", "  dR10", "  after",
-            "param", "  e11", "  p", "  dR11", "  dR12", "  after", "result", "  e13", "  r",
-            "  dR13", "  dR14", "  after", "keep", "  k15", "  dR15", "  dR16", "  after", "twice",
-            "  e17", "  e17", "  2", "  dR17", "  dR18", "  after", "loop", "  e20", "  dR20",
+            "  after", "expr", "  e5", "  dR5", "  dR6", "  after", "iflet", "  e7", "  dR7",
+            "  dR8", "  i", "  after", "whilet", "  e9", "  dR9", "  dR10", "  w", "  after",
+            "param", "  e11", "  p", "  dR11", "  dR12", "  after", "result", "  e13", "  dR13",
+            "  dR14", "  r", "  after", "keep", "  k15", "  dR15", "  dR16", "  after", "twice",
+            "  e17", "  e17", "  dR17", "  dR18", "  2", "  after", "loop", "  e20", "  dR20",
             "  dR21", "  e22", "  dR22", "  dR23", "end",
         ],
         "taken_tuple_payload_handed_to_by_value_param_frees_once",

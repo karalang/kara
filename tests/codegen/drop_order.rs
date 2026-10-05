@@ -9158,7 +9158,7 @@ fn main() { k1(); k2(true); k4(true); k6(false); k7(); k8(); k9(); k11(); k12();
 "#
         )
         .as_deref(),
-        Some("q=1\ndR1\nk1\nq=2\ndR2\nk2\nq=4\ndR4\nk4\nq=6\ndR6\nk6\nq=7\ndR7\nmid\nk7\nq=8\ndR8\nk8\np=9\ndR9\nk9\nn=11\ndR11\nk11\nq=12\ndR12\nk12\nh=13\ndR13\nk13\ndE\ndR14\nin\nk14\np=15\ndR15\narm\nk15\ndone\n"),
+        Some("q=1\ndR1\nk1\nq=2\ndR2\nk2\nq=4\ndR4\nk4\nq=6\ndR6\nk6\nq=7\ndR7\nmid\nk7\nq=8\ndR8\nk8\np=9\ndR9\nk9\ndR11\nn=11\nk11\nq=12\ndR12\nk12\nh=13\ndR13\nk13\ndE\ndR14\nin\nk14\np=15\ndR15\narm\nk15\ndone\n"),
         "must match --interp"
     );
 }

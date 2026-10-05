@@ -4037,7 +4037,7 @@ fn asan_consuming_arm_boxed_enum_payload_move_positions_and_boundaries() {
              \x20            match o {{ Some(g) => {{ let n = sink(g); println(f\"n{{n}}\") }}\n\
              \x20                       None => {{ println(\"none\") }} }} }}\n"
         ),
-        &["sink", "n1", "dGz9"],
+        &["sink", "dGz9", "n1"],
         "into-call",
     );
     assert_clean_asan_run(
@@ -4045,7 +4045,7 @@ fn asan_consuming_arm_boxed_enum_payload_move_positions_and_boundaries() {
             "{H}fn main() {{ let o: Option[G] = Some(G.A(f\"z{{9}}\"));\n\
              \x20            if let Some(g) = o {{ let n = sink(g); println(f\"n{{n}}\") }} }}\n"
         ),
-        &["sink", "n1", "dGz9"],
+        &["sink", "dGz9", "n1"],
         "if-let-into-call",
     );
     assert_clean_asan_run(

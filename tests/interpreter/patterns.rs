@@ -1159,7 +1159,7 @@ fn test_if_let_moved_payload_runs_drop_body() {
                  println(\"end\");\n\
              }\n"),
         "a\narm sees 33\ndrop 33\nb\narm sees 34\ndrop 34\nc\nempty\nd\n\
-         consumed 35\nafter move\ndrop 35\nend\n"
+         consumed 35\ndrop 35\nafter move\nend\n"
     );
 }
 
@@ -2828,7 +2828,7 @@ fn readthrough_arm_leaves_the_payload_with_its_enum() {
             "free-fn-argument",
             "let e = E.A(R { id: 5 });\n\
              \x20 match e { E.A(r) => { let k = keep(r); println(f\"k{k}\") } E.B => {} }\n",
-            "k5\ndR5\ndE\npost\n",
+            "dR5\nk5\ndE\npost\n",
         ),
         (
             "let-rebind",

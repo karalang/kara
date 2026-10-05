@@ -228,6 +228,18 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.pattern_bind_depth += 1;
         let r = self.bind_pattern_values_impl(pattern, scrut);
         self.drop_rc.pattern_bind_depth -= 1;
+        // B-2026-10-05-7 — a pattern binding inside a loop is a fresh binding
+        // each iteration, so a move bit a hand-off clears on one iteration
+        // must be re-armed on the next (`record_loop_decl_rearm_anchor`).
+        if let PatternKind::Binding(name) = &pattern.kind {
+            if !self.fn_ctx.loop_stack.is_empty() {
+                if let Some(blk) = self.builder.get_insert_block() {
+                    self.drop_rc
+                        .loop_decl_rearm_anchors
+                        .insert(name.clone(), (blk, blk.get_last_instruction()));
+                }
+            }
+        }
         // B-2026-10-04-46 — see `PayloadVars::user_enum_payload_slots`.
         if let PatternKind::Binding(name) = &pattern.kind {
             if !self

@@ -7612,7 +7612,7 @@ fn k15() { let o = Some(mk(15)); match o { Some(r) => { { let p = r; println(f"p
 fn main() { k1(); k2(true); k3(false); k4(true); k5(false); k6(false); k7(); k8(); k9(); k10(); k11(); k12(); k13(); k14(); k15(); println("done") }
 "#,
     );
-    assert_eq!(out, "q=1\ndR1\nk1\nq=2\ndR2\nk2\nq=30\ndR30\ndR3\nk3\nq=4\ndR4\nk4\nq=50\ndR50\ndR5\nk5\nq=6\ndR6\nk6\nq=7\ndR7\nmid\nk7\nq=8\ndR8\nk8\np=9\ndR9\nk9\nq=10\ndR10\nk10\nn=11\ndR11\nk11\nq=12\ndR12\nk12\nh=13\ndR13\nk13\ndE\ndR14\nin\nk14\np=15\ndR15\narm\nk15\ndone\n");
+    assert_eq!(out, "q=1\ndR1\nk1\nq=2\ndR2\nk2\nq=30\ndR30\ndR3\nk3\nq=4\ndR4\nk4\nq=50\ndR50\ndR5\nk5\nq=6\ndR6\nk6\nq=7\ndR7\nmid\nk7\nq=8\ndR8\nk8\np=9\ndR9\nk9\nq=10\ndR10\nk10\ndR11\nn=11\nk11\nq=12\ndR12\nk12\nh=13\ndR13\nk13\ndE\ndR14\nin\nk14\np=15\ndR15\narm\nk15\ndone\n");
 }
 
 /// B-2026-09-26-12 — a `Vec` of a GENERIC user enum whose payload is heap-BOXED

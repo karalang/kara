@@ -654,6 +654,13 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Some(self.fn_body_last_use(block))
         };
+        // B-2026-10-05-7 — bindings this block does not declare that die in a
+        // callee at one of its statements (design.md rule 3).
+        let dying_in_callee = if user_drop_last_use.is_some() {
+            crate::param_fate::bindings_dying_in_callee(self.program_snapshot.as_deref(), block)
+        } else {
+            Vec::new()
+        };
         for (i, stmt) in block.stmts.iter().enumerate() {
             // Statement-end firing for fresh Drop-temps (B-2026-08-01-4):
             // snapshot the scope frame's length so the post-statement drain
@@ -703,6 +710,22 @@ impl<'ctx> super::Codegen<'ctx> {
             // exit-path cleanup as before.
             if let Some(lu) = &user_drop_last_use {
                 self.fire_due_user_drops(lu, i);
+            }
+            // B-2026-10-05-7 — and, as for a discard (`let _ = x;`), a binding
+            // an ENCLOSING frame owns that this statement handed by value to a
+            // callee keeping it on no exit.
+            // A by-value param (or a view of one) is the caller's, rule 3 for
+            // the outer call.
+            for (n, at) in &dying_in_callee {
+                if *at == i
+                    && !self.fn_ctx.current_fn_param_names.contains(n.as_str())
+                    && !self
+                        .payload_vars
+                        .param_payload_arm_views
+                        .contains(n.as_str())
+                {
+                    self.fire_discarded_binding_drops_now(n);
+                }
             }
         }
         if let Some(ref expr) = block.final_expr {

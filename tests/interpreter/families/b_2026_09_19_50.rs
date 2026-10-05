@@ -74,5 +74,5 @@ fn main() {
     println("fieldmv"); { let g = Ga { h: Ha.P([Mono.P(r(14))]) }; let h = g.h; println("  x") }
     println("end")
 }"#);
-    assert_eq!(out, "stmt\n  dR1\n  x\nunit\n  x\nret\n  dR2\n  x\narmpass\n  n1\n  dR4\narmelem\n  in 5\n  dR5\niflet\n  in\n  dR6\nvec\n  dR7\n  x\nopt\n  dR8\n  x\ntup\n  dR9\n  x\nnested\n  dR10\n  x\nowndrop\n  dMd\n  dR11\n  x\ngeneric\n  dR13\n  x\nfieldmv\n  dR14\n  x\nend\n", "got:\n{out}");
+    assert_eq!(out, "stmt\n  dR1\n  x\nunit\n  x\nret\n  dR2\n  x\narmpass\n  dR4\n  n1\narmelem\n  in 5\n  dR5\niflet\n  in\n  dR6\nvec\n  dR7\n  x\nopt\n  dR8\n  x\ntup\n  dR9\n  x\nnested\n  dR10\n  x\nowndrop\n  dMd\n  dR11\n  x\ngeneric\n  dR13\n  x\nfieldmv\n  dR14\n  x\nend\n", "got:\n{out}");
 }
