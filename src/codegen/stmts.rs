@@ -24737,6 +24737,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Map`/`Set` out of its field move for exactly that reason), and so is a
     /// `ref` binding, which owns nothing.
     fn optres_unwrap_hands_over_map_handle(&self, value: &Expr) -> bool {
+        // B-2026-10-02-31 — `let x = mk(k)?` hands the payload over exactly as
+        // `mk(k).unwrap()` does: the source's payload cleanup is disarmed by
+        // the unwrap, so without an owner here the whole map was nobody's.
+        if let ExprKind::Question(object) = &value.kind {
+            return self.optres_source_hands_over(object);
+        }
         let ExprKind::MethodCall { object, method, .. } = &value.kind else {
             return false;
         };
@@ -24746,6 +24752,13 @@ impl<'ctx> super::Codegen<'ctx> {
         ) {
             return false;
         }
+        self.optres_source_hands_over(object)
+    }
+
+    /// Does unwrapping `object` (an `Option`/`Result` of a `Map`/`Set`) hand
+    /// its payload to the new binding: an owned local, or a call that returns
+    /// by value.
+    fn optres_source_hands_over(&self, object: &Expr) -> bool {
         match &object.kind {
             ExprKind::Identifier(n) => {
                 self.variables.contains_key(n.as_str())

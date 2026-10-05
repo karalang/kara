@@ -3086,6 +3086,29 @@ impl<'ctx> super::Codegen<'ctx> {
         // Only multi-word struct payloads (Vec / String / Slice / small
         // struct) need reconstruction; scalars / pointers / floats are
         // exactly `w0`.
+        // B-2026-10-02-31 — a `Map`/`Set` payload is a handle: hand it back as
+        // the pointer `.unwrap()` yields, not the raw word. Bound as an `i64`
+        // the binding's slot was invisible to the move machinery, so
+        // `let x = mk(k)?; let y = x` freed the map through both bindings.
+        if let BasicTypeEnum::PointerType(pt) = payload_llvm {
+            let is_map_handle = self
+                .span_tables
+                .question_ok_payload_types
+                .get(&key)
+                .is_some_and(|te| {
+                    matches!(&te.kind, TypeKind::Path(p)
+                    if p.segments.last().is_some_and(|n| {
+                        matches!(n.as_str(), "Map" | "HashMap" | "Set" | "HashSet")
+                    }))
+                });
+            if is_map_handle && w0.is_int_value() {
+                return Ok(self
+                    .builder
+                    .build_int_to_ptr(w0.into_int_value(), pt, "q.ok.handle")
+                    .unwrap()
+                    .into());
+            }
+        }
         if !matches!(payload_llvm, BasicTypeEnum::StructType(_)) {
             return Ok(w0);
         }
