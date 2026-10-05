@@ -92,16 +92,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 688 |
-| run-vs-build | 590 |
-| leak | 570 |
+| miscompile | 689 |
+| run-vs-build | 591 |
+| leak | 571 |
 | double-free | 418 |
-| codegen-gap | 224 |
+| codegen-gap | 225 |
 | missing-feature | 217 |
 | other | 168 |
 | perf | 143 |
 | diagnostics | 142 |
-| false-positive | 119 |
+| false-positive | 120 |
 | crash | 111 |
 | soundness | 98 |
 | use-after-free | 82 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2728 |
-| interp | 848 |
-| typecheck | 329 |
+| codegen | 2731 |
+| interp | 849 |
+| typecheck | 330 |
 | other | 113 |
 | ownership | 80 |
 | cli | 73 |
@@ -525,7 +525,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-12 | 2026-10-05 | codegen | medium | AN OWNED-`self` GENERIC-ENUM METHOD THAT RETURNS `self` ON ONE PATH AND A `Self` PARAMETER ON ANOTHER LOSES THE PARAMETER'S `Drop` BODY COMPILED WHEN IT RETURNS `self` -- `d.pick(true, mk(7))` over `fn pick(self, c: bool, o: Self) -> Self { if c { return self; } return o; }` prints `x6s6 dR6 end` at -O0 and -O2 where `--interp` prints `dR7 x6s6 dR6 end`, 34 B definitely lost; reachable since B-2026-09-28-73 | — |
 | B-2026-10-05-13 | 2026-10-05 | codegen | medium | A `Self`-TYPED PARAMETER IN A CONCRETE IMPL OVER A GENERIC ENUM FAILS MODULE VERIFICATION -- `impl G[R] { fn cself(self, o: Self) -> i64 { 1 } }` called as `d.cself(mk(5))` fails `Call parameter type does not match function signature` (`call { i64, i64 } @mk(i64 5)`) under `karac build`, while `--interp` prints `dR5 1 dR4 end`; the generic-struct twin is B-2026-09-27-116 | — |
 | B-2026-10-05-15 | 2026-10-05 | interp | medium | `--interp` COPIES A `String` ARGUMENT INTO A `ref` OR `mut ref` PARAMETER ON EVERY CALL, so a helper that appends to a `mut ref String` is still quadratic after B-2026-10-05-14 -- 20,000 calls of an empty `fn noop(out: mut ref String) {}` on a 20,000-char string take 0.15 s more than the loop without them, the same for `ref String`, and `gen_text`'s `out.push(..)` through such a param still takes 4.2 s for 200,000 pushes | — |
-| B-2026-10-05-17 | 2026-10-05 | codegen | medium | `karac build` CANNOT LOWER `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` -- design.md's `CountUp` in a `for` loop fails `for-loop over this iterable is not lowered` (a struct literal or call as the iterable) or ``for` over `c` -- the binding is not an iterable this backend can lower`` (a named binding), while `while let Some(v) = c.next()` over the same value builds and runs | — |
 | B-2026-10-05-18 | 2026-10-05 | typecheck+interp+codegen | medium | THE ITERATOR ADAPTORS ARE NOT AVAILABLE ON A USER TYPE THAT IMPLEMENTS `Iterator` -- `CountUp { .. }.collect()` and `.sum()` fail `no method 'collect' on type 'CountUp'` / `no method 'sum' on type 'CountUp'`, where design.md § Iterator Adaptors defines them as extension methods on every `Iterator` | — |
 | B-2026-10-05-19 | 2026-10-05 | codegen | medium | `let mut rest = items;` OVER A BY-VALUE `Vec` PARAMETER DEEP-COPIES THE WHOLE VEC, ELEMENTS INCLUDED, ON EVERY CALL -- kata 341's `push_reversed(mut ref self, items: Vec[Nested])` clones each list's entire subtree once per level above it, and its bench runs 0.55 s against 0.34 s with the same loop written inline (310M against 214M instructions; Rust 137M) | — |
 | B-2026-10-05-20 | 2026-10-05 | codegen | medium | `Vec[T].pop()` FOR AN ELEMENT WIDER THAN THREE WORDS HEAP-ALLOCATES A BOX FOR THE `Some` PAYLOAD ON EVERY CALL, EVEN WHEN `while let Some(x) = v.pop()` UNPACKS IT AT ONCE -- a four-word enum, struct or tuple element pays a `malloc` and a `free` per pop (kata 341's stack iterator: about two per tree node), a three-word one pays nothing | — |
@@ -536,6 +535,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-27 | 2026-10-05 | codegen | medium | REMAINDER OF B-2026-10-03-35: A GENERIC `shared enum` INSTANTIATED AT `Option` OF A `shared` TYPE STILL LEAKS THE INNER BOX -- `let h: G[Option[M]] = G.Y(Some(M.My(mkv("q"))))` over `shared enum G[T] { Y(T), N }` and `shared enum M { My(Vec[String]), N }` prints correctly and loses 40 B definitely + 102 B indirectly at -O0; `G.Y(None)` is clean | — |
 | B-2026-10-05-28 | 2026-10-05 | codegen | medium | A `Map` UNWRAPPED STRAIGHT INTO A BY-VALUE PARAMETER LEAKS THE WHOLE MAP, BY `?` AND BY `.unwrap()` ALIKE -- `fn cnt(m: Map[String, i64]) -> i64 { m.len() }`, `cnt(mk(k)?)` and `cnt(mk(k).unwrap())` over `fn mk(k: i64) -> Option[Map[String, i64]]` print the right count and lose 72 B definitely + 553 B indirectly per call at -O0; binding first (`let x = mk(k)?; cnt(x)`) is clean | — |
 | B-2026-10-05-29 | 2026-10-05 | interp+codegen | medium | A GENERIC CALLEE THAT SHADOWS ITS BY-VALUE PARAM WITH AN UNRELATED VALUE LOSES THE ARGUMENT'S `Drop` BODY ON EVERY SURFACE -- `fn g1[T](s: T, n: i64) -> i64 { let s = n; s }` called `g1(R { id: 13 }, 4)` prints `k4` with no `d13` on `--interp` and compiled, temporary and named argument alike; the same callee binding `let t = n; t` runs the body | — |
+| B-2026-10-05-41 | 2026-10-05 | codegen | medium | WHOLE-VALUE ASSIGNMENT THROUGH A `mut ref` PARAM OR `mut ref self` LEAKS THE DISPLACED VALUE FOR A GENERIC STRUCT AND FOR A `shared` STRUCT -- `fn re2[T](g: mut ref G[T], x: T) { g = G { v: x, k: g.k + 1 }; }` at `T = String` loses the old `v` (1 B per call) and `fn re3(s: mut ref S) { s = S { n: 77 }; }` over `shared struct S { n: i64 }` loses 16 B; output is right on every surface, and the concrete-struct spelling (`Q { v: String, k: i64 }`) is clean | — |
+| B-2026-10-05-42 | 2026-10-05 | interp | medium | `--interp` RUNS NO `Drop` BODY FOR THE VALUE DISPLACED BY `self = v` IN A `mut ref self` METHOD, where every compiled surface runs it at the assignment and the free-function `h: mut ref H` spelling runs it interpreted too -- `impl H { fn swap_in(mut ref self, id: i64) { self = H { r: R { id: id, .. }, n: self.n + 1 }; } }` prints `2 t2 1` interpreted and `drop 1` then `2 t2 1` compiled | — |
+| B-2026-10-05-43 | 2026-10-05 | typecheck | medium | A METHOD FROM `impl[T: Clone] G[T]` IS REJECTED ON A `G[String]` RECEIVER WITH "trait bound `T: Clone` is not satisfied; `String` does not implement `Clone`" -- `struct G[T] { v: T }; impl[T: Clone] G[T] { fn get(ref self) -> T { self.v.clone() } }` then `G { v: "x".to_string() }.get()` fails check, annotated or not; a `for` loop over an `impl[T: Clone] Iterator for Rep[T]` at `T = String` is accepted | — |
+| B-2026-10-05-44 | 2026-10-05 | codegen | medium | `.clone()` ON A BINDING FROM A DESTRUCTURING `let` INSIDE A GENERIC FUNCTION FAILS `karac build` AT `T = String` -- `fn f[T: Clone](x: ref T) -> T { let (v, n) = (x.clone(), 1); v.clone() }` called as `f("ab".to_string())` dies with "no handler for method 'clone' on variable 'v'" while `--interp` prints `ab` | — |
 
 ### Relocated
 
@@ -3736,9 +3739,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-05-9 | codegen+interp | medium | A BY-VALUE PARAM PROJECTED TO A SCALAR AND THEN SHADOWED (`fn c1(s: S) -> i64 { let s = s.r.id; s }`) LOSES THE CALLER'S `Drop` BODY, ON A DIFFERENT… | c22ad1095 |
 | B-2026-10-05-14 | interp | medium | `--interp` COPIES THE WHOLE `String` ON EVERY `push` / `push_str`, SO BUILDING A STRING ONE CHARACTER AT A TIME IS QUADRATIC -- 50,000 `s.push('x')`… | 4c789647b |
 | B-2026-10-05-16 | interp | high | `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` RUNS THE BODY ONCE UNDER `--interp`, WITH THE ITERATOR ITSELF BOUND TO `v` -- de… | 3a7995069 |
+| B-2026-10-05-17 | codegen | medium | `karac build` CANNOT LOWER `for v in it` OVER A VALUE OF A USER TYPE THAT IMPLEMENTS `Iterator` -- design.md's `CountUp` in a `for` loop fails `for-l… | bc0b729dd |
 | B-2026-10-05-23 | interp | medium | `--interp` RE-DERIVES TYPE-LEVEL DROP FACTS FOR EVERY VALUE IT MATCHES OR BINDS, RE-SCANNING THE PROGRAM'S ITEMS EACH TIME -- kata 341's bench kernel… | 40ecccbe6 |
 | B-2026-10-05-25 | typecheck | low | `n.is_power_of_two()` ON A SIGNED INTEGER SAYS ONLY "no method 'is_power_of_two' on type 'i32'", which reads as if the method did not exist; it is un… | 7dcf9ef77 |
 | B-2026-10-05-30 | autopar | high | AUTO-PAR FANS OUT A SUMMING LOOP WHOSE BODY PRINTS, AND THE PRINTED LINES COME OUT IN A DIFFERENT ORDER ON EVERY RUN -- the reduction lane never asks… | cc0766f52 |
+| B-2026-10-05-40 | codegen | high | `self = v` IN A `mut ref self` METHOD DOES NOTHING UNDER `karac build`: the method returns with the receiver unchanged and the new value leaks, while… | 9903a4f6c |
 
 </details>
 
