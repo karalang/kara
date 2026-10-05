@@ -96,11 +96,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 589 |
 | leak | 562 |
 | double-free | 416 |
-| codegen-gap | 220 |
+| codegen-gap | 221 |
 | missing-feature | 216 |
 | other | 168 |
 | diagnostics | 141 |
-| perf | 136 |
+| perf | 137 |
 | false-positive | 119 |
 | crash | 111 |
 | soundness | 98 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2706 |
-| interp | 835 |
+| codegen | 2707 |
+| interp | 836 |
 | typecheck | 327 |
 | other | 113 |
 | ownership | 80 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-04). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-05). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -482,7 +482,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-20 | 2026-10-03 | codegen | low | A scan loop with several early returns runs about 23% slower compiled than the same loop in Rust or C with overflow checks: once the function is inlined, the optimiser merges its `return true` and `return false` exits into one flag recomputed on every iteration (`lea; cmp; setb`) instead of setting the answer on each exit path (kata 335: 124 ms vs 101 ms equal-safety Rust and 100 ms C) | — |
 | B-2026-10-03-31 | 2026-10-03 | codegen | medium | AN OWNED-`self` METHOD WITH ITS OWN TYPE PARAMS LEAKS A GENERIC ENUM RECEIVER'S HEAP PAYLOAD ON EVERY COMPILED SURFACE -- `impl[T] H[T] { fn hw[U](self, u: U) -> U { return u; } }` called as `h.hw(8)` on `h: H[String] = H.A(f"h{1}")` prints `8` and valgrind at -O0 reports the 2-byte String definitely lost; the same receiver through a non-generic owned-`self` method (`fn ea(self) -> i64`) is clean, and so is a payload-free receiver | — |
 | B-2026-10-03-29 | 2026-10-03 | interp+codegen | medium | A GUARDED NESTED ARM OVER A GENERIC BY-VALUE `Option[Option[T]]` PARAM LOSES THE PAYLOAD'S `Drop` BODY ON EVERY SURFACE WHEN THE GUARD FAILS, AND LEAKS -- `mx(Some(Some(mk(10))), false)` over `fn mx[T](x: Option[Option[T]], keep: bool) -> Option[T] { match x { Some(Some(w)) if keep => Some(w), _ => None } }` prints `b end` with no `dR10` on interp, -O0 and -O2, and loses 30 B; the non-generic twin loses the body only under `--interp` (B-2026-10-03-6) | — |
-| B-2026-10-03-21 | 2026-10-03 | interp | low | `--interp` spends about 44,000 instructions (5 µs) on every call to a two-line user function, almost all of it in per-call ownership bookkeeping (`record_passthrough_arg_moves`, `run_fresh_temp_arg_drops`, memo lookups, AST and Value clones) rather than in the body: 200,000 calls of `fn f(a: i64, k: i64) -> i64 { return a + k; }` take 1.0 s where the same loop with `i + j` inlined takes 0.13 s | — |
 | B-2026-10-03-45 | 2026-10-03 | codegen | high | Iterating a `shared struct`'s `mut` Vec field while pushing to it through the same handle reads a freed buffer on every compiled surface, where design.md § Part 5 says the write must panic: `for x in self.v.iter() { if self.v.len() < 64 { self.v.push(x + 1); } }` inside a `ref self` method of `shared struct Bag { mut v: Vec[i64] }` returns a garbage total under the JIT and both `karac build` modes, valgrind reports `Invalid read of size 8 ... inside a block of size 24 free'd` by `karac_realloc_or_panic`, and `--interp` prints `6 6` without the specified panic | — |
 | B-2026-10-03-46 | 2026-10-03 | codegen | low | A recursive function taking `ref Vec[T]` reloads the Vec's length and data pointer and repeats the bounds check after every recursive call, because a Freeze `ref` parameter carries LLVM `readonly` but not `noalias`: kata 337's bench runs 1.88 s where the same code taking `Slice[Node]` runs 1.76 s and Rust with overflow checks 1.77 s; adding `noalias` by hand removes the reloads, but it would be unsound today because a `shared struct` handle can still write the referent during the call | — |
 | B-2026-10-03-35 | 2026-10-03 | codegen | medium | A GENERIC `shared enum` INSTANTIATED AT ANOTHER `shared enum` LEAKS THE INNER ENUM'S BOX -- `shared enum G[T] { Y(T), N }` over `shared enum M { My(Vec[String]), N }`: `let h: G[M] = G.Y(M.My(mkv(..))); println("made")` loses 40 B direct + 151 B indirect at -O0, whether or not `h` is ever matched | — |
@@ -531,6 +530,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-04-89 | 2026-10-04 | codegen | low | A TUPLE-ELEMENT ASSIGNMENT THROUGH A `Map` VALUE FAILS THE BUILD -- `m[1].1 = 7` over `Map[i64, (P, i64)]` stops `karac build` with `tuple-element assignment through this receiver shape is not yet lowered` while `--interp` prints `r:7`; the FIELD store through the same value (`m[1].0.n = 9`) builds since B-2026-10-04-70 | — |
 | B-2026-10-04-90 | 2026-10-04 | codegen | low | A METHOD CALL ON A CONTAINER HELD IN A TUPLE THAT IS ITSELF AN INDEXED ELEMENT OR A MAP VALUE FAILS THE BUILD -- `mm[1].0.push(p)` over `Map[i64, (Vec[P], i64)]` and `a[0].0.insert(1, p)` over `Array[(Map[i64, P], i64), 1]` stop `karac build` with `no handler for method ... on this tuple-element receiver` while `--interp` runs them | — |
 | B-2026-10-04-91 | 2026-10-04 | codegen | low | INDEXING A `Map` HELD IN AN UNANNOTATED TUPLE LOCAL FAILS THE BUILD -- `let mut t = (m, 1); ... t.0[1].n` stops `karac build` with `Index operator applied to non-array type` while `--interp` prints the value; the annotated `let t: (Map[i64, P], i64)` builds since B-2026-10-04-70 | — |
+| B-2026-10-05-1 | 2026-10-05 | interp | low | AFTER B-2026-10-03-21 AN INTERPRETED CALL OF A TWO-LINE SCALAR FUNCTION STILL COSTS ABOUT 37,000 INSTRUCTIONS (200,000 calls 0.86 s against 0.16 s inlined): call-frame setup re-derives per-callee ownership state on every call, and the AST and argument values are cloned per call | — |
+| B-2026-10-05-2 | 2026-10-05 | codegen | medium | AFTER B-2026-10-04-54, `.clone()` ON A TUPLE ELEMENT STILL FAILS `karac build` WHEN THE SUBSCRIPT IS AN EXPRESSION -- `cases[i + 1].0.clone()` over `Vec[(String, i64)]` bails with "Vec/String method 'clone' is not yet supported in codegen" while `cases[i]`, `cases[1]` and `cases[j]` (with `let j = i + 1`) all build; kata 340's differential is the program it blocks | — |
 
 ### Relocated
 
@@ -3661,6 +3662,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-03-33 | typecheck+interp+codegen | medium | A MIXED-SIGNEDNESS INTEGER COMPARISON TYPE-CHECKS AND THE BACKENDS DISAGREE ON IT -- `u > k` over `u: u8 = 3`, `k: i64 = -1` is `true` under `--inter… | 3c50c55b4 |
 | B-2026-10-03-16 | codegen | medium | A CLOSURE WHOSE BY-VALUE PARAM IS A HEAP-BOXED GENERIC ENUM LEAKS THE PARAM'S BOX WHEN THE BODY'S `match` TAKES THE PAYLOAD -- `let f = \|q: Ho[String… | adb71475f |
 | B-2026-10-03-22 | codegen | medium | A CLOSURE THAT CAPTURES NOTHING, RETURNED OUT OF THE FN THAT MADE IT, READS ITS PLACEHOLDER ENV FROM THAT FN'S DEAD STACK FRAME ON EVERY CALL -- `fn… | 31fbb4f0c |
+| B-2026-10-03-21 | interp | low | `--interp` spends about 44,000 instructions (5 µs) on every call to a two-line user function, almost all of it in per-call ownership bookkeeping (`re… | dd02ff14c |
 | B-2026-10-03-23 | codegen | high | A tuple LITERAL stored into a container whose element type has narrower integer fields is laid out at the literal's default `i64` widths on every com… | 7ffd270c1 |
 | B-2026-10-03-24 | interp | medium | `--interp` orders a `u64` INSIDE a tuple or a nested `Vec` as signed, where both compiled backends order it unsigned: `(u64::MAX, 1) < (0, 1)` is `tr… | 85f9efd77 |
 | B-2026-10-03-25 | codegen | low | A bare `Vec.sort()` over tuples, `F64`, nested `Vec`s or derived-`Ord` structs calls its natural-order comparator through `karac_vec_sort_by`'s funct… | 30f7470f3 |
