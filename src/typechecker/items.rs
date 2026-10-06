@@ -3650,6 +3650,73 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 return;
             }
+            // B-2026-10-06-42: a NON-EMPTY `Vec` / `VecDeque` literal is
+            // heap data, which § Module-Level Bindings forbids for the same
+            // reason it forbids `String` ("Anything requiring runtime heap
+            // allocation"). It used to be accepted, and the two backends then
+            // disagreed: the interpreter built a real Vec, while codegen's
+            // constant-initializer path emitted the literal as an LLVM ARRAY
+            // and read it back through a Vec header, so `V[2]` panicked out of
+            // bounds and `for x in V` segfaulted. `Vec.new()` and an empty
+            // `[]` allocate nothing and stay legal; a fixed table is an
+            // `Array[T, N]`, which the module-scope path already lowers.
+            if let Type::Named { name, args } = &declared {
+                let n_elems = match &b.value.kind {
+                    ExprKind::ArrayLiteral(elems) => Some(elems.len()),
+                    ExprKind::RepeatLiteral { .. } => None,
+                    _ => Some(0),
+                };
+                let is_heap_literal = matches!(b.value.kind, ExprKind::RepeatLiteral { .. })
+                    || n_elems.is_some_and(|n| n > 0);
+                if (name == "Vec" || name == "VecDeque") && args.len() == 1 && is_heap_literal {
+                    let elem = &args[0];
+                    let elem_src = super::types::type_display(elem);
+                    let suggestion = match n_elems {
+                        Some(n) => format!("Array[{elem_src}, {n}]"),
+                        None => format!("Array[{elem_src}, N]"),
+                    };
+                    let message = format!(
+                        "error[E_MODULE_BINDING_HEAP_TYPE]: module-level binding '{}' \
+                         is declared with type '{}' and a non-empty literal, whose \
+                         elements are heap-allocated; module bindings live in the \
+                         binary as constant data — declare a fixed table as '{}', or \
+                         initialise the binding with `{}.new()` and fill it at startup",
+                        b.name,
+                        super::types::type_display(&declared),
+                        suggestion,
+                        name,
+                    );
+                    // The edit is offered only where applying it is known to
+                    // typecheck: an immutable binding (a `let mut` table is
+                    // there to be pushed to, which an `Array` cannot do) of a
+                    // plain array literal of primitive elements, where the
+                    // length is the literal's own and the element type is
+                    // constant data. A repeat literal's count may be a named
+                    // constant, so it keeps the descriptive diagnostic.
+                    let primitive_elem = matches!(
+                        elem,
+                        Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+                    );
+                    if !b.is_mut && n_elems.is_some() && primitive_elem {
+                        self.type_error_with_fix_it(
+                            message,
+                            ty_expr.span,
+                            TypeErrorKind::ModuleBindingHeapType,
+                            crate::typechecker::FixIt {
+                                span: ty_expr.span,
+                                replacement: suggestion,
+                            },
+                        );
+                    } else {
+                        self.type_error(
+                            message,
+                            ty_expr.span,
+                            TypeErrorKind::ModuleBindingHeapType,
+                        );
+                    }
+                    return;
+                }
+            }
             // §1284: at module scope, string literals have type
             // `StringSlice` rather than the function-body default of
             // `String`. The generic `check_expr` against a

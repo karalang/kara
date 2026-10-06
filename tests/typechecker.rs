@@ -52818,3 +52818,36 @@ fn const_array_annotation_drives_the_literal_form() {
         "a two-element literal for a three-element array is still an error"
     );
 }
+
+/// B-2026-10-06-42: a module-level `Vec` / `VecDeque` binding with a
+/// NON-EMPTY literal is heap data, which § Module-Level Bindings forbids.
+/// It was accepted, and the compiled program then read the literal through a
+/// Vec header (`V[2]` out of bounds, `for x in V` a segfault). An empty `[]`
+/// and `Vec.new()` allocate nothing and stay legal. The edit to `Array[T, N]`
+/// is offered only where applying it typechecks.
+#[test]
+fn module_vec_literal_is_rejected_as_heap_data() {
+    for (src, fix) in [
+        ("let NUMS: Vec[i64] = [1, 2, 3];", Some("Array[i64, 3]")),
+        ("let NUMS: VecDeque[u8] = [1, 2];", Some("Array[u8, 2]")),
+        ("let NUMS: Vec[i64] = [0; 4];", None),
+        ("let mut NUMS: Vec[i64] = [1, 2, 3];", None),
+        ("let NAMES: Vec[StringSlice] = [\"a\"];", None),
+    ] {
+        let errors = typecheck_errors(src);
+        let err = errors
+            .iter()
+            .find(|e| e.kind == TypeErrorKind::ModuleBindingHeapType)
+            .unwrap_or_else(|| {
+                panic!("{src}: expected E_MODULE_BINDING_HEAP_TYPE, got {errors:?}")
+            });
+        assert_eq!(
+            err.fix_it.as_ref().map(|f| f.replacement.as_str()),
+            fix,
+            "{src}: fix-it"
+        );
+    }
+    typecheck_ok("let EMPTY: Vec[i64] = [];\nfn main() { println(f\"{EMPTY.len()}\"); }");
+    typecheck_ok("let START: Vec[i64] = Vec.new();\nfn main() { println(f\"{START.len()}\"); }");
+    typecheck_ok("let TABLE: Array[i64, 3] = [1, 2, 3];\nfn main() { println(f\"{TABLE[2]}\"); }");
+}
