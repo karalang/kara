@@ -425,14 +425,30 @@ impl<'ctx> super::Codegen<'ctx> {
             // only, so take its full `Array[T, N]` TypeExpr from the
             // place-chain resolver instead; the Identifier dispatch below
             // already serves a named Array container.
+            //
+            // B-2026-10-06-61 — a `Map` / `SortedMap` tuple element
+            // (`t.0[k].push(x)`) takes its full TypeExpr from the place chain
+            // too, and FIRST: whatever `temp_recv_elem_types` holds for a map
+            // receiver is not a Vec element, so wrapping it in `Vec[..]` would
+            // describe the wrong container. The Identifier dispatch below
+            // already serves a named map container (B-2026-07-25-5).
             let key = (inner.span.offset, inner.span.length);
-            let container_te = match self.span_tables.temp_recv_elem_types.get(&key).cloned() {
-                Some(elem_te) => Some(super::Codegen::vec_type_expr_from_element(&elem_te)),
-                None => self
-                    .place_chain_tuple_tes(tup)
-                    .and_then(|tes| tes.get(*tidx as usize).cloned())
-                    .map(|te| self.subst_monomorph_type_params(&te))
-                    .filter(|te| super::helpers::array_inner_type_expr(te).is_some()),
+            let place_te = self
+                .place_chain_tuple_tes(tup)
+                .and_then(|tes| tes.get(*tidx as usize).cloned())
+                .map(|te| self.subst_monomorph_type_params(&te));
+            let map_te = place_te
+                .clone()
+                .filter(|te| super::helpers::map_kv_type_exprs(te).is_some());
+            let container_te = match (
+                map_te,
+                self.span_tables.temp_recv_elem_types.get(&key).cloned(),
+            ) {
+                (Some(map_te), _) => Some(map_te),
+                (None, Some(elem_te)) => Some(super::Codegen::vec_type_expr_from_element(&elem_te)),
+                (None, None) => {
+                    place_te.filter(|te| super::helpers::array_inner_type_expr(te).is_some())
+                }
             };
             let hoisted = container_te.and_then(|vec_te| {
                 let elem_ptr = self.place_chain_ptr_through_borrow(inner)?;
