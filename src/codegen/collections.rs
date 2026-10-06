@@ -8067,6 +8067,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 (data_ptr, ref_arr_ty)
             } else if let Some(slot) = self.variables.get(name.as_str()).copied() {
                 (slot.ptr, slot.ty)
+            } else if let Some(info) = self.mod_bindings.module_bindings.get(name.as_str()) {
+                // B-2026-10-06-106 — a module-level `let mut X: Array[T, N]`:
+                // the global holds the same `[N x T]` storage a local array's
+                // alloca does, exactly as `compile_index` already reads it.
+                (info.global.as_pointer_value(), info.llvm_ty)
             } else {
                 return Err(format!("Undefined variable '{}' in index store", name));
             }
