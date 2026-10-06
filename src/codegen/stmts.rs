@@ -26838,6 +26838,28 @@ impl<'ctx> super::Codegen<'ctx> {
         (self.drop_rc.cond_move_drop_flags.get(name) == Some(&flag)).then_some(flag)
     }
 
+    /// B-2026-10-06-63 — the per-path move bit for `name`'s generation at
+    /// `slot`, chosen exactly as `emit_user_drop_call_guarded` chooses the bit
+    /// that gates the binding's scope-exit drop.
+    fn live_cond_move_flag_for_slot(
+        &self,
+        name: &str,
+        slot: PointerValue<'ctx>,
+    ) -> Option<PointerValue<'ctx>> {
+        let flags = &self.drop_rc.cond_move_drop_flags;
+        flags
+            .get(&Self::generation_flag_key(name, slot))
+            .copied()
+            .or_else(|| {
+                flags.get(name).copied().filter(|_| {
+                    !matches!(
+                        self.drop_rc.cond_move_drop_flag_slots.get(name),
+                        Some(Some(s)) if *s != slot
+                    )
+                })
+            })
+    }
+
     /// B-2026-10-01-21 — call a DISPLACED container value's element-bodies
     /// walker, behind `name`'s bit when it has one: a value built from param
     /// views carries bodies the caller runs, so the walk must not run them
@@ -26848,7 +26870,15 @@ impl<'ctx> super::Codegen<'ctx> {
         bodies: inkwell::values::FunctionValue<'ctx>,
         ptr: PointerValue<'ctx>,
     ) {
-        let Some(flag) = self.live_reassigned_view_container_flag(name) else {
+        // B-2026-10-06-63 — or the binding's per-path move bit: a value a
+        // branch moved out (`if c { let q = v; } v = [..]`) left the slot's
+        // header behind with only its capacity zeroed, so the walk would read
+        // the buffer `q` already freed. The same bit, with the same generation
+        // filter, gates the binding's scope-exit walk.
+        let Some(flag) = self
+            .live_reassigned_view_container_flag(name)
+            .or_else(|| self.live_cond_move_flag_for_slot(name, ptr))
+        else {
             self.builder.build_call(bodies, &[ptr.into()], "").unwrap();
             return;
         };
