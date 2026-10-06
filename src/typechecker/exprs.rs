@@ -653,6 +653,13 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Error;
             }
         }
+        // B-2026-10-06-88 — an operator expression built from unsuffixed
+        // integer literals takes a narrow integer context's type, as a lone
+        // literal does just above: `let x: u16 = 1 + 2;`, `let m: u8 = 7 & 3;`,
+        // and a shift whose LEFT side is one, `let bit: u16 = 1 << k;`.
+        if let Some(ty) = self.check_int_literal_operator_tree(expr, expected) {
+            return ty;
+        }
         // Fallible-allocation constructor `?`-form at check-mode
         // (phase-8-stdlib-floor item 8): `let v: Vec[T] =
         // Vec.try_with_capacity(n)?`. The `?` unwraps `Result[Vec[?T],
@@ -4342,6 +4349,165 @@ impl<'a> super::TypeChecker<'a> {
     /// UNSUFFIXED literal expression, in i128 (so `-(i64::MIN)` shapes can't
     /// wrap). Suffixed literals return `None` — their range is validated
     /// against their own suffix at synthesis.
+    /// B-2026-10-06-88 — check-mode typing of an operator tree whose
+    /// leaves are unsuffixed integer literals, against a narrow integer
+    /// context. Synthesis types such a tree `i64` (both operands are literals,
+    /// so Q4 promotion has no typed peer to promote to), and the widening gate
+    /// then refused `let x: u16 = 1 + 2;` as an `i64` -> `u16` narrowing. The
+    /// context is the peer here: each leaf is range-checked and recorded at
+    /// the context type, as Q4 records a promoted literal, and so is every
+    /// operator node, so both backends lower the tree at the context width.
+    ///
+    /// A shift is admitted when its LEFT side is such a tree, whatever its
+    /// right side is: the result of `a << n` has `a`'s type, and the amount is
+    /// independent of it (`k << d` over `k: u16`, `d: i64` already types
+    /// `u16`). Without a shift the tree is a compile-time constant, and a value
+    /// that does not fit the context is refused as an out-of-range literal
+    /// would be; a shift is not range-checked here, because a shift wraps at
+    /// run time (`200u8 << 1` is 144) rather than overflowing.
+    ///
+    /// `None` leaves the expression to the ordinary path: a non-integer or
+    /// `i64` context (synthesis already gets those right), a root that is not
+    /// an operator, or any leaf that is not an unsuffixed integer literal.
+    fn check_int_literal_operator_tree(&mut self, expr: &Expr, expected: &Type) -> Option<Type> {
+        let ctx = match expected {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        if !matches!(ctx, Type::Int(_) | Type::UInt(_)) || *ctx == Type::Int(IntSize::I64) {
+            return None;
+        }
+        let root_is_operator = match &expr.kind {
+            ExprKind::Binary { .. } => true,
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => matches!(operand.kind, ExprKind::Binary { .. }),
+            _ => false,
+        };
+        if !root_is_operator || !Self::is_int_literal_operator_tree(expr) {
+            return None;
+        }
+        if self.infer_expr(expr) == Type::Error {
+            return Some(Type::Error);
+        }
+        let ty = ctx.clone();
+        if !self.promote_int_literal_operator_tree(expr, &ty) {
+            self.record_expr_type(&expr.span, &Type::Error);
+            return Some(Type::Error);
+        }
+        Some(ty)
+    }
+
+    fn is_int_literal_operator_tree(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Integer(_, None) => true,
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => Self::is_int_literal_operator_tree(operand),
+            ExprKind::Binary { op, left, right } => match op {
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Mod
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor => {
+                    Self::is_int_literal_operator_tree(left)
+                        && Self::is_int_literal_operator_tree(right)
+                }
+                BinOp::Shl | BinOp::Shr => Self::is_int_literal_operator_tree(left),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Record every leaf literal and operator node of an
+    /// [`Self::is_int_literal_operator_tree`] at `ty`, range-checking each
+    /// leaf. A shift's right side keeps the type synthesis gave it.
+    fn promote_int_literal_operator_tree(&mut self, e: &Expr, ty: &Type) -> bool {
+        match &e.kind {
+            ExprKind::Integer(n, None) => {
+                if !self.check_int_literal_fits(*n, ty, &e.span, None) {
+                    return false;
+                }
+            }
+            ExprKind::Unary { operand, .. } => {
+                if let ExprKind::Integer(n, None) = &operand.kind {
+                    if !self.check_int_literal_fits(-*n, ty, &e.span, None) {
+                        return false;
+                    }
+                    self.record_expr_type(&operand.span, ty);
+                } else if !self.promote_int_literal_operator_tree(operand, ty) {
+                    return false;
+                }
+            }
+            ExprKind::Binary { op, left, right } => {
+                if !self.promote_int_literal_operator_tree(left, ty) {
+                    return false;
+                }
+                if !matches!(op, BinOp::Shl | BinOp::Shr)
+                    && !self.promote_int_literal_operator_tree(right, ty)
+                {
+                    return false;
+                }
+                // Every intermediate value must fit too: `3 - 10 + 20` is 13,
+                // but at `u16` its `3 - 10` underflows at run time.
+                if let Some(value) = Self::int_literal_operator_tree_value(e) {
+                    if Self::int_literal_range(ty)
+                        .is_some_and(|(min, max)| value < min || value > max)
+                    {
+                        self.type_error(
+                            format!(
+                                "this constant expression evaluates to {} here, which is out \
+                                 of range for '{}'",
+                                value,
+                                type_display(ty)
+                            ),
+                            e.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return false;
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.record_expr_type(&e.span, ty);
+        true
+    }
+
+    /// The value of a shift-free [`Self::is_int_literal_operator_tree`], or
+    /// `None` when it has a shift or does not evaluate (division by zero, or a
+    /// value past `i128`), in which case the run-time checks decide.
+    fn int_literal_operator_tree_value(e: &Expr) -> Option<i128> {
+        match &e.kind {
+            ExprKind::Integer(n, None) => Some(*n),
+            ExprKind::Unary { operand, .. } => {
+                Self::int_literal_operator_tree_value(operand)?.checked_neg()
+            }
+            ExprKind::Binary { op, left, right } => {
+                let l = Self::int_literal_operator_tree_value(left)?;
+                let r = Self::int_literal_operator_tree_value(right)?;
+                match op {
+                    BinOp::Add => l.checked_add(r),
+                    BinOp::Sub => l.checked_sub(r),
+                    BinOp::Mul => l.checked_mul(r),
+                    BinOp::Div => l.checked_div(r),
+                    BinOp::Mod => l.checked_rem(r),
+                    BinOp::BitAnd => Some(l & r),
+                    BinOp::BitOr => Some(l | r),
+                    BinOp::BitXor => Some(l ^ r),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn unsuffixed_int_literal_value(expr: &Expr) -> Option<i128> {
         match &expr.kind {
             ExprKind::Integer(n, None) => Some(*n),

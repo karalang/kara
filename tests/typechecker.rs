@@ -52881,3 +52881,35 @@ fn module_vec_literal_is_rejected_as_heap_data() {
     typecheck_ok("let START: Vec[i64] = Vec.new();\nfn main() { println(f\"{START.len()}\"); }");
     typecheck_ok("let TABLE: Array[i64, 3] = [1, 2, 3];\nfn main() { println(f\"{TABLE[2]}\"); }");
 }
+
+#[test]
+fn int_literal_operator_tree_takes_a_narrow_type_context() {
+    // B-2026-10-06-88: both operands literals, so Q4 promotion had no
+    // typed peer and the tree synthesised i64.
+    typecheck_ok("fn main() { let x: u16 = 1 + 2; println(f\"{x}\"); }");
+    typecheck_ok("fn main() { let x: u8 = 7 & 3; println(f\"{x}\"); }");
+    typecheck_ok("fn main() { let x: u8 = 255 >> 1; println(f\"{x}\"); }");
+    typecheck_ok("fn main() { let x: i32 = 1 << 3; println(f\"{x}\"); }");
+    typecheck_ok("fn main() { let x: u64 = 1 << 40; println(f\"{x}\"); }");
+    typecheck_ok("fn main() { let k: u64 = 5; let x: u64 = 1 << k; println(f\"{x}\"); }");
+    typecheck_ok(
+        "fn main() { let d: i64 = 3; let bit: u16 = 1 << (d as u16); println(f\"{bit}\"); }",
+    );
+    typecheck_ok("fn main() { let x: i8 = -(2 * 3); println(f\"{x}\"); }");
+    // Still refused: a constant tree whose value does not fit the context,
+    // a leaf that does not fit, and a tree with a non-literal i64 operand.
+    let errors = typecheck_errors("fn main() { let x: u8 = 200 + 100; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("out of range for 'u8'")),
+        "200 + 100 into u8 should be refused; got {errors:#?}"
+    );
+    let errors = typecheck_errors("fn main() { let x: u8 = 300 - 100; }");
+    assert!(!errors.is_empty(), "a 300 leaf into u8 should be refused");
+    let errors = typecheck_errors("fn main() { let k: i64 = 2; let x: u16 = 1 + k; }");
+    assert!(
+        !errors.is_empty(),
+        "an i64 operand into u16 should still be refused"
+    );
+}
