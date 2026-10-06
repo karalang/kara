@@ -5668,6 +5668,126 @@ impl<'a> TypeChecker<'a> {
         self.method_callee_types.insert(key, callee);
     }
 
+    /// Record the impl-parameter bindings of a method call on a named
+    /// receiver, for the dispatch paths that do not pass through
+    /// `record_node_impl_subs` (the builtin `Column` / `Tensor` surfaces among
+    /// them). The impl is the one generic impl of `type_name` that declares
+    /// `method` and whose target matches the receiver; with more than one
+    /// match nothing is recorded, rather than a guess. Entries already
+    /// recorded for the call are kept.
+    pub(super) fn record_node_receiver_impl_subs(
+        &mut self,
+        span: &Span,
+        receiver: &Type,
+        type_name: &str,
+        method: &str,
+    ) {
+        fn bind(
+            pat: &Type,
+            actual: &Type,
+            params: &[String],
+            out: &mut std::collections::HashMap<String, Type>,
+        ) -> bool {
+            match (pat, actual) {
+                (Type::TypeParam(n), _) if params.contains(n) => {
+                    out.entry(n.clone()).or_insert_with(|| actual.clone()) == actual
+                }
+                (Type::Named { name: a, args: x }, Type::Named { name: b, args: y }) => {
+                    a == b
+                        && x.len() == y.len()
+                        && x.iter().zip(y).all(|(p, t)| bind(p, t, params, out))
+                }
+                (Type::Tuple(x), Type::Tuple(y)) => {
+                    x.len() == y.len() && x.iter().zip(y).all(|(p, t)| bind(p, t, params, out))
+                }
+                (Type::Ref(p), Type::Ref(t)) | (Type::MutRef(p), Type::MutRef(t)) => {
+                    bind(p, t, params, out)
+                }
+                _ => pat == actual,
+            }
+        }
+        let Some((node, key)) = self.current_call_node else {
+            return;
+        };
+        if key != SpanKey::from_span(span) || node.is_dummy() {
+            return;
+        }
+        let mut recv = receiver;
+        while let Type::Ref(t) | Type::MutRef(t) = recv {
+            recv = t;
+        }
+        let Type::Named { args, .. } = recv else {
+            return;
+        };
+        let mut found: Option<std::collections::HashMap<String, Type>> = None;
+        for imp in &self.env.impls {
+            let Some(gp) = imp.generic_params.as_ref() else {
+                continue;
+            };
+            if imp.target_type != type_name
+                || !imp.methods.contains_key(method)
+                || imp.target_generic_args.len() != args.len()
+            {
+                continue;
+            }
+            let params: Vec<String> = gp.params.iter().map(|p| p.name.clone()).collect();
+            let mut out = std::collections::HashMap::new();
+            let all = imp
+                .target_generic_args
+                .iter()
+                .zip(args)
+                .all(|(p, t)| bind(p, t, &params, &mut out));
+            if !all || params.iter().any(|p| !out.contains_key(p)) {
+                continue;
+            }
+            if found.is_some() {
+                return;
+            }
+            found = Some(out);
+        }
+        if let Some(out) = found {
+            let frame = self.node_call_subs.entry(node).or_default();
+            for (n, t) in out {
+                frame.entry(n).or_insert(t);
+            }
+        }
+    }
+
+    /// Whether `ty` names a generic parameter that is not in scope where the
+    /// node being recorded sits: a leftover from a signature, such as the
+    /// `Option[T]` a bare `None` synthesizes before its context decides `T`.
+    pub(super) fn mentions_foreign_param(&self, ty: &Type) -> bool {
+        fn walk(ty: &Type, scope: &[String]) -> bool {
+            match ty {
+                Type::TypeParam(n) => !scope.iter().any(|s| s == n),
+                Type::Tuple(ts) => ts.iter().any(|t| walk(t, scope)),
+                Type::Named { args, .. } => args.iter().any(|t| walk(t, scope)),
+                Type::Array { element, .. }
+                | Type::Vector { element, .. }
+                | Type::Slice { element, .. } => walk(element, scope),
+                Type::Ref(t) | Type::MutRef(t) | Type::Weak(t) | Type::Rc(t) | Type::Arc(t) => {
+                    walk(t, scope)
+                }
+                Type::Pointer { inner, .. } => walk(inner, scope),
+                Type::Function {
+                    params,
+                    return_type,
+                }
+                | Type::OnceFunction {
+                    params,
+                    return_type,
+                } => params.iter().any(|t| walk(t, scope)) || walk(return_type, scope),
+                _ => false,
+            }
+        }
+        let scope = self
+            .node_generic_frames
+            .get(self.current_generic_frame as usize)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        walk(ty, scope)
+    }
+
     /// Record a method call's impl-parameter bindings (read off the
     /// receiver's type) as part of the call's node-keyed type arguments, so a
     /// method's frame holds the impl's parameters as well as its own.

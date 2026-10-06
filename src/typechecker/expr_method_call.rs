@@ -1570,6 +1570,7 @@ impl<'a> super::TypeChecker<'a> {
                     SpanKey::from_span(span),
                     format!("{}.{}", type_name, method),
                 );
+                self.record_node_receiver_impl_subs(span, &obj_ty, &type_name, method);
             }
         }
         // Type-param receiver (`x.m()` where `x: T` inside a generic body):

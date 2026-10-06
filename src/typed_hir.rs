@@ -122,6 +122,11 @@ impl HirDefs for ProgramHirDefs<'_> {
             // A primitive or compiler-provided type: `i64.abs`, `String.len`.
             return builtin();
         };
+        // `Result.Ok(x)` parses as a method call on the enum: a variant
+        // constructor.
+        if let Some(v) = self.defs.variant(owner_def, method) {
+            return Some(Callee::Def(v));
+        }
         let Some(cands) = self
             .defs
             .methods

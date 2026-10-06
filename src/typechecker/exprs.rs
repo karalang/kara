@@ -582,7 +582,14 @@ impl<'a> super::TypeChecker<'a> {
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
         let ty = self.check_expr_inner(expr, expected);
-        self.record_node_type(expr.id, &ty);
+        // A synthesized type that still names a parameter from some signature
+        // (`None` as `Option[T]`) is less precise than the type it was checked
+        // against; typed HIR records the context's type instead.
+        if self.mentions_foreign_param(&ty) && !self.mentions_foreign_param(expected) {
+            self.record_node_type(expr.id, expected);
+        } else {
+            self.record_node_type(expr.id, &ty);
+        }
         self.deny_for_element_drop_copy_in_literal(expr);
         ty
     }
