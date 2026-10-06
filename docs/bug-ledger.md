@@ -97,12 +97,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 588 |
 | double-free | 425 |
 | codegen-gap | 232 |
-| missing-feature | 217 |
-| other | 168 |
+| missing-feature | 218 |
+| other | 169 |
 | diagnostics | 147 |
-| perf | 144 |
+| perf | 146 |
 | false-positive | 124 |
-| crash | 112 |
+| crash | 113 |
 | soundness | 98 |
 | use-after-free | 87 |
 
@@ -110,14 +110,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2799 |
-| interp | 876 |
-| typecheck | 338 |
-| other | 113 |
+| codegen | 2802 |
+| interp | 878 |
+| typecheck | 339 |
+| other | 114 |
 | ownership | 80 |
 | cli | 74 |
 | autopar | 59 |
-| runtime | 54 |
+| runtime | 55 |
 | parser | 54 |
 | effect | 30 |
 | resolver | 29 |
@@ -547,6 +547,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-62 | 2026-10-06 | codegen | low | A STORE INSIDE A LOOP INTO A TUPLE LOCAL THAT WAS MOVED OUT WHOLE LOSES THE `Drop` BODY OF THE VALUE THE SECOND ITERATION DISPLACES COMPILED -- `let mut p = mkr(1); let q = p; let mut i = 0; while i < 2 { p = mkr(i + 5); i = i + 1; }` prints `g61 dR1 dR6 end` where `--interp` prints `dR5 g61 dR1 dR6 end` | — |
 | B-2026-10-06-63 | 2026-10-06 | codegen | high | A `Vec` LOCAL MOVED OUT INSIDE AN `if` AND THEN REASSIGNED READS THE MOVED BUFFER AFTER ITS NEW OWNER FREED IT COMPILED -- `let mut v = [R { id: 1 }]; if v.len() > 0 { let q = v; } v = [R { id: 2 }];` prints a garbage `dR93883621204699` at the store (valgrind: invalid read of size 8) where `--interp` prints `q1 dR1 u1 dR2 end` | — |
 | B-2026-10-06-64 | 2026-10-06 | codegen | low | A STRUCT LOCAL MOVED OUT AND THEN REASSIGNED DROPS ITS NEW VALUE BEFORE THE LATER-DECLARED BINDING THAT TOOK THE OLD ONE COMPILED -- `let mut r = R { id: 1 }; let q = r; r = R { id: 2 };` prints `s21 dR2 dR1` compiled, against reverse declaration order (`q` then `r`: `dR1 dR2`), which the tuple spelling `let q = p; p = mkr(2)` already gives on both surfaces | — |
+| B-2026-10-06-67 | 2026-10-06 | typecheck+interp+codegen | low | `SortedSet.range(from, to)` IS IN design.md's `SortedSet` METHOD TABLE BUT IS REJECTED WITH "no method 'range' on type 'SortedSet'" ON EVERY SURFACE; `SortedMap.range` EXISTS | — |
+| B-2026-10-06-68 | 2026-10-06 | other | low | design.md's `SortedMap` TABLE DISAGREES WITH THE IMPLEMENTATION: IT SAYS `range(from, to)` IS HALF-OPEN `[from, to)` AND RETURNS AN ITERATOR, BUT BOTH BACKENDS RETURN A `Vec` OF THE INCLUSIVE `[from, to]`; AND `floor`, `ceiling`, `min`, `max`, `get_or`, `entries`, `merge` AND `entry` ARE IMPLEMENTED BUT NOT IN THE TABLE | — |
+| B-2026-10-06-69 | 2026-10-06 | codegen | high | A `Set` (or `SortedSet`) COPIED BY THE GENERIC MAP CLONE HELPER GETS AN 8-BYTE VALUE SLOT, AND A LATER `remove` ON IT WRITES 8 BYTES INTO A 1-BYTE STACK SLOT: THE RETURN ADDRESS IS SMASHED AND THE COMPILED PROGRAM SEGFAULTS (THE INTERPRETER IS CORRECT) | — |
 
 ### Relocated
 
@@ -3827,6 +3830,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-41 | typecheck | medium | `const NAME: Array[T, N] = [..]` IS REFUSED ON EVERY SURFACE WITH "expected 'Array[i64, 3]', found 'Vec[i64]'", WHILE THE SAME ANNOTATION ON A LOCAL… | da1850607 |
 | B-2026-10-06-42 | typecheck+codegen | high | A MODULE-LEVEL `let V: Vec[i64] = [1, 2, 3]` TYPECHECKS AND IS THEN MISCOMPILED: UNDER `karac build` `V[2]` PANICS 'vec index out of bounds' AND `for… | 242cc2ec8 |
 | B-2026-10-06-40 | typecheck+codegen | medium | `.len()` AND `.is_empty()` ON A FIXED `Array` WHOSE ELEMENTS ARE NOT SCALAR (TUPLES, `String`, `Option`, `Vec`) ARE REFUSED WITH "no method 'len' on… | e4461e129 |
+| B-2026-10-06-65 | runtime+codegen | high | COMPILED `SortedMap` `floor` / `ceiling` / `min` / `max` GATHER AND SORT EVERY KEY ON EVERY CALL (O(n log n) PER QUERY, PLUS A MALLOC), SO KATA 352's… | 57401755a |
+| B-2026-10-06-66 | interp | medium | THE INTERPRETER COPIES A WHOLE `SortedMap` / `SortedSet` ON EVERY READ OF THE BINDING, SO EVERY METHOD CALL ON ONE (`floor`, `len`, `insert`, ...) IS… | d820db989 |
 
 </details>
 
